@@ -110,6 +110,9 @@ type Server struct {
 	denylist  *DenyListPublisher
 	moderator *Moderator
 	csrf      *http.CrossOriginProtection
+	// errorPage is WP5's login-failure template, installed by [Server.SetErrorPage].
+	// nil means the built-in page in [Server.authError] answers instead.
+	errorPage ErrorPage
 
 	ownLock sync.Mutex
 }
@@ -397,14 +400,17 @@ func fail(w http.ResponseWriter, code, detail string) {
 // authError renders a browser-facing failure of the login flow.
 //
 // The flow is a top-level navigation, so the answer has to be readable in a
-// browser window — but WP5 owns the templates, and this must not become one.
-// It is therefore the smallest self-contained page that carries the contract
-// WP5 and its playwright suite depend on: `#auth-error` with the §4.9 code in
-// `data-error`, and the code repeated in `#auth-error-code`. A client that
-// asked for JSON gets the §4.9 body instead.
+// browser window. WP5 installs a real template via [Server.SetErrorPage]; what
+// remains here is the fallback for a catlogd wired without a web UI, and it
+// carries the same contract the template must: `#auth-error` with the §4.9 code
+// in `data-error`, and the code repeated in `#auth-error-code`. A client that
+// asked for JSON gets the §4.9 body instead, whichever renderer is installed.
 func (s *Server) authError(w http.ResponseWriter, r *http.Request, status int, code, detail string) {
 	if wantsJSON(r) {
 		writeError(w, status, code, detail)
+		return
+	}
+	if s.errorPage != nil && s.errorPage(w, r, status, code, detail) {
 		return
 	}
 	page := `<!doctype html>

@@ -53,10 +53,8 @@ kill %1
 
 ## Dev loop
 
-Once the identity, ingest and UI work packages have landed, the loop is:
-
 ```sh
-make keys && make dev
+make keys && make site-build && make dev
 ```
 
 …then visit <http://127.0.0.1:8080>, log in through one of the `mockidp` buttons, claim a handle,
@@ -66,5 +64,18 @@ download your credential file, and drive a scenario through the real pipeline:
 make sim SCENARIO=hop-lithobrake CRED=~/Downloads/catlog-credential.json
 ```
 
-The board and the live feed update while it runs. Targets that are not implemented yet say so and
-exit cleanly.
+The board and the live feed update while it runs — the feed over server-sent events, with no reload.
+
+`make dev` serves `site/dist` at `/static/`, so run `make site-build` after changing anything under
+`site/assets/`. In production nginx serves the same tree and `[server] static_dir` is left empty.
+
+## End-to-end
+
+```sh
+make e2e        # playwright (chromium) against a throwaway, seeded catlogd + mockidp
+make e2e-full   # the whole stack: catlogctl issue -> simulator -> read API -> browser
+```
+
+`make e2e` starts its own catlogd on a scratch data directory (`data-e2e/`), so it must not race a
+`make dev` already holding port 8080 — Turso takes an exclusive lock on the database file, and only
+one process may hold it (see `docs/DECISIONS.md`).

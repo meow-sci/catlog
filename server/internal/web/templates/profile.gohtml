@@ -1,0 +1,31 @@
+{{define "content" -}}
+<hgroup>
+  <h1 id="profile-handle" data-handle="{{.Data.Handle}}">{{.Data.Handle}}</h1>
+  <p>Flying since {{date .Data.Since}}.</p>
+</hgroup>
+
+<table id="profile-stats">
+  <thead>
+    <tr>
+      <th scope="col">Board</th>
+      <th scope="col" class="value">Value</th>
+      <th scope="col" class="rank">Rank</th>
+      <th scope="col">Detail</th>
+      <th scope="col">When</th>
+    </tr>
+  </thead>
+  <tbody>
+    {{- range .Data.Stats}}
+    <tr class="profile-row" data-stat="{{.Stat}}" data-rank="{{.Rank}}">
+      <td><a href="{{statPath .Stat}}">{{.Title}}</a></td>
+      <td class="value">{{value .Value}} {{.Unit}}</td>
+      <td class="rank">#{{.Rank}}</td>
+      <td class="context">{{range ctx .Context}}<span class="ctx-pair"><span class="ctx-key">{{.Key}}</span> {{.Value}}</span> {{end}}</td>
+      <td class="when">{{datetime .Updated}}</td>
+    </tr>
+    {{- else}}
+    <tr id="profile-empty"><td colspan="5"><em>No records yet.</em></td></tr>
+    {{- end}}
+  </tbody>
+</table>
+{{- end}}

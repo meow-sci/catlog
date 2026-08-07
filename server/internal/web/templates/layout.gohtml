@@ -1,0 +1,47 @@
+{{define "layout" -}}
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Title}}</title>
+<meta name="description" content="catlog — leaderboards and a live feed for Kitten Space Agency flights.">
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/static/vendor/pico.min.css">
+<link rel="stylesheet" href="/static/css/catlog.css">
+<script type="module" src="/static/vendor/datastar.js"></script>
+{{- range .Scripts}}
+<script type="module" src="{{.}}"></script>
+{{- end}}
+</head>
+<body>
+<header class="container">
+  <nav>
+    <ul><li><a href="/" id="nav-home" class="brand"><strong>catlog</strong></a></li></ul>
+    <ul>
+      <li><a href="/boards" id="nav-boards" {{if eq .Nav "boards"}}aria-current="page"{{end}}>Leaderboards</a></li>
+      <li><a href="/docs/install" id="nav-docs" {{if eq .Nav "docs"}}aria-current="page"{{end}}>Docs</a></li>
+      {{- if .SignedIn}}
+      <li><a href="/dashboard" id="nav-dashboard" {{if eq .Nav "account"}}aria-current="page"{{end}}>Dashboard</a></li>
+      {{- else}}
+      <li><a href="/login" id="nav-login" role="button" class="secondary" {{if eq .Nav "account"}}aria-current="page"{{end}}>Sign in</a></li>
+      {{- end}}
+    </ul>
+  </nav>
+</header>
+
+<main class="container" id="main">
+{{- template "content" .}}
+</main>
+
+<footer class="container catlog-footer">
+  <small>
+    catlog logs Kitten Space Agency flights. It never receives your email —
+    <a href="/docs/privacy">how that works</a>.
+    · <a href="/docs/install">Install</a>
+    · <a href="/docs/api">API</a>
+  </small>
+</footer>
+</body>
+</html>
+{{- end}}

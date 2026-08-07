@@ -1,0 +1,132 @@
+{{define "content" -}}
+{{- $me := .Data.Account.Me -}}
+<hgroup>
+  <h1 id="dashboard-title">Your handles</h1>
+  <p>Signed in with {{$me.IdP}} since {{date $me.Since}}. catlog knows nothing else about you.</p>
+</hgroup>
+
+<section id="quotas" class="grid">
+  <article><header><small>Handles</small></header><strong id="quota-handles" data-used="{{$me.Handles}}" data-limit="{{$me.HandleQuota}}">{{$me.Handles}} / {{$me.HandleQuota}}</strong></article>
+  <article><header><small>Licenses issued today</small></header><strong id="quota-issuances" data-used="{{$me.Issuances24h}}" data-limit="{{$me.IssuanceQuota}}">{{$me.Issuances24h}} / {{$me.IssuanceQuota}}</strong></article>
+  <article><header><small>License lifetime</small></header><strong id="quota-ttl">{{$me.LicenseTTLDays}} days</strong></article>
+</section>
+
+<section id="handles">
+  {{- range .Data.Live}}
+  <article class="handle" data-handle="{{.Handle}}">
+    <header>
+      <h2><a href="{{playerPath .Handle}}">{{.Handle}}</a></h2>
+      <small>claimed {{date .Since}}</small>
+    </header>
+
+    <table class="credentials">
+      <thead><tr><th scope="col">Key thumbprint (jkt)</th><th scope="col">Issued</th><th scope="col">Expires</th></tr></thead>
+      <tbody>
+        {{- range .Credentials}}
+        {{- if .Revoked}}
+        <tr class="credential credential-revoked" data-revoked-jkt="{{.JKT}}">
+          <td><code>{{.JKT}}</code> <mark>revoked</mark></td>
+          <td>{{date .IssuedAt}}</td>
+          <td>{{date .RevokedAt}}</td>
+        </tr>
+        {{- else}}
+        <tr class="credential" data-jkt="{{.JKT}}">
+          <td><code>{{.JKT}}</code></td>
+          <td>{{date .IssuedAt}}</td>
+          <td>{{date .ExpiresAt}}</td>
+        </tr>
+        {{- end}}
+        {{- else}}
+        <tr class="credential-empty"><td colspan="3"><em>No credential. Reissue one to start shipping flights.</em></td></tr>
+        {{- end}}
+      </tbody>
+    </table>
+
+    <footer>
+      <button class="secondary outline catlog-reissue" data-handle="{{.Handle}}">Reissue credential</button>
+      <button class="contrast outline catlog-revoke" data-handle="{{.Handle}}">Revoke every credential</button>
+      <p class="handle-error" role="alert" hidden data-error=""></p>
+    </footer>
+  </article>
+  {{- else}}
+  <article id="handles-empty"><p>You have no handles yet. Claim one below.</p></article>
+  {{- end}}
+
+  {{- range .Data.Retired}}
+  <article class="handle handle-retired" data-handle="{{.Handle}}">
+    <header><h2>{{.Handle}}</h2><small>retired — permanently unusable, and nobody else can ever claim it</small></header>
+  </article>
+  {{- end}}
+</section>
+
+{{- /*
+The four-step wizard (§5.7). Every step is in the DOM from the start and
+switched with [hidden] so keygen.js never builds markup out of strings — the
+only HTML the browser gets is the HTML the server sent.
+*/}}
+<article id="wizard"
+         data-can-claim="{{.Data.CanClaim}}"
+         data-can-issue="{{.Data.CanIssue}}">
+  <header><h2>New handle</h2></header>
+
+  <section id="wizard-step-1" class="wizard-step">
+    <p>Pick a handle. It is permanent: catlog has no rename, and a handle is never recycled to anyone else.</p>
+    <label for="wizard-handle">Handle
+      <input type="text" id="wizard-handle" name="handle" maxlength="150" autocomplete="off"
+             spellcheck="false" placeholder="whiskers_prime"
+             {{if not .Data.CanClaim}}disabled{{end}}>
+    </label>
+    <small>1–150 characters: letters, digits, <code>.</code>, <code>_</code>, <code>-</code>; must start and end with a letter or digit.</small>
+    <p>
+      <button id="wizard-submit" {{if or (not .Data.CanClaim) (not .Data.CanIssue)}}disabled{{end}}>
+        Generate a key and claim it
+      </button>
+    </p>
+    {{- if not .Data.CanClaim}}<p class="wizard-blocked"><mark>You already hold the maximum number of handles.</mark></p>{{end}}
+    {{- if not .Data.CanIssue}}<p class="wizard-blocked"><mark>You have issued today's licenses. Try again tomorrow.</mark></p>{{end}}
+  </section>
+
+  <section id="wizard-step-2" class="wizard-step" hidden>
+    <p aria-busy="true" id="wizard-status">Generating a P-256 key pair in this browser…</p>
+    <p><small>Only the public half is ever sent to catlog. The private key stays in this page.</small></p>
+  </section>
+
+  <section id="wizard-step-3" class="wizard-step" hidden>
+    <p aria-busy="true">Claiming the handle and asking catlog for a license…</p>
+  </section>
+
+  <section id="wizard-step-4" class="wizard-step" hidden>
+    <h3>Handle claimed: <span id="wizard-claimed"></span></h3>
+    <p id="wizard-warning">
+      <mark><strong>Your credential file has downloaded. It cannot be downloaded again.</strong></mark>
+      catlog never had your private key and cannot send you another copy. If you lose the file,
+      reissue the credential — which generates a fresh key and revokes this one.
+    </p>
+    <p>Key thumbprint (jkt): <code id="wizard-jkt"></code></p>
+    <p>Expires: <span id="wizard-expires"></span></p>
+    <p>
+      <a id="wizard-download" role="button" download="catlog-credential.json" href="#">Download catlog-credential.json again</a>
+      <button id="wizard-done" class="secondary">Done</button>
+    </p>
+    <p><small>Put it at <code>&lt;KSA user dir&gt;/mods/catlog/credential.json</code> — see <a href="/docs/install">install</a>.</small></p>
+  </section>
+
+  <p id="wizard-error" role="alert" hidden data-error=""><strong id="wizard-error-code"></strong> <span id="wizard-error-detail"></span></p>
+</article>
+
+<article id="account-danger">
+  <header><h2>Account</h2></header>
+  <p>
+    <button id="logout" class="secondary outline">Sign out</button>
+  </p>
+  <details>
+    <summary>Delete everything catlog holds about me</summary>
+    <p>
+      This deletes every event, batch and credential, and retires your handles permanently —
+      neither you nor anybody else can ever claim them again. It cannot be undone.
+    </p>
+    <button id="delete-account" class="contrast">Delete my data</button>
+    <p id="delete-error" role="alert" hidden data-error=""></p>
+  </details>
+</article>
+{{- end}}

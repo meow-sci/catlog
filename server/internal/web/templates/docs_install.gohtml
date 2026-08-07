@@ -1,0 +1,67 @@
+{{define "content" -}}
+<hgroup>
+  <h1 id="docs-title">Installing catlog</h1>
+  <p>Five minutes, one file, no account linking.</p>
+</hgroup>
+
+<section id="docs-install-steps">
+<h2>1. Sign in and claim a handle</h2>
+<p>
+  <a href="/login">Sign in</a> with Discord, Google or GitHub, then claim a handle on your
+  <a href="/dashboard">dashboard</a>. The handle is the name that appears on the leaderboards.
+  It is permanent, and it is never recycled to anybody else.
+</p>
+
+<h2>2. Download your credential</h2>
+<p>
+  Claiming a handle generates an ECDSA P-256 key pair <em>in your browser</em> and downloads
+  <code>catlog-credential.json</code>. It looks like this:
+</p>
+<pre><code>{
+  "format": 1,
+  "handle": "whiskers_prime",
+  "license": "eyJhbGciOiJFUzI1NiIs…",
+  "private_key_pem": "-----BEGIN PRIVATE KEY-----\n…\n-----END PRIVATE KEY-----\n"
+}</code></pre>
+<p>
+  <strong>The private key never leaves your browser</strong> — catlog only ever receives the public half,
+  so it cannot send you a second copy of this file. Keep it; if you lose it, reissue the credential
+  from the dashboard, which mints a new key and revokes the old one.
+</p>
+
+<h2>3. Drop it next to the mod</h2>
+<p>Install the mod, then put the file at:</p>
+<pre><code>&lt;KSA user dir&gt;/mods/catlog/credential.json</code></pre>
+<p>The mod reads the handle and expiry out of the license and refuses to ship anything if the file's key does not match the license it came with.</p>
+
+<h2>4. Fly</h2>
+<p>
+  That is it. The mod batches events locally and ships them to
+  <code>{{.BaseURL}}/v1/ingest</code>. If the server is unreachable it keeps them in a local outbox and
+  catches up later; nothing is lost because you played offline.
+</p>
+</section>
+
+<section id="docs-install-what">
+<h2>What gets sent</h2>
+<p>
+  Flight events — launches, situation changes, orbits, sphere-of-influence crossings, dockings, stagings,
+  impacts, rapid unscheduled disassemblies, kitten EVAs and tumbles — plus 30-second windowed telemetry
+  summaries (minimum, maximum, mean, last) rather than a raw sample firehose.
+</p>
+<p>
+  Not sent: your save files, your craft files, your screenshots, your IP-derived location, and
+  <strong>your email address, which catlog never receives at all</strong>. See
+  <a href="/docs/privacy">privacy</a>.
+</p>
+</section>
+
+<section id="docs-install-flags">
+<h2>Flagged flights</h2>
+<p>
+  The mod reports when a flight used a teleport, a refuel, a resource edit, the console, or a live tuning
+  edit. Those flights are stored, and they are visible to you, but they score on no leaderboard and never
+  appear in the live feed. catlog would rather record the truth than pretend it did not happen.
+</p>
+</section>
+{{- end}}

@@ -1,0 +1,12 @@
+{{define "content" -}}
+<nav aria-label="breadcrumb"><ul><li><a href="/boards">Leaderboards</a></li><li>{{.Data.Title}}</li></ul></nav>
+
+<hgroup>
+  <h1 id="board-title" data-stat="{{.Data.Stat}}">{{.Data.Title}}</h1>
+  <p>Measured in {{.Data.Unit}}. Top {{.Data.Limit}}.</p>
+</hgroup>
+
+{{template "board-table" (dict "Board" .Data "Compact" false)}}
+
+<p><small>Ranks skip nobody: a banned account is removed from the board rather than leaving a hole in the numbering.</small></p>
+{{- end}}

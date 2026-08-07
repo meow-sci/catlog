@@ -7,12 +7,17 @@ mod/**/obj/
 
 # --- runtime data (§3: ./data/ holds events.db, projections.db, keys/, archive/) ---
 data/
+# Throwaway data directories for `make e2e` / `make e2e-full` (§8).
+data-e2e/
+data-e2e-full/
 *.db
 *.db-wal
 *.db-shm
 
 # --- scratch ---
 contracts/testdata/tmp/
+site/e2e/.report/
+site/e2e/.results/
 
 # --- OS ---
 .DS_Store

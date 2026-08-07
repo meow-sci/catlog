@@ -1,0 +1,21 @@
+{{define "content" -}}
+<hgroup>
+  <h1 id="boards-title">Leaderboards</h1>
+  <p>Every board catlog keeps. Flights flagged as cheated — teleports, refuels, resource edits, console use — score on none of them.</p>
+</hgroup>
+
+<table id="boards-index">
+  <thead>
+    <tr><th scope="col">Board</th><th scope="col">Unit</th><th scope="col" class="value">Players</th></tr>
+  </thead>
+  <tbody>
+    {{- range .Data.Boards}}
+    <tr class="boards-row" data-stat="{{.Stat}}">
+      <td><a href="{{statPath .Stat}}" class="board-link">{{.Title}}</a></td>
+      <td>{{.Unit}}</td>
+      <td class="value">{{.Count}}</td>
+    </tr>
+    {{- end}}
+  </tbody>
+</table>
+{{- end}}

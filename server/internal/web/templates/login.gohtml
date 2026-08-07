@@ -1,0 +1,24 @@
+{{define "content" -}}
+<hgroup>
+  <h1 id="login-title">Sign in</h1>
+  <p>You need an account to claim a handle and download a credential. Signing in is also the only thing catlog ever asks an identity provider for.</p>
+</hgroup>
+
+<div id="login-choices">
+  {{- range .Data.IdPs}}
+  <article class="login-choice">
+    <a id="login-{{.Key}}" href="{{.Start}}" role="button" class="contrast">Continue with {{.Name}}</a>
+    <p><small>{{.Note}}</small></p>
+  </article>
+  {{- end}}
+</div>
+
+<article id="login-privacy">
+  <header><strong>What catlog learns about you</strong></header>
+  <p>
+    A single opaque identifier, hashed before it is stored. <strong>catlog never asks for your email address</strong>
+    and never receives one — not from Discord, not from Google, not from GitHub.
+    <a href="/docs/privacy">The privacy page</a> explains exactly how.
+  </p>
+</article>
+{{- end}}

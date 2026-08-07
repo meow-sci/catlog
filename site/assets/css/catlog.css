@@ -1,18 +1,193 @@
 /*
  * catlog site styles — layered on top of @picocss/pico (vendored to dist/vendor/).
- * The Go server renders every page (INITIAL_IMPL_PLAN §5.7); this file only carries
- * the catlog-specific bits. WP5 fills it in.
+ * The Go server renders every page (INITIAL_IMPL_PLAN §5.7); this file carries
+ * only the catlog-specific bits. Pico supplies the reset, the type scale, the
+ * dark theme and the form controls, so there is deliberately not much here.
  */
 
 :root {
   --catlog-accent: #ff8c42;
+  --catlog-dim: color-mix(in srgb, currentColor 55%, transparent);
 }
 
-.catlog-board td.rank {
+/* --- navigation ------------------------------------------------------------- */
+
+header .brand {
+  text-decoration: none;
+}
+
+header .brand strong {
+  color: var(--catlog-accent);
+  letter-spacing: 0.02em;
+}
+
+.catlog-footer {
+  border-top: 1px solid var(--pico-muted-border-color, #333);
+  margin-top: 3rem;
+  padding-top: 1rem;
+  color: var(--catlog-dim);
+}
+
+/* --- boards ----------------------------------------------------------------- */
+
+.catlog-board td.rank,
+.catlog-board th.rank,
+#profile-stats td.rank,
+#profile-stats th.rank {
   font-variant-numeric: tabular-nums;
   text-align: right;
+  width: 3rem;
+}
+
+.catlog-board td.value,
+.catlog-board th.value,
+#boards-index td.value,
+#boards-index th.value,
+#profile-stats td.value,
+#profile-stats th.value {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.catlog-board tr[data-rank="1"] td.rank {
+  color: var(--catlog-accent);
+  font-weight: 700;
+}
+
+.catlog-board td.when,
+#profile-stats td.when {
+  white-space: nowrap;
+  color: var(--catlog-dim);
+  font-size: 0.85em;
+}
+
+.ctx-pair {
+  display: inline-block;
+  margin-right: 0.6rem;
+  font-size: 0.85em;
+  white-space: nowrap;
+}
+
+.ctx-key {
+  color: var(--catlog-dim);
+}
+
+.board-empty td,
+.credential-empty td,
+#profile-empty td {
+  color: var(--catlog-dim);
+}
+
+.featured-board table {
+  margin-bottom: 0;
+}
+
+/* Wide tables scroll inside themselves rather than making the page scroll. */
+.catlog-board,
+#boards-index,
+#profile-stats,
+.credentials {
+  display: block;
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+/* --- live feed --------------------------------------------------------------- */
+
+.catlog-feed-panel {
+  margin-top: 2rem;
+}
+
+.catlog-feed {
+  list-style: none;
+  padding-left: 0;
+  margin-bottom: 0;
+  max-height: 26rem;
+  overflow-y: auto;
 }
 
 .catlog-feed li {
   list-style: none;
+  padding: 0.35rem 0;
+  border-bottom: 1px solid var(--pico-muted-border-color, #2a2a2a);
+}
+
+.catlog-feed li:last-child {
+  border-bottom: none;
+}
+
+.catlog-feed time {
+  color: var(--catlog-dim);
+  font-size: 0.8em;
+  font-variant-numeric: tabular-nums;
+  margin-right: 0.5rem;
+}
+
+/* A line patched in over SSE gets a brief highlight, so "it updated without a
+   reload" is visible rather than merely true. */
+@keyframes catlog-arrive {
+  from { background: color-mix(in srgb, var(--catlog-accent) 22%, transparent); }
+  to   { background: transparent; }
+}
+
+.catlog-feed li {
+  animation: catlog-arrive 1.2s ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .catlog-feed li { animation: none; }
+}
+
+/* --- dashboard ---------------------------------------------------------------- */
+
+.handle code,
+#wizard-jkt {
+  font-size: 0.8em;
+  word-break: break-all;
+}
+
+.handle-retired header {
+  color: var(--catlog-dim);
+}
+
+.credential-revoked {
+  color: var(--catlog-dim);
+}
+
+#quotas strong {
+  font-size: 1.4rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.wizard-step[hidden] {
+  display: none;
+}
+
+#wizard-error[hidden],
+.handle-error[hidden],
+#delete-error[hidden] {
+  display: none;
+}
+
+#wizard-error,
+.handle-error,
+#delete-error {
+  color: var(--pico-del-color, #f66);
+}
+
+#wizard-error strong {
+  font-family: var(--pico-font-family-monospace, monospace);
+  margin-right: 0.5rem;
+}
+
+#wizard-warning mark {
+  display: inline-block;
+}
+
+/* --- errors -------------------------------------------------------------------- */
+
+#not-found code,
+#auth-error code {
+  word-break: break-all;
 }

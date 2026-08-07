@@ -1,0 +1,94 @@
+{{define "content" -}}
+<hgroup>
+  <h1 id="docs-title">Privacy</h1>
+  <p>What catlog stores, what it deliberately cannot store, and how to make it all go away.</p>
+</hgroup>
+
+<article id="privacy-no-email">
+  <header><h2>catlog never receives your email address</h2></header>
+  <p>
+    This is not a promise about what we do with your email. It is a statement about what catlog is able to
+    know: <strong>your email address is never requested from any identity provider, so it is never sent,
+    so there is nothing to store, leak or hand over.</strong>
+  </p>
+  <p>catlog asks each provider for the narrowest scope that yields a stable account id, and nothing else:</p>
+  <table id="privacy-scopes">
+    <thead><tr><th scope="col">Provider</th><th scope="col">Scope requested</th><th scope="col">What catlog reads</th></tr></thead>
+    <tbody>
+      <tr><td>Discord</td><td><code>identify</code></td><td>your numeric user id</td></tr>
+      <tr><td>Google</td><td><code>openid</code></td><td>the <code>sub</code> claim of the id_token</td></tr>
+      <tr><td>GitHub</td><td>none (default)</td><td>your numeric user id</td></tr>
+    </tbody>
+  </table>
+  <p>
+    None of those scopes grants an email address. The provider's access token is used for exactly one call —
+    the one that reads that id — and is discarded immediately afterwards. It is never stored.
+  </p>
+</article>
+
+<section id="privacy-userkey">
+<h2>Even the account id is not kept</h2>
+<p>
+  The id from the provider is immediately hashed into an opaque 32-byte value:
+</p>
+<pre><code>user_key = HMAC-SHA256(pepper, "&lt;provider&gt;:&lt;account id&gt;")</code></pre>
+<p>
+  The <code>pepper</code> is 32 random bytes held on the server outside the database and never logged.
+  <strong>Only the <code>user_key</code> is stored.</strong> There is no column anywhere holding a Discord
+  snowflake, a Google subject or a GitHub id, so a copy of the database does not let anybody walk back from
+  a row to an account at a provider.
+</p>
+</section>
+
+<section id="privacy-stored">
+<h2>What is stored</h2>
+<ul>
+  <li>Your <code>user_key</code>, which provider it came from, and when the account was created.</li>
+  <li>Your handles, and when you claimed them.</li>
+  <li>Credential metadata: the public-key thumbprint, the license id, issue and expiry times. Never a private key — catlog is never sent one.</li>
+  <li>Flight events sent by the mod: what happened, when in sim time, and the measurements the leaderboards are computed from. Kitten names travel with them, because they are on the boards.</li>
+  <li>The server-side receive time of every event and batch.</li>
+</ul>
+<h2>What is not stored</h2>
+<ul>
+  <li>Email addresses — see above.</li>
+  <li>Provider access tokens or refresh tokens.</li>
+  <li>Real names, avatars, profile URLs, friend lists.</li>
+  <li>Save files, craft files or screenshots.</li>
+  <li>Your private key, in any form.</li>
+</ul>
+</section>
+
+<section id="privacy-public">
+<h2>What is public</h2>
+<p>
+  Your handle, your leaderboard values and their context (body, speed, energy), your rank, and the live feed
+  lines your flights generate. That is the point of catlog. Everything else — which provider you used,
+  when you signed in, your quota usage — is visible only to you, on your dashboard.
+</p>
+<p>Flights flagged as cheated are stored and shown to you, but score nothing and never appear publicly.</p>
+</section>
+
+<section id="privacy-delete">
+<h2>Deleting everything</h2>
+<p>
+  <a href="/dashboard">Dashboard</a> → <em>Delete everything catlog holds about me</em>. That deletes every
+  event, batch, stream record and credential, and removes the archived copies.
+</p>
+<p>
+  Two things survive on purpose. A tombstone — the <code>user_key</code>, a reason and a timestamp — so a
+  deleted account cannot be silently recreated, and the <em>retirement</em> of your handles: a handle is
+  never recycled, so nobody can take a name you were known by and be mistaken for you. Neither carries any
+  information about who you are.
+</p>
+</section>
+
+<section id="privacy-transport">
+<h2>Transport and cookies</h2>
+<p>
+  One cookie, <code>catlog_sess</code>: a signed, <code>HttpOnly</code>, <code>SameSite=Lax</code> session
+  that expires after seven days. There is no analytics script, no third-party script, no tracking pixel and
+  no advertising identifier on this site — every asset it loads is served from this origin.
+</p>
+</section>
+{{- end}}

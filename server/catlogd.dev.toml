@@ -17,7 +17,11 @@
 listen       = "127.0.0.1:8080"
 admin_listen = "127.0.0.1:6060"          # loopback only, never proxied (§5.9)
 base_url     = "http://127.0.0.1:8080"   # license `iss` AND the htu base (§4.5.1)
-static_dir   = "../site/dist"            # served at /static/ in dev; nginx serves it in prod
+# Relative to the working directory, like `[data] dir` below, and every dev
+# entry point (`make dev`, `make e2e`, scripts/e2e-full.sh) runs catlogd from
+# the repo root. §5.3's literal "../site/dist" is written from server/'s point
+# of view and would resolve outside the repo here (docs/DECISIONS.md, WP5).
+static_dir   = "site/dist"               # served at /static/ in dev; nginx serves it in prod
 
 [data]
 dir = "./data"                            # events.db, projections.db, keys/, archive/ (§3)

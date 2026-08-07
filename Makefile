@@ -15,10 +15,13 @@ CRED       ?=
 ASSERT     ?=
 # make sim SPEED=100 … paces the run at 100 sim seconds per wall second; unset runs flat out.
 SPEED      ?=
+# Throwaway data directory for `make e2e` (§8). Never ./data — see the target.
+E2E_DATA_DIR ?= data-e2e
 
 .PHONY: help bootstrap build server-build mod-build site-build \
         test server-test mod-test test-integration test-nginx \
-        e2e e2e-full sim dev mockidp-run keys seed testvectors clean
+        e2e e2e-browser e2e-full server-run-test-env \
+        sim dev mockidp-run keys seed testvectors clean
 
 ## help: list targets
 help:
@@ -80,14 +83,43 @@ test-nginx: server-build
 	fi
 	cd server && go test -tags docker -count=1 ./internal/nginxproxy/
 
-## e2e: playwright suite against a local catlogd + mockidp
-e2e:
-	@echo "make e2e: not yet implemented (WP5)"
-	@# $(MAKE) site-build && pnpm -C site exec playwright test
+## e2e: playwright suite (chromium) against a throwaway seeded catlogd + mockidp
+# playwright.config.ts starts both servers itself (§8) via server-run-test-env
+# and mockidp-run, so this target only has to make sure the binaries, the static
+# bundle and the browser exist first.
+e2e: server-build site-build e2e-browser
+	pnpm -C site exec playwright test --config e2e/playwright.config.ts
 
-## e2e-full: full-stack proof — server + mockidp + sim + read API + playwright
-e2e-full:
-	@echo "make e2e-full: not yet implemented (WP5 + WP7); scripts/e2e-full.sh lands there"
+## e2e-browser: download the chromium playwright drives (idempotent; the one allowed network fetch)
+e2e-browser:
+	pnpm -C site exec playwright install chromium
+
+## server-run-test-env: catlogd on a throwaway, seeded data directory (§8 webServer)
+# Never point this at ./data: tursogo takes an exclusive whole-file lock that
+# shuts every other process out entirely (§5.4), so an e2e run must not share a
+# database with a dev server — and must not inherit its leftover state either,
+# which is why the directory is deleted rather than reused.
+server-run-test-env: server-build
+	@rm -rf $(E2E_DATA_DIR)
+	@mkdir -p $(E2E_DATA_DIR)/keys
+	@# Seeding needs a server that is already up, and this recipe has to *become*
+	@# that server for playwright's webServer to track it — hence the background
+	@# poller. It exits either way; catlogd is what stays in the foreground.
+	@( for i in $$(seq 1 200); do \
+	     if curl -fsS $(SERVER_URL)/healthz >/dev/null 2>&1; then \
+	       curl -fsS -X POST $(ADMIN_URL)/admin/seed >/dev/null \
+	         && echo "server-run-test-env: demo dataset seeded" >&2; \
+	       exit 0; \
+	     fi; \
+	     sleep 0.1; \
+	   done; \
+	   echo "server-run-test-env: catlogd never became healthy" >&2 ) &
+	@echo "server-run-test-env: data dir $(E2E_DATA_DIR)" >&2
+	CATLOG_DATA_DIR=$(E2E_DATA_DIR) exec server/bin/catlogd -config server/catlogd.dev.toml
+
+## e2e-full: full-stack proof — server + mockidp + catlogctl + sim + read API + playwright (§8)
+e2e-full: server-build site-build e2e-browser
+	scripts/e2e-full.sh
 
 ## sim: run a catlog.sim scenario (SCENARIO=<name> CRED=<path> [ASSERT=1] [SPEED=n]); no SCENARIO lists them
 sim:
@@ -126,5 +158,5 @@ testvectors: server-build
 
 ## clean: remove build output (keeps data/ and node_modules/)
 clean:
-	rm -rf server/bin site/dist
+	rm -rf server/bin site/dist site/e2e/.report site/e2e/.results $(E2E_DATA_DIR) data-e2e-full
 	dotnet clean mod/catlog.slnx -c Release --verbosity quiet

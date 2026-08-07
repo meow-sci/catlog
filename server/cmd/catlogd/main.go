@@ -10,7 +10,9 @@
 // draining both HTTP servers, stopping the ingest writer, checkpointing each
 // WAL and releasing the database file locks.
 //
-// The web UI (WP5) and the archiver (WP10) mount onto this skeleton.
+// Wiring as of WP10 additionally builds the filesystem archive store
+// (data/archive/) and hands it to both the admin mux and the identity purge
+// path. The web UI (WP5) mounts onto the same skeleton.
 package main
 
 import (
@@ -28,6 +30,7 @@ import (
 	"time"
 
 	"github.com/meow-sci/catlog/server/internal/adminapi"
+	"github.com/meow-sci/catlog/server/internal/archive"
 	"github.com/meow-sci/catlog/server/internal/authz"
 	"github.com/meow-sci/catlog/server/internal/config"
 	"github.com/meow-sci/catlog/server/internal/directory"
@@ -37,6 +40,7 @@ import (
 	"github.com/meow-sci/catlog/server/internal/projector"
 	"github.com/meow-sci/catlog/server/internal/readapi"
 	"github.com/meow-sci/catlog/server/internal/store"
+	"github.com/meow-sci/catlog/server/internal/web"
 )
 
 // version is the catlogd build version. Kept in lockstep with the mod's
@@ -212,6 +216,20 @@ func run(ctx context.Context, cfg config.Config, log *slog.Logger, ready func(pu
 		Writer:    writer,
 	})
 
+	// The archiver (§5.10, D8): a filesystem store rooted at data/archive/, and
+	// nothing that talks to R2 — that implementation is design-only
+	// (docs/r2-archive-design.md). It is built before identity because identity
+	// takes it as the purge seam.
+	archiveStore, err := archive.NewFSStore(cfg.ArchiveDir())
+	if err != nil {
+		return fmt.Errorf("open archive store: %w", err)
+	}
+	archiver, err := archive.New(archive.Options{Events: events, Store: archiveStore, Log: log})
+	if err != nil {
+		return fmt.Errorf("build archiver: %w", err)
+	}
+	admin.RegisterArchive(adminapi.ArchiveDeps{Archiver: archiver})
+
 	// Identity (§4.7, §5.8): the three IdP flows, the session cookie, handle
 	// claims and issuance, and the two well-known documents. Its writes share
 	// the admin API's mutex, which is what makes a dashboard claim and an admin
@@ -223,7 +241,11 @@ func run(ctx context.Context, cfg config.Config, log *slog.Logger, ready func(pu
 		Deny:      deny,
 		Directory: dir,
 		WriteLock: admin.WithWriteLock,
-		Log:       log,
+		// The purge seam (§4.7): a purge deletes the player's archive prefix
+		// too, and fails if it cannot — leaving a deleted account's raw event
+		// log in storage is the one thing a purge exists to prevent.
+		Archive: archiver,
+		Log:     log,
 	})
 	if err != nil {
 		return fmt.Errorf("build identity: %w", err)
@@ -233,6 +255,31 @@ func run(ctx context.Context, cfg config.Config, log *slog.Logger, ready func(pu
 		Moderator: ident.Moderator(),
 		DenyList:  ident.DenyListPublisher(),
 	})
+	// `POST /admin/events`: the loopback-only path that pushes events without the
+	// §4.5.3 auth chain. It is what the §8 feed spec and the dev loop use to make
+	// something happen on demand (§5.9's seed is idempotent and cannot).
+	admin.RegisterEvents()
+
+	// The web UI (§5.7). It is built after identity because it needs that
+	// server's session codec and account loader, and it hands back the
+	// login-failure template — the one direction that has to happen after
+	// construction because the two are mutually dependent.
+	site, err := web.New(web.Deps{
+		Config:      cfg,
+		Read:        reader,
+		Projections: live,
+		Feed:        broadcaster,
+		Sessions:    ident.Sessions(),
+		Accounts:    ident,
+		Log:         log,
+	})
+	if err != nil {
+		return fmt.Errorf("build web ui: %w", err)
+	}
+	ident.SetErrorPage(site.AuthError)
+	// Registered last: its `GET /` is the catch-all 404 page, and Go's pattern
+	// router only falls through to it when nothing more specific matched.
+	site.Register(mux)
 
 	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	adminSrv := &http.Server{Handler: admin.Handler(), ReadHeaderTimeout: 10 * time.Second}

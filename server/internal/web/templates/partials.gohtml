@@ -1,0 +1,61 @@
+{{/*
+Shared fragments. `feed-list` and `feed-item` are also what the SSE handler
+patches in (§5.7), so a line that arrives over the wire is byte-identical to one
+rendered into a page.
+*/}}
+
+{{define "board-table" -}}
+{{- /* .Board is a readapi.BoardResponse; .Compact hides the context column. */ -}}
+{{- $board := .Board -}}
+<table class="catlog-board" data-stat="{{$board.Stat}}">
+  <thead>
+    <tr>
+      <th scope="col" class="rank">#</th>
+      <th scope="col">Handle</th>
+      <th scope="col" class="value">{{$board.Unit}}</th>
+      {{- if not .Compact}}<th scope="col">Detail</th><th scope="col">When</th>{{end}}
+    </tr>
+  </thead>
+  <tbody>
+    {{- range $board.Rows}}
+    <tr class="board-row" data-rank="{{.Rank}}" data-handle="{{.Handle}}">
+      <td class="rank">{{.Rank}}</td>
+      <td><a href="{{playerPath .Handle}}">{{.Handle}}</a></td>
+      <td class="value">{{value .Value}}</td>
+      {{- if not $.Compact}}
+      <td class="context">{{range ctx .Context}}<span class="ctx-pair"><span class="ctx-key">{{.Key}}</span> {{.Value}}</span> {{end}}</td>
+      <td class="when">{{datetime .Updated}}</td>
+      {{- end}}
+    </tr>
+    {{- else}}
+    <tr class="board-empty"><td colspan="{{if .Compact}}3{{else}}5{{end}}"><em>Nobody has scored here yet.</em></td></tr>
+    {{- end}}
+  </tbody>
+</table>
+{{- end}}
+
+{{define "feed-item" -}}
+<li class="feed-item" id="{{feedID .ID}}" data-feed-id="{{.ID}}" data-type="{{.Type}}"><time datetime="{{datetime .At}}">{{datetime .At}}</time> <span class="feed-summary">{{.Summary}}</span></li>
+{{- end}}
+
+{{/*
+`data-source` says who rendered this list: "ssr" for the copy the page shipped
+with, "sse" once the stream has replaced it. It is the readiness signal the e2e
+feed spec waits on — without it there is no way to tell an open stream from a
+page whose datastar module never ran, because both show the same rows.
+*/}}
+{{define "feed-list" -}}
+<ul id="feed" class="catlog-feed" data-source="{{.Source}}" data-count="{{len .Rows}}">
+{{- range .Rows}}{{template "feed-item" .}}{{end}}
+{{- if not .Rows}}<li class="feed-empty"><em>Nothing has happened yet. Fly something.</em></li>{{end}}
+</ul>
+{{- end}}
+
+{{define "feed-panel" -}}
+<article id="feed-panel" class="catlog-feed-panel" data-init="@get('/v1/feed/sse')">
+  <header><h2>Live feed</h2></header>
+  {{template "feed-list" .}}
+  <span id="feed-heartbeat" hidden></span>
+  <footer><small>Streamed over server-sent events. Flights flagged as cheated never appear here.</small></footer>
+</article>
+{{- end}}

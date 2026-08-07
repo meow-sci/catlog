@@ -10,7 +10,6 @@ import (
 
 	"github.com/meow-sci/catlog/server/internal/authz"
 	"github.com/meow-sci/catlog/server/internal/directory"
-	"github.com/meow-sci/catlog/server/internal/stats"
 	"github.com/meow-sci/catlog/server/internal/store"
 )
 
@@ -102,26 +101,10 @@ type BoardSummary struct {
 }
 
 func (s *Server) handleBoards(w http.ResponseWriter, r *http.Request) {
-	var counts map[string]int64
-	err := s.deps.Projections.With(func(p *store.Projections) error {
-		var err error
-		counts, err = p.StatCounts(r.Context())
-		return err
-	})
+	out, err := s.BoardList(r.Context())
 	if err != nil {
 		s.fail(w, r, err, "read board counts")
 		return
-	}
-
-	// Every board is listed whether or not anyone is on it: the set of boards
-	// is a property of the build, not of the data, and a UI that discovers
-	// boards from this endpoint must not lose one because nobody has scored yet.
-	all := stats.Boards()
-	out := BoardsResponse{Boards: make([]BoardSummary, 0, len(all))}
-	for _, b := range all {
-		out.Boards = append(out.Boards, BoardSummary{
-			Stat: b.Stat, Title: b.Title, Unit: b.Unit, Count: counts[b.Stat],
-		})
 	}
 	s.writeJSON(w, http.StatusOK, out)
 }
@@ -152,48 +135,19 @@ type BoardRow struct {
 }
 
 func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
-	stat := r.PathValue("stat")
-	board, ok := stats.BoardFor(stat)
-	if !ok {
-		s.writeError(w, http.StatusNotFound, authz.CodeNotFound, "no such leaderboard")
-		return
-	}
 	limit, offset, ok := s.paging(w, r)
 	if !ok {
 		return
 	}
-
-	rows, handles, err := s.visibleRows(r.Context(), stat, limit, offset)
-	if err != nil {
+	out, known, err := s.Board(r.Context(), r.PathValue("stat"), limit, offset)
+	switch {
+	case !known:
+		s.writeError(w, http.StatusNotFound, authz.CodeNotFound, "no such leaderboard")
+	case err != nil:
 		s.fail(w, r, err, "read leaderboard")
-		return
+	default:
+		s.writeJSON(w, http.StatusOK, out)
 	}
-
-	seqs := make([]int64, 0, len(rows))
-	for _, row := range rows {
-		seqs = append(seqs, row.UpdatedSeq)
-	}
-	times, err := s.deps.Events.RecvTimes(r.Context(), seqs)
-	if err != nil {
-		s.fail(w, r, err, "read event times")
-		return
-	}
-
-	out := BoardResponse{
-		Stat: board.Stat, Title: board.Title, Unit: board.Unit,
-		Limit: limit, Offset: offset,
-		Rows: make([]BoardRow, 0, len(rows)),
-	}
-	for i, row := range rows {
-		out.Rows = append(out.Rows, BoardRow{
-			Rank:    offset + i + 1,
-			Handle:  handles[i],
-			Value:   row.Value,
-			Context: row.Context,
-			Updated: times[row.UpdatedSeq],
-		})
-	}
-	s.writeJSON(w, http.StatusOK, out)
 }
 
 // visibleRows reads one page of a board with banned players removed.
@@ -255,7 +209,8 @@ func (s *Server) paging(w http.ResponseWriter, r *http.Request) (limit, offset i
 	if !ok {
 		return 0, 0, false
 	}
-	return min(max(limit, 1), MaxLimit), max(offset, 0), true
+	limit, offset = ClampPaging(limit, offset)
+	return limit, offset, true
 }
 
 func (s *Server) intParam(w http.ResponseWriter, r *http.Request, name string, def int) (int, bool) {
@@ -294,56 +249,17 @@ type PlayerRow struct {
 }
 
 func (s *Server) handlePlayer(w http.ResponseWriter, r *http.Request) {
-	entry, ok := s.deps.Directory.Lookup(r.PathValue("handle"))
-	if !ok {
+	out, known, err := s.Player(r.Context(), r.PathValue("handle"))
+	switch {
+	case !known:
 		// Unknown, retired and banned are one answer on purpose (§4.8): telling
 		// them apart would turn this endpoint into a ban oracle.
 		s.writeError(w, http.StatusNotFound, authz.CodeNotFound, "no such player")
-		return
-	}
-
-	var rows []store.StatRow
-	err := s.deps.Projections.With(func(p *store.Projections) error {
-		var err error
-		rows, err = p.PlayerStats(r.Context(), entry.PlayerID)
-		return err
-	})
-	if err != nil {
+	case err != nil:
 		s.fail(w, r, err, "read player stats")
-		return
+	default:
+		s.writeJSON(w, http.StatusOK, out)
 	}
-
-	seqs := make([]int64, 0, len(rows))
-	for _, row := range rows {
-		seqs = append(seqs, row.UpdatedSeq)
-	}
-	times, err := s.deps.Events.RecvTimes(r.Context(), seqs)
-	if err != nil {
-		s.fail(w, r, err, "read event times")
-		return
-	}
-
-	banned := s.deps.Directory.BannedIDs()
-	out := PlayerResponse{Handle: entry.Handle, Since: entry.Since, Stats: make([]PlayerRow, 0, len(rows))}
-	for _, row := range rows {
-		board, known := stats.BoardFor(row.Stat)
-		if !known {
-			// A stat this build no longer publishes — a board removed between
-			// releases, still sitting in projections.db until the next rebuild.
-			continue
-		}
-		rank, err := s.rank(r.Context(), row, banned)
-		if err != nil {
-			s.fail(w, r, err, "rank player")
-			return
-		}
-		out.Stats = append(out.Stats, PlayerRow{
-			Stat: row.Stat, Title: board.Title, Unit: board.Unit,
-			Value: row.Value, Rank: rank, Context: row.Context,
-			Updated: times[row.UpdatedSeq],
-		})
-	}
-	s.writeJSON(w, http.StatusOK, out)
 }
 
 // rank is the player's visible position on a board: everyone ahead of them,

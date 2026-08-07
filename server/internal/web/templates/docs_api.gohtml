@@ -1,0 +1,81 @@
+{{define "content" -}}
+<hgroup>
+  <h1 id="docs-title">API</h1>
+  <p>Everything on this site is also JSON. No key, no sign-up, no rate limit worth mentioning — it is cached at the edge.</p>
+</hgroup>
+
+<section id="docs-api-read">
+<h2>Read API</h2>
+<p>All read responses carry <code>Cache-Control: public, s-maxage=30, stale-while-revalidate=300</code>.</p>
+<table id="docs-api-endpoints">
+  <thead><tr><th scope="col">Endpoint</th><th scope="col">Returns</th></tr></thead>
+  <tbody>
+    <tr><td><code>GET /v1/leaderboards</code></td><td>every board with its title, unit and population</td></tr>
+    <tr><td><code>GET /v1/leaderboards/{stat}?limit=50&amp;offset=0</code></td><td>one page of a board; <code>limit</code> is clamped to 200</td></tr>
+    <tr><td><code>GET /v1/players/{handle}</code></td><td>a player's records and ranks; 404 for an unknown handle</td></tr>
+    <tr><td><code>GET /v1/feed/sse</code></td><td>the live activity stream as server-sent events (never cached)</td></tr>
+    <tr><td><code>GET /.well-known/catlog-jwks.json</code></td><td>the public keys catlog signs licenses with</td></tr>
+    <tr><td><code>GET /.well-known/catlog-denylist.json</code></td><td>the signed revocation list</td></tr>
+    <tr><td><code>GET /healthz</code></td><td><code>{"ok": true}</code></td></tr>
+  </tbody>
+</table>
+<pre><code>curl -s {{.BaseURL}}/v1/leaderboards/biggest_lithobrake_survived | jq '.rows[0]'</code></pre>
+</section>
+
+<section id="docs-api-ingest">
+<h2>Ingest</h2>
+<p>
+  <code>POST /v1/ingest</code> takes Brotli-compressed NDJSON — one event envelope per line —
+  with <code>Content-Type: application/x-ndjson</code> and <code>Content-Encoding: br</code>.
+</p>
+<p>Two headers authenticate it, both ES256 compact JWS:</p>
+<ul>
+  <li><code>X-Catlog-License</code> — the long-lived license catlog signed when you claimed your handle. It names your handle and binds a public-key thumbprint in <code>cnf.jkt</code>.</li>
+  <li><code>X-Catlog-Proof</code> — signed per batch by the private key in your credential file, over the batch id, the request method and URL, and a hash of the exact bytes being sent.</li>
+</ul>
+<p>
+  Because the proof is signed by the key the license names, a stolen license alone ships nothing.
+  Batches chain: each proof carries a sequence number and the hash of the previous batch's body,
+  so a replayed or forked stream is detectable and is rejected rather than silently merged.
+</p>
+</section>
+
+<section id="docs-api-errors">
+<h2>Errors</h2>
+<p>Every error, everywhere, is the same shape:</p>
+<pre><code>{"error": "handle_taken", "detail": "that handle is already taken"}</code></pre>
+<p>
+  Codes: <code>bad_request</code>, <code>malformed_batch</code>, <code>unsupported_encoding</code>,
+  <code>license_invalid</code>, <code>license_expired</code>, <code>license_revoked</code>,
+  <code>proof_invalid</code>, <code>clock_skew</code>, <code>banned</code>, <code>stream_fork</code>,
+  <code>rate_limited</code>, <code>too_large</code>, <code>not_found</code>, <code>handle_taken</code>,
+  <code>handle_invalid</code>, <code>handle_reserved</code>, <code>quota_exceeded</code>,
+  <code>account_too_new</code>, <code>internal</code>.
+</p>
+<p>
+  A <code>clock_skew</code> response includes <code>server_time</code> in unix milliseconds, and every
+  response carries a <code>Date</code> header — that is how the mod corrects its own clock rather than
+  failing forever because a machine is five minutes fast.
+</p>
+</section>
+
+<section id="docs-api-dashboard">
+<h2>Dashboard API</h2>
+<p>Session-authenticated and same-origin only. This is what the dashboard page itself calls:</p>
+<table>
+  <tbody>
+    <tr><td><code>GET /api/me</code></td><td>your provider, quotas and license lifetime</td></tr>
+    <tr><td><code>GET /api/handles</code></td><td>your handles and their credential metadata</td></tr>
+    <tr><td><code>POST /api/handles</code></td><td><code>{handle, jwk}</code> → <code>{license}</code></td></tr>
+    <tr><td><code>POST /api/handles/{handle}/reissue</code></td><td><code>{jwk}</code> → <code>{license}</code></td></tr>
+    <tr><td><code>POST /api/handles/{handle}/revoke</code></td><td>revokes every live credential for that handle</td></tr>
+    <tr><td><code>POST /api/me/delete</code></td><td>deletes everything (see <a href="/docs/privacy">privacy</a>)</td></tr>
+    <tr><td><code>POST /api/logout</code></td><td>clears the session cookie</td></tr>
+  </tbody>
+</table>
+<p>
+  <code>jwk</code> is a public EC P-256 key as <code>{kty, crv, x, y}</code>. A JWK carrying a private
+  <code>d</code> is rejected outright: catlog will not accept your private key even by accident.
+</p>
+</section>
+{{- end}}
