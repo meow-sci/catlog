@@ -1,19 +1,19 @@
 {{define "content" -}}
-<hgroup>
+<div class="page-head">
   <h1 id="login-title">Sign in</h1>
   <p>You need an account to claim a handle and download a credential. Signing in is also the only thing catlog ever asks an identity provider for.</p>
-</hgroup>
+</div>
 
 <div id="login-choices">
   {{- range .Data.IdPs}}
-  <article class="login-choice">
-    <a id="login-{{.Key}}" href="{{.Start}}" role="button" class="contrast">Continue with {{.Name}}</a>
-    <p><small>{{.Note}}</small></p>
+  <article class="login-choice panel">
+    <a id="login-{{.Key}}" href="{{.Start}}" class="button">Continue with {{.Name}}</a>
+    <p>{{.Note}}</p>
   </article>
   {{- end}}
 </div>
 
-<article id="login-privacy">
+<article id="login-privacy" class="panel prose" style="margin-top: 1.5rem">
   <header><strong>What catlog learns about you</strong></header>
   <p>
     A single opaque identifier, hashed before it is stored. <strong>catlog never asks for your email address</strong>

@@ -115,11 +115,24 @@ test.describe("boards", () => {
     await expect(page.locator("#board-direction")).toHaveAttribute("data-ascending", "true");
     await expect(page.locator("#board-direction")).toContainText("Lowest wins");
 
+    // Read the figure out of `data-value`, never out of the rendered text.
+    //
+    // This board is a career-time board, so its unit is milliseconds and every
+    // cell renders as a duration — "5m 13s", "1h 01m". Stripping non-digits out
+    // of that produces 513 and 101, which happen to sort, so the old assertion
+    // would have gone on passing while asserting nothing. Every value cell now
+    // carries the exact float the API published; that is what to compare.
     const values = await page
       .locator("tr.board-row td.value")
-      .evaluateAll((els) => els.map((el) => Number(el.textContent?.replace(/[^\d.-]/g, ""))));
+      .evaluateAll((els) => els.map((el) => Number((el as HTMLElement).dataset.value)));
     expect(values.length).toBeGreaterThan(1);
+    expect(values.every((v) => Number.isFinite(v))).toBeTruthy();
     expect(values).toEqual([...values].sort((a, b) => a - b));
+
+    // And the cells really are rendered as durations, which is the whole reason
+    // the assertion above had to move.
+    const rendered = await page.locator("tr.board-row td.value").first().innerText();
+    expect(rendered).toMatch(/^\d[\d .]*\s?(ms|s)$|^\d+[dhmy]\s\d+[dhms]$/);
 
     // The HTML agrees with the JSON, direction included.
     const json = (await (await page.request.get("/v1/leaderboards/fastest_to_luna")).json()) as {
@@ -148,9 +161,17 @@ test.describe("boards", () => {
 
     const top = rows.first();
     await expect(top).toHaveAttribute("data-handle", TOP_HANDLE);
-    await expect(top.locator("td.value")).toHaveText(String(TOP_VALUE));
-    // The fold's context blob is rendered, not dumped as JSON.
-    await expect(top.locator("td.context")).toContainText("duna");
+    // The exact figure lives in `data-value`; the cell reads "214 m/s", because
+    // a value cell carries its own unit wherever it appears.
+    await expect(top.locator("td.value")).toHaveAttribute("data-value", String(TOP_VALUE));
+    await expect(top.locator("td.value")).toContainText(`${TOP_VALUE} m/s`);
+    // The fold's context blob is rendered as pairs, not dumped as JSON, and body
+    // names are title-cased to match the board titles the server generates.
+    await expect(top.locator("td.context")).toContainText("Duna");
+    // `flight` is a client-minted ULID: out of the default table, still inside
+    // the row's Details disclosure.
+    await expect(top.locator("td.context .ctx-key", { hasText: "flight" })).toHaveCount(0);
+    await expect(top.locator("td.context details.details-blob")).toHaveCount(1);
 
     // And the HTML agrees with the JSON the same server publishes.
     const api = await page.request.get(`/v1/leaderboards/${LITHOBRAKE}`);
@@ -168,19 +189,29 @@ test.describe("boards", () => {
     const row = page.locator(`#profile-stats tr[data-stat="${LITHOBRAKE}"]`);
     await expect(row).toBeVisible();
     await expect(row).toHaveAttribute("data-rank", "1");
-    await expect(row.locator("td.value")).toContainText(String(TOP_VALUE));
+    await expect(row.locator("td.value")).toHaveAttribute("data-value", String(TOP_VALUE));
+
+    // A rank now carries its denominator, which is what turns "#1" into a fact.
+    await expect(row.locator("td.rank")).toContainText(/#1 of \d+/);
+    await expect(row.locator("td.rank")).not.toHaveAttribute("data-players", "0");
 
     // Every RUD cause is seeded, so the counter boards are populated too.
-    await expect(page.locator(`#profile-stats tr[data-stat="rud_total"] td.value`)).toContainText("6");
+    const ruds = page.locator(`#profile-stats tr[data-stat="rud_total"] td.value`);
+    await expect(ruds).toHaveAttribute("data-value", "6");
+    await expect(ruds).toContainText("6 RUDs");
   });
 
   test("a flagged flight scores nothing", async ({ page }) => {
     // The demo dataset deliberately contains a flagged flight with a 999 m/s
     // impact and a 99.9 g window. Neither may appear anywhere.
+    //
+    // Asserted on `data-value` rather than on the rendered text: "999" as text
+    // would also match a grouped "1 999" and would not match a scaled cell at
+    // all, so the attribute is both stricter and more honest.
     await page.goto(`/boards/${LITHOBRAKE}`);
-    await expect(page.locator("tr.board-row", { hasText: "999" })).toHaveCount(0);
+    await expect(page.locator('tr.board-row td.value[data-value="999"]')).toHaveCount(0);
     await page.goto("/boards/peak_g_survived");
-    await expect(page.locator("tr.board-row", { hasText: "99.9" })).toHaveCount(0);
+    await expect(page.locator('tr.board-row td.value[data-value="99.9"]')).toHaveCount(0);
 
     // Same fact through the JSON, where the value is a number rather than text.
     for (const stat of [LITHOBRAKE, "peak_g_survived"]) {

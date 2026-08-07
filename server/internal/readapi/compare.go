@@ -107,7 +107,7 @@ type CompareRow struct {
 }
 
 func (s *Server) handleCompare(w http.ResponseWriter, r *http.Request) {
-	out, err := s.Compare(r.Context(), splitHandles(strings.Join(r.URL.Query()["handles"], ",")))
+	out, err := s.Compare(r.Context(), SplitHandles(strings.Join(r.URL.Query()["handles"], ",")))
 	if err != nil {
 		s.fail(w, r, err, "compare players")
 		return
@@ -115,13 +115,18 @@ func (s *Server) handleCompare(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, out)
 }
 
-// splitHandles parses `?handles=a,b,c` into a deduplicated, capped list in
+// SplitHandles parses `?handles=a,b,c` into a deduplicated, capped list in
 // request order.
 //
 // Repeating `?handles=` is accepted too — `a,b&handles=c` is the same request —
 // because a client building a URL from an array will do it either way and a
 // comparison is not the place to be strict about which.
-func splitHandles(raw string) []string {
+//
+// Exported because the server-rendered site renders `/compare?handles=` from the
+// same query string and must cap, deduplicate and order it identically: two
+// surfaces disagreeing about which eight of nine handles were kept is a bug
+// nobody would find twice.
+func SplitHandles(raw string) []string {
 	var (
 		out  []string
 		seen = map[string]bool{}

@@ -1,11 +1,16 @@
 package web
 
 import (
-	"github.com/meow-sci/catlog/server/internal/stats"
 	"net/http"
+	"net/url"
+	"sort"
+	"strconv"
+	"strings"
 
 	"github.com/meow-sci/catlog/server/internal/readapi"
+	"github.com/meow-sci/catlog/server/internal/stats"
 	"github.com/meow-sci/catlog/server/internal/store"
+	"github.com/starfederation/datastar-go/datastar"
 )
 
 // Cache headers. Public pages carry the §4.8 header — they are the same public
@@ -18,7 +23,7 @@ const (
 
 // --- GET / -------------------------------------------------------------------
 
-// homeData is the front page: the top of a few boards, plus the live feed.
+// homeData is the front page: where am I, what is happening, and how am I doing.
 type homeData struct {
 	Featured []readapi.BoardResponse
 	// Feed is the panel's server-rendered starting state. The SSE handler
@@ -26,6 +31,27 @@ type homeData struct {
 	// is not merely a nicety: it is what the front page shows to a reader whose
 	// browser never runs the datastar module at all.
 	Feed FeedList
+	// Tiles are the global "what is catlog holding" numbers.
+	Tiles homeTiles
+}
+
+// homeTiles are assembled from `GET /v1/leaderboards` and nothing else.
+//
+// That endpoint answers "how many players are on each board", which is not the
+// same question as "how many events exist" — but it is a question with a bounded
+// cost that catlog already computes for the index, and it is the honest version
+// of a front-page summary until somebody decides a public `/v1/stats` is worth
+// its unbounded half.
+type homeTiles struct {
+	// Boards is how many boards are published.
+	Boards int
+	// Placements is the sum of every board's population: one player on one
+	// board, counted once per board.
+	Placements int64
+	// BusiestTitle and BusiestCount name the most-populated board.
+	BusiestTitle string
+	BusiestStat  string
+	BusiestCount int64
 }
 
 func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
@@ -38,6 +64,18 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 	}); err != nil {
 		s.serverError(w, r, err, "read the activity feed")
 		return
+	}
+	list, err := s.deps.Read.BoardList(r.Context())
+	if err != nil {
+		s.serverError(w, r, err, "read the board list")
+		return
+	}
+	data.Tiles.Boards = len(list.Boards)
+	for _, b := range list.Boards {
+		data.Tiles.Placements += b.Count
+		if b.Count > data.Tiles.BusiestCount {
+			data.Tiles.BusiestCount, data.Tiles.BusiestTitle, data.Tiles.BusiestStat = b.Count, b.Title, b.Stat
+		}
 	}
 	for _, stat := range FeaturedBoards {
 		board, known, err := s.deps.Read.Board(r.Context(), stat, stats.PeriodAllTime, "", FeaturedRows, 0)
@@ -77,8 +115,65 @@ func (s *Server) handleBoards(w http.ResponseWriter, r *http.Request) {
 
 // --- GET /boards/{stat} ---------------------------------------------------------
 
+// boardData is one board page: the rows, plus what the page needs to offer the
+// window selector and the pager.
+type boardData struct {
+	readapi.BoardResponse
+	// Periods are the windows this board can be read over, in display order.
+	Periods []string
+	// HasMore says a next page probably exists.
+	//
+	// Inferred from a full page rather than known: `BoardResponse` publishes no
+	// total, deliberately, and inferring is honest — a full page might be the
+	// last one, in which case the next page says "nobody is on this board yet"
+	// and the reader has lost nothing.
+	HasMore bool
+	// Prev and Next are offsets, valid only when the corresponding flag is set.
+	Prev, Next int
+	// FirstRank and LastRank are what the pager counts out loud.
+	FirstRank, LastRank int
+}
+
+// periodLabels are how a window is written for a reader. The API's keys are
+// durations ("weekly"); what a reader wants to click is the window ("This
+// week"), which is also what makes the selector answer "what happened lately"
+// rather than "pick a projection".
+var periodLabels = map[string]string{
+	stats.PeriodAllTime: "All time",
+	stats.PeriodDaily:   "Today",
+	stats.PeriodWeekly:  "This week",
+	stats.PeriodMonthly: "This month",
+	stats.PeriodYearly:  "This year",
+}
+
+// periodLabel is [periodLabels] with a fallback, so a window added to the API
+// renders its own key rather than an empty chip.
+func periodLabel(period string) string {
+	if label, ok := periodLabels[period]; ok {
+		return label
+	}
+	return period
+}
+
 func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
-	board, known, err := s.deps.Read.Board(r.Context(), r.PathValue("stat"), stats.PeriodAllTime, "", BoardRows, 0)
+	period, ok := stats.ValidPeriod(r.URL.Query().Get("period"))
+	if !ok {
+		// A window this server does not serve is not a board that does not
+		// exist: say which of the two it is.
+		s.notFound(w, r, "catlog has no such window. Try all time, today, this week, this month or this year.")
+		return
+	}
+	offset := 0
+	if raw := r.URL.Query().Get("offset"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 0 {
+			s.notFound(w, r, "That is not a page of this board.")
+			return
+		}
+		offset = n
+	}
+
+	board, known, err := s.deps.Read.Board(r.Context(), r.PathValue("stat"), period, "", BoardRows, offset)
 	switch {
 	case !known:
 		s.notFound(w, r, "No such leaderboard.")
@@ -87,10 +182,20 @@ func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, r, err, "read the leaderboard")
 		return
 	}
+
+	data := boardData{
+		BoardResponse: board,
+		Periods:       stats.Periods(),
+		HasMore:       len(board.Rows) >= board.Limit,
+		Prev:          max(board.Offset-board.Limit, 0),
+		Next:          board.Offset + board.Limit,
+		FirstRank:     board.Offset + 1,
+		LastRank:      board.Offset + len(board.Rows),
+	}
 	s.render(w, r, http.StatusOK, "board", publicCache, page{
 		Title: board.Title + " — catlog",
 		Nav:   "boards",
-		Data:  board,
+		Data:  data,
 	})
 }
 
@@ -112,6 +217,282 @@ func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {
 		Title: player.Handle + " — catlog",
 		Nav:   "boards",
 		Data:  player,
+	})
+}
+
+// --- GET /p/{handle}/events -------------------------------------------------------
+
+// EventRows is one page of the raw log.
+const EventRows = 50
+
+// eventsData is `/p/{handle}/events`.
+type eventsData struct {
+	readapi.EventsResponse
+	// Types are the event types present on this page, so the filter offers what
+	// the reader can actually see rather than the whole §4.2 taxonomy.
+	Types []string
+	// Filter is the active `?type=`, empty for none.
+	Filter string
+	// Before echoes the cursor this page was read at, so "start again" can be
+	// offered only when it would do something.
+	Before string
+	// NextURL is the link to the next (older) page, empty at the end of the log.
+	//
+	// It is built from `Next` and nothing else: a filtered page that hit the
+	// server's scan bound comes back short *with* a cursor and is not the end of
+	// the log, so paging until a page looks short would silently truncate
+	// somebody's history.
+	NextURL string
+}
+
+func (s *Server) handlePlayerEvents(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	handle := r.PathValue("handle")
+	filter := q.Get("type")
+
+	var before int64
+	if raw := q.Get("before"); raw != "" {
+		n, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || n < 0 {
+			s.notFound(w, r, "That is not a cursor catlog issued.")
+			return
+		}
+		before = n
+	}
+
+	out, known, err := s.deps.Read.PlayerEvents(r.Context(), handle, filter, before, EventRows)
+	switch {
+	case !known:
+		s.notFound(w, r, "No such player.")
+		return
+	case err != nil:
+		s.serverError(w, r, err, "read the event log")
+		return
+	}
+
+	data := eventsData{EventsResponse: out, Filter: filter, Before: q.Get("before")}
+	seen := map[string]bool{}
+	for _, ev := range out.Events {
+		if !seen[ev.Type] {
+			seen[ev.Type] = true
+			data.Types = append(data.Types, ev.Type)
+		}
+	}
+	sort.Strings(data.Types)
+	if out.Next != "" {
+		next := url.Values{"before": {out.Next}}
+		if filter != "" {
+			next.Set("type", filter)
+		}
+		data.NextURL = "/p/" + url.PathEscape(out.Handle) + "/events?" + next.Encode()
+	}
+
+	s.render(w, r, http.StatusOK, "events", publicCache, page{
+		Title: out.Handle + "'s events — catlog",
+		Nav:   "boards",
+		Data:  data,
+	})
+}
+
+// --- GET /search -------------------------------------------------------------------
+
+// SearchRows is how many handles a results page shows.
+const SearchRows = readapi.MaxSearchLimit
+
+// searchData is `/search?q=`.
+type searchData struct {
+	// Query is what was typed, trimmed, in the caller's casing.
+	Query string
+	// TooShort is a query of one character. It is not an error and must not read
+	// like one: the API answers 400 below two characters, so the page simply
+	// does not ask.
+	TooShort bool
+	Result   readapi.SearchResponse
+	// With is the comparison set being assembled, carried through the URL so
+	// "add this one too" is a link rather than a session.
+	With []string
+}
+
+func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
+	if len(q) > readapi.MaxQueryLen {
+		// Longer than any handle can be, so nothing can match. Truncating is
+		// what the search box does client-side; doing it here too means a pasted
+		// URL behaves the same way rather than 400ing.
+		q = q[:readapi.MaxQueryLen]
+	}
+	data := searchData{
+		Query:    q,
+		TooShort: q != "" && len(q) < readapi.MinQueryLen,
+		With:     readapi.SplitHandles(strings.Join(r.URL.Query()["with"], ",")),
+	}
+	if len(q) >= readapi.MinQueryLen {
+		data.Result = s.deps.Read.Search(q, SearchRows)
+	}
+	s.render(w, r, http.StatusOK, "search", publicCache, page{
+		Title:  "Search — catlog",
+		Nav:    "search",
+		Search: q,
+		Data:   data,
+	})
+}
+
+// handleSearchSuggest answers the header box's debounced datastar patch with a
+// `#search-suggest` list.
+//
+// It is an enhancement and nothing depends on it: the box is an ordinary
+// `<form action="/search" method="get">` that works with JavaScript off, and
+// this only replaces one element inside it.
+func (s *Server) handleSearchSuggest(w http.ResponseWriter, r *http.Request) {
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
+	if len(q) > readapi.MaxQueryLen {
+		q = q[:readapi.MaxQueryLen]
+	}
+	var result readapi.SearchResponse
+	if len(q) >= readapi.MinQueryLen {
+		result = s.deps.Read.Search(q, SuggestRows)
+	}
+	// Below two characters this renders an empty list, which is what clears the
+	// popover on backspace. It never renders an error: the right fix for the
+	// API's 400 is not to send the request.
+	html, err := s.fragment("search-suggest", result)
+	if err != nil {
+		s.deps.Log.Error("rendering search suggestions failed", "err", err)
+		return
+	}
+	sse := datastar.NewSSE(w, r)
+	if err := sse.PatchElements(html); err != nil {
+		s.deps.Log.Debug("search suggestion patch failed", "err", err)
+	}
+}
+
+// SuggestRows is how many suggestions the header box offers. Smaller than a
+// results page: this is a shortcut, not the search.
+const SuggestRows = 8
+
+// --- GET /compare -------------------------------------------------------------------
+
+// compareData is `/compare?handles=`.
+type compareData struct {
+	readapi.CompareResponse
+	// Asked is how many handles the query string named before the cap.
+	Asked int
+	// Columns is the effective handle list, with the URL that drops each one.
+	Columns []compareColumn
+	// Rows is the pivot: one per board, each already aligned to Columns, so the
+	// template never has to look a handle up in a map.
+	Rows []compareRow
+}
+
+// compareColumn is one handle heading.
+type compareColumn struct {
+	readapi.ComparePlayer
+	// RemoveURL is the comparison without this handle.
+	RemoveURL string
+}
+
+// compareRow is one board across every compared handle.
+type compareRow struct {
+	readapi.CompareBoard
+	// Cells is one per column, in column order. A handle that is not on this
+	// board gets an absent cell rather than a zero one — the same rule the folds
+	// follow for a missing measurement.
+	Cells []compareCell
+}
+
+// compareCell is one player's placement on one compared board, or its absence.
+type compareCell struct {
+	Present bool
+	Best    bool
+	Row     readapi.CompareRow
+}
+
+// pivot aligns each board's rows to the column order and marks the best cell.
+//
+// Two rules, both of which a comparison table gets wrong by default:
+//
+//   - **"Best" is decided by the board's published `ascending`, never inferred
+//     from the numbers.** `fastest_to_luna` ranks the smallest value first, and
+//     a table that guessed would crown the slowest ascent on exactly the boards
+//     where the mistake is hardest to spot.
+//   - **A tie marks every tied cell.** The counter boards tie constantly — two
+//     players with one ocean-impact RUD each — and picking whichever arrived
+//     first would be an arbitrary winner presented as a fact.
+//
+// A board only one of them is on marks nothing: there is nobody to be better
+// than, and a mark there would read as a claim about the board rather than about
+// the comparison.
+func pivot(out readapi.CompareResponse) []compareRow {
+	rows := make([]compareRow, 0, len(out.Boards))
+	for _, board := range out.Boards {
+		byHandle := make(map[string]readapi.CompareRow, len(board.Rows))
+		best, haveBest := 0.0, false
+		for _, row := range board.Rows {
+			byHandle[row.Handle] = row
+			if !haveBest || (board.Ascending && row.Value < best) || (!board.Ascending && row.Value > best) {
+				best, haveBest = row.Value, true
+			}
+		}
+		contested := haveBest && len(board.Rows) > 1
+		cells := make([]compareCell, 0, len(out.Handles))
+		for _, col := range out.Handles {
+			row, ok := byHandle[col.Handle]
+			cells = append(cells, compareCell{
+				Present: ok,
+				Best:    ok && contested && row.Value == best,
+				Row:     row,
+			})
+		}
+		rows = append(rows, compareRow{CompareBoard: board, Cells: cells})
+	}
+	return rows
+}
+
+func (s *Server) handleCompare(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	raw := strings.Join(q["handles"], ",")
+
+	// `?add=` is the form's field. It is merged and redirected away rather than
+	// rendered, so the URL in the address bar is always the comparison — which
+	// is the entire point of holding the set in the query string.
+	if add := strings.TrimSpace(q.Get("add")); add != "" {
+		w.Header().Set("Cache-Control", publicCache)
+		http.Redirect(w, r, comparePath(raw+","+add), http.StatusFound)
+		return
+	}
+
+	asked := 0
+	for _, h := range strings.Split(raw, ",") {
+		if strings.TrimSpace(h) != "" {
+			asked++
+		}
+	}
+	handles := readapi.SplitHandles(raw)
+
+	out, err := s.deps.Read.Compare(r.Context(), handles)
+	if err != nil {
+		s.serverError(w, r, err, "compare those players")
+		return
+	}
+
+	data := compareData{CompareResponse: out, Asked: asked, Rows: pivot(out)}
+	for _, player := range out.Handles {
+		rest := make([]string, 0, len(out.Handles)-1)
+		for _, other := range out.Handles {
+			if other.Handle != player.Handle {
+				rest = append(rest, other.Handle)
+			}
+		}
+		data.Columns = append(data.Columns, compareColumn{
+			ComparePlayer: player,
+			RemoveURL:     comparePath(rest),
+		})
+	}
+
+	s.render(w, r, http.StatusOK, "compare", publicCache, page{
+		Title: "Compare — catlog",
+		Nav:   "compare",
+		Data:  data,
 	})
 }
 

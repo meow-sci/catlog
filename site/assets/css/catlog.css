@@ -1,193 +1,1428 @@
 /*
- * catlog site styles — layered on top of @picocss/pico (vendored to dist/vendor/).
- * The Go server renders every page (INITIAL_IMPL_PLAN §5.7); this file carries
- * only the catlog-specific bits. Pico supplies the reset, the type scale, the
- * dark theme and the form controls, so there is deliberately not much here.
+ * catlog — the whole stylesheet.
+ *
+ * There is no framework under this file any more. @picocss/pico used to supply
+ * the reset, the type scale, the theme and the form controls; its default scale
+ * (an h1 at 2× body, an hgroup subtitle outsizing the tables beneath it) was the
+ * entire "the CSS is huge" complaint, so it is gone and this file carries all of
+ * it. That is the trade: ~1000 hand-written lines that we chose, instead of 193
+ * of ours layered over 83 kB of somebody else's.
+ *
+ * The token names and values are shared with the React reader (docs/ui-design.md
+ * §2): same names, same numbers, declared here as custom properties and there in
+ * Tailwind's @theme. Two frontends showing one leaderboard in two greens would
+ * defeat the point of having two.
+ *
+ * Contents
+ *   1. font face
+ *   2. tokens — colour, type, space, radius, motion
+ *   3. reset
+ *   4. elements — type scale, links, code, forms
+ *   5. layout — header, main, footer, panels
+ *   6. tables — boards, profiles, comparison, the raw log
+ *   7. the live feed
+ *   8. "me" — the local handle, and what it lights up
+ *   9. search and compare
+ *  10. dashboard and the credential wizard
+ *  11. docs prose and errors
  */
 
-:root {
-  --catlog-accent: #ff8c42;
-  --catlog-dim: color-mix(in srgb, currentColor 55%, transparent);
+/* --- 1. font face ------------------------------------------------------------
+ *
+ * Inter Variable, self-hosted, latin subset, copied into dist/fonts/ by
+ * scripts/build.mjs. The unicode-range is the package's own for this subset and
+ * is why one 48 kB file is enough: every glyph catlog renders is inside it,
+ * U+202F (units.Format's group separator) included.
+ */
+@font-face {
+  font-family: 'Inter Variable';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url('/static/fonts/inter-latin-wght-normal.woff2') format('woff2-variations');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+    U+2212, U+2215, U+FEFF, U+FFFD;
 }
 
-/* --- navigation ------------------------------------------------------------- */
+/* --- 2. tokens --------------------------------------------------------------- */
 
-header .brand {
+:root {
+  /* light */
+  --color-canvas: #ffffff;
+  --color-panel: #f7f8f8;
+  --color-panel-raised: #ffffff;
+  --color-panel-sunken: #f0f1f2;
+
+  --color-border: #dfe1e4;
+  --color-border-strong: #c3c7cc;
+
+  --color-fg: #16181b;
+  --color-fg-muted: #5a6068;
+  --color-fg-subtle: #868c94;
+
+  --color-accent: #2cfa1f;
+  --color-accent-hover: #54fb4a;
+  --color-accent-press: #1fd615;
+  --color-accent-fg: #052008;
+  /*
+   * #2cfa1f against white is 1.42:1 — not "a bit low", unreadable. So the raw
+   * green is a FILL in light theme and never a text colour; --color-accent-text
+   * (5.5:1 on white) carries every accent-coloured word, link and focus ring and
+   * collapses to the raw green in dark, where it is ~14.8:1.
+   * Never write `color: var(--color-accent)`.
+   */
+  --color-accent-text: #147a0d;
+
+  --color-danger: #b91c1c;
+  --color-danger-fg: #ffffff;
+  --color-warning: #8a6100;
+  --color-warning-fg: #ffffff;
+
+  --color-wash-hover: rgb(0 0 0 / 0.05);
+  --color-wash-press: rgb(0 0 0 / 0.09);
+  --color-wash-selected: rgb(44 250 31 / 0.14);
+
+  --shadow-panel: 0 1px 2px rgb(0 0 0 / 0.05);
+  --shadow-popover: 0 12px 32px -12px rgb(0 0 0 / 0.25);
+
+  /* type — anchored at 16 px, nothing above 24 px anywhere on the site */
+  --font-sans: 'Inter Variable', Inter, ui-sans-serif, system-ui, -apple-system,
+    'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', 'Fira Code', Menlo,
+    Consolas, monospace;
+
+  --text-xs: 0.75rem;
+  --text-sm: 0.875rem;
+  --text-base: 1rem;
+  --text-lg: 1.125rem;
+  --text-xl: 1.25rem;
+  --text-2xl: 1.5rem;
+
+  --leading-tight: 1.25;
+  --leading-snug: 1.4;
+  --leading-normal: 1.5;
+
+  --weight-normal: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+
+  /* space, radius, borders */
+  --space-1: 0.125rem;
+  --space-2: 0.25rem;
+  --space-3: 0.5rem;
+  --space-4: 0.75rem;
+  --space-5: 1rem;
+  --space-6: 1.5rem;
+  --space-7: 2rem;
+  --space-8: 3rem;
+  --space-9: 4rem;
+
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-full: 9999px;
+
+  --border-width: 1px;
+  --focus-width: 2px;
+  --focus-offset: 2px;
+
+  --row-py: 0.5rem;
+  --row-py-dense: 0.25rem;
+  --row-px: 0.75rem;
+  --panel-p: 1rem;
+
+  --measure: 65ch;
+  --container: 74rem;
+
+  color-scheme: light dark;
+}
+
+/* Dark is flexo's token set, verbatim where it applies. Declared three times so
+   the viewer's explicit choice wins in both directions and the OS preference
+   wins when there is no choice. */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-canvas: #0b0c0e;
+    --color-panel: #161719;
+    --color-panel-raised: #1f2125;
+    --color-panel-sunken: #0e0f11;
+    --color-border: #2a2d32;
+    --color-border-strong: #3a3e45;
+    --color-fg: #e8eaed;
+    --color-fg-muted: #9aa0a8;
+    --color-fg-subtle: #61666e;
+    --color-accent-text: #2cfa1f;
+    --color-danger: #ef4444;
+    --color-danger-fg: #ffffff;
+    --color-warning: #f5c542;
+    --color-warning-fg: #1a1400;
+    --color-wash-hover: rgb(255 255 255 / 0.06);
+    --color-wash-press: rgb(255 255 255 / 0.1);
+    --color-wash-selected: rgb(44 250 31 / 0.12);
+    --shadow-panel: none;
+    --shadow-popover: 0 16px 48px -12px rgb(0 0 0 / 0.6);
+  }
+}
+
+:root[data-theme='dark'] {
+  --color-canvas: #0b0c0e;
+  --color-panel: #161719;
+  --color-panel-raised: #1f2125;
+  --color-panel-sunken: #0e0f11;
+  --color-border: #2a2d32;
+  --color-border-strong: #3a3e45;
+  --color-fg: #e8eaed;
+  --color-fg-muted: #9aa0a8;
+  --color-fg-subtle: #61666e;
+  --color-accent-text: #2cfa1f;
+  --color-danger: #ef4444;
+  --color-danger-fg: #ffffff;
+  --color-warning: #f5c542;
+  --color-warning-fg: #1a1400;
+  --color-wash-hover: rgb(255 255 255 / 0.06);
+  --color-wash-press: rgb(255 255 255 / 0.1);
+  --color-wash-selected: rgb(44 250 31 / 0.12);
+  --shadow-panel: none;
+  --shadow-popover: 0 16px 48px -12px rgb(0 0 0 / 0.6);
+  color-scheme: dark;
+}
+
+:root[data-theme='light'] {
+  --color-canvas: #ffffff;
+  --color-panel: #f7f8f8;
+  --color-panel-raised: #ffffff;
+  --color-panel-sunken: #f0f1f2;
+  --color-border: #dfe1e4;
+  --color-border-strong: #c3c7cc;
+  --color-fg: #16181b;
+  --color-fg-muted: #5a6068;
+  --color-fg-subtle: #868c94;
+  --color-accent-text: #147a0d;
+  --color-danger: #b91c1c;
+  --color-danger-fg: #ffffff;
+  --color-warning: #8a6100;
+  --color-warning-fg: #ffffff;
+  --color-wash-hover: rgb(0 0 0 / 0.05);
+  --color-wash-press: rgb(0 0 0 / 0.09);
+  --color-wash-selected: rgb(44 250 31 / 0.14);
+  --shadow-panel: 0 1px 2px rgb(0 0 0 / 0.05);
+  --shadow-popover: 0 12px 32px -12px rgb(0 0 0 / 0.25);
+  color-scheme: light;
+}
+
+/* --- 3. reset ---------------------------------------------------------------- */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+* {
+  margin: 0;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  tab-size: 2;
+}
+
+body {
+  min-height: 100vh;
+  background: var(--color-canvas);
+  color: var(--color-fg);
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  font-weight: var(--weight-normal);
+  line-height: var(--leading-normal);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  display: flex;
+  flex-direction: column;
+}
+
+img,
+svg {
+  display: block;
+  max-width: 100%;
+}
+
+input,
+button,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+ul,
+ol {
+  padding-left: var(--space-6);
+}
+
+/* One ring for everything, on :focus-visible and on [data-focus-visible] so the
+   two frontends focus identically. */
+:focus-visible,
+[data-focus-visible] {
+  outline: var(--focus-width) solid var(--color-accent-text);
+  outline-offset: var(--focus-offset);
+  border-radius: inherit;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* --- 4. elements ------------------------------------------------------------- */
+
+h1,
+h2,
+h3,
+h4 {
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-tight);
+  text-wrap: balance;
+}
+
+h1 {
+  font-size: var(--text-2xl);
+  letter-spacing: -0.011em;
+}
+
+h2 {
+  font-size: var(--text-xl);
+  letter-spacing: -0.011em;
+}
+
+h3 {
+  font-size: var(--text-lg);
+}
+
+h4 {
+  font-size: var(--text-base);
+}
+
+p,
+li {
+  line-height: var(--leading-normal);
+}
+
+small,
+.text-sm {
+  font-size: var(--text-sm);
+}
+
+.text-xs {
+  font-size: var(--text-xs);
+}
+
+.muted {
+  color: var(--color-fg-muted);
+}
+
+/* A label, not a heading: uppercase, small, tracked out. */
+.label {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-fg-muted);
+}
+
+a {
+  color: var(--color-accent-text);
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+  text-decoration-thickness: from-font;
+  border-radius: var(--radius-sm);
+}
+
+a:hover {
+  text-decoration-thickness: 2px;
+}
+
+code,
+kbd,
+pre {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+}
+
+code {
+  background: var(--color-panel-sunken);
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: 0.1em 0.35em;
+}
+
+pre {
+  background: var(--color-panel-sunken);
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-5);
+  overflow-x: auto;
+  line-height: var(--leading-snug);
+}
+
+pre code {
+  background: none;
+  border: 0;
+  padding: 0;
+}
+
+mark {
+  background: var(--color-wash-selected);
+  color: inherit;
+  border-radius: var(--radius-sm);
+  padding: 0.05em 0.3em;
+}
+
+hr {
+  border: 0;
+  border-top: var(--border-width) solid var(--color-border);
+  margin-block: var(--space-6);
+}
+
+/* forms */
+
+label {
+  display: block;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--color-fg-muted);
+}
+
+input[type='text'],
+input[type='search'],
+select {
+  width: 100%;
+  min-height: 2.25rem;
+  padding: var(--space-2) var(--space-4);
+  background: var(--color-panel-raised);
+  color: var(--color-fg);
+  border: var(--border-width) solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  transition: border-color 150ms ease, background-color 150ms ease;
+}
+
+input::placeholder {
+  color: var(--color-fg-subtle);
+}
+
+input:disabled,
+button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+button,
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  min-height: 2.25rem;
+  padding: var(--space-3) var(--space-5);
+  background: var(--color-accent);
+  color: var(--color-accent-fg);
+  border: var(--border-width) solid transparent;
+  border-radius: var(--radius-md);
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
+  text-decoration: none;
+  cursor: pointer;
+  transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease;
+}
+
+button:hover:not(:disabled),
+.button:hover {
+  background: var(--color-accent-hover);
   text-decoration: none;
 }
 
-header .brand strong {
-  color: var(--catlog-accent);
-  letter-spacing: 0.02em;
+button:active:not(:disabled),
+.button:active {
+  background: var(--color-accent-press);
 }
 
-.catlog-footer {
-  border-top: 1px solid var(--pico-muted-border-color, #333);
-  margin-top: 3rem;
-  padding-top: 1rem;
-  color: var(--catlog-dim);
+button.secondary,
+.button.secondary {
+  background: transparent;
+  color: var(--color-fg);
+  border-color: var(--color-border-strong);
 }
 
-/* --- boards ----------------------------------------------------------------- */
+button.secondary:hover:not(:disabled),
+.button.secondary:hover {
+  background: var(--color-wash-hover);
+}
 
-.catlog-board td.rank,
-.catlog-board th.rank,
-#profile-stats td.rank,
-#profile-stats th.rank {
+button.danger,
+.button.danger {
+  background: transparent;
+  color: var(--color-danger);
+  border-color: var(--color-danger);
+}
+
+button.danger:hover:not(:disabled) {
+  background: var(--color-danger);
+  color: var(--color-danger-fg);
+}
+
+button.quiet {
+  background: none;
+  border-color: transparent;
+  color: var(--color-fg-muted);
+  padding: var(--space-2) var(--space-3);
+  min-height: 1.75rem;
+  font-size: var(--text-sm);
+}
+
+button.quiet:hover:not(:disabled) {
+  background: var(--color-wash-hover);
+  color: var(--color-fg);
+}
+
+details summary {
+  cursor: pointer;
+  color: var(--color-accent-text);
+}
+
+@media (pointer: coarse) {
+  button,
+  .button,
+  input[type='text'],
+  input[type='search'] {
+    min-height: 2.75rem;
+  }
+}
+
+/* --- 5. layout --------------------------------------------------------------- */
+
+.container {
+  width: 100%;
+  max-width: var(--container);
+  margin-inline: auto;
+  padding-inline: var(--space-5);
+}
+
+#site-header {
+  border-bottom: var(--border-width) solid var(--color-border);
+  background: var(--color-canvas);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+#site-header .container {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-4);
+  padding-block: var(--space-4);
+}
+
+#nav-home {
+  font-weight: var(--weight-semibold);
+  font-size: var(--text-lg);
+  color: var(--color-fg);
+  text-decoration: none;
+  letter-spacing: -0.011em;
+}
+
+#nav-home::first-letter {
+  color: var(--color-accent-text);
+}
+
+#site-nav {
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+  font-size: var(--text-sm);
+}
+
+#site-nav a {
+  color: var(--color-fg-muted);
+  text-decoration: none;
+  padding-block: var(--space-2);
+}
+
+#site-nav a:hover {
+  color: var(--color-fg);
+}
+
+#site-nav a[aria-current='page'] {
+  color: var(--color-fg);
+  font-weight: var(--weight-medium);
+  box-shadow: inset 0 -2px 0 var(--color-accent);
+}
+
+#header-tail {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+main {
+  flex: 1;
+  padding-block: var(--space-7) var(--space-8);
+}
+
+#site-footer {
+  border-top: var(--border-width) solid var(--color-border);
+  padding-block: var(--space-5);
+  color: var(--color-fg-muted);
+  font-size: var(--text-sm);
+}
+
+#site-footer a {
+  color: var(--color-fg-muted);
+}
+
+/* The page's own heading block. Deliberately not a scaled-up hero: the subtitle
+   is body text, and the widest thing on the page is the table. */
+.page-head {
+  margin-bottom: var(--space-6);
+}
+
+.page-head p {
+  color: var(--color-fg-muted);
+  max-width: var(--measure);
+  margin-top: var(--space-3);
+}
+
+.stack > * + * {
+  margin-top: var(--space-6);
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.prose {
+  max-width: var(--measure);
+}
+
+.prose > * + * {
+  margin-top: var(--space-5);
+}
+
+.prose h2 {
+  margin-top: var(--space-7);
+}
+
+.prose h3 {
+  margin-top: var(--space-6);
+}
+
+.prose li + li {
+  margin-top: var(--space-2);
+}
+
+/* One container shape for the whole site. There is no second card style. */
+.panel {
+  background: var(--color-panel);
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-panel);
+  padding: var(--panel-p);
+}
+
+.panel > header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
+.panel > footer {
+  margin-top: var(--space-4);
+  font-size: var(--text-sm);
+  color: var(--color-fg-muted);
+}
+
+.panel-title {
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+}
+
+.grid {
+  display: grid;
+  gap: var(--space-5);
+  grid-template-columns: repeat(auto-fit, minmax(19rem, 1fr));
+}
+
+.tiles {
+  display: grid;
+  gap: var(--space-4);
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+}
+
+.tile {
+  background: var(--color-panel);
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-5);
+}
+
+.tile .label {
+  display: block;
+  margin-bottom: var(--space-2);
+}
+
+.stat-value {
+  display: block;
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
   font-variant-numeric: tabular-nums;
-  text-align: right;
-  width: 3rem;
 }
 
-.catlog-board td.value,
-.catlog-board th.value,
-#boards-index td.value,
-#boards-index th.value,
-#profile-stats td.value,
-#profile-stats th.value {
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-sm);
+  background: var(--color-panel-sunken);
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius-full);
+  text-decoration: none;
+  color: var(--color-fg);
+}
+
+a.chip:hover {
+  background: var(--color-wash-hover);
+  text-decoration: none;
+}
+
+.chip.selected {
+  background: var(--color-wash-selected);
+  border-color: var(--color-accent-text);
+  color: var(--color-fg);
+}
+
+.chip-remove {
+  color: var(--color-fg-muted);
+  text-decoration: none;
+  font-weight: var(--weight-semibold);
+  line-height: 1;
+}
+
+/* --- 6. tables --------------------------------------------------------------- */
+
+/* Wide tables scroll inside themselves rather than making the page scroll. */
+.table-wrap {
+  overflow-x: auto;
+  max-width: 100%;
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-panel);
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-base);
+}
+
+thead th {
+  text-align: left;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-fg-muted);
+  white-space: nowrap;
+  border-bottom: var(--border-width) solid var(--color-border);
+}
+
+/* A unit header is a label of what the column holds — "m/s", "ms", "RUDs" — and
+   is written the way the API writes it. Uppercasing it would shout a unit, and
+   "M/S" is not a unit. */
+thead th.value {
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+/* A row header (the board name in a comparison) reads as a heading, not as a
+   centred cell, which is what the UA default would make it. */
+tbody th {
+  text-align: left;
+  font-weight: var(--weight-medium);
+}
+
+th,
+td {
+  padding: var(--row-py) var(--row-px);
+  vertical-align: baseline;
+}
+
+tbody tr + tr td {
+  border-top: var(--border-width) solid var(--color-border);
+}
+
+tbody tr {
+  transition: background-color 150ms ease;
+}
+
+tbody tr:hover {
+  background: var(--color-wash-hover);
+}
+
+/* Tabular figures on every number in a table or a stat block — and nowhere in
+   prose. `font-variant-numeric`, never `font-feature-settings`: the low-level
+   property replaces rather than composes, so a descendant setting it for
+   anything else silently drops tnum and a column un-aligns invisibly. */
+td.value,
+th.value,
+td.rank,
+th.rank,
+td.num,
+th.num,
+.tnum,
+.stat-value,
+time {
   font-variant-numeric: tabular-nums;
+}
+
+td.value,
+th.value,
+td.rank,
+th.rank,
+td.num,
+th.num {
   text-align: right;
   white-space: nowrap;
 }
 
-.catlog-board tr[data-rank="1"] td.rank {
-  color: var(--catlog-accent);
-  font-weight: 700;
+td.rank,
+th.rank {
+  width: 3.5rem;
 }
 
-.catlog-board td.when,
-#profile-stats td.when {
+td.handle {
+  font-weight: var(--weight-medium);
+}
+
+td.handle a {
+  color: var(--color-fg);
+  text-decoration: none;
+}
+
+td.handle a:hover {
+  color: var(--color-accent-text);
+  text-decoration: underline;
+}
+
+td.when,
+.when {
   white-space: nowrap;
-  color: var(--catlog-dim);
-  font-size: 0.85em;
+  color: var(--color-fg-muted);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
 }
 
-.ctx-pair {
-  display: inline-block;
-  margin-right: 0.6rem;
-  font-size: 0.85em;
-  white-space: nowrap;
-}
-
-.ctx-key {
-  color: var(--catlog-dim);
+/* The medal is the rank cell, not a colour on the whole row. */
+tr[data-rank='1'] td.rank,
+tr[data-rank='2'] td.rank,
+tr[data-rank='3'] td.rank {
+  color: var(--color-accent-text);
+  font-weight: var(--weight-semibold);
 }
 
 .board-empty td,
 .credential-empty td,
-#profile-empty td {
-  color: var(--catlog-dim);
+#profile-empty td,
+.empty {
+  color: var(--color-fg-muted);
+  font-style: italic;
 }
 
-.featured-board table {
-  margin-bottom: 0;
+/* The fold's context blob, rendered as pairs rather than dumped as JSON. */
+td.context {
+  font-size: var(--text-sm);
 }
 
-/* Wide tables scroll inside themselves rather than making the page scroll. */
-.catlog-board,
-#boards-index,
-#profile-stats,
-.credentials {
+.ctx-pair {
+  display: inline-block;
+  margin-right: var(--space-4);
+  white-space: nowrap;
+}
+
+.ctx-key {
+  color: var(--color-fg-muted);
+}
+
+.ctx-pair .ctx-value {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Disclosure for the row's full blob, exactly as the API sent it. */
+details.details-blob summary {
+  font-size: var(--text-sm);
+  color: var(--color-fg-muted);
+}
+
+details.details-blob[open] summary {
+  color: var(--color-accent-text);
+}
+
+details.details-blob pre {
+  margin-top: var(--space-3);
+  font-size: var(--text-xs);
+  max-height: 20rem;
+}
+
+/* The rewind dagger. It qualifies a number and does nothing else — the row ranks
+   normally. */
+.rewound {
+  color: var(--color-warning);
+  cursor: help;
+  margin-left: 0.15em;
+}
+
+.direction {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Period selector and pager */
+.periods {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-bottom: var(--space-5);
+}
+
+.pager {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  margin-top: var(--space-5);
+  font-size: var(--text-sm);
+}
+
+.pager .count {
+  color: var(--color-fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.pager [aria-disabled='true'] {
+  color: var(--color-fg-subtle);
+  text-decoration: none;
+  cursor: default;
+}
+
+/* A rank with its denominator, plus the bar that makes "of 41" mean something. */
+.rank-of {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--space-1);
+}
+
+.rank-of .of {
+  color: var(--color-fg-muted);
+  font-size: var(--text-xs);
+}
+
+.rank-bar {
+  width: 4.5rem;
+  height: 3px;
+  border-radius: var(--radius-full);
+  background: var(--color-panel-sunken);
+  border: var(--border-width) solid var(--color-border);
+  overflow: hidden;
+}
+
+.rank-bar > span {
   display: block;
-  overflow-x: auto;
-  max-width: 100%;
+  height: 100%;
+  background: var(--color-accent);
 }
 
-/* --- live feed --------------------------------------------------------------- */
-
-.catlog-feed-panel {
-  margin-top: 2rem;
+tr.rank-top td.rank {
+  color: var(--color-accent-text);
+  font-weight: var(--weight-semibold);
 }
 
-.catlog-feed {
+tr.rank-high td.rank {
+  color: var(--color-fg);
+}
+
+tr.rank-rest td.rank {
+  color: var(--color-fg-muted);
+}
+
+/* The comparison table. One row per board, one column per handle. */
+#compare-table td.value {
+  font-variant-numeric: tabular-nums;
+}
+
+#compare-table td.best {
+  color: var(--color-accent-text);
+  font-weight: var(--weight-semibold);
+}
+
+#compare-table td.absent {
+  color: var(--color-fg-subtle);
+  text-align: right;
+}
+
+#compare-table th.handle-col {
+  text-align: right;
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: var(--text-sm);
+}
+
+#compare-table th.handle-col a {
+  color: var(--color-fg);
+}
+
+#compare-table th.missing {
+  color: var(--color-fg-muted);
+  font-weight: var(--weight-normal);
+}
+
+.world-rank {
+  display: block;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-normal);
+  color: var(--color-fg-muted);
+}
+
+/* The raw event log. Dense, newest first. */
+#events-log td {
+  padding-block: var(--row-py-dense);
+  font-size: var(--text-sm);
+}
+
+#events-log td.type code {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--color-fg);
+}
+
+#events-log td.simt,
+#events-log th.simt {
+  text-align: right;
+}
+
+#events-log td.simt,
+#events-log td.recv {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  color: var(--color-fg-muted);
+}
+
+#events-log pre {
+  margin-top: var(--space-2);
+  font-size: var(--text-xs);
+  max-height: 24rem;
+}
+
+.event-ids {
+  color: var(--color-fg-muted);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums slashed-zero;
+  word-break: break-all;
+}
+
+/* --- 7. the live feed --------------------------------------------------------- */
+
+#feed {
   list-style: none;
   padding-left: 0;
-  margin-bottom: 0;
+  margin: 0;
   max-height: 26rem;
   overflow-y: auto;
 }
 
-.catlog-feed li {
-  list-style: none;
-  padding: 0.35rem 0;
-  border-bottom: 1px solid var(--pico-muted-border-color, #2a2a2a);
+#feed li {
+  display: flex;
+  gap: var(--space-4);
+  align-items: baseline;
+  padding: var(--row-py) 0;
+  border-bottom: var(--border-width) solid var(--color-border);
 }
 
-.catlog-feed li:last-child {
+#feed li:last-child {
   border-bottom: none;
 }
 
-.catlog-feed time {
-  color: var(--catlog-dim);
-  font-size: 0.8em;
-  font-variant-numeric: tabular-nums;
-  margin-right: 0.5rem;
+#feed time {
+  color: var(--color-fg-muted);
+  font-size: var(--text-xs);
+  white-space: nowrap;
 }
 
-/* A line patched in over SSE gets a brief highlight, so "it updated without a
-   reload" is visible rather than merely true. */
+/* The feed summary is a sentence, so it is prose and gets no tabular figures. */
+.feed-summary {
+  font-variant-numeric: normal;
+}
+
+.feed-empty {
+  color: var(--color-fg-muted);
+  font-style: italic;
+}
+
+/* A line patched in over SSE gets a brief flash, so "it updated without a
+   reload" is visible rather than merely true. This and the 150 ms hover
+   transition are the only two animations on the site. */
 @keyframes catlog-arrive {
-  from { background: color-mix(in srgb, var(--catlog-accent) 22%, transparent); }
-  to   { background: transparent; }
+  from {
+    background: rgb(44 250 31 / 0.22);
+  }
+  to {
+    background: transparent;
+  }
 }
 
-.catlog-feed li {
+#feed li {
   animation: catlog-arrive 1.2s ease-out;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .catlog-feed li { animation: none; }
+  #feed li {
+    animation: none;
+  }
+
+  * {
+    transition-duration: 0.01ms !important;
+  }
 }
 
-/* --- dashboard ---------------------------------------------------------------- */
+/* --- 8. "me" ------------------------------------------------------------------ */
 
-.handle code,
-#wizard-jkt {
-  font-size: 0.8em;
-  word-break: break-all;
+/*
+ * Every public page is served `s-maxage=30` to a shared cache, so there is no
+ * server-rendered personalisation available at all. me.js reads
+ * localStorage['catlog:me'], stamps it on <html> and marks the rows; everything
+ * below is what that lights up. Nothing here is ever sent to the server.
+ */
+
+#me-chip[hidden],
+#me-standing[hidden],
+#board-me[hidden],
+#profile-me-note[hidden] {
+  display: none;
 }
 
-.handle-retired header {
-  color: var(--catlog-dim);
+#me-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  font-size: var(--text-sm);
 }
 
-.credential-revoked {
-  color: var(--catlog-dim);
+#me-chip a {
+  color: var(--color-fg);
+  text-decoration: none;
+  font-weight: var(--weight-medium);
 }
 
-#quotas strong {
-  font-size: 1.4rem;
+#me-chip a:hover {
+  color: var(--color-accent-text);
+}
+
+tr.is-me {
+  background: var(--color-wash-selected);
+  box-shadow: inset 3px 0 0 var(--color-accent);
+}
+
+tr.is-me:hover {
+  background: var(--color-wash-selected);
+}
+
+/* The strip at the table foot when the reader's own row is on another page. */
+#board-me {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--row-px);
+  background: var(--color-panel-raised);
+  border: var(--border-width) solid var(--color-accent-text);
+  border-radius: var(--radius-md);
+  margin-top: var(--space-3);
+  font-size: var(--text-sm);
   font-variant-numeric: tabular-nums;
 }
 
-.wizard-step[hidden] {
+#me-standing .standing-rows {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.standing-row {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-4);
+  font-size: var(--text-sm);
+}
+
+.standing-row .rank {
+  font-variant-numeric: tabular-nums;
+  color: var(--color-accent-text);
+  font-weight: var(--weight-semibold);
+}
+
+/* The notice when a stored "me" handle stops resolving. It never guesses why and
+   it never clears itself. */
+#me-gone {
+  border-color: var(--color-warning);
+}
+
+/* --- 9. search and compare ---------------------------------------------------- */
+
+#search-form {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  position: relative;
+}
+
+#search-form input[type='search'] {
+  width: 13rem;
+  min-width: 8rem;
+}
+
+#search-suggest {
+  list-style: none;
+  padding: var(--space-2);
+  margin: 0;
+  position: absolute;
+  top: calc(100% + var(--space-2));
+  right: 0;
+  min-width: 15rem;
+  z-index: 20;
+  background: var(--color-panel-raised);
+  border: var(--border-width) solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-popover);
+}
+
+#search-suggest:empty {
   display: none;
 }
 
+#search-suggest li a {
+  display: block;
+  padding: var(--space-3);
+  border-radius: var(--radius-sm);
+  color: var(--color-fg);
+  text-decoration: none;
+  font-size: var(--text-sm);
+}
+
+#search-suggest li a:hover {
+  background: var(--color-wash-hover);
+}
+
+#search-suggest li.suggest-note {
+  padding: var(--space-3);
+  font-size: var(--text-xs);
+  color: var(--color-fg-muted);
+}
+
+#search-results {
+  list-style: none;
+  padding: 0;
+  display: grid;
+  gap: var(--space-3);
+  grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
+}
+
+#search-results li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-panel);
+}
+
+#search-results .result-handle {
+  font-weight: var(--weight-medium);
+  color: var(--color-fg);
+  text-decoration: none;
+}
+
+#search-results .result-handle:hover {
+  color: var(--color-accent-text);
+}
+
+#compare-handles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  align-items: center;
+}
+
+#compare-add {
+  flex-wrap: nowrap;
+}
+
+/* --- 10. dashboard and the credential wizard ---------------------------------- */
+
+/*
+ * The wizard's markup discipline: every step is in the DOM from the start and
+ * toggled with [hidden], so keygen.js never builds HTML out of strings. These
+ * rules exist to make [hidden] win over any display we set.
+ */
+.wizard-step[hidden],
 #wizard-error[hidden],
 .handle-error[hidden],
-#delete-error[hidden] {
-  display: none;
+#delete-error[hidden],
+[hidden] {
+  display: none !important;
+}
+
+#quotas .stat-value {
+  font-size: var(--text-lg);
+}
+
+.handle header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-4);
+}
+
+.handle h2 a {
+  color: var(--color-fg);
+  text-decoration: none;
+}
+
+.handle h2 a:hover {
+  color: var(--color-accent-text);
+}
+
+.handle-retired header {
+  color: var(--color-fg-muted);
+}
+
+.credential code,
+#wizard-jkt {
+  font-size: var(--text-xs);
+  word-break: break-all;
+  font-variant-numeric: tabular-nums slashed-zero;
+}
+
+.credential-revoked {
+  color: var(--color-fg-muted);
 }
 
 #wizard-error,
 .handle-error,
 #delete-error {
-  color: var(--pico-del-color, #f66);
+  color: var(--color-danger);
 }
 
-#wizard-error strong {
-  font-family: var(--pico-font-family-monospace, monospace);
-  margin-right: 0.5rem;
+#wizard-error strong,
+.handle-error strong {
+  font-family: var(--font-mono);
+  margin-right: var(--space-3);
 }
 
 #wizard-warning mark {
   display: inline-block;
 }
 
-/* --- errors -------------------------------------------------------------------- */
+.wizard-step p + p {
+  margin-top: var(--space-4);
+}
+
+.wizard-step label {
+  margin-bottom: var(--space-2);
+}
+
+.wizard-step input[type='text'] {
+  max-width: 24rem;
+}
+
+#login-choices {
+  display: grid;
+  gap: var(--space-5);
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+}
+
+.login-choice p {
+  margin-top: var(--space-3);
+  color: var(--color-fg-muted);
+  font-size: var(--text-sm);
+}
+
+/* --- 11. docs prose and errors ------------------------------------------------ */
 
 #not-found code,
 #auth-error code {
   word-break: break-all;
+}
+
+#not-found,
+#auth-error {
+  max-width: var(--measure);
+}
+
+#not-found footer,
+#auth-error footer {
+  margin-top: var(--space-5);
+  display: flex;
+  gap: var(--space-4);
+  align-items: center;
+}
+
+/* Docs tables read as prose-adjacent: same panel, no uppercase shouting. */
+.prose table {
+  margin-block: var(--space-5);
+}
+
+.prose thead th {
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+/* A link that ends a section, with the one arrow glyph Inter's latin subset
+   actually carries (U+2192 is in no subset; U+203A is). */
+.more::after {
+  content: ' \203A';
+}
+
+@media (max-width: 40rem) {
+  #site-header .container {
+    row-gap: var(--space-3);
+  }
+
+  #header-tail {
+    margin-left: 0;
+    width: 100%;
+  }
+
+  #search-form {
+    flex: 1;
+  }
+
+  #search-form input[type='search'] {
+    width: 100%;
+  }
 }

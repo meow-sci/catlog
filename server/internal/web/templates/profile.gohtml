@@ -1,9 +1,18 @@
 {{define "content" -}}
-<hgroup>
-  <h1 id="profile-handle" data-handle="{{.Data.Handle}}">{{.Data.Handle}}</h1>
-  <p>Flying since {{date .Data.Since}}.</p>
-</hgroup>
+{{- $handle := .Data.Handle -}}
+<div class="page-head">
+  <h1 id="profile-handle" data-handle="{{$handle}}">{{$handle}}</h1>
+  <p>Flying since {{date .Data.Since}}. <span id="profile-me-note" hidden>This is you.</span></p>
+  <p class="row" style="margin-top: 1rem">
+    {{- /* me.js flips the label to "This is not me" once the handle is stored,
+           and the stored value never leaves this browser. */}}
+    <button type="button" id="profile-me-toggle" class="secondary" data-handle="{{$handle}}">This is me</button>
+    <a class="button secondary" id="profile-compare" href="{{comparePath $handle}}">Compare</a>
+    <a class="button secondary" id="profile-events" href="{{eventsPath $handle}}">Raw events</a>
+  </p>
+</div>
 
+<div class="table-wrap">
 <table id="profile-stats">
   <thead>
     <tr>
@@ -16,20 +25,28 @@
   </thead>
   <tbody>
     {{- range .Data.Stats}}
-    <tr class="profile-row" data-stat="{{.Stat}}" data-rank="{{.Rank}}">
-      <td><a href="{{statPath .Stat}}">{{.Title}}</a></td>
-      {{- /* One cell per board, so each stands on its own: `unit` scales and
-             labels the number (a career time in ms becomes a duration, metres
-             become km). The board *page* keeps a bare number under a unit
-             header, because there a whole column shares one unit. */}}
-      <td class="value">{{unit .Value .Unit}}</td>
-      <td class="rank" data-players="{{.Players}}">#{{.Rank}} of {{.Players}}</td>
-      <td class="context">{{range ctx .Context}}<span class="ctx-pair"><span class="ctx-key">{{.Key}}</span> {{.Value}}</span> {{end}}</td>
+    <tr class="profile-row {{rankClass .Rank .Players}}" data-stat="{{.Stat}}" data-rank="{{.Rank}}" data-ascending="{{.Ascending}}">
+      {{- /* The link lands on the page that actually contains this rank, so
+             "see where I sit" is one click and needs no new endpoint. */}}
+      <td><a href="{{statPath .Stat}}{{if gt (pageOffset .Rank) 0}}?offset={{pageOffset .Rank}}{{end}}">{{.Title}}</a>
+        <small class="muted">{{if .Ascending}}&#8595;{{else}}&#8593;{{end}}<span class="sr-only">{{if .Ascending}}lowest wins{{else}}highest wins{{end}}</span></small></td>
+      {{template "value-cell" (dict "Value" .Value "Unit" .Unit "Rewound" .Rewound)}}
+      <td class="rank" data-players="{{.Players}}">
+        <span class="rank-of">
+          <span>#{{.Rank}} <span class="of">of {{number .Players}}</span></span>
+          {{- /* Fuller is better, and clamped: rank is filtered of banned
+                 players and the denominator is not, so the naive ratio can
+                 leave the interval. */}}
+          <span class="rank-bar" role="presentation"><span style="width: {{standing .Rank .Players}}%"></span></span>
+        </span>
+      </td>
+      {{template "context-cell" .}}
       <td class="when">{{datetime .Updated}}</td>
     </tr>
     {{- else}}
-    <tr id="profile-empty"><td colspan="5"><em>No records yet.</em></td></tr>
+    <tr id="profile-empty"><td colspan="5">This player is not on any board yet.</td></tr>
     {{- end}}
   </tbody>
 </table>
+</div>
 {{- end}}

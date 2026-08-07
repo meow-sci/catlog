@@ -1,8 +1,8 @@
 {{define "content" -}}
-<article id="not-found">
+<article id="not-found" class="panel">
   <header><h1>Nothing here</h1></header>
   <p id="not-found-detail">{{.Data.Detail}}</p>
   <p><small><code id="not-found-path">{{.Data.Path}}</code></small></p>
-  <footer><a href="/" id="not-found-home">Back to the front page</a> · <a href="/boards">Leaderboards</a></footer>
+  <footer><a href="/" id="not-found-home">Back to the front page</a> <a href="/boards">Leaderboards</a></footer>
 </article>
 {{- end}}

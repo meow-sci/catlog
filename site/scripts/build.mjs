@@ -5,6 +5,7 @@
  *   assets/js/*.js   --esbuild bundle-->  dist/js/
  *   assets/css/      --copy---------->    dist/css/
  *   vendored deps    --copy---------->    dist/vendor/
+ *   font subsets     --copy---------->    dist/fonts/
  *
  * There is no dev server and no framework: the Go server renders every page and
  * serves dist/ at /static/ in dev (nginx serves it in prod).
@@ -32,10 +33,34 @@ const distDir = path.join(siteDir, "dist");
  * became v1. The v1.x browser bundle ships only from the git repo, so it is
  * vendored into assets/vendor/ and committed — which also keeps the build hermetic
  * (D2). See docs/DECISIONS.md for the pinned version and its SRI hash.
+ *
+ * @picocss/pico used to be here. It is gone: its default type scale was the whole
+ * of the "the CSS is huge" complaint, and catlog.css now carries the reset, the
+ * tokens, the type scale, the theme and the form controls itself.
  */
-const vendorFiles = [
-  { from: require.resolve("@picocss/pico/css/pico.min.css"), to: "pico.min.css" },
-  { from: path.join(assetsDir, "vendor", "datastar.js"), to: "datastar.js" },
+const vendorFiles = [{ from: path.join(assetsDir, "vendor", "datastar.js"), to: "datastar.js" }];
+
+/**
+ * Font subsets copied into dist/fonts/.
+ *
+ * Inter Variable, self-hosted from fontsource, **latin subset only** — no CDN, so
+ * the build stays hermetic (D2) exactly as the vendored datastar bundle does. One
+ * 48 kB woff2 covers every glyph catlog can render: handles, kitten names and body
+ * names are ASCII by construction (docs/events.md), and the only non-ASCII
+ * characters in our own copy — em dash, ×, †, ↑, ↓, · and the U+202F group
+ * separator `units.Format` uses — all fall inside the latin `unicode-range`
+ * (U+0000-00FF plus U+2000-206F plus U+2191/2193). Verified against the package's
+ * own unicode.json rather than assumed.
+ *
+ * `@font-face` is declared in catlog.css against /static/fonts/, not copied from
+ * the package's CSS, so the `src:` URL matches where this script actually put the
+ * file.
+ */
+const fontFiles = [
+  {
+    from: require.resolve("@fontsource-variable/inter/files/inter-latin-wght-normal.woff2"),
+    to: "inter-latin-wght-normal.woff2",
+  },
 ];
 
 /** @param {string} dir @returns {Promise<string[]>} entries, or [] when dir is absent */
@@ -72,7 +97,7 @@ async function main() {
   }
   console.log(`js:     ${entryPoints.length} bundle(s)`);
 
-  // --- css: copied as-is; pico does the heavy lifting ---
+  // --- css: copied as-is; there is no preprocessor and nothing to compile ---
   const cssDir = path.join(assetsDir, "css");
   const cssFiles = (await listDir(cssDir)).filter((name) => name.endsWith(".css"));
   if (cssFiles.length > 0) {
@@ -89,6 +114,13 @@ async function main() {
     await cp(from, path.join(distDir, "vendor", to));
   }
   console.log(`vendor: ${vendorFiles.length} file(s)`);
+
+  // --- fonts ---
+  await mkdir(path.join(distDir, "fonts"), { recursive: true });
+  for (const { from, to } of fontFiles) {
+    await cp(from, path.join(distDir, "fonts", to));
+  }
+  console.log(`fonts:  ${fontFiles.length} file(s)`);
 
   console.log(`built   ${path.relative(process.cwd(), distDir)}`);
 }

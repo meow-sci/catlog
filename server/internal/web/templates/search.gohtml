@@ -1,0 +1,48 @@
+{{define "content" -}}
+{{- $s := .Data -}}
+<div class="page-head">
+  <h1 id="search-title">Find a handle</h1>
+  <p>Prefix matches first, then anything containing what you typed. Handles that were retired or banned are not in the directory at all, so there is nothing here to filter.</p>
+</div>
+
+<form action="/search" method="get" class="row" id="search-page-form" style="margin-bottom: 1.5rem">
+  <label class="sr-only" for="search-page-q">Handle</label>
+  <input type="search" id="search-page-q" name="q" value="{{$s.Query}}" placeholder="whiskers" autocomplete="off"
+         spellcheck="false" maxlength="150" style="max-width: 22rem">
+  {{- range $s.With}}<input type="hidden" name="with" value="{{.}}">{{end}}
+  <button type="submit">Search</button>
+</form>
+
+{{- if $s.With}}
+<p class="row" id="search-with" style="margin-bottom: 1rem">
+  <span class="muted text-sm">Comparing:</span>
+  {{- range $s.With}}<a class="chip" href="{{playerPath .}}">{{.}}</a>{{end}}
+  <a class="button secondary" href="{{comparePath $s.With}}">See the comparison</a>
+</p>
+{{- end}}
+
+{{- if not $s.Query}}
+<p class="empty" id="search-idle">Type at least two characters. catlog will not guess from one.</p>
+{{- else if $s.TooShort}}
+{{- /* Not an error, and it must not read like one: the API answers 400 below
+       two characters, so the page simply does not ask. */}}
+<p class="empty" id="search-short">Two characters or more, please &#8212; one letter matches most of the directory.</p>
+{{- else if not $s.Result.Handles}}
+<p class="empty" id="search-empty">No handles match <code>{{$s.Query}}</code>.</p>
+{{- else}}
+<ul id="search-results" data-count="{{len $s.Result.Handles}}">
+  {{- range $s.Result.Handles}}
+  <li class="search-result" data-handle="{{.}}">
+    <a class="result-handle" href="{{playerPath .}}">{{.}}</a>
+    <a class="chip" href="{{comparePath $s.With .}}" title="Add {{.}} to a comparison">+ compare</a>
+  </li>
+  {{- end}}
+</ul>
+{{- if $s.Result.Truncated}}
+{{- /* `truncated` means "narrow your query", not "load more": there is
+       deliberately no offset, because a paged search over a live directory is a
+       promise catlog cannot keep. */}}
+<p class="muted" id="search-truncated" style="margin-top: 1rem"><small>More handles match. Try a longer query.</small></p>
+{{- end}}
+{{- end}}
+{{- end}}

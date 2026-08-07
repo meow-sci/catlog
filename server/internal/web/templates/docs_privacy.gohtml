@@ -1,11 +1,13 @@
 {{define "content" -}}
-<hgroup>
+<div class="page-head">
   <h1 id="docs-title">Privacy</h1>
   <p>What catlog stores, what it deliberately cannot store, and how to make it all go away.</p>
-</hgroup>
+</div>
 
-<article id="privacy-no-email">
-  <header><h2>catlog never receives your email address</h2></header>
+<div class="prose">
+
+<article id="privacy-no-email" class="panel">
+  <header><h2 class="panel-title">catlog never receives your email address</h2></header>
   <p>
     This is not a promise about what we do with your email. It is a statement about what catlog is able to
     know: <strong>your email address is never requested from any identity provider, so it is never sent,
@@ -59,14 +61,73 @@
 </ul>
 </section>
 
+<section id="privacy-install">
+<h2>Two accounts, one person, and why nothing links them</h2>
+{{- /*
+This section is a load-bearing claim about what catlog cannot do, so it states
+the mechanism rather than the intention and it does not get to be playful.
+*/}}
+<p>
+  catlog permits one person to hold more than one handle, and the point of that is that no outside observer
+  can tell. Three identifiers travelled with your events that would have broken it:
+</p>
+<ul>
+  <li><strong>The installation id.</strong> Constant for the life of an install and the same whichever handle
+    is shipping. It is <strong>never published</strong> — not blanked, not replaced, removed.</li>
+  <li><strong>The career id</strong> — which save a record came from — and <strong>the kitten id</strong>.
+    Both are derived from the installation id, so both are identical across two handles playing the same save
+    or flying a kitten of the same name.</li>
+</ul>
+<p>
+  Career and kitten identifiers are <strong>relabelled per player</strong> before anything leaves the server:
+  they still group your own records together, and they cannot be matched against anybody else's. The label is
+  computed from your player id as well as the value, so two handles looking at the same save see two unrelated
+  labels.
+</p>
+<p>
+  Two things this does not fix, stated rather than hidden. Kitten and vehicle <em>names</em> are the same
+  across a person's two accounts if they name things the same way, and catlog cannot remove them without
+  deleting the content the leaderboards exist to show. Receive <em>times</em> correlate anything shipped at
+  the same moment, which the live feed has published per handle since it existed.
+</p>
+</section>
+
 <section id="privacy-public">
 <h2>What is public</h2>
 <p>
   Your handle, your leaderboard values and their context (body, speed, energy), your rank, and the live feed
-  lines your flights generate. That is the point of catlog. Everything else — which provider you used,
-  when you signed in, your quota usage — is visible only to you, on your dashboard.
+  lines your flights generate. That is the point of catlog. Your raw event log is public too, at
+  <code>/p/&lt;handle&gt;/events</code>: it is what makes a leaderboard checkable rather than merely asserted.
+  Everything else — which provider you used, when you signed in, your quota usage — is visible only to you,
+  on your dashboard.
 </p>
-<p>Flights flagged as cheated are stored and shown to you, but score nothing and never appear publicly.</p>
+{{- /*
+The sentence that used to be here said flagged flights were "stored and shown to
+you". The second half was true and the first was not: no session-authed view of
+them exists, and the public event log cannot be one because it takes no
+credentials at all. Rather than leave a promise catlog does not keep, the promise
+now says what catlog actually does — which is also the only reading of the flags
+the constitution's consequence test allows. See docs/DECISIONS.md.
+*/}}
+<p id="privacy-flagged">
+  Flights flagged as cheated — teleports, refuels, resource edits, console use, live tuning edits — are
+  <strong>stored and score nothing, and they appear nowhere public: not on a board, not in the live feed, and
+  not in an event log, including your own</strong>. catlog would rather record the truth than pretend it did
+  not happen, but a browsable list of whose flights were flagged would be a permanent public mark on a person,
+  and a flag's only effect here is that a flight does not count. There is therefore no page, yours included,
+  that says which of your flights were flagged.
+</p>
+</section>
+
+<section id="privacy-me">
+<h2>The handle this browser calls &#8220;me&#8221;</h2>
+<p>
+  Pressing <strong>This is me</strong> on a profile stores that handle in this browser, under
+  <code>catlog:me</code>. It is a local preference and nothing more: it is never sent to catlog as an
+  identifier, never appears in a query string on a cached page, never in a <code>Referer</code>, and it is
+  not a login. Two people sharing a machine share it, exactly like a bookmark. Clearing it is the
+  <em>clear</em> control beside it in the header.
+</p>
 </section>
 
 <section id="privacy-delete">
@@ -88,7 +149,10 @@
 <p>
   One cookie, <code>catlog_sess</code>: a signed, <code>HttpOnly</code>, <code>SameSite=Lax</code> session
   that expires after seven days. There is no analytics script, no third-party script, no tracking pixel and
-  no advertising identifier on this site — every asset it loads is served from this origin.
+  no advertising identifier on this site — every asset it loads, the typeface included, is served from this
+  origin.
 </p>
 </section>
+
+</div>
 {{- end}}

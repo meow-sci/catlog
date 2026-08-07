@@ -1,8 +1,10 @@
 {{define "content" -}}
-<hgroup>
+<div class="page-head">
   <h1 id="docs-title">Installing catlog</h1>
   <p>Five minutes, one file, no account linking.</p>
-</hgroup>
+</div>
+
+<div class="prose">
 
 <section id="docs-install-steps">
 <h2>1. Sign in and claim a handle</h2>
@@ -60,8 +62,12 @@
 <h2>Flagged flights</h2>
 <p>
   The mod reports when a flight used a teleport, a refuel, a resource edit, the console, or a live tuning
-  edit. Those flights are stored, and they are visible to you, but they score on no leaderboard and never
-  appear in the live feed. catlog would rather record the truth than pretend it did not happen.
+  edit. Those flights are stored, and they score on no leaderboard, never appear in the live feed and are
+  absent from every event log — including your own. catlog would rather record the truth than pretend it did
+  not happen; it just does not publish a list of who tripped which flag. See
+  <a href="/docs/privacy">privacy</a>.
 </p>
 </section>
+
+</div>
 {{- end}}

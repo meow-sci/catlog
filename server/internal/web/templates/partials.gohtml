@@ -1,18 +1,53 @@
 {{/*
 Shared fragments. `feed-list` and `feed-item` are also what the SSE handler
 patches in (§5.7), so a line that arrives over the wire is byte-identical to one
-rendered into a page.
+rendered into a page. `search-suggest` is the same arrangement for the header
+search box.
 */}}
 
+{{/*
+One value cell, everywhere on the site.
+
+Three things travel together and none of them is decoration:
+
+  - the rendered string, from `units`, which is the same string the React reader
+    produces from the same JSON;
+  - `title`, the undecorated figure and its unit, which is how a reader recovers
+    the digits "48 MJ" hides;
+  - `data-value`, the float exactly as the API sent it. That is what a test — or
+    anything else that wants to compare two cells — reads. Reconstructing a
+    number by stripping non-digits out of the rendered text stops working the
+    moment a career board renders "5m 13s", and it fails by passing.
+
+`.Value` is the number, `.Unit` the board's unit, `.Rewound` the optional
+career-rewind qualification.
+*/}}
+{{define "value-cell" -}}
+<td class="value" data-value="{{exact .Value}}" title="{{exactUnit .Value .Unit}}">{{value .Value .Unit}}
+  {{- if .Rewound}}<abbr class="rewound" title="An earlier save of this career was loaded, so its clock did not only run forwards.">&dagger;</abbr><span class="sr-only"> (career rewound)</span>{{end -}}
+</td>
+{{- end}}
+
+{{/* The fold's per-row detail: an allow-list of the human-meaningful keys, with
+     the whole blob — post-redaction, as the API sent it — behind a disclosure. */}}
+{{define "context-cell" -}}
+<td class="context">
+  {{- range ctx .Context}}<span class="ctx-pair"><span class="ctx-key">{{.Key}}</span> <span class="ctx-value">{{.Value}}</span></span> {{end -}}
+  {{- if .Context}}<details class="details-blob"><summary>Details</summary><pre><code>{{blob .Context}}</code></pre></details>{{end -}}
+</td>
+{{- end}}
+
 {{define "board-table" -}}
-{{- /* .Board is a readapi.BoardResponse; .Compact hides the context column. */ -}}
+{{- /* .Board is a readapi.BoardResponse (or anything embedding one); .Compact
+       hides the detail and time columns for the front page. */ -}}
 {{- $board := .Board -}}
+<div class="table-wrap">
 <table class="catlog-board" data-stat="{{$board.Stat}}">
   <thead>
     <tr>
       <th scope="col" class="rank">#</th>
       <th scope="col">Handle</th>
-      <th scope="col" class="value">{{$board.Unit}}</th>
+      <th scope="col" class="value">{{if $board.Unit}}{{$board.Unit}}{{else}}Value{{end}}</th>
       {{- if not .Compact}}<th scope="col">Detail</th><th scope="col">When</th>{{end}}
     </tr>
   </thead>
@@ -20,18 +55,19 @@ rendered into a page.
     {{- range $board.Rows}}
     <tr class="board-row" data-rank="{{.Rank}}" data-handle="{{.Handle}}">
       <td class="rank">{{.Rank}}</td>
-      <td><a href="{{playerPath .Handle}}">{{.Handle}}</a></td>
-      <td class="value">{{value .Value}}</td>
+      <td class="handle"><a href="{{playerPath .Handle}}">{{.Handle}}</a></td>
+      {{template "value-cell" (dict "Value" .Value "Unit" $board.Unit "Rewound" .Rewound)}}
       {{- if not $.Compact}}
-      <td class="context">{{range ctx .Context}}<span class="ctx-pair"><span class="ctx-key">{{.Key}}</span> {{.Value}}</span> {{end}}</td>
+      {{template "context-cell" .}}
       <td class="when">{{datetime .Updated}}</td>
       {{- end}}
     </tr>
     {{- else}}
-    <tr class="board-empty"><td colspan="{{if .Compact}}3{{else}}5{{end}}"><em>Nobody has scored here yet.</em></td></tr>
+    <tr class="board-empty"><td colspan="{{if .Compact}}3{{else}}5{{end}}">Nobody has scored here yet.</td></tr>
     {{- end}}
   </tbody>
 </table>
+</div>
 {{- end}}
 
 {{define "feed-item" -}}
@@ -47,15 +83,24 @@ page whose datastar module never ran, because both show the same rows.
 {{define "feed-list" -}}
 <ul id="feed" class="catlog-feed" data-source="{{.Source}}" data-count="{{len .Rows}}">
 {{- range .Rows}}{{template "feed-item" .}}{{end}}
-{{- if not .Rows}}<li class="feed-empty"><em>Nothing has happened yet. Fly something.</em></li>{{end}}
+{{- if not .Rows}}<li class="feed-empty">Nothing has happened yet. Fly something.</li>{{end}}
 </ul>
 {{- end}}
 
 {{define "feed-panel" -}}
-<article id="feed-panel" class="catlog-feed-panel" data-init="@get('/v1/feed/sse')">
-  <header><h2>Live feed</h2></header>
+<article id="feed-panel" class="panel" data-init="@get('/v1/feed/sse')">
+  <header><h2 class="panel-title">Live feed</h2></header>
   {{template "feed-list" .}}
   <span id="feed-heartbeat" hidden></span>
-  <footer><small>Streamed over server-sent events. Flights flagged as cheated never appear here.</small></footer>
+  <footer>Streamed over server-sent events. Flights flagged as cheated never appear here.</footer>
 </article>
+{{- end}}
+
+{{/* The header box's suggestion popover. `truncated` means narrow the query;
+     there is no offset and there is deliberately no "load more". */}}
+{{define "search-suggest" -}}
+<ul id="search-suggest" role="listbox" aria-label="Handle suggestions">
+{{- range .Handles}}<li role="option"><a href="{{playerPath .}}">{{.}}</a></li>{{end}}
+{{- if .Truncated}}<li class="suggest-note">More handles match. Try a longer query.</li>{{end}}
+</ul>
 {{- end}}

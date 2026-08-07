@@ -62,14 +62,26 @@ const FeaturedRows = 3
 const BoardRows = 100
 
 // Read is the subset of [readapi.Server] the pages need.
+//
+// It is the seam that keeps the ban filter and the install-derived-identifier
+// redaction in one implementation each: every page assembles its rows through
+// here rather than reaching around into `store`, so a banned player has exactly
+// one place to reappear from and a `career` key has exactly one place to be
+// relabelled in. Widen it deliberately; do not bypass it.
 type Read interface {
 	BoardList(ctx context.Context) (readapi.BoardsResponse, error)
-	// Board takes the window as well as the page. The server-rendered site
-	// always asks for `alltime`: the rolling windows are a JSON-API dimension
-	// (`?period=`), and adding a period selector to these pages is a UI
-	// decision, not a consequence of the projection existing.
+	// Board takes the window as well as the page. `/boards/{stat}` now offers a
+	// period selector, so this site passes through whatever `?period=` named
+	// rather than always asking for `alltime`.
 	Board(ctx context.Context, stat, period, bucket string, limit, offset int) (readapi.BoardResponse, bool, error)
 	Player(ctx context.Context, handle string) (readapi.PlayerResponse, bool, error)
+	// PlayerEvents is the raw log behind `/p/{handle}/events`.
+	PlayerEvents(ctx context.Context, handle, typ string, before int64, limit int) (readapi.EventsResponse, bool, error)
+	// Search is handle search. It does no I/O — the directory is in memory —
+	// which is why it takes neither a context nor an error.
+	Search(q string, limit int) readapi.SearchResponse
+	// Compare is the N-handle side-by-side behind `/compare?handles=`.
+	Compare(ctx context.Context, handles []string) (readapi.CompareResponse, error)
 }
 
 // Projections runs a query against the live projections handle while holding the
@@ -151,6 +163,10 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /boards", s.handleBoards)
 	mux.HandleFunc("GET /boards/{stat}", s.handleBoard)
 	mux.HandleFunc("GET /p/{handle}", s.handleProfile)
+	mux.HandleFunc("GET /p/{handle}/events", s.handlePlayerEvents)
+	mux.HandleFunc("GET /search", s.handleSearch)
+	mux.HandleFunc("GET /search/suggest", s.handleSearchSuggest)
+	mux.HandleFunc("GET /compare", s.handleCompare)
 	mux.HandleFunc("GET /login", s.handleLogin)
 	mux.HandleFunc("GET /dashboard", s.handleDashboard)
 	mux.HandleFunc("GET /docs/{page}", s.handleDocs)

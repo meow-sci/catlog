@@ -1,25 +1,58 @@
 {{define "content" -}}
-<hgroup>
-  <h1 id="home-title">Everything you broke, ranked</h1>
-  <p>catlog watches your Kitten Space Agency flights and keeps score. Lithobrakes you walked away from, speeds nobody should reach, and every rapid unscheduled disassembly along the way.</p>
-</hgroup>
-
-<p>
-  <a href="/docs/install" role="button" id="home-install">Install the mod</a>
-  <a href="/boards" role="button" class="secondary outline" id="home-all-boards">All leaderboards</a>
-</p>
-
-<section id="featured-boards">
-  <div class="grid">
-    {{- range .Data.Featured}}
-    <article class="featured-board" data-stat="{{.Stat}}">
-      <header><h2><a href="{{statPath .Stat}}">{{.Title}}</a></h2></header>
-      {{template "board-table" (dict "Board" . "Compact" true)}}
-      <footer><a href="{{statPath .Stat}}">Full board &rarr;</a></footer>
-    </article>
-    {{- end}}
+<div class="stack">
+  <div class="page-head">
+    <h1 id="home-title">Everything you broke, ranked</h1>
+    <p>catlog watches your Kitten Space Agency flights and keeps score. Lithobrakes you walked away from, speeds nobody should reach, and every rapid unscheduled disassembly along the way.</p>
+    <p class="row" style="margin-top: 1rem">
+      <a href="/docs/install" class="button" id="home-install">Install the mod</a>
+      <a href="/boards" class="button secondary" id="home-all-boards">All leaderboards</a>
+    </p>
   </div>
-</section>
 
-{{template "feed-panel" .Data.Feed}}
+  {{- /*
+  Filled in by me.js when a handle has been stored locally, and absent otherwise —
+  never a spinner and never an empty shell. It cannot be server-rendered at all:
+  every public page is served `s-maxage=30` to a shared cache, so there is no
+  personalisation available here to render.
+  */}}
+  <section id="me-standing" class="panel" hidden>
+    <header>
+      <h2 class="panel-title">Your standing</h2>
+      <a href="/" id="me-standing-link" class="more">Full profile</a>
+    </header>
+    <div class="standing-rows" id="me-standing-rows"></div>
+  </section>
+
+  <section id="global-tiles" class="tiles">
+    <div class="tile">
+      <span class="label">Boards published</span>
+      <span class="stat-value" id="tile-boards" data-value="{{.Data.Tiles.Boards}}">{{number .Data.Tiles.Boards}}</span>
+    </div>
+    <div class="tile">
+      <span class="label">Placements held</span>
+      <span class="stat-value" id="tile-placements" data-value="{{.Data.Tiles.Placements}}">{{number .Data.Tiles.Placements}}</span>
+    </div>
+    {{- if .Data.Tiles.BusiestStat}}
+    <div class="tile">
+      <span class="label">Busiest board</span>
+      <span class="stat-value" id="tile-busiest" data-value="{{.Data.Tiles.BusiestCount}}">{{number .Data.Tiles.BusiestCount}}</span>
+      <small class="muted"><a href="{{statPath .Data.Tiles.BusiestStat}}">{{.Data.Tiles.BusiestTitle}}</a></small>
+    </div>
+    {{- end}}
+  </section>
+
+  <section id="featured-boards">
+    <div class="grid">
+      {{- range .Data.Featured}}
+      <article class="featured-board panel" data-stat="{{.Stat}}">
+        <header><h2 class="panel-title"><a href="{{statPath .Stat}}">{{.Title}}</a></h2></header>
+        {{template "board-table" (dict "Board" . "Compact" true)}}
+        <footer><a href="{{statPath .Stat}}" class="more">Full board</a></footer>
+      </article>
+      {{- end}}
+    </div>
+  </section>
+
+  {{template "feed-panel" .Data.Feed}}
+</div>
 {{- end}}

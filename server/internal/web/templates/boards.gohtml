@@ -1,29 +1,40 @@
 {{define "content" -}}
-<hgroup>
+<div class="page-head">
   <h1 id="boards-title">Leaderboards</h1>
   <p>Every board catlog is publishing. Flights flagged as cheated — teleports, refuels, resource edits, console use — score on none of them.</p>
-</hgroup>
+</div>
 
 {{- /* This list comes from the server, which builds it from the data: catlog
        keeps no list of celestial bodies, so a board for a place appears here
        once players have been there. Nothing in this template may assume how
        many rows there are. */}}
+<div class="table-wrap">
 <table id="boards-index">
   <thead>
-    <tr><th scope="col">Board</th><th scope="col">Unit</th><th scope="col" class="value">Players</th></tr>
+    <tr>
+      <th scope="col">Board</th>
+      <th scope="col">Unit</th>
+      <th scope="col">Reads</th>
+      <th scope="col" class="value">Players</th>
+    </tr>
   </thead>
   <tbody>
     {{- range .Data.Boards}}
     <tr class="boards-row" data-stat="{{.Stat}}" data-ascending="{{.Ascending}}">
       <td><a href="{{statPath .Stat}}" class="board-link">{{.Title}}</a></td>
-      <td>{{.Unit}}</td>
-      <td class="value">{{.Count}}</td>
+      <td class="muted">{{.Unit}}</td>
+      {{- /* Which way a board reads is published, never guessed: the career-time
+             boards rank the smallest value first, and a reader that assumed
+             otherwise would present the fastest ascent as the worst one. */}}
+      <td class="direction muted">{{if .Ascending}}&#8595; lowest wins{{else}}&#8593; highest wins{{end}}</td>
+      <td class="value" data-value="{{.Count}}">{{number .Count}}</td>
     </tr>
     {{- end}}
   </tbody>
 </table>
+</div>
 
 {{- if gt .Data.MinPlayers 1}}
-<p id="boards-note"><small>Boards for places, and for ways a vehicle came apart, come from what players actually did rather than from a list inside the server. One appears here once at least {{.Data.MinPlayers}} different players are on it. Before that it still exists, and still shows on the profile of whoever is on it — but a leaderboard with a single entrant is not a leaderboard.</small></p>
+<p id="boards-note" class="muted prose" style="margin-top: 1rem"><small>Boards for places, and for ways a vehicle came apart, come from what players actually did rather than from a list inside the server. One appears here once at least {{.Data.MinPlayers}} different players are on it. Before that it still exists, and still shows on the profile of whoever is on it — but a leaderboard with a single entrant is not a leaderboard.</small></p>
 {{- end}}
 {{- end}}

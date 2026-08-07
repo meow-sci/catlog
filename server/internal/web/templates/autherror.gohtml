@@ -3,11 +3,14 @@
 The DOM contract WP3 established and the playwright suite asserts:
 #auth-error[data-error], #auth-error-code, #auth-error-detail, #auth-error-retry.
 Do not rename these without changing site/e2e/auth.spec.ts in the same commit.
+
+This page is deliberately plain. It is an error the reader has to act on, so it
+is a code, a detail and a way back — never a joke and never a generic apology.
 */ -}}
-<article id="auth-error" data-error="{{.Data.Code}}">
+<article id="auth-error" data-error="{{.Data.Code}}" class="panel">
   <header><h1>Sign-in failed</h1></header>
   <p><code id="auth-error-code">{{.Data.Code}}</code></p>
   <p id="auth-error-detail">{{.Data.Detail}}</p>
-  <footer><a id="auth-error-retry" href="/login" role="button" class="secondary">Back to sign in</a></footer>
+  <footer><a id="auth-error-retry" href="/login" class="button secondary">Back to sign in</a></footer>
 </article>
 {{- end}}

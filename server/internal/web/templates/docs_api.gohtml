@@ -1,8 +1,10 @@
 {{define "content" -}}
-<hgroup>
+<div class="page-head">
   <h1 id="docs-title">API</h1>
   <p>Everything on this site is also JSON. No key, no sign-up, no rate limit worth mentioning — it is cached at the edge.</p>
-</hgroup>
+</div>
+
+<div class="prose">
 
 <section id="docs-api-read">
 <h2>Read API</h2>
@@ -12,7 +14,10 @@
   <tbody>
     <tr><td><code>GET /v1/leaderboards</code></td><td>every board with its title, unit and population</td></tr>
     <tr><td><code>GET /v1/leaderboards/{stat}?limit=50&amp;offset=0</code></td><td>one page of a board; <code>limit</code> is clamped to 200</td></tr>
-    <tr><td><code>GET /v1/players/{handle}</code></td><td>a player's records and ranks; 404 for an unknown handle</td></tr>
+    <tr><td><code>GET /v1/players/{handle}</code></td><td>a player's records and ranks, each with the board's direction and population; 404 for an unknown handle</td></tr>
+    <tr><td><code>GET /v1/players?q=whisk</code></td><td>handle search; prefix matches first, then substring. Two characters minimum</td></tr>
+    <tr><td><code>GET /v1/players/{handle}/events?limit=50&amp;before=…</code></td><td>the raw event log, newest first, cursor-paged. Page until <code>next</code> is absent, not until a page comes back short</td></tr>
+    <tr><td><code>GET /v1/compare?handles=a,b,c</code></td><td>up to eight players pivoted board-first, read against one view of the projections</td></tr>
     <tr><td><code>GET /v1/feed/sse</code></td><td>the live activity stream as server-sent events (never cached)</td></tr>
     <tr><td><code>GET /.well-known/catlog-jwks.json</code></td><td>the public keys catlog signs licenses with</td></tr>
     <tr><td><code>GET /.well-known/catlog-denylist.json</code></td><td>the signed revocation list</td></tr>
@@ -78,4 +83,17 @@
   <code>d</code> is rejected outright: catlog will not accept your private key even by accident.
 </p>
 </section>
+
+<section id="docs-api-numbers">
+<h2>Numbers are raw</h2>
+<p>
+  Every value is published in the unit the event carried — metres, metres per second, milliseconds, joules —
+  and never as a formatted string. A formatted string is not a number you can sort, and freezing the
+  presentation into a response that is cached for thirty seconds would make a decimal place an API change.
+  Both of catlog's own frontends format it themselves, from the same rules, and are checked against the same
+  table of worked examples.
+</p>
+</section>
+
+</div>
 {{- end}}

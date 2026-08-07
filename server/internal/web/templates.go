@@ -8,11 +8,12 @@ import (
 	"html/template"
 	"math"
 	"net/http"
-	"sort"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/meow-sci/catlog/server/internal/readapi"
 	"github.com/meow-sci/catlog/server/internal/units"
 )
 
@@ -30,6 +31,9 @@ var pageTemplates = []string{
 	"boards",
 	"board",
 	"profile",
+	"events",
+	"search",
+	"compare",
 	"login",
 	"dashboard",
 	"notfound",
@@ -83,6 +87,9 @@ type page struct {
 	// BaseURL is the deployment's public URL, quoted in the docs pages so the
 	// install instructions match the server the reader is looking at.
 	BaseURL string
+	// Search pre-fills the header search box, so a results page shows what was
+	// asked for rather than an empty field.
+	Search string
 	// Data is the page's own payload.
 	Data any
 }
@@ -140,22 +147,166 @@ func (s *Server) signedIn(r *http.Request) bool {
 // record differently is exactly the failure that package exists to prevent.
 // Read its comment before changing what a number looks like here.
 var templateFuncs = template.FuncMap{
-	// value is the bare number — thousands grouped, three significant figures —
-	// for a column whose header already carries the unit.
-	"value": units.Number,
-	// unit is the number with its unit applied: metres scaled to km/Mm, a
-	// career time in milliseconds rendered as a duration, a count labelled. For
-	// a cell that has to stand on its own.
-	"unit":       units.Format,
-	"datetime":   formatDateTime,
-	"date":       formatDate,
-	"ctx":        contextPairs,
-	"pct":        percent,
-	"feedID":     feedItemID,
-	"statPath":   func(stat string) string { return "/boards/" + stat },
-	"playerPath": func(handle string) string { return "/p/" + handle },
-	"dict":       dict,
-	"add":        func(a, b int) int { return a + b },
+	// value is the number with its unit applied: metres scaled to km/Mm, a
+	// career time in milliseconds rendered as a duration, a count labelled.
+	//
+	// Every value cell on the site calls this, header unit or not. That is not
+	// redundant for the scaling quantities — a length column legitimately mixes
+	// "999 m" and "1.82 Mm" — and it buys column-independence on the profile,
+	// comparison and tile surfaces, where there is no header to carry the unit.
+	"value": units.Format,
+	// number is rule 2 alone, for a count that is not in any unit at all.
+	"number": number,
+	// exact is the figure as the API sent it, for `data-value` and `title`. It
+	// is what a reader uses to recover the digits "48 MJ" hides, and what the
+	// e2e suite reads instead of trying to strip non-digits out of "5m 13s".
+	"exact":       exactValue,
+	"exactUnit":   exactWithUnit,
+	"datetime":    formatDateTime,
+	"date":        formatDate,
+	"ctx":         contextPairs,
+	"blob":        prettyJSON,
+	"standing":    standing,
+	"periodLabel": periodLabel,
+	"rankClass":   rankClass,
+	"pageOffset":  pageOffset,
+	"titleize":    titleize,
+	"feedID":      feedItemID,
+	"statPath":    func(stat string) string { return "/boards/" + stat },
+	"playerPath":  func(handle string) string { return "/p/" + handle },
+	"eventsPath":  func(handle string) string { return "/p/" + handle + "/events" },
+	"comparePath": comparePath,
+	"query":       url.Values.Encode,
+	"dict":        dict,
+	"add":         func(a, b int) int { return a + b },
+	"sub":         func(a, b int) int { return a - b },
+}
+
+// number groups a count for display.
+//
+// It takes `any` because text/template does not convert between numeric kinds,
+// and the counts on these pages are variously `int` (how many boards), `int64`
+// (a board's population) and `float64` (a value off a row). One entry point that
+// widens them is less error-prone than three template functions that differ only
+// in a signature.
+func number(v any) string {
+	switch t := v.(type) {
+	case int:
+		return units.Number(float64(t))
+	case int64:
+		return units.Number(float64(t))
+	case float64:
+		return units.Number(t)
+	default:
+		return "—"
+	}
+}
+
+// exactValue renders a float the way the JSON API published it: no grouping, no
+// significant-figure trim, no unit. It is the machine-readable half of every
+// value cell (`data-value`).
+func exactValue(v float64) string {
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		return ""
+	}
+	return strconv.FormatFloat(v, 'f', -1, 64)
+}
+
+// exactWithUnit is the `title` on a formatted value: the undecorated figure and
+// the unit the event carried, so hovering "48 MJ" says "48000000 J".
+func exactWithUnit(v float64, unit string) string {
+	s := exactValue(v)
+	if s == "" {
+		return "not a number"
+	}
+	if unit == "" {
+		return s
+	}
+	return s + " " + unit
+}
+
+// pageOffset is the offset of the board page a rank falls on, so a profile row
+// can link to "where I actually sit" without a new endpoint.
+func pageOffset(rank int) int {
+	if rank < 1 {
+		return 0
+	}
+	return (rank - 1) / BoardRows * BoardRows
+}
+
+// rankClass grades a placement for the profile table. Top three get the accent,
+// the top tenth gets full-strength text, everyone else is muted — a ranking, not
+// a verdict.
+func rankClass(rank int, players int64) string {
+	switch {
+	case rank <= 3:
+		return "rank-top"
+	case players > 0 && float64(rank) <= float64(players)/10:
+		return "rank-high"
+	default:
+		return "rank-rest"
+	}
+}
+
+// comparePath builds `/compare?handles=…` out of any mixture of handles and
+// lists of handles, so a template can write `comparePath .With .Handle` to mean
+// "the set I am carrying, plus this one".
+//
+// The result goes back through [readapi.SplitHandles], which deduplicates and
+// caps at eight. That makes "+ compare" idempotent on a handle already in the
+// set, and it means the link a template offers can never ask for more handles
+// than the endpoint will answer with — the cap is applied where the URL is
+// built rather than silently by the server afterwards.
+func comparePath(parts ...any) string {
+	var handles []string
+	for _, p := range parts {
+		switch t := p.(type) {
+		case string:
+			if t != "" {
+				handles = append(handles, t)
+			}
+		case []string:
+			handles = append(handles, t...)
+		}
+	}
+	handles = readapi.SplitHandles(strings.Join(handles, ","))
+	if len(handles) == 0 {
+		return "/compare"
+	}
+	return "/compare?handles=" + url.QueryEscape(strings.Join(handles, ","))
+}
+
+// titleize renders a fold's lowercase content word as a display name — "luna" →
+// "Luna", "ground_impact" → "Ground Impact" — matching stats.titleize, which the
+// server already applied to the board titles themselves. Board titles must not
+// be run through this a second time; context *values* must.
+func titleize(s string) string {
+	words := strings.FieldsFunc(s, func(r rune) bool { return r == '_' || r == '-' || r == '.' })
+	for i, w := range words {
+		r := []rune(w)
+		words[i] = strings.ToUpper(string(r[:1])) + string(r[1:])
+	}
+	return strings.Join(words, " ")
+}
+
+// prettyJSON re-indents a stored blob for a disclosure.
+//
+// It is decoded and re-encoded rather than printed, so a malformed or hostile
+// blob cannot end a <script> or open a tag: html/template escapes the result as
+// text, and what it escapes is bytes encoding/json produced.
+func prettyJSON(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var v any
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return ""
+	}
+	out, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return ""
+	}
+	return string(out)
 }
 
 // formatDateTime renders a unix-ms timestamp in UTC. Everything catlog stores is
@@ -175,11 +326,22 @@ func formatDate(ms int64) string {
 	return time.UnixMilli(ms).UTC().Format("2006-01-02")
 }
 
-func percent(n, of int) int {
-	if of <= 0 {
+// standing is how full a profile row's rank bar is: 100 for first place, falling
+// towards 0 at the back of the field. It reads the way a reader expects a bar to
+// read — more is better — which the raw percentile does not, since rank 1 of 41
+// is a *2 %* percentile and a 2 %-full bar next to a first place would be
+// nonsense.
+//
+// The clamp is load-bearing rather than defensive: `rank` is filtered of banned
+// players and `players` is not, so a rank can legitimately be better than the
+// denominator implies and the naive ratio can leave the interval. A bar 104 %
+// wide would be a visible lie about arithmetic nobody would think to question.
+func standing(rank int, players int64) int {
+	if players <= 0 || rank < 1 {
 		return 0
 	}
-	return int(math.Round(float64(n) / float64(of) * 100))
+	behind := int(math.Round((1 - float64(rank-1)/float64(players)) * 100))
+	return min(max(behind, 0), 100)
 }
 
 // pair is one decoded entry of a board row's `context` blob.
@@ -188,7 +350,24 @@ type pair struct {
 	Value string
 }
 
-// contextPairs decodes a fold's `context` JSON for display.
+// contextKeys is the display allow-list for the Detail column: the
+// human-meaningful half of a fold's `context` blob, in the order it reads best.
+//
+// An unrecognised key is **hidden**, not shown. That is the whole point of an
+// allow-list here rather than a deny-list: the fold layer can add a context key
+// without a frontend release, and a new internal id cannot leak into a public
+// table merely because nobody remembered to exclude it.
+//
+// What is deliberately off it: `flight` — a client-minted ULID that means
+// nothing to a reader and eats the widest column — and `career`, which the
+// server has already relabelled per player (readapi/privacy.go) and which is
+// still a 16-character token no reader wants in a table. Both remain visible in
+// the row's Details disclosure and in the raw event log, which is what those
+// surfaces are for.
+var contextKeys = []string{"body", "from", "energy_j", "t1_sim"}
+
+// contextPairs decodes a fold's `context` JSON for display, keeping only
+// [contextKeys].
 //
 // The blob is written by the folds, not by players, but its *values* come from
 // event payloads, which are player-supplied (§4.2 names are a moderation
@@ -202,14 +381,17 @@ func contextPairs(raw json.RawMessage) []pair {
 	if err := json.Unmarshal(raw, &m); err != nil {
 		return nil
 	}
-	out := make([]pair, 0, len(m))
-	for k, v := range m {
+	out := make([]pair, 0, len(contextKeys))
+	for _, k := range contextKeys {
+		v, ok := m[k]
+		if !ok {
+			continue
+		}
 		// The key is what says which unit the number is in — `energy_j` is
-		// joules, `speed_ms` is metres per second — so the label is stripped of
-		// its underscores for display and handed to units.ForKey for meaning.
+		// joules, `t1_sim` is seconds — so the label is stripped of its
+		// underscores for display and handed to units.ForKey for meaning.
 		out = append(out, pair{Key: strings.ReplaceAll(k, "_", " "), Value: scalar(k, v)})
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
 	return out
 }
 
@@ -218,7 +400,10 @@ func scalar(key string, v any) string {
 	case nil:
 		return "—"
 	case string:
-		return t
+		// Body and vehicle names arrive lowercase from the game; the board
+		// titles the server generates are already title case, so the values
+		// beside them should read the same way.
+		return titleize(t)
 	case bool:
 		return strconv.FormatBool(t)
 	case float64:

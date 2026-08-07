@@ -1,46 +1,98 @@
 {{define "layout" -}}
 <!doctype html>
-<html lang="en" data-theme="dark">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{.Title}}</title>
 <meta name="description" content="catlog — leaderboards and a live feed for Kitten Space Agency flights.">
 <link rel="icon" href="data:,">
-<link rel="stylesheet" href="/static/vendor/pico.min.css">
 <link rel="stylesheet" href="/static/css/catlog.css">
+{{- /*
+The theme, resolved before first paint. It has to be synchronous and inline:
+anything async paints the light default first and a dark-theme reader gets a
+white flash on every reload. It is the only inline script on the site — if a
+Content-Security-Policy is ever added, this is the one thing needing a hash.
+*/}}
+<script>
+(function () {
+  try {
+    var stored = localStorage.getItem('catlog:theme');
+    if (stored === 'light' || stored === 'dark') {
+      document.documentElement.setAttribute('data-theme', stored);
+    }
+    var me = localStorage.getItem('catlog:me');
+    if (me) document.documentElement.setAttribute('data-me', me);
+  } catch (e) {
+    /* Storage can be denied outright. A themeless page is still a page. */
+  }
+})();
+</script>
 <script type="module" src="/static/vendor/datastar.js"></script>
+<script type="module" src="/static/js/me.js"></script>
 {{- range .Scripts}}
 <script type="module" src="{{.}}"></script>
 {{- end}}
 </head>
 <body>
-<header class="container">
-  <nav>
-    <ul><li><a href="/" id="nav-home" class="brand"><strong>catlog</strong></a></li></ul>
-    <ul>
-      <li><a href="/boards" id="nav-boards" {{if eq .Nav "boards"}}aria-current="page"{{end}}>Leaderboards</a></li>
-      <li><a href="/docs/install" id="nav-docs" {{if eq .Nav "docs"}}aria-current="page"{{end}}>Docs</a></li>
+<header id="site-header">
+  <div class="container">
+    <a href="/" id="nav-home">catlog</a>
+    <nav id="site-nav" aria-label="Main">
+      <a href="/boards" id="nav-boards" {{if eq .Nav "boards"}}aria-current="page"{{end}}>Leaderboards</a>
+      <a href="/compare" id="nav-compare" {{if eq .Nav "compare"}}aria-current="page"{{end}}>Compare</a>
+      <a href="/docs/install" id="nav-docs" {{if eq .Nav "docs"}}aria-current="page"{{end}}>Docs</a>
+    </nav>
+
+    <div id="header-tail">
+      {{- /*
+      A plain GET form, so search works with JavaScript off and every result page
+      is a URL somebody can paste. The datastar attribute below only patches the
+      suggestion list; nothing depends on it. The debounce and the two-character
+      floor are both the API's rules (`MinQueryLen`), kept client-side so a
+      one-character query is simply not sent rather than answered with a 400 —
+      and backspacing below the floor clears the list rather than leaving stale
+      suggestions under a query that no longer produced them.
+
+      **The separator before the event name is a colon.** `data-on-input` is
+      silently ignored by datastar v1.0.2 — no console error, no listener, an
+      attribute that looks right and does nothing. `data-on:input` is the form
+      that works. Same shape as WP5's `data-on-load` → `data-init` finding; see
+      docs/DECISIONS.md.
+      */}}
+      <form id="search-form" action="/search" method="get" role="search"
+            data-on:input__debounce.250ms="evt.target.value.trim().length > 1 ? @get('/search/suggest?q=' + encodeURIComponent(evt.target.value.trim())) : (document.getElementById('search-suggest').innerHTML = '')">
+        <label class="sr-only" for="search-q">Search handles</label>
+        <input type="search" id="search-q" name="q" placeholder="Find a handle" autocomplete="off"
+               spellcheck="false" maxlength="150" value="{{.Search}}">
+        <ul id="search-suggest" role="listbox" aria-label="Handle suggestions"></ul>
+      </form>
+
+      {{- /* Filled in by me.js from localStorage; absent, not empty, when unset. */}}
+      <span id="me-chip" hidden>You: <a href="#" id="me-link"></a><button type="button" id="me-clear" class="quiet" title="Forget this handle">clear</button></span>
+
+      <button type="button" id="theme-toggle" class="quiet" aria-label="Switch theme">Theme</button>
+
       {{- if .SignedIn}}
-      <li><a href="/dashboard" id="nav-dashboard" {{if eq .Nav "account"}}aria-current="page"{{end}}>Dashboard</a></li>
+      <a href="/dashboard" id="nav-dashboard" class="button secondary" {{if eq .Nav "account"}}aria-current="page"{{end}}>Dashboard</a>
       {{- else}}
-      <li><a href="/login" id="nav-login" role="button" class="secondary" {{if eq .Nav "account"}}aria-current="page"{{end}}>Sign in</a></li>
+      <a href="/login" id="nav-login" class="button secondary" {{if eq .Nav "account"}}aria-current="page"{{end}}>Sign in</a>
       {{- end}}
-    </ul>
-  </nav>
+    </div>
+  </div>
 </header>
 
 <main class="container" id="main">
 {{- template "content" .}}
 </main>
 
-<footer class="container catlog-footer">
-  <small>
+<footer id="site-footer">
+  <div class="container">
     catlog logs Kitten Space Agency flights. It never receives your email —
     <a href="/docs/privacy">how that works</a>.
     · <a href="/docs/install">Install</a>
     · <a href="/docs/api">API</a>
-  </small>
+  </div>
 </footer>
 </body>
 </html>

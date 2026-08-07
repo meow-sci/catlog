@@ -1,15 +1,52 @@
 {{define "content" -}}
-<nav aria-label="breadcrumb"><ul><li><a href="/boards">Leaderboards</a></li><li>{{.Data.Title}}</li></ul></nav>
+{{- $b := .Data -}}
+<nav aria-label="Breadcrumb" class="muted text-sm"><a href="/boards">Leaderboards</a> / {{$b.Title}}</nav>
 
-<hgroup>
-  <h1 id="board-title" data-stat="{{.Data.Stat}}">{{.Data.Title}}</h1>
+<div class="page-head">
+  <h1 id="board-title" data-stat="{{$b.Stat}}">{{$b.Title}}</h1>
   {{- /* Which way the board reads is published, never guessed: the career-time
          boards rank the *smallest* value first, and a reader that assumed
          otherwise would present the fastest ascent as the worst one. */}}
-  <p id="board-direction" data-ascending="{{.Data.Ascending}}">Measured in {{.Data.Unit}}. Top {{.Data.Limit}}. {{if .Data.Ascending}}Lowest wins.{{else}}Highest wins.{{end}}</p>
-</hgroup>
+  <p id="board-direction" data-ascending="{{$b.Ascending}}">Measured in {{$b.Unit}}. Top {{$b.Limit}}. {{if $b.Ascending}}Lowest wins.{{else}}Highest wins.{{end}}</p>
+</div>
 
-{{template "board-table" (dict "Board" .Data "Compact" false)}}
+{{- /* A window is a dimension of this board, not another board — so the key
+       stays in the URL and only the label changes. */}}
+<nav class="periods" id="board-periods" aria-label="Window">
+  {{- range $b.Periods}}
+  <a class="chip{{if eq . $b.Period}} selected{{end}}" data-period="{{.}}"
+     href="{{statPath $b.Stat}}{{if ne . "alltime"}}?period={{.}}{{end}}"
+     {{if eq . $b.Period}}aria-current="page"{{end}}>{{periodLabel .}}</a>
+  {{- end}}
+</nav>
 
-<p><small>Ranks skip nobody: a banned account is removed from the board rather than leaving a hole in the numbering.</small></p>
+{{- if and $b.Bucket (ne $b.Period "alltime")}}
+<p class="muted text-sm" id="board-bucket" data-bucket="{{$b.Bucket}}">Window {{$b.Bucket}}. Ranks are for this window; a player's all-time placing is on their profile.</p>
+{{- end}}
+
+{{template "board-table" (dict "Board" $b.BoardResponse "Compact" false)}}
+
+{{- /* Filled in by me.js when the reader's own handle is on this board but not
+       on this page. It is a link to the page that does contain them. */}}
+<div id="board-me" hidden><span id="board-me-text"></span> <a href="/" id="board-me-link">Show my row</a></div>
+
+<nav class="pager" aria-label="Pagination">
+  {{- if gt $b.Offset 0}}
+  <a href="{{statPath $b.Stat}}?period={{$b.Period}}&amp;offset={{$b.Prev}}" id="board-prev">Previous</a>
+  {{- else}}
+  <span id="board-prev" aria-disabled="true">Previous</span>
+  {{- end}}
+  {{- if $b.Rows}}
+  <span class="count" id="board-range">Ranks {{$b.FirstRank}}&#8211;{{$b.LastRank}}</span>
+  {{- else}}
+  <span class="count" id="board-range">No ranks on this page</span>
+  {{- end}}
+  {{- if $b.HasMore}}
+  <a href="{{statPath $b.Stat}}?period={{$b.Period}}&amp;offset={{$b.Next}}" id="board-next">Next</a>
+  {{- else}}
+  <span id="board-next" aria-disabled="true">Next</span>
+  {{- end}}
+</nav>
+
+<p class="muted prose" style="margin-top: 1rem"><small>Ranks skip nobody: a banned account is removed from the board rather than leaving a hole in the numbering.</small></p>
 {{- end}}

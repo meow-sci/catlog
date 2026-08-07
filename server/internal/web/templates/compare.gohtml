@@ -1,0 +1,74 @@
+{{define "content" -}}
+{{- $c := .Data -}}
+<div class="page-head">
+  <h1 id="compare-title">Side by side</h1>
+  <p>Up to eight handles across every board any of them is on. The set lives in the address bar, so this page is a link you can paste at the people in it.</p>
+</div>
+
+<div id="compare-handles" style="margin-bottom: 1rem">
+  {{- range $c.Columns}}
+  <span class="chip{{if not .Found}} muted{{end}}" data-handle="{{.Handle}}" data-found="{{.Found}}">
+    {{- if .Found}}<a href="{{playerPath .Handle}}">{{.Handle}}</a>{{else}}{{.Handle}}{{end}}
+    <a class="chip-remove" href="{{.RemoveURL}}" title="Remove {{.Handle}}" aria-label="Remove {{.Handle}}">&#215;</a>
+  </span>
+  {{- end}}
+
+  {{- if lt (len $c.Columns) 8}}
+  <form action="/compare" method="get" class="row" id="compare-add">
+    {{- range $c.Columns}}<input type="hidden" name="handles" value="{{.Handle}}">{{end}}
+    <label class="sr-only" for="compare-add-handle">Add a handle</label>
+    <input type="text" id="compare-add-handle" name="add" placeholder="add a handle" autocomplete="off"
+           spellcheck="false" maxlength="150" style="max-width: 14rem">
+    <button type="submit" class="secondary">Add</button>
+  </form>
+  {{- end}}
+</div>
+
+{{- if gt $c.Asked 8}}
+<p class="muted" id="compare-capped"><small>Eight is the most catlog will line up at once, so the last {{sub $c.Asked 8}} were dropped.</small></p>
+{{- end}}
+
+{{- if not $c.Columns}}
+<p class="empty" id="compare-empty">Nobody selected yet. Add a handle above, or press <strong>Compare</strong> on somebody&#8217;s profile.</p>
+{{- else if not $c.Rows}}
+<p class="empty" id="compare-nothing">None of those handles is on a board yet.</p>
+{{- else}}
+<div class="table-wrap">
+<table id="compare-table">
+  <thead>
+    <tr>
+      <th scope="col">Board</th>
+      {{- range $c.Columns}}
+      <th scope="col" class="handle-col{{if not .Found}} missing{{end}}" data-handle="{{.Handle}}">
+        {{- if .Found}}<a href="{{playerPath .Handle}}">{{.Handle}}</a>{{else}}{{.Handle}}<span class="world-rank">no such player</span>{{end -}}
+      </th>
+      {{- end}}
+    </tr>
+  </thead>
+  <tbody>
+    {{- range $row := $c.Rows}}
+    <tr class="compare-row" data-stat="{{$row.Stat}}" data-ascending="{{$row.Ascending}}">
+      <th scope="row"><a href="{{statPath $row.Stat}}">{{$row.Title}}</a>
+        <span class="world-rank">{{$row.Unit}} &#183; {{if $row.Ascending}}lowest wins{{else}}highest wins{{end}}</span></th>
+      {{- range $row.Cells}}
+      {{- if .Present}}
+      <td class="value{{if .Best}} best{{end}}" data-value="{{exact .Row.Value}}" data-handle="{{.Row.Handle}}"
+          title="{{exactUnit .Row.Value $row.Unit}}"{{if .Best}} aria-label="{{value .Row.Value $row.Unit}}, best of these handles"{{end}}>
+        {{- value .Row.Value $row.Unit}}
+        {{- if .Row.Rewound}}<abbr class="rewound" title="An earlier save of this career was loaded, so its clock did not only run forwards.">&dagger;</abbr>{{end}}
+        {{- /* The world rank, not the rank among the compared handles: "3rd in
+               the world", never "2nd of your friends". */}}
+        <span class="world-rank">#{{.Row.Rank}} of {{number $row.Players}} worldwide</span>
+      </td>
+      {{- else}}
+      <td class="absent" title="not on this board">&#8212;</td>
+      {{- end}}
+      {{- end}}
+    </tr>
+    {{- end}}
+  </tbody>
+</table>
+</div>
+<p class="muted prose" style="margin-top: 1rem"><small>A gap is a gap: a player who is not on a board is absent from it, not sitting at zero. Ranks are world ranks, so the best cell in a row and the best rank in it are usually but not always the same player &#8212; two of you can be one place apart on a board a thousand people are on.</small></p>
+{{- end}}
+{{- end}}

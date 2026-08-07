@@ -1,24 +1,25 @@
 {{define "content" -}}
 {{- $me := .Data.Account.Me -}}
-<hgroup>
+<div class="page-head">
   <h1 id="dashboard-title">Your handles</h1>
   <p>Signed in with {{$me.IdP}} since {{date $me.Since}}. catlog knows nothing else about you.</p>
-</hgroup>
+</div>
 
-<section id="quotas" class="grid">
-  <article><header><small>Handles</small></header><strong id="quota-handles" data-used="{{$me.Handles}}" data-limit="{{$me.HandleQuota}}">{{$me.Handles}} / {{$me.HandleQuota}}</strong></article>
-  <article><header><small>Licenses issued today</small></header><strong id="quota-issuances" data-used="{{$me.Issuances24h}}" data-limit="{{$me.IssuanceQuota}}">{{$me.Issuances24h}} / {{$me.IssuanceQuota}}</strong></article>
-  <article><header><small>License lifetime</small></header><strong id="quota-ttl">{{$me.LicenseTTLDays}} days</strong></article>
+<section id="quotas" class="tiles">
+  <div class="tile"><span class="label">Handles</span><span class="stat-value" id="quota-handles" data-used="{{$me.Handles}}" data-limit="{{$me.HandleQuota}}">{{$me.Handles}} / {{$me.HandleQuota}}</span></div>
+  <div class="tile"><span class="label">Licenses issued today</span><span class="stat-value" id="quota-issuances" data-used="{{$me.Issuances24h}}" data-limit="{{$me.IssuanceQuota}}">{{$me.Issuances24h}} / {{$me.IssuanceQuota}}</span></div>
+  <div class="tile"><span class="label">License lifetime</span><span class="stat-value" id="quota-ttl">{{$me.LicenseTTLDays}} days</span></div>
 </section>
 
-<section id="handles">
+<section id="handles" class="stack" style="margin-top: 1.5rem">
   {{- range .Data.Live}}
-  <article class="handle" data-handle="{{.Handle}}">
+  <article class="handle panel" data-handle="{{.Handle}}">
     <header>
-      <h2><a href="{{playerPath .Handle}}">{{.Handle}}</a></h2>
-      <small>claimed {{date .Since}}</small>
+      <h2 class="panel-title"><a href="{{playerPath .Handle}}">{{.Handle}}</a></h2>
+      <small class="muted">claimed {{date .Since}}</small>
     </header>
 
+    <div class="table-wrap">
     <table class="credentials">
       <thead><tr><th scope="col">Key thumbprint (jkt)</th><th scope="col">Issued</th><th scope="col">Expires</th></tr></thead>
       <tbody>
@@ -37,24 +38,26 @@
         </tr>
         {{- end}}
         {{- else}}
-        <tr class="credential-empty"><td colspan="3"><em>No credential. Reissue one to start shipping flights.</em></td></tr>
+        <tr class="credential-empty"><td colspan="3">No credential. Reissue one to start shipping flights.</td></tr>
         {{- end}}
       </tbody>
     </table>
+    </div>
 
-    <footer>
-      <button class="secondary outline catlog-reissue" data-handle="{{.Handle}}">Reissue credential</button>
-      <button class="contrast outline catlog-revoke" data-handle="{{.Handle}}">Revoke every credential</button>
+    <footer class="row">
+      <button class="secondary catlog-reissue" data-handle="{{.Handle}}">Reissue credential</button>
+      <button class="danger catlog-revoke" data-handle="{{.Handle}}">Revoke every credential</button>
+      <a class="button secondary" href="{{eventsPath .Handle}}">Your event log</a>
       <p class="handle-error" role="alert" hidden data-error=""></p>
     </footer>
   </article>
   {{- else}}
-  <article id="handles-empty"><p>You have no handles yet. Claim one below.</p></article>
+  <article id="handles-empty" class="panel"><p>You have no handles yet. Claim one below.</p></article>
   {{- end}}
 
   {{- range .Data.Retired}}
-  <article class="handle handle-retired" data-handle="{{.Handle}}">
-    <header><h2>{{.Handle}}</h2><small>retired — permanently unusable, and nobody else can ever claim it</small></header>
+  <article class="handle handle-retired panel" data-handle="{{.Handle}}">
+    <header><h2 class="panel-title">{{.Handle}}</h2><small>retired — permanently unusable, and nobody else can ever claim it</small></header>
   </article>
   {{- end}}
 </section>
@@ -64,19 +67,20 @@ The four-step wizard (§5.7). Every step is in the DOM from the start and
 switched with [hidden] so keygen.js never builds markup out of strings — the
 only HTML the browser gets is the HTML the server sent.
 */}}
-<article id="wizard"
+<article id="wizard" class="panel" style="margin-top: 1.5rem"
          data-can-claim="{{.Data.CanClaim}}"
          data-can-issue="{{.Data.CanIssue}}">
-  <header><h2>New handle</h2></header>
+  <header><h2 class="panel-title">New handle</h2></header>
 
   <section id="wizard-step-1" class="wizard-step">
     <p>Pick a handle. It is permanent: catlog has no rename, and a handle is never recycled to anyone else.</p>
-    <label for="wizard-handle">Handle
+    <p>
+      <label for="wizard-handle">Handle</label>
       <input type="text" id="wizard-handle" name="handle" maxlength="150" autocomplete="off"
              spellcheck="false" placeholder="whiskers_prime"
              {{if not .Data.CanClaim}}disabled{{end}}>
-    </label>
-    <small>1–150 characters: letters, digits, <code>.</code>, <code>_</code>, <code>-</code>; must start and end with a letter or digit.</small>
+      <small class="muted">1–150 characters: letters, digits, <code>.</code>, <code>_</code>, <code>-</code>; must start and end with a letter or digit.</small>
+    </p>
     <p>
       <button id="wizard-submit" {{if or (not .Data.CanClaim) (not .Data.CanIssue)}}disabled{{end}}>
         Generate a key and claim it
@@ -104,9 +108,12 @@ only HTML the browser gets is the HTML the server sent.
     </p>
     <p>Key thumbprint (jkt): <code id="wizard-jkt"></code></p>
     <p>Expires: <span id="wizard-expires"></span></p>
-    <p>
-      <a id="wizard-download" role="button" download="catlog-credential.json" href="#">Download catlog-credential.json again</a>
+    <p class="row">
+      <a id="wizard-download" class="button" download="catlog-credential.json" href="#">Download catlog-credential.json again</a>
       <button id="wizard-done" class="secondary">Done</button>
+      {{- /* The one moment this site knows the handle for certain. The value is
+             written to this browser's localStorage and never sent anywhere. */}}
+      <button id="wizard-set-me" class="secondary" type="button">Make this my handle on this browser</button>
     </p>
     <p><small>Put it at <code>&lt;KSA user dir&gt;/mods/catlog/credential.json</code> — see <a href="/docs/install">install</a>.</small></p>
   </section>
@@ -114,10 +121,10 @@ only HTML the browser gets is the HTML the server sent.
   <p id="wizard-error" role="alert" hidden data-error=""><strong id="wizard-error-code"></strong> <span id="wizard-error-detail"></span></p>
 </article>
 
-<article id="account-danger">
-  <header><h2>Account</h2></header>
+<article id="account-danger" class="panel prose" style="margin-top: 1.5rem">
+  <header><h2 class="panel-title">Account</h2></header>
   <p>
-    <button id="logout" class="secondary outline">Sign out</button>
+    <button id="logout" class="secondary">Sign out</button>
   </p>
   <details>
     <summary>Delete everything catlog holds about me</summary>
@@ -125,7 +132,7 @@ only HTML the browser gets is the HTML the server sent.
       This deletes every event, batch and credential, and retires your handles permanently —
       neither you nor anybody else can ever claim them again. It cannot be undone.
     </p>
-    <button id="delete-account" class="contrast">Delete my data</button>
+    <p><button id="delete-account" class="danger">Delete my data</button></p>
     <p id="delete-error" role="alert" hidden data-error=""></p>
   </details>
 </article>
