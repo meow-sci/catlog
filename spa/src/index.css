@@ -31,12 +31,20 @@
  * fetched. So the one face is declared here against the package's own file, and
  * Vite fingerprints and rewrites the URL.
  *
- * The `unicode-range` is the package's own for that file, copied verbatim. Every
- * non-ASCII glyph catlog renders is inside it and none of them are decorative:
+ * The `unicode-range` is the package's own for that file, copied verbatim, and
+ * it is the *list of glyphs the file contains* — not a hint. A character outside
+ * it silently renders from a fallback face at a different width. So every
+ * non-ASCII glyph catlog renders has been checked against
+ * `@fontsource-variable/inter/unicode.json`, and none of them are decorative:
  * U+2014 — em dash (a value that is not a number), U+202F narrow no-break space
  * (§4's group separator — unrenderable without U+2000-206F), U+2020 † (the
  * career-rewind mark), U+2191/U+2193 ↑↓ (board direction), U+00B7 ·, U+00D7 ×,
- * U+2192 →. Every dynamic string catlog renders is ASCII by construction.
+ * U+203A › (a step in a path). Every dynamic string catlog renders is ASCII by
+ * construction.
+ *
+ * **U+2192 → is in no subset of this package**, latin or otherwise, and neither
+ * is ✓ U+2713 or ▾ U+25BE. Use › U+203A for an arrow and a `lucide-react` icon
+ * where a symbol is wanted — those are SVG and depend on no font at all.
  */
 @font-face {
   font-family: 'Inter Variable';

@@ -124,6 +124,21 @@ describe('BoardsPage', () => {
     expect(screen.getByText(/at least 2 different players/)).toBeTruthy();
   });
 
+  it('lists the label each board is read in, not the unit it is stored in', async () => {
+    stubFetch([{ path: '/v1/leaderboards', body: BOARDS }]);
+    const { container } = render(<BoardsPage />);
+    await screen.findByText('Fastest to Zephyria');
+
+    // This column has to agree with the header on the board page it links to.
+    const cells = [...container.querySelectorAll('tr.boards-row td.unit')].map(
+      (c) => c.textContent ?? '',
+    );
+    expect(cells.some((t) => t.includes('m/s'))).toBe(true);
+    expect(cells.some((t) => t.includes('orbits'))).toBe(true);
+    // `fastest_to_zephyria` is in seconds and reads as a duration.
+    expect(cells.some((t) => t.includes('Time'))).toBe(true);
+  });
+
   it('shows the server error rather than an empty list when the read fails', async () => {
     stubFetch([
       { path: '/v1/leaderboards', status: 500, body: { error: 'internal', detail: 'boom' } },
@@ -306,6 +321,74 @@ describe('BoardPage', () => {
     expect(screen.getByText('50 s')).toBeTruthy();
     // And the rewind qualifier reaches the row it qualifies.
     expect(screen.getByText(/career rewound/)).toBeTruthy();
+  });
+
+  // The header labels the column; the cells label themselves. The two must not
+  // contradict each other, and for a career-time board they used to: the board
+  // publishes `unit: "ms"`/`"s"`, every cell renders `8m 57s`, and the header
+  // said "ms". `unitLabel` is the rule that fixed it, and these three cases are
+  // the three board families it has to get right.
+  it('heads a duration column with the quantity, and every other column with its unit', async () => {
+    stubFetch([
+      {
+        path: '/v1/leaderboards/fastest_to_zephyria',
+        body: {
+          stat: 'fastest_to_zephyria',
+          title: 'Fastest to Zephyria',
+          unit: 's',
+          ascending: true,
+          period: ALLTIME,
+          limit: 50,
+          offset: 0,
+          rows: [{ rank: 1, handle: 'demo_ace', value: 537.5, updated: 1_800_000_000_000 }],
+        },
+      },
+      { path: '/v1/leaderboards', body: BOARDS },
+    ]);
+    render(<BoardPage stat="fastest_to_zephyria" offset={0} period={ALLTIME} />);
+    await screen.findByRole('link', { name: 'demo_ace' });
+
+    const header = screen.getAllByRole('columnheader')[2];
+    expect(header?.textContent).toContain('Time');
+    // Not the storage unit: nothing in this column ends in "s" the way "8m 57s"
+    // would have to for the old header to have been true.
+    expect(header?.textContent).not.toMatch(/\bms\b/);
+    // It keeps its own case, because the same cell holds "m/s" and "RUDs" on
+    // other boards and the header row is otherwise uppercased.
+    expect(header?.className).toContain('normal-case');
+    // The storage unit is not lost — it moves into the prose above the board,
+    // which is what makes `data-value` and the cell's `title` legible.
+    expect(screen.getByText(/Measured in s, shown as a duration\./)).toBeTruthy();
+  });
+
+  it('heads a speed column with m/s, which every cell in it already ends in', async () => {
+    stubFetch(boardRoutes(LITHOBRAKE));
+    render(<BoardPage stat="biggest_lithobrake_survived" offset={0} period={ALLTIME} />);
+    await screen.findByRole('link', { name: 'demo_crasher' });
+    expect(screen.getAllByRole('columnheader')[2]?.textContent).toContain('m/s');
+    expect(screen.getByText(/Measured in m\/s\./)).toBeTruthy();
+  });
+
+  it('heads a counting column with the label the API publishes, in its own case', async () => {
+    stubFetch([
+      {
+        path: '/v1/leaderboards/rud_total',
+        body: {
+          ...LITHOBRAKE,
+          stat: 'rud_total',
+          title: 'Rapid Unscheduled Disassemblies',
+          unit: 'RUDs',
+          rows: [{ rank: 1, handle: 'demo_crasher', value: 6, updated: 1_800_000_000_000 }],
+        },
+      },
+      { path: '/v1/leaderboards', body: BOARDS },
+    ]);
+    render(<BoardPage stat="rud_total" offset={0} period={ALLTIME} />);
+    await screen.findByRole('link', { name: 'demo_crasher' });
+    // Written the way the API writes it: "RUDs", never "RUDS".
+    expect(screen.getAllByRole('columnheader')[2]?.textContent).toContain('RUDs');
+    expect(screen.getAllByRole('columnheader')[2]?.textContent).not.toContain('RUDS');
+    expect(screen.getByText(/Measured in RUDs\./)).toBeTruthy();
   });
 
   it('marks the viewer’s own row', async () => {

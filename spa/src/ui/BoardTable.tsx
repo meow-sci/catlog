@@ -15,6 +15,7 @@ import {
   TableRows,
   Value,
 } from './kit/index.ts';
+import { unitLabel } from './units.ts';
 
 /**
  * A leaderboard.
@@ -61,13 +62,19 @@ export function BoardTable(props: {
         <HeadCell id="handle" isRowHeader>
           Player
         </HeadCell>
-        <HeadCell id="value" align="end">
-          {/* The unit labels the column even though every cell carries its own:
-              a length column legitimately mixes `999 m` and `1.82 Mm`, so the
-              header says what the column *is* rather than what each row says. */}
+        {/* `normal-case tracking-normal` undoes the header row's uppercasing for
+            this one cell, and only this one: "M/S" is not a unit, "PA" is not a
+            unit, and "RUDS" is not how catlog writes that word. The datastar
+            site does the same with `thead th.value`. */}
+        <HeadCell id="value" align="end" className="normal-case tracking-normal">
+          {/* The label says what the column *is*, not what each row says. It is
+              the unit wherever a cell ends in that unit — a length column
+              legitimately mixes `999 m` and `1.82 Mm` and `m` names both — and
+              the quantity where no cell does: a career-time column renders
+              `5m 13s` and `243d 01h`, so it is headed "Time" rather than the
+              "ms" the API publishes. */}
           <span title={`Ranked ${direction}`}>
-            {props.unit === '' ? 'Value' : props.unit}{' '}
-            <span aria-hidden>{props.ascending ? '↑' : '↓'}</span>
+            {unitLabel(props.unit)} <span aria-hidden>{props.ascending ? '↑' : '↓'}</span>
             <span className="sr-only"> — ranked {direction}</span>
           </span>
         </HeadCell>

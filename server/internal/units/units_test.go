@@ -24,6 +24,47 @@ func TestConformance(t *testing.T) {
 	}
 }
 
+// TestLabelConformance is the same contract for rule 7. A column of durations
+// under a header reading "ms" was the defect this table exists to stop coming
+// back: no cell in that column says "ms", so the header names the quantity.
+func TestLabelConformance(t *testing.T) {
+	for _, tc := range units.LabelConformance {
+		if got := units.Label(tc.Unit); got != tc.Label {
+			t.Errorf("Label(%q) = %q, want %q", tc.Unit, got, tc.Label)
+		}
+		if got := units.Measured(tc.Unit); got != tc.Measured {
+			t.Errorf("Measured(%q) = %q, want %q", tc.Unit, got, tc.Measured)
+		}
+	}
+}
+
+// A header may only name a unit that a reader will actually see at the end of
+// every cell beneath it. That is the whole rule, and it is checkable: render a
+// value in the unit and look at what the string ends with.
+func TestLabelNamesOnlyAUnitEveryCellCarries(t *testing.T) {
+	for _, tc := range units.LabelConformance {
+		if tc.Unit == "" {
+			continue
+		}
+		for _, v := range []float64{0.45, 37.5, 313, 3661, 90000, 1234.5, 1.82e6} {
+			cell := units.Format(v, tc.Unit)
+			// An SI prefix goes *before* the symbol — "1.82 Mm" still ends in
+			// "m" — which is exactly why a scaled column can keep its base
+			// symbol in the header and a duration column cannot.
+			named := strings.HasSuffix(cell, tc.Label)
+			if tc.Label == "Time" {
+				if named {
+					t.Errorf("Label(%q) = %q but Format(%v, %q) = %q ends in it: the header should name the unit", tc.Unit, tc.Label, v, tc.Unit, cell)
+				}
+				continue
+			}
+			if !named {
+				t.Errorf("Label(%q) = %q but Format(%v, %q) = %q does not end in it", tc.Unit, tc.Label, v, tc.Unit, cell)
+			}
+		}
+	}
+}
+
 // The separator is U+202F, not an ASCII space: it does not wrap and it does not
 // widen the column. A plain space here would be invisible in a diff and visible
 // on every page.

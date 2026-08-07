@@ -14,11 +14,13 @@ The shared contract for the redesign of catlog's **two** frontends:
 They are a deliberate bake-off (`spa/README.md`, D14). They must reach **feature and
 behaviour parity** on everything below. They must **not** reach markup parity — see §10.
 
-> **Status.** §1 is *reported* from the repository. §2–§3, §5, §9–§11 are *proposed* — a
-> specification to be implemented, not a description of what exists. §4 and §6–§8 describe
-> **code that landed in `server/internal/` while this document was being written** and are
-> therefore reports of a live contract: read the named Go files, not this summary, when the
-> two disagree. Uncertainties are marked **⚠ FLAG**.
+> **Status.** This began as a specification and is now a **living record of a shipped
+> redesign**: §2–§11 have been implemented in both frontends, and where the document and the
+> repository disagree the repository is the fact and this file is the bug. It is edited in
+> place rather than appended to — a stale sentence here is how two frontends came to put a
+> raw unit string in a column header (§4.4), so a correction goes in the paragraph that was
+> wrong. §1 is the pre-redesign report and is kept as history; §12 lists what is still open.
+> Uncertainties are marked **⚠ FLAG**; resolved ones say so and say how.
 
 ---
 
@@ -100,15 +102,16 @@ its shape is the one to build against:
 
 `cd server && go build ./...` is green with these in the tree.
 
-**Two consequences for the frontends, and neither is optional:**
+**Two consequences for the frontends, both since done:**
 
-1. `web/templates.go` still registers the old `formatValue` as the `value` template
-   function, and `contextPairs`/`scalar` still format context values with it. Both must move
-   to `units.Format` and `units.ForKey`. `units.Format` takes the unit, so the template call
-   becomes `{{value .Value $board.Unit}}`.
-2. `web.Read` — the interface package `web` uses so that no page assembles its own rows —
-   has only `BoardList`, `Board` and `Player`. The datastar site's new pages need
-   `PlayerEvents`, `Search` and `Compare` added to it. **Do not reach around it into
+1. ✅ `web/templates.go` registered the old `formatValue` as the `value` template function,
+   and `contextPairs`/`scalar` formatted context values with it. Both moved to
+   `units.Format` and `units.ForKey`; `units.Format` takes the unit, so the template call is
+   `{{value .Value $board.Unit}}`. The func map also now carries `unitLabel` and `measured`
+   (§4.4) — a header is a `units` decision too, not a template one.
+2. ✅ `web.Read` — the interface package `web` uses so that no page assembles its own rows —
+   had only `BoardList`, `Board` and `Player`. `PlayerEvents`, `Search` and `Compare` were
+   added to it, and the new datastar pages go through it. **Do not reach around it into
    `store`**; the redaction and the ban filter both live behind it.
 
 ---
@@ -301,15 +304,32 @@ site's build must stay hermetic (D2 — the same argument that made
              Consolas, monospace;
 ```
 
-**Latin subset only, and it is safe rather than a gamble.** Every dynamic string catlog
-renders is ASCII by construction: handles are `[a-z0-9._-]`; kitten names are "sanitized to
-printable US-ASCII, max 32 chars" (`docs/events.md`); body names pass `statSuffix`'s
-`[a-z0-9._-]` for boards and `sanitize()` for the feed. The only non-ASCII glyphs on any
-page are ours — `—` U+2014, `×` U+00D7, `†` U+2020, `↑↓` U+2191/2193, `·` U+00B7,
-`→` U+2192, and the U+202F group separator — and **every one falls inside the
-Google-Fonts "latin" `unicode-range`** (`U+0000-00FF` plus `U+2000-206F`). U+202F in
-particular is inside `U+2000-206F`, which matters because §4's separator is unrenderable
-without it. Verify by rendering, not by trusting this paragraph.
+**Latin subset only, and it is safe for the dynamic strings but not for every glyph we
+write.** Every dynamic string catlog renders is ASCII by construction: handles are
+`[a-z0-9._-]`; kitten names are "sanitized to printable US-ASCII, max 32 chars"
+(`docs/events.md`); body names pass `statSuffix`'s `[a-z0-9._-]` for boards and `sanitize()`
+for the feed. The punctuation is ours, and it has to be checked one glyph at a time against
+the package's own `unicode.json` — **the `unicode-range` is the list of glyphs the file
+contains, not a hint**, and a character outside it silently renders from a fallback face at
+a different width. `@fontsource-variable/inter@5.3.0`'s latin range, verbatim:
+
+```
+U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308,
+U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD
+```
+
+Covered, and therefore usable: `—` U+2014, `†` U+2020, `–` U+2013, `›` U+203A and the U+202F
+group separator (all via `U+2000-206F` — which matters, because §4's separator is
+unrenderable without it); `·` U+00B7 and `×` U+00D7 (via `U+0000-00FF`); `↑` U+2191 and `↓`
+U+2193, which are listed individually and are *not* inside `U+2000-206F`.
+
+> **`→` U+2192 is in no subset of this package** — not latin, not latin-ext, not any of the
+> other five. An earlier draft of this section claimed it fell inside `U+2000-206F`; it does
+> not (`0x2192 > 0x206F`), and the claim was wrong rather than imprecise. **Use `›` U+203A**,
+> which both frontends now do: the datastar site through `.more::after { content: ' \203A' }`
+> and in the two docs pages that had a literal arrow. Likewise `✓` U+2713 and `▾` U+25BE are
+> in no subset — where a symbol is wanted, the SPA uses a `lucide-react` icon, which is SVG
+> and depends on no font at all. Verify against `unicode.json`, not against this paragraph.
 
 **datastar site.** Add the fontsource package as a `devDependency` of `site/package.json`
 and extend `vendorFiles` in `site/scripts/build.mjs`, resolving through `require.resolve` —
@@ -322,12 +342,15 @@ own CSS, so the `src:` URLs match where the build actually put the files.
 **SPA.** `pnpm add` the same package, `import` its latin CSS in `src/main.tsx` **before**
 `./index.css`, set `--font-sans` in `@theme`. Vite fingerprints and rewrites the URLs.
 
-> **⚠ FLAG — package name.** Almost certainly `@fontsource-variable/inter`, but I cannot
-> resolve it offline and neither frontend has it installed. Resolve the real name, entry
-> path and version at `pnpm add` time and **record it in `docs/DECISIONS.md`**, exactly as
-> WP0 did for the datastar bundle. Both frontends must use the *same* package at the *same*
-> major version; a metric or axis mismatch is invisible until the two screenshots are put
-> side by side.
+> **Resolved — package name.** It is `@fontsource-variable/inter`, pinned at **5.3.0** in
+> both frontends, and recorded in `docs/DECISIONS.md`. One correction to the instructions
+> above: 5.3.0 ships **no `latin.css` entry** — `index.css`, `wght.css`, `standard.css` and
+> `opsz.css` each declare *all* seven subsets, so importing any of them emits six `.woff2`
+> files where five are never fetched. Both frontends therefore declare one `@font-face`
+> themselves against `files/inter-latin-wght-normal.woff2` (48 kB, weight axis only), with
+> the package's own latin `unicode-range` copied verbatim. Both must stay on the same
+> package at the same major version; a metric or axis mismatch is invisible until the two
+> screenshots are put side by side.
 
 ---
 
@@ -341,9 +364,9 @@ other feature silently drops `tnum`, and the failure is invisible until a column
 un-aligns. `font-variant-numeric` is the high-level property browsers map to `tnum` and it
 composes. Tailwind's `tabular-nums` utility emits exactly this.
 
-`spa/src/index.css` currently sets `font-feature-settings: 'tnum' 1` **on `body`**. Both
-halves are wrong — the low-level property, and applying it globally including to prose —
-and both are removed.
+`spa/src/index.css` used to set `font-feature-settings: 'tnum' 1` **on `body`**. Both halves
+were wrong — the low-level property, and applying it globally including to prose — and both
+were removed.
 
 **Where it applies — the complete list:**
 
@@ -415,6 +438,13 @@ makes two implementations agree.
    — is rule 2 followed by a space and the unit verbatim. An empty unit is rule 2 alone.
    This is what makes a board added later with a new label render `12 whatevers` rather
    than falling through to something that looks like a bug.
+7. **A column header names the unit only when every cell in the column ends in it.**
+   `units.Label(unit)` is that rule, and `units.Measured(unit)` is the same distinction in
+   prose. Rules 3, 4 and 6 all render `value + symbol` — `1.82 Mm`, `7 799 m/s`, `6 RUDs` —
+   so the symbol labels the column and the header shows it **verbatim, in its own case**.
+   Rule 5 does not: a duration column reads `37.5 s`, `10h 23m`, `243d 01h`, and no cell in
+   it says `ms`. Its header therefore names the **quantity** — `Time`. No unit at all →
+   `Value`. See §4.4, which is where this went wrong before it was a rule.
 
 `units.ForKey(key string) string` maps a payload or `context` key to its unit, so a generic
 renderer — a board's Detail column, the raw-event view — can format a blob it has no schema
@@ -483,6 +513,35 @@ demonstrate: **an orbital speed stays in m/s and gets grouped** (`7·799 m/s`), 
 time becomes a duration** (`37.5 s`), **an impact energy takes an SI prefix** (`48 MJ`), and
 **a transfer becomes a two-component duration** (`243d 01h`).
 
+`units.LabelConformance` is the rule-7 table, and the SPA reproduces it the same way. It is
+a second table rather than three more columns on the first because the two answer different
+questions — one is per *value*, one is per *unit*, and a header label has no value to be
+right about.
+
+| unit | `Label` (column header) | `Measured` ("Measured in …") |
+|---|---|---|
+| `m/s` | `m/s` | `m/s` |
+| `m` | `m` | `m` |
+| `g` | `g` | `g` |
+| `J` | `J` | `J` |
+| `Pa` | `Pa` | `Pa` |
+| `s` | **`Time`** | `s, shown as a duration` |
+| `ms` | **`Time`** | `ms, shown as a duration` |
+| `RUDs` | `RUDs` | `RUDs` |
+| `tumbles` | `tumbles` | `tumbles` |
+| `orbits` | `orbits` | `orbits` |
+| `bodies` | `bodies` | `bodies` |
+| `dockings` | `dockings` | `dockings` |
+| `stagings` | `stagings` | `stagings` |
+| `kittens` | `kittens` | `kittens` |
+| `whatevers` | `whatevers` | `whatevers` |
+| — | `Value` | `plain counts` |
+
+The counting boards keep their label because it *is* the name of the thing counted, which is
+exactly what a header wants, and it is what every cell in the column already ends in. Only
+the durations move, because they are the only family whose rendered form carries units of
+its own.
+
 ### 4.3 Where the renderer lives — the decision, and why it is right
 
 **It is implemented twice — once in Go for the server-rendered site, once in TypeScript for
@@ -508,34 +567,49 @@ decision that gets re-litigated:
    table removes the divergence far more reliably than a shared implementation would remove
    the coupling.
 
-**What the SPA implementer does:** port `units.Format` and `units.ForKey` to
-`spa/src/ui/units.ts`, and port `units.Conformance` to a vitest that asserts every row.
-`spa/src/ui/format.ts`'s `formatValue`/`exactValue` are replaced; `formatInstant`,
-`formatAgo` and `$now` stay exactly as they are (§11).
-**⚠ FLAG** — `units.Conformance` is a Go `var`, not a JSON file. The package comment notes
-that a future `catlogctl` sub-command could emit it as JSON for the SPA to consume rather
-than have it transcribed. Until that exists the table is copied by hand, and **a rule change
-means editing three places in one commit**: `units.go`, `units_test.go`'s table, and the
-SPA's port.
+**What the SPA implementer does:** port `units.Format`, `units.ForKey`, `units.Label` and
+`units.Measured` to `spa/src/ui/units.ts`, and port `units.Conformance` and
+`units.LabelConformance` to `spa/src/ui/units.conformance.ts`, asserted row by row by
+`units.test.ts`. `spa/src/ui/format.ts`'s `formatValue`/`exactValue` are replaced;
+`formatInstant`, `formatAgo` and `$now` stay exactly as they are (§11).
+**⚠ FLAG** — both tables are Go `var`s, not JSON files. The package comment notes that a
+future `catlogctl` sub-command could emit them for the SPA to consume rather than have them
+transcribed. Until that exists they are copied by hand, and **a rule change means editing
+three places in one commit**: `units.go`, `units_test.go`'s assertions, and the SPA's port.
+Rule 7 was added this way and is the worked example.
 
 ### 4.4 Rendering rules around the renderer
 
-- **The unit is inside the string.** So the board table keeps the unit in the column header
-  *as a label of what the column is* (`<th class="value">{{$board.Unit}}</th>`) while each
-  cell still carries its own rendered unit. That is not redundant for the scaling
-  quantities — a length column legitimately mixes `999 m` and `1.82 Mm` — and for counter
-  boards it is mild repetition that buys column-independence on the profile, comparison and
-  tile surfaces where there is no header. Prefer consistency over saving three characters.
+- **The unit is inside the string.** So the board table keeps a label of what the column is
+  in the header while each cell still carries its own rendered unit. That is not redundant
+  for the scaling quantities — a length column legitimately mixes `999 m` and `1.82 Mm` —
+  and for counter boards it is mild repetition that buys column-independence on the profile,
+  comparison and tile surfaces where there is no header. Prefer consistency over saving
+  three characters.
+- **The header label is `units.Label($board.Unit)`, never `$board.Unit`.** This paragraph
+  used to say `<th class="value">{{$board.Unit}}</th>`, both frontends did exactly that, and
+  the result was a column of `37.5 s`, `10h 23m` and `243d 01h` sitting under a header
+  reading `ms` — a statement about catlog's storage that no cell in the column supports and
+  no reader can check. Rule 7 in §4.1 is the fix and `units.LabelConformance` pins it. The
+  storage unit is not lost: it moves into the sentence above the table
+  (`Measured in {{measured $b.Unit}}.` → *"Measured in ms, shown as a duration."*), which is
+  the one place it is true and the one place a reader needs it, because it is what makes
+  `data-value` and the cell `title` legible.
+- **The unit header is the one header cell that is not uppercased.** `M/S` is not a unit,
+  `PA` is not a unit, and `RUDS` is not how catlog writes that word. datastar:
+  `thead th.value { text-transform: none; letter-spacing: 0 }`. SPA: `normal-case
+  tracking-normal` on that `HeadCell` and nowhere else.
 - **Right-align every value cell**, `font-variant-numeric: tabular-nums`, `white-space:
   nowrap`. The existing CSS already does this; keep it.
 - **`title` keeps the exact figure.** `title="7799 m/s"` on every formatted value. The SPA
   already does this via `exactValue`; the datastar site adopts it. It is also how a reader
   recovers the digits `48 MJ` hides.
-- **`data-value`.** Every value cell carries `data-value="<the exact float, as sent>"`.
-  This is not decoration: `site/e2e/boards.spec.ts` currently reconstructs numbers by
-  stripping non-digits from rendered text, which breaks the moment a career-time board
-  renders `5m 13s`. Move those assertions onto `data-value` in the same commit as the unit
-  renderer. Not optional — it is the difference between 32/32 and a mystery.
+- **`data-value`.** Every value cell carries `data-value="<the exact float, as sent>"`, and
+  the e2e suite reads it. This was not decoration: `site/e2e/boards.spec.ts` used to
+  reconstruct numbers by stripping non-digits from the rendered text, which produced `513`
+  and `101` from `5m 13s` and `1h 01m` — figures that happen to sort, so the assertion went
+  on passing while asserting nothing. Those assertions moved onto `data-value` with the unit
+  renderer and must stay there.
 - **Titlecase** for body names and RUD causes on `_ - .` boundaries, matching
   `stats.titleize` exactly: `luna` → `Luna`, `ground_impact` → `Ground Impact`. Both
   frontends implement it. Do **not** re-titlecase board titles — the server already did.
@@ -683,22 +757,21 @@ negative is a 400), `type` (exact event-type filter, applied in Go over pages be
 - 404 for unknown, retired and banned identically — the same non-oracle answer as everywhere
   else.
 
-**⚠ FLAG — flagged flights. This is the one place the landed code and a published promise
-disagree.** `docs_privacy.gohtml` states: *"Flights flagged as cheated are stored and shown
-to you, but score nothing and never appear publicly."* The shipped endpoint filters by
-player and by type only — it does **not** exclude events of flagged flights — so shipping
-the raw view as it stands makes that sentence false. Three ways out, and it is the owner's
-call:
+**Resolved — flagged flights.** This was the one place the landed code and a published
+promise disagreed, and it went the first of the three ways that were on the table:
+`readapi/events.go` now **excludes the events of flagged flights** (`scanEvents` →
+`flaggedFlights`, a `flight_state` lookup per page against projections.db), and the privacy
+copy was rewritten in the same commit to say what the server actually does rather than the
+older *"stored and shown to you"* sentence — see `#privacy-flagged`. The reasoning is worth
+keeping: the promise is also the only reading of the flags that Constitution §8's
+consequence test permits, because a browsable list of whose flights were flagged is a
+durable public mark on a person.
 
-1. filter flagged flights out in `PlayerEvents` (matches the current promise; costs a
-   `flight_state` lookup per page, in the other database file);
-2. publish them and **amend the privacy sentence in the same commit**, in which case
-   `EventRow` needs a `flagged` field so the UI can mark them — a client cannot currently
-   tell, beyond noticing a `flight.flagged` event for the same flight elsewhere in the log;
-3. publish them unmarked, which is the only option that is definitely wrong.
+Both frontends therefore **link the raw-event view from the profile** — `#profile-events` on
+the datastar site, the *Raw events* link on the SPA's `PlayerPage` — and neither gates it.
 
-Until this is decided, **neither frontend should link the raw-event view from a public
-page.** Build it, keep it reachable by URL, and gate the link.
+`EventRow` does **not** get a `flagged` field, and must not: there is nothing flagged left in
+the response to mark.
 
 ### 6.3 What is redacted — the install hazard
 
@@ -974,8 +1047,9 @@ board" rather than "how many events exist". **The second needs no API work and i
 would ship first**; treat a public `/v1/stats` as a later question, and note that it is the
 one endpoint here whose cost is not obviously bounded.
 
-**4. `EventRow.flagged`** — needed only if §6.2's flagged-flight question resolves toward
-publishing them. See §12.
+**4. `EventRow.flagged`** — **not needed, and not wanted.** §6.2 resolved the other way: the
+endpoint excludes flagged flights outright, so there is nothing in the response for a
+`flagged` field to describe. Recorded here so nobody adds it back from this list.
 
 **Not needed, recorded so nobody builds them:**
 
@@ -1111,7 +1185,8 @@ nothing else is.
 | **Timestamps** | `2026-08-07 14:32 UTC` | `7 Aug 2026, 14:32 UTC` — two renderings of the same fixed UTC instant, both locale-independent |
 
 **What may *not* differ:** which pages exist, what each shows, what is hidden, every
-number's formatting (§4 — character for character), the colour and type tokens (§2), the
+number's formatting **and every value column's header label** (§4 — character for
+character, `units.Format` and `units.Label`), the colour and type tokens (§2), the
 copy for shared surfaces, the "me" semantics including its failure behaviour (§7.1), the
 comparison rules (≤8 handles, `found: false` as a column, best-cell by `ascending`, absent ≠
 zero), the search rules (no request under 2 characters, `truncated` means narrow not page),
@@ -1123,18 +1198,31 @@ and the tone rules (§9).
 
 Things a redesign will delete without noticing, and what breaks when it does.
 
-**The DOM contract the e2e suite asserts (32/32 depends on it).** `#home-title`;
+**The DOM contract the e2e suite asserts (all 47 tests depend on it).** `#home-title`;
+`#tile-boards[data-value]`, `#tile-placements[data-value]`;
 `#featured-boards .featured-board[data-stat]`; `tr.board-row[data-rank][data-handle]` with
-`td.value` and `td.context`; `#boards-index tr.boards-row[data-stat]`; `#boards-title`;
-`#boards-note` (must contain the server's `min_players` number); `#board-title[data-stat]`;
-`#board-direction[data-ascending]`; `#profile-handle[data-handle]`;
-`#profile-stats tr[data-stat][data-rank]`; `#feed-panel`; `#feed[data-source][data-count]`;
-`li.feed-item[data-feed-id][data-type]`; `#not-found`, `#not-found-detail`,
-`#not-found-home`; `#auth-error[data-error]` with `#auth-error-code`, `#auth-error-detail`,
-`#auth-error-retry`; `#docs-title`; `#privacy-no-email`; `#privacy-scopes`;
-`#docs-api-endpoints`; the whole `#wizard-*` set; `#quota-handles`, `#quota-issuances`,
-`#quota-ttl`; `.credential[data-jkt]`; `#logout`; `#delete-account`. Rename any of these and
-update the spec file in the same commit, never after.
+`td.value[data-value]` and `td.context`; `#boards-index tr.boards-row[data-stat]
+[data-ascending]` with `td.unit` and `td.direction`; `#boards-title`; `#boards-note` (must
+contain the server's `min_players` number); `#board-title[data-stat]`;
+`#board-direction[data-ascending]`; `#board-periods a[data-period]`;
+`#board-bucket[data-bucket]`; `#board-prev`, `#board-next`, `#board-range`;
+`thead th.value` (the unit header, §4.4); `#profile-handle[data-handle]`;
+`#profile-stats tr[data-stat][data-rank]` with `td.rank[data-players]`;
+`#profile-me-toggle`, `#profile-me-note`, `#profile-compare`, `#profile-events`;
+`#me-chip`, `#me-link`, `#me-gone`, `#me-standing`, `#me-standing-rows .standing-row`,
+`tr.is-me`; `#search-q`, `#search-results li[data-handle]`, `#search-suggest li a`,
+`#search-short`, `#search-empty`; `#compare-table` with `th.handle-col[data-handle]`,
+`tr[data-stat][data-ascending]`, `td.value[data-value][data-handle]`, `td.best`,
+`td.absent`, `#compare-handles .chip[data-handle] .chip-remove`, `#compare-add`,
+`#compare-add-handle`, `#compare-empty`; `#events-log tr.event-row[data-type]`,
+`#events-types a[data-type]`, `#events-newest`, `#events-older`; `#theme-toggle`;
+`#feed-panel`; `#feed[data-source][data-count]`; `li.feed-item[data-feed-id][data-type]`;
+`#not-found`, `#not-found-detail`, `#not-found-home`; `#auth-error[data-error]` with
+`#auth-error-code`, `#auth-error-detail`, `#auth-error-retry`; `#docs-title`;
+`#privacy-no-email`; `#privacy-scopes`; `#privacy-flagged`; `#docs-api-endpoints`; the whole
+`#wizard-*` set; `#quota-handles`, `#quota-issuances`, `#quota-ttl`;
+`.credential[data-jkt]`; `#logout`; `#delete-account`. Rename any of these and update the
+spec file in the same commit, never after.
 
 **`feed-list` and `feed-item` being one partial, used by both the page and the SSE
 handler.** A line patched in over the wire is byte-identical to one rendered into the page
@@ -1194,8 +1282,14 @@ column, `aria-disabled` spans instead of dead pager links.
 
 **`prefers-reduced-motion` on the feed arrival flash.**
 
-**Tables scrolling inside themselves** (`display: block; overflow-x: auto`) rather than
-making the page scroll horizontally.
+**Tables scrolling inside themselves** rather than making the page scroll horizontally — a
+comparison of eight handles is wider than a phone and must not take the rest of the page
+with it. **The scroll goes on a wrapper element, not on the `<table>`.** An earlier draft of
+this line recommended `display: block; overflow-x: auto` on the table itself; that does make
+`overflow-x` apply, but it also stops the table filling its container — the anonymous table
+box inside a block box is sized to its content, so a three-column board ends up half the
+width of the panel around it. Both frontends use the wrapper: `.table-wrap` on the datastar
+site, `<div class="w-full max-w-full overflow-x-auto">` inside `DataTable` in the SPA.
 
 **`#feed-heartbeat`** — the hidden element the 20 s patch writes to, which keeps nginx and
 any CDN from dropping an idle stream.
@@ -1207,22 +1301,31 @@ any CDN from dropping an idle stream.
 
 ## 12. Open questions
 
-1. **Flagged flights in the raw-event view (§6.2).** The landed endpoint publishes them;
-   `docs/privacy` says they never appear publicly. This is a live contradiction and it
-   needs an owner decision before the raw view is linked from any public page. It is the
-   only item here that is a correctness problem rather than a preference.
-2. **Period-scoped profile ranks (§8.1).** Needs a period-aware `StatAhead`. Until it
+Still open:
+
+1. **Period-scoped profile ranks (§8.1).** Needs a period-aware `StatAhead`. Until it
    exists, a windowed profile must hide ranks rather than show all-time ranks beside
    weekly values.
-3. **The fontsource package name and version (§2.4).** Resolve at install time, record in
-   `docs/DECISIONS.md`, identical package in both frontends.
-4. **`units.Conformance` as JSON (§4.3).** Today the table is transcribed into the SPA by
-   hand, so a rule change touches three places. A `catlogctl` sub-command emitting it would
-   remove the transcription; the package comment already contemplates it.
-5. **`count` on `BoardResponse` (§8.2).** Cheap, and it turns an inferred pager into a real
-   one. API agent's call whether it is in scope.
-6. **Global stat tiles (§8.3).** Ship the version assembled from `/v1/leaderboards` first; a
-   public `/v1/stats` is a separate question with a less obviously bounded cost.
-7. **`web.Read` growth.** The datastar site needs `PlayerEvents`, `Search` and `Compare` on
-   that interface. Straightforward, but it is the seam that keeps the ban filter and the
-   redaction in one place, so it must be widened deliberately rather than bypassed.
+2. **`units.Conformance` as JSON (§4.3).** Today the table is transcribed into the SPA by
+   hand, and rule 7 added a second table (`units.LabelConformance`) transcribed the same
+   way, so a rule change touches three places and now two tables. A `catlogctl` sub-command
+   emitting both would remove the transcription; the package comment already contemplates
+   it.
+3. **`count` on `BoardResponse` (§8.2).** Cheap, and it turns an inferred pager into a real
+   one. Still not on the response — both frontends still infer "there is probably more"
+   from `rows.length >= limit`. API agent's call whether it is in scope.
+
+Resolved since this was written, kept so nobody re-opens them:
+
+4. **Flagged flights in the raw-event view (§6.2).** ✅ Resolved by *excluding* them:
+   `readapi/events.go` filters the events of flagged flights out, the privacy page was
+   rewritten to state the mechanism, and both frontends link the raw view from the profile.
+   `EventRow.flagged` is not needed and must not be added.
+5. **The fontsource package name and version (§2.4).** ✅ `@fontsource-variable/inter@5.3.0`
+   in both frontends, recorded in `docs/DECISIONS.md`. There is no `latin.css` entry, so
+   both declare their own `@font-face` against `files/inter-latin-wght-normal.woff2`.
+6. **Global stat tiles (§8.3).** ✅ Shipped assembled from `/v1/leaderboards`, as
+   recommended: `#tile-boards` and `#tile-placements` on both front pages. A public
+   `/v1/stats` remains a separate question and nobody needs it yet.
+7. **`web.Read` growth.** ✅ `PlayerEvents`, `Search` and `Compare` are on the interface, and
+   the datastar pages go through it rather than around it into `store`.

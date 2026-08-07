@@ -47,7 +47,11 @@ career-rewind qualification.
     <tr>
       <th scope="col" class="rank">#</th>
       <th scope="col">Handle</th>
-      <th scope="col" class="value">{{if $board.Unit}}{{$board.Unit}}{{else}}Value{{end}}</th>
+      {{- /* The header labels the column; every cell still carries its own unit.
+             `unitLabel` is what keeps the two from contradicting each other: a
+             career-time column renders "5m 13s" and "243d 01h", so its header
+             reads "Time" rather than the "ms" the API publishes. */}}
+      <th scope="col" class="value">{{unitLabel $board.Unit}}</th>
       {{- if not .Compact}}<th scope="col">Detail</th><th scope="col">When</th>{{end}}
     </tr>
   </thead>

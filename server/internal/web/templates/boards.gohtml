@@ -13,7 +13,7 @@
   <thead>
     <tr>
       <th scope="col">Board</th>
-      <th scope="col">Unit</th>
+      <th scope="col">Measured in</th>
       <th scope="col">Reads</th>
       <th scope="col" class="value">Players</th>
     </tr>
@@ -22,7 +22,9 @@
     {{- range .Data.Boards}}
     <tr class="boards-row" data-stat="{{.Stat}}" data-ascending="{{.Ascending}}">
       <td><a href="{{statPath .Stat}}" class="board-link">{{.Title}}</a></td>
-      <td class="muted">{{.Unit}}</td>
+      {{- /* The display label, not the storage unit: this column has to agree
+             with the header on the board page it links to. */}}
+      <td class="muted unit">{{unitLabel .Unit}}</td>
       {{- /* Which way a board reads is published, never guessed: the career-time
              boards rank the smallest value first, and a reader that assumed
              otherwise would present the fastest ascent as the worst one. */}}

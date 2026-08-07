@@ -1,18 +1,19 @@
 import { GS, JOULES, METRES, METRES_SEC, MILLIS, PASCALS, SECONDS } from './units.ts';
 
 /**
- * `units.Conformance`, transcribed.
+ * `units.Conformance` and `units.LabelConformance`, transcribed.
  *
- * This is the cross-language table from `server/internal/units/units.go`. The Go
- * half is asserted by `units_test.go`; this half is asserted by `units.test.ts`.
- * Every row must be present and every row must match — a divergence here means
- * the same record now reads differently on catlog's two frontends.
+ * These are the cross-language tables from `server/internal/units/units.go`. The
+ * Go half is asserted by `units_test.go`; this half is asserted by
+ * `units.test.ts`. Every row must be present and every row must match — a
+ * divergence here means the same record now reads differently on catlog's two
+ * frontends.
  *
- * It is a hand transcription because `units.Conformance` is a Go `var`, not a
- * JSON file. The Go package comment contemplates a `catlogctl` sub-command that
- * would emit it and remove the transcription; until that exists, **a rule change
- * is three edits in one commit** — `units.go`, `units_test.go`'s table, and this
- * file plus `units.ts`.
+ * They are hand transcriptions because both are Go `var`s, not JSON files. The
+ * Go package comment contemplates a `catlogctl` sub-command that would emit them
+ * and remove the transcription; until that exists, **a rule change is three
+ * edits in one commit** — `units.go`, `units_test.go`'s table, and this file
+ * plus `units.ts`.
  *
  * The separator in the expectations below is U+202F, not a space. It looks like
  * one. It is not one, and `units.test.ts` asserts that too.
@@ -81,4 +82,55 @@ export const CONFORMANCE: readonly ConformanceRow[] = [
   { value: 12, unit: 'tumbles', want: '12 tumbles' },
   { value: Number.NaN, unit: METRES, want: '—' },
   { value: Number.POSITIVE_INFINITY, unit: 'RUDs', want: '—' },
+];
+
+/** One row of `units.LabelConformance`. */
+export interface LabelConformanceRow {
+  readonly unit: string;
+  /** The column header — `units.Label`'s answer. */
+  readonly label: string;
+  /** The noun phrase for "Measured in ___." — `units.Measured`'s answer. */
+  readonly measured: string;
+}
+
+/**
+ * `units.LabelConformance`, transcribed — the rule-7 half of the contract.
+ *
+ * A second table rather than three more columns on the first, for the same
+ * reason the Go side splits them: one is per *value*, one is per *unit*, and a
+ * header label has no value to be right about.
+ *
+ * The defect this pins: a career-time board carries the unit string `ms`, its
+ * cells render `37.5 s` and `243d 01h`, and both frontends used to put `ms` in
+ * the column header — a statement about catlog's storage sitting over a column
+ * that never says it.
+ */
+export const LABEL_CONFORMANCE: readonly LabelConformanceRow[] = [
+  // Rules 3, 4 and 6: the rendered cell ends in the unit, so the header is the
+  // unit. Nothing here is title-cased, because none of it is a word.
+  { unit: METRES_SEC, label: 'm/s', measured: 'm/s' },
+  { unit: METRES, label: 'm', measured: 'm' },
+  { unit: GS, label: 'g', measured: 'g' },
+  { unit: JOULES, label: 'J', measured: 'J' },
+  { unit: PASCALS, label: 'Pa', measured: 'Pa' },
+
+  // Rule 5 is the exception: a duration column says "243d 01h", never "ms".
+  { unit: SECONDS, label: 'Time', measured: 's, shown as a duration' },
+  { unit: MILLIS, label: 'Time', measured: 'ms, shown as a duration' },
+
+  // The counter boards' labels are the name of the thing counted, which is
+  // exactly what a header wants, and they are written the way the API writes
+  // them — "RUDs", not "RUDS".
+  { unit: 'RUDs', label: 'RUDs', measured: 'RUDs' },
+  { unit: 'tumbles', label: 'tumbles', measured: 'tumbles' },
+  { unit: 'orbits', label: 'orbits', measured: 'orbits' },
+  { unit: 'bodies', label: 'bodies', measured: 'bodies' },
+  { unit: 'dockings', label: 'dockings', measured: 'dockings' },
+  { unit: 'stagings', label: 'stagings', measured: 'stagings' },
+  { unit: 'kittens', label: 'kittens', measured: 'kittens' },
+
+  // A board added later with a label this build has never seen, and the
+  // defensive case of no unit at all.
+  { unit: 'whatevers', label: 'whatevers', measured: 'whatevers' },
+  { unit: '', label: 'Value', measured: 'plain counts' },
 ];

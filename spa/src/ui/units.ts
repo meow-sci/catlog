@@ -50,6 +50,15 @@
  *     is rule 2 alone. That is what makes a board added later with a label this
  *     build has never seen render `12 whatevers` rather than something that
  *     looks like a bug.
+ *
+ *  7. **A column header names the unit only when every cell in the column ends
+ *     in it.** {@link unitLabel} is that rule. Rules 3, 4 and 6 all render
+ *     `value + symbol` — `1.82 Mm`, `7 799 m/s`, `6 RUDs` — so the symbol labels
+ *     the column and the header shows it verbatim, in its own case. Rule 5 does
+ *     not: a column of durations reads `37.5 s`, `10h 23m`, `243d 01h`, and no
+ *     cell in it says `ms`. Its header therefore names the **quantity** —
+ *     `Time`. {@link unitMeasured} is the same distinction in prose, for
+ *     "Measured in …", and it keeps the storage unit the header drops.
  */
 
 /** Canonical unit ids — exactly the strings `stats.Board.Unit` carries, plus the two that only appear inside a fold's `context` blob. */
@@ -111,6 +120,57 @@ export function formatValue(value: number, unit: string): string {
       return formatNumber(value);
     default:
       return formatNumber(value) + ' ' + unit;
+  }
+}
+
+/**
+ * Rule 7: the column header for a column of values in `unit`.
+ *
+ * The value cells carry their own units, so the header is not there to repeat
+ * them — it is there to say what the column *is*. For every unit whose rendered
+ * form ends in the unit itself (rules 3, 4 and 6) that is the unit, verbatim: a
+ * length column mixes `999 m` and `1.82 Mm` and `m` names both, a counter board
+ * mixes `6 RUDs` and `12 RUDs` and `RUDs` names both. A duration column (rule 5)
+ * is the one place that breaks, because `243d 01h` contains no `ms` and
+ * `10h 23m` contains no `s`, so the header names the quantity instead.
+ *
+ * The returned string is a label to render **as it is**. Do not uppercase it:
+ * `M/S` is not a unit, `PA` is not a unit, and `RUDS` is not how catlog writes
+ * that word — so the header cell that carries this is the one cell exempted from
+ * the uppercasing every other header gets, in both frontends.
+ */
+export function unitLabel(unit: string): string {
+  switch (unit) {
+    case SECONDS:
+    case MILLIS:
+      return 'Time';
+    // No unit at all: nothing to name but the column's job.
+    case '':
+      return 'Value';
+    default:
+      return unit;
+  }
+}
+
+/**
+ * Rule 7 in prose — the noun phrase for a sentence like "Measured in ___.",
+ * which both frontends put above a board.
+ *
+ * It differs from {@link unitLabel} in two ways, both deliberate. It is lower
+ * case, because it lands mid-sentence. And for a duration it keeps the storage
+ * unit rather than replacing it: `ms, shown as a duration` is the one place a
+ * reader is told that the API publishes milliseconds, which is what makes
+ * `data-value` and the `title` on every cell legible instead of mysterious.
+ */
+export function unitMeasured(unit: string): string {
+  switch (unit) {
+    case SECONDS:
+    case MILLIS:
+      return unit + ', shown as a duration';
+    case '':
+      return 'plain counts';
+    default:
+      return unit;
   }
 }
 

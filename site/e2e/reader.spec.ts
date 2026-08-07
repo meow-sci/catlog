@@ -45,6 +45,54 @@ test.describe("units and numerals", () => {
     }
   });
 
+  test("a value column is headed by what it holds, not by the unit it is stored in", async ({
+    page,
+  }) => {
+    // The rule (`units.Label`): the header names the unit only where every cell
+    // beneath it ends in that unit. A career-time board publishes `unit: "ms"`
+    // and renders "37.5 s", "10h 23m", "243d 01h" — so its header names the
+    // quantity instead, and the storage unit moves into the prose above, which
+    // is the one place it is true and the only place a reader needs it.
+    await page.goto("/boards/fastest_to_luna");
+    const timeHead = page.locator("table.catlog-board thead th.value");
+    await expect(timeHead).toHaveText("Time");
+    await expect(page.locator("#board-direction")).toContainText(
+      "Measured in ms, shown as a duration.",
+    );
+    // And the cells really are durations — the reason the header had to change.
+    await expect(page.locator("tr.board-row td.value").first()).not.toContainText("ms");
+
+    // A unit header is written the way the API writes it. The rest of the header
+    // row is uppercased and this one cell is not, because "M/S" is not a unit,
+    // "PA" is not a unit, and "RUDS" is not how catlog writes that word.
+    expect(await timeHead.evaluate((el) => getComputedStyle(el).textTransform)).toBe("none");
+    expect(
+      await page
+        .locator("table.catlog-board thead th.rank")
+        .evaluate((el) => getComputedStyle(el).textTransform),
+    ).toBe("uppercase");
+
+    // A speed board is unchanged: every cell ends in "m/s", so the header says it.
+    await page.goto(`/boards/${LITHOBRAKE}`);
+    await expect(page.locator("table.catlog-board thead th.value")).toHaveText("m/s");
+    await expect(page.locator("#board-direction")).toContainText("Measured in m/s.");
+
+    // A counting board is unchanged too, label and case intact.
+    await page.goto("/boards/rud_total");
+    await expect(page.locator("table.catlog-board thead th.value")).toHaveText("RUDs");
+    await expect(page.locator("#board-direction")).toContainText("Measured in RUDs.");
+
+    // The board index says the same thing, so the column a reader picks from
+    // agrees with the column they land on.
+    await page.goto("/boards");
+    await expect(
+      page.locator('#boards-index tr[data-stat="fastest_to_luna"] td.unit'),
+    ).toHaveText("Time");
+    await expect(
+      page.locator(`#boards-index tr[data-stat="${LITHOBRAKE}"] td.unit`),
+    ).toHaveText("m/s");
+  });
+
   test("Inter is served from this origin and actually loads", async ({ page }) => {
     // D2: the build is hermetic. Nothing on any page may come from a CDN.
     const external: string[] = [];
@@ -66,6 +114,16 @@ test.describe("units and numerals", () => {
     expect(loaded).toBe(true);
 
     expect(external).toEqual([]);
+
+    // The `unicode-range` is the list of glyphs the file contains, not a hint:
+    // a character outside it renders from a fallback face at a different width.
+    // → U+2192 is in no subset of @fontsource-variable/inter — latin, latin-ext
+    // or any of the other five — so nothing may render one. › U+203A is covered
+    // and is what the "Full board" affordance and the docs pages use.
+    for (const path of ["/", "/boards", "/boards/fastest_to_luna", "/docs/api", "/docs/privacy"]) {
+      await page.goto(path);
+      expect(await page.locator("body").innerText()).not.toContain("→");
+    }
   });
 });
 

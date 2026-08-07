@@ -155,6 +155,17 @@ var templateFuncs = template.FuncMap{
 	// "999 m" and "1.82 Mm" — and it buys column-independence on the profile,
 	// comparison and tile surfaces, where there is no header to carry the unit.
 	"value": units.Format,
+	// unitLabel is the column header for a value column (rule 7). It is the unit
+	// itself wherever a cell ends in that unit, and the name of the quantity
+	// where it does not — a career-time column reads "243d 01h", so its header
+	// says "Time" rather than "ms". Rendered as returned: `thead th.value` turns
+	// the uppercasing off, because "M/S" is not a unit and "RUDS" is not a word
+	// catlog writes.
+	"unitLabel": units.Label,
+	// measured is the same fact mid-sentence, under "Measured in ___." — and it
+	// keeps the storage unit that unitLabel drops, so the page still says
+	// somewhere that the API publishes milliseconds.
+	"measured": units.Measured,
 	// number is rule 2 alone, for a count that is not in any unit at all.
 	"number": number,
 	// exact is the figure as the API sent it, for `data-value` and `title`. It

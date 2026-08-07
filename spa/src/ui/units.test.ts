@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CONFORMANCE } from './units.conformance.ts';
+import { CONFORMANCE, LABEL_CONFORMANCE } from './units.conformance.ts';
 import {
   DEGREES,
   exactValue,
@@ -14,6 +14,8 @@ import {
   PASCALS,
   SECONDS,
   unitForKey,
+  unitLabel,
+  unitMeasured,
 } from './units.ts';
 
 /**
@@ -38,6 +40,45 @@ describe('the shared conformance table', () => {
     // A guard on the transcription itself: rows get deleted by accident during a
     // merge far more easily than they get changed.
     expect(CONFORMANCE).toHaveLength(43);
+  });
+});
+
+describe('the shared label table', () => {
+  it.each(LABEL_CONFORMANCE.map((row) => [row.unit, row.label, row.measured] as const))(
+    'Label(%p) = %p, Measured = %p',
+    (unit, label, measured) => {
+      expect(unitLabel(unit)).toBe(label);
+      expect(unitMeasured(unit)).toBe(measured);
+    },
+  );
+
+  it('reproduces every row the Go table carries', () => {
+    expect(LABEL_CONFORMANCE).toHaveLength(16);
+  });
+
+  it('names a unit only when every cell in the column ends in it', () => {
+    // The whole rule, checked rather than asserted: render a value in the unit
+    // and look at what the string ends with. An SI prefix goes *before* the
+    // symbol — "1.82 Mm" still ends in "m" — which is why a scaled column keeps
+    // its base symbol and a duration column cannot.
+    for (const row of LABEL_CONFORMANCE) {
+      if (row.unit === '') continue;
+      for (const value of [0.45, 37.5, 313, 3661, 90_000, 1234.5, 1.82e6]) {
+        const cell = formatValue(value, row.unit);
+        expect(cell.endsWith(row.label)).toBe(row.label !== 'Time');
+      }
+    }
+  });
+
+  it('is the fix for a duration column headed "ms"', () => {
+    // The defect, spelled out. A career-time board publishes `unit: "ms"` and
+    // renders these three strings; not one of them says "ms".
+    expect(formatValue(37_500, 'ms')).toBe('37.5 s');
+    expect(formatValue(37_380_000, 'ms')).toBe('10h 23m');
+    expect(formatValue(2.1e10, 'ms')).toBe('243d 01h');
+    expect(unitLabel('ms')).toBe('Time');
+    // And the storage unit is not lost — it moves into the prose above the board.
+    expect(unitMeasured('ms')).toBe('ms, shown as a duration');
   });
 });
 

@@ -7,7 +7,7 @@
   {{- /* Which way the board reads is published, never guessed: the career-time
          boards rank the *smallest* value first, and a reader that assumed
          otherwise would present the fastest ascent as the worst one. */}}
-  <p id="board-direction" data-ascending="{{$b.Ascending}}">Measured in {{$b.Unit}}. Top {{$b.Limit}}. {{if $b.Ascending}}Lowest wins.{{else}}Highest wins.{{end}}</p>
+  <p id="board-direction" data-ascending="{{$b.Ascending}}">Measured in {{measured $b.Unit}}. Top {{$b.Limit}}. {{if $b.Ascending}}Lowest wins.{{else}}Highest wins.{{end}}</p>
 </div>
 
 {{- /* A window is a dimension of this board, not another board — so the key

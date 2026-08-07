@@ -13,7 +13,7 @@ import {
   Panel,
   TableRows,
 } from '../ui/kit/index.ts';
-import { formatNumber } from '../ui/units.ts';
+import { formatNumber, unitLabel } from '../ui/units.ts';
 
 /**
  * Every board catlog is currently publishing: which exist, how populated, and
@@ -76,9 +76,10 @@ export function BoardsPage() {
                       {board.title}
                     </a>
                   </DataCell>
-                  <DataCell className="text-fg-muted text-sm">
-                    {board.unit === '' ? 'plain counts' : board.unit}{' '}
-                    <span aria-hidden>{board.ascending ? '↑' : '↓'}</span>
+                  {/* The display label, not the storage unit: this column has to
+                      agree with the header on the board page it links to. */}
+                  <DataCell className="text-fg-muted unit text-sm">
+                    {unitLabel(board.unit)} <span aria-hidden>{board.ascending ? '↑' : '↓'}</span>
                     <span className="sr-only">
                       {board.ascending ? ' — lowest wins' : ' — highest wins'}
                     </span>

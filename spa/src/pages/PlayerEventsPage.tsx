@@ -1,4 +1,4 @@
-import { ArrowLeft, SearchX } from 'lucide-react';
+import { ArrowLeft, ChevronDown, SearchX } from 'lucide-react';
 import { useState } from 'react';
 import type { Key } from 'react-aria-components';
 import { Label, ListBox, ListBoxItem, Popover, Select, SelectValue } from 'react-aria-components';
@@ -169,9 +169,9 @@ function TypeFilter(props: {
       <Label className="text-fg-muted text-sm">Show</Label>
       <Button className="min-w-56 justify-between">
         <SelectValue />
-        <span aria-hidden className="text-fg-subtle">
-          ▾
-        </span>
+        {/* An icon rather than ▾ U+25BE: that codepoint is in no subset of
+            the Inter package, so it would render from a fallback face. */}
+        <ChevronDown aria-hidden className="text-fg-subtle size-4" />
       </Button>
       <Popover className="bg-panel-raised border-border shadow-popover max-h-80 w-(--trigger-width) overflow-auto rounded-lg border py-1">
         <ListBox items={items}>

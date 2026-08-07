@@ -17,7 +17,7 @@ import {
   PeriodTabs,
   Pill,
 } from '../ui/kit/index.ts';
-import { formatNumber } from '../ui/units.ts';
+import { formatNumber, unitMeasured } from '../ui/units.ts';
 
 /**
  * One leaderboard, paged, over a chosen window.
@@ -79,7 +79,7 @@ export function BoardPage(props: {
             data-ascending={board.data.ascending}
             className="text-fg-muted mt-1 text-sm"
           >
-            Measured in {board.data.unit === '' ? 'plain counts' : board.data.unit}.{' '}
+            Measured in {unitMeasured(board.data.unit)}.{' '}
             {board.data.ascending ? 'Lowest wins.' : 'Highest wins.'}
           </p>
         )}

@@ -49,7 +49,7 @@
     {{- range $row := $c.Rows}}
     <tr class="compare-row" data-stat="{{$row.Stat}}" data-ascending="{{$row.Ascending}}">
       <th scope="row"><a href="{{statPath $row.Stat}}">{{$row.Title}}</a>
-        <span class="world-rank">{{$row.Unit}} &#183; {{if $row.Ascending}}lowest wins{{else}}highest wins{{end}}</span></th>
+        <span class="world-rank">{{unitLabel $row.Unit}} &#183; {{if $row.Ascending}}lowest wins{{else}}highest wins{{end}}</span></th>
       {{- range $row.Cells}}
       {{- if .Present}}
       <td class="value{{if .Best}} best{{end}}" data-value="{{exact .Row.Value}}" data-handle="{{.Row.Handle}}"

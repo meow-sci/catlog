@@ -1,4 +1,4 @@
-import { Search, Users, X } from 'lucide-react';
+import { Check, Search, Users, X } from 'lucide-react';
 import { useState } from 'react';
 import { Checkbox, CheckboxGroup, Input, SearchField } from 'react-aria-components';
 import { MAX_COMPARE_HANDLES, MIN_QUERY_LENGTH } from '../api/client.ts';
@@ -121,9 +121,13 @@ export function SearchPage(props: { readonly q: string }) {
                   className="group flex cursor-pointer items-center gap-2 data-disabled:cursor-not-allowed data-disabled:opacity-40"
                 >
                   <span className="border-border-strong group-data-selected:bg-accent group-data-selected:border-accent flex size-4 shrink-0 items-center justify-center rounded-sm border transition-colors duration-150">
-                    <span className="text-accent-fg hidden text-xs leading-none group-data-selected:block">
-                      ✓
-                    </span>
+                    {/* An icon rather than ✓ U+2713: that codepoint is in no
+                        subset of the Inter package, so it would render from a
+                        fallback face. */}
+                    <Check
+                      aria-hidden
+                      className="text-accent-fg hidden size-3 group-data-selected:block"
+                    />
                   </span>
                 </Checkbox>
                 <a

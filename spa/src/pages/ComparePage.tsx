@@ -22,6 +22,7 @@ import {
   Value,
 } from '../ui/kit/index.ts';
 import { HandleTags } from '../ui/kit/HandleTags.tsx';
+import { unitLabel } from '../ui/units.ts';
 
 /**
  * Up to eight handles, side by side, across every board any of them is on.
@@ -202,8 +203,11 @@ function CompareTable(props: {
               >
                 {board.title}
               </a>
+              {/* One row is one board, so the row header carries what a column
+                  header carries elsewhere: the label of what these cells hold. */}
               <span className="text-fg-muted block text-sm">
-                {board.ascending ? 'Lowest wins.' : 'Highest wins.'} {board.players} on the board.
+                {unitLabel(board.unit)} · {board.ascending ? 'lowest wins' : 'highest wins'} ·{' '}
+                {board.players} on the board
               </span>
             </DataCell>
             {props.columns.map((column) => (

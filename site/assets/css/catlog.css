@@ -750,9 +750,10 @@ thead th {
   border-bottom: var(--border-width) solid var(--color-border);
 }
 
-/* A unit header is a label of what the column holds — "m/s", "ms", "RUDs" — and
-   is written the way the API writes it. Uppercasing it would shout a unit, and
-   "M/S" is not a unit. */
+/* A unit header is a label of what the column holds — "m/s", "RUDs", "Time" —
+   and comes from `units.Label`, written exactly as it is returned. Uppercasing
+   it would shout a unit, and "M/S" is not a unit, "PA" is not a unit, and
+   "RUDS" is not how catlog writes that word. */
 thead th.value {
   text-transform: none;
   letter-spacing: 0;

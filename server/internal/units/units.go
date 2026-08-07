@@ -55,6 +55,17 @@
 //     (`RUDs`, `tumbles`, `bodies`…) — is rule 2 followed by a space and the
 //     unit verbatim. An empty unit is rule 2 alone.
 //
+//  7. **A column header names the unit only when every cell in the column ends
+//     in it.** [Label] is that rule. Rules 3, 4 and 6 all render `value + symbol`
+//     — `1.82 Mm`, `7 799 m/s`, `6 RUDs` — so the symbol labels the column and
+//     the header shows it verbatim, in its own case. Rule 5 does not: a column of
+//     durations reads `37.5 s`, `10h 23m`, `243d 01h`, and no cell in it says
+//     "ms". Its header therefore names the **quantity** — `Time` — because a
+//     header reading `ms` over `243d 01h` is a statement about catlog's storage
+//     that a reader has no way to check and no reason to want. [Measured] is the
+//     same distinction in prose, for a sentence like "Measured in …", and it
+//     keeps the storage unit visible where [Label] drops it.
+//
 // # Worked examples
 //
 //	Format(62, "m/s")        →  "62 m/s"
@@ -70,7 +81,13 @@
 //	Format(6, "RUDs")        →  "6 RUDs"
 //	Format(math.NaN(), "m")  →  "—"
 //
-// The full list, including the edge cases, is [Conformance].
+//	Label("m/s")             →  "m/s"
+//	Label("ms")              →  "Time"
+//	Label("RUDs")            →  "RUDs"
+//	Measured("ms")           →  "ms, shown as a duration"
+//
+// The full list, including the edge cases, is [Conformance]; the header labels
+// are [LabelConformance].
 package units
 
 import (
@@ -131,6 +148,51 @@ func Format(v float64, unit string) string {
 		return Number(v)
 	default:
 		return Number(v) + " " + unit
+	}
+}
+
+// Label is rule 7: the column header for a column of values in unit.
+//
+// The value cells carry their own units, so the header is not there to repeat
+// them — it is there to say what the column *is*. For every unit whose rendered
+// form ends in the unit itself (rules 3, 4 and 6) that is the unit, verbatim: a
+// length column mixes "999 m" and "1.82 Mm" and `m` names both, a counter board
+// mixes "6 RUDs" and "12 RUDs" and `RUDs` names both. A duration column
+// (rule 5) is the one place that breaks, because "243d 01h" contains no `ms` and
+// "10h 23m" contains no `s`, so the header names the quantity instead.
+//
+// The returned string is a label to render **as it is**. Do not uppercase it:
+// "M/S" is not a unit, "PA" is not a unit, and "RUDS" is not how catlog writes
+// that word. Both frontends exempt this one header cell from the uppercasing
+// every other header gets, and that is why.
+func Label(unit string) string {
+	switch unit {
+	case Seconds, Millis:
+		return "Time"
+	case "":
+		// No unit at all: nothing to name but the column's job.
+		return "Value"
+	default:
+		return unit
+	}
+}
+
+// Measured is rule 7 in prose — the noun phrase for a sentence like
+// "Measured in ___.", which both frontends put above a board.
+//
+// It differs from [Label] in two ways, both deliberate. It is lower case,
+// because it lands mid-sentence. And for a duration it keeps the storage unit
+// rather than replacing it: "ms, shown as a duration" is the one place a reader
+// is told that the API publishes milliseconds, which is what makes `data-value`
+// and the `title` on every cell legible instead of mysterious.
+func Measured(unit string) string {
+	switch unit {
+	case Seconds, Millis:
+		return unit + ", shown as a duration"
+	case "":
+		return "plain counts"
+	default:
+		return unit
 	}
 }
 
@@ -363,4 +425,49 @@ var Conformance = []struct {
 	{12, "tumbles", "12 tumbles"},
 	{math.NaN(), Metres, "—"},
 	{math.Inf(1), "RUDs", "—"},
+}
+
+// LabelConformance is [Conformance] for rule 7: every unit a board can publish,
+// the column header it gets from [Label], and the prose form [Measured] gives it.
+//
+// It is a second table rather than three more columns on the first because the
+// two answer different questions — one is per *value*, one is per *unit* — and
+// because a header label has no value to be right about.
+//
+// The same standing rule applies: **copy it, keep it in step, and add a row here
+// first when a rule changes.** The TypeScript port is `spa/src/ui/units.conformance.ts`.
+var LabelConformance = []struct {
+	Unit string
+	// Label is the column header — [Label]'s answer.
+	Label string
+	// Measured is the noun phrase for "Measured in ___." — [Measured]'s answer.
+	Measured string
+}{
+	// Rules 3, 4 and 6: the rendered cell ends in the unit, so the header is the
+	// unit. Nothing here is title-cased, because none of it is a word.
+	{MetresSec, "m/s", "m/s"},
+	{Metres, "m", "m"},
+	{Gs, "g", "g"},
+	{Joules, "J", "J"},
+	{Pascals, "Pa", "Pa"},
+
+	// Rule 5 is the exception: a duration column says "243d 01h", never "ms".
+	{Seconds, "Time", "s, shown as a duration"},
+	{Millis, "Time", "ms, shown as a duration"},
+
+	// The counter boards' labels are the name of the thing counted, which is
+	// exactly what a header wants, and they are written the way the API writes
+	// them — "RUDs", not "RUDS".
+	{"RUDs", "RUDs", "RUDs"},
+	{"tumbles", "tumbles", "tumbles"},
+	{"orbits", "orbits", "orbits"},
+	{"bodies", "bodies", "bodies"},
+	{"dockings", "dockings", "dockings"},
+	{"stagings", "stagings", "stagings"},
+	{"kittens", "kittens", "kittens"},
+
+	// A board added later with a label this build has never seen, and the
+	// defensive case of no unit at all.
+	{"whatevers", "whatevers", "whatevers"},
+	{"", "Value", "plain counts"},
 }
