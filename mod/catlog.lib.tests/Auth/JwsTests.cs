@@ -33,10 +33,23 @@ public sealed class JwsTests
         using ECDsa key = TestKeys.NewKey();
 
         string compact = Jws.Sign(Header, "{}", key);
+        string signingInput = compact[..compact.LastIndexOf('.')];
         byte[] signature = Bytes.FromBase64Url(compact.Split('.')[2]);
 
         Assert.Equal(Jws.Es256SignatureBytes, signature.Length);
-        Assert.NotEqual(0x30, signature[0]); // 0x30 would be a DER SEQUENCE tag
+
+        // Ask the BCL to interpret the bytes in each format explicitly. This replaced a
+        // "first byte is not 0x30 (a DER SEQUENCE tag)" check, which was flaky: r's leading byte
+        // is uniformly random, so one signature in 256 starts with 0x30 and failed the run.
+        byte[] input = System.Text.Encoding.ASCII.GetBytes(signingInput);
+        Assert.True(
+            key.VerifyData(input, signature, HashAlgorithmName.SHA256,
+                DSASignatureFormat.IeeeP1363FixedFieldConcatenation),
+            "the signature must be IEEE P-1363 r‖s, which is what JWS requires");
+        Assert.False(
+            key.VerifyData(input, signature, HashAlgorithmName.SHA256,
+                DSASignatureFormat.Rfc3279DerSequence),
+            "a DER SEQUENCE signature would be rejected by the Go verifier");
     }
 
     [Fact]

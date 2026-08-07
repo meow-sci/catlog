@@ -8,12 +8,17 @@ SHELL := /bin/bash
 .DEFAULT_GOAL := help
 
 SERVER_URL ?= http://127.0.0.1:8080
+ADMIN_URL  ?= http://127.0.0.1:6060
 SCENARIO   ?=
 CRED       ?=
+# make sim ASSERT=1 …  checks the leaderboards after the run (§7.3).
+ASSERT     ?=
+# make sim SPEED=100 … paces the run at 100 sim seconds per wall second; unset runs flat out.
+SPEED      ?=
 
 .PHONY: help bootstrap build server-build mod-build site-build \
         test server-test mod-test test-integration test-nginx \
-        e2e e2e-full sim dev keys seed testvectors clean
+        e2e e2e-full sim dev mockidp-run keys seed testvectors clean
 
 ## help: list targets
 help:
@@ -54,10 +59,11 @@ mod-test:
 	dotnet test mod/catlog.lib.tests
 
 ## test-integration: server integration tests + mod-vs-server tests
-test-integration:
+# The mod leg spawns server/bin/catlogd on random loopback ports with throwaway
+# data directories (§7.5), so the binaries have to exist before it runs.
+test-integration: server-build
 	cd server && go test -tags integration -count=1 ./integration/
-	@echo "make test-integration: mod leg not yet implemented (WP7)"
-	@# dotnet test mod/catlog.integration.tests
+	dotnet test mod/catlog.integration.tests -c Release
 
 ## test-nginx: testcontainers nginx suite (clean-skips without docker)
 test-nginx: server-build
@@ -83,18 +89,28 @@ e2e:
 e2e-full:
 	@echo "make e2e-full: not yet implemented (WP5 + WP7); scripts/e2e-full.sh lands there"
 
-## sim: run a catlog.sim scenario (SCENARIO=<name> CRED=<path to credential json>)
+## sim: run a catlog.sim scenario (SCENARIO=<name> CRED=<path> [ASSERT=1] [SPEED=n]); no SCENARIO lists them
 sim:
-	dotnet run --project mod/catlog.sim -- --scenario "$(SCENARIO)" --server "$(SERVER_URL)" --credential "$(CRED)"
+	@dotnet run --project mod/catlog.sim -c Release -v quiet -- \
+	  $(if $(strip $(SCENARIO)),--scenario "$(SCENARIO)",--list) \
+	  --server "$(SERVER_URL)" --admin "$(ADMIN_URL)" \
+	  $(if $(strip $(CRED)),--credential "$(CRED)",) \
+	  $(if $(strip $(ASSERT)),--assert,) \
+	  $(if $(strip $(SPEED)),--speed "$(SPEED)",)
 
 ## dev: run catlogd + mockidp in the foreground (Ctrl-C stops both)
 dev: server-build
 	@echo "catlogd  -> $(SERVER_URL)"
 	@echo "mockidp  -> http://127.0.0.1:9090"
-	@server/bin/catlogd & catlogd_pid=$$!; \
-	 server/bin/mockidp & mockidp_pid=$$!; \
+	@echo "log in at $(SERVER_URL)/auth/discord/start (also google, github)"
+	@server/bin/catlogd -config server/catlogd.dev.toml & catlogd_pid=$$!; \
+	 server/bin/mockidp -config server/mockidp.toml & mockidp_pid=$$!; \
 	 trap 'kill $$catlogd_pid $$mockidp_pid 2>/dev/null' EXIT INT TERM; \
 	 wait
+
+## mockidp-run: run mockidp alone on 127.0.0.1:9090 (playwright webServer, §8)
+mockidp-run: server-build
+	server/bin/mockidp -config server/mockidp.toml
 
 ## keys: create data/keys/{license-signing.pem,session.key,pepper.key}
 keys: server-build
