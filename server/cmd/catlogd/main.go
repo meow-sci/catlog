@@ -217,6 +217,9 @@ func run(ctx context.Context, cfg config.Config, log *slog.Logger, ready func(pu
 		// How many players a board whose key came out of the event stream needs
 		// before the public index lists it (config.Boards).
 		MinBoardPlayers: cfg.Boards.MinPlayers,
+		// Which window "this week" is, on the same clock that stamped the
+		// buckets — see readapi.Deps.Now.
+		Now: srvClock.Now,
 		// Cross-origin reads, and nothing else — see readapi/cors.go. The
 		// dashboard API, the auth flows and the admin mux never see this list.
 		AllowedOrigins: cfg.CORS.AllowedOrigins,

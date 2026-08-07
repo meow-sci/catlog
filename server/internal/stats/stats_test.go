@@ -36,6 +36,10 @@ type input struct {
 	payload  any
 	simT     float64
 	noSimT   bool
+	// recvMS overrides the server receive stamp. Zero means the default ladder.
+	// The rolling-window tests set it because a bucket is a function of exactly
+	// this value and of nothing else.
+	recvMS int64
 }
 
 // defaultCareer is the career every golden event belongs to unless it says
@@ -134,7 +138,7 @@ func decode(t *testing.T, e input, seq int64) stats.Event {
 	se := store.StoredEvent{
 		Seq:      seq,
 		PlayerID: player,
-		RecvTime: 1_700_000_000_000 + seq,
+		RecvTime: recvOr(e.recvMS, 1_700_000_000_000+seq),
 		Event: store.Event{
 			ID:        flightN(byte(seq)),
 			FlightID:  e.flight,
@@ -712,7 +716,7 @@ func TestBoardMetadataCoversEveryStatAFoldWrites(t *testing.T) {
 		if !ok {
 			t.Fatalf("FastestToStat(%q) refused a well-formed name", body)
 		}
-		if b, known := stats.Describe(stat); !known || b.Unit != "s" {
+		if b, known := stats.Describe(stat); !known || b.Unit != "ms" {
 			t.Errorf("fold writes %q but Describe says %+v (known=%v)", stat, b, known)
 		}
 	}
@@ -892,4 +896,12 @@ func indexOf(haystack, needle string) int {
 		}
 	}
 	return -1
+}
+
+// recvOr picks an input's explicit receive stamp, or the default ladder.
+func recvOr(explicit, fallback int64) int64 {
+	if explicit != 0 {
+		return explicit
+	}
+	return fallback
 }

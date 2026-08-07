@@ -46,6 +46,7 @@ func (s *Server) BoardList(ctx context.Context) (BoardsResponse, error) {
 		out.Boards = append(out.Boards, BoardSummary{
 			Stat: b.Stat, Title: b.Title, Unit: b.Unit,
 			Ascending: b.Ascending, Count: counts[b.Stat],
+			Periods: stats.Periods(),
 		})
 	}
 	return out, nil
@@ -58,14 +59,21 @@ func (s *Server) BoardList(ctx context.Context) (BoardsResponse, error) {
 // nobody has ever scored on. A family board that exists but is not yet *listed*
 // is still served: the alternative is a profile row that links to a 404, and a
 // player's own achievement being hidden from them until somebody else repeats it.
-func (s *Server) Board(ctx context.Context, stat string, limit, offset int) (BoardResponse, bool, error) {
+func (s *Server) Board(ctx context.Context, stat, period, bucket string, limit, offset int) (BoardResponse, bool, error) {
 	board, ok, err := s.board(ctx, stat)
 	if err != nil || !ok {
 		return BoardResponse{}, false, err
 	}
 	limit, offset = ClampPaging(limit, offset)
 
-	rows, handles, err := s.visibleRows(ctx, stat, board.Ascending, limit, offset)
+	// An unnamed window means "the one we are in", read from the server clock —
+	// never from anything a client sent, which is the same rule recv_time
+	// follows and for the same reason.
+	if period != stats.PeriodAllTime && bucket == "" {
+		bucket, _ = stats.CurrentBucket(period, s.deps.Now().UnixMilli())
+	}
+
+	rows, handles, err := s.visibleRows(ctx, stat, period, bucket, board.Ascending, limit, offset)
 	if err != nil {
 		return BoardResponse{}, true, err
 	}
@@ -87,7 +95,8 @@ func (s *Server) Board(ctx context.Context, stat string, limit, offset int) (Boa
 	out := BoardResponse{
 		Stat: board.Stat, Title: board.Title, Unit: board.Unit,
 		Ascending: board.Ascending,
-		Limit:     limit, Offset: offset,
+		Period:    period, Bucket: bucket,
+		Limit: limit, Offset: offset,
 		Rows: make([]BoardRow, 0, len(rows)),
 	}
 	for i, row := range rows {

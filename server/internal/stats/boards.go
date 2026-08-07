@@ -70,7 +70,7 @@ var fixedBoards = func() []Board {
 		rec(StatStagings, "Stagings", "stagings"),
 		rec(StatKittensRecovered, "Kittens Recovered", "kittens"),
 		rec(StatDistanceTravelled, "Distance Travelled", "m"),
-		{Stat: StatFastestToOrbit, Title: "Fastest to Orbit", Unit: "s", Ascending: true, Career: true},
+		{Stat: StatFastestToOrbit, Title: "Fastest to Orbit", Unit: "ms", Ascending: true, Career: true},
 	}
 }()
 
@@ -145,7 +145,7 @@ var families = []family{{
 	prefix: "fastest_to_",
 	after:  StatFastestToOrbit,
 	board: func(stat, body string) Board {
-		return Board{Stat: stat, Title: "Fastest to " + titleize(body), Unit: "s", Ascending: true, Career: true}
+		return Board{Stat: stat, Title: "Fastest to " + titleize(body), Unit: "ms", Ascending: true, Career: true}
 	},
 }}
 
@@ -348,11 +348,11 @@ func (lithobrakeFold) Apply(ctx context.Context, tx *sql.Tx, ev Event, fs Flight
 		// "survived with crew" (§4.2).
 		return nil
 	}
-	return putRecord(ctx, tx, ev.PlayerID, StatBiggestLithobrakeSurvived, p.SpeedMs, map[string]any{
+	return putRecord(ctx, tx, ev, StatBiggestLithobrakeSurvived, p.SpeedMs, map[string]any{
 		"body":     p.Body,
 		"flight":   ids.String(ev.FlightID),
 		"energy_j": p.EnergyJ,
-	}, ev.Seq)
+	})
 }
 
 // peakGFold implements `peak_g_survived` (§5.6): the largest `telemetry.window`
@@ -388,11 +388,11 @@ func (peakGFold) Apply(ctx context.Context, tx *sql.Tx, ev Event, fs FlightState
 	if fs.Refined() && !(found && st.Recovered()) {
 		return nil
 	}
-	return putRecord(ctx, tx, ev.PlayerID, StatPeakGSurvived, *p.PeakG, map[string]any{
+	return putRecord(ctx, tx, ev, StatPeakGSurvived, *p.PeakG, map[string]any{
 		"body":   p.Body,
 		"flight": ids.String(ev.FlightID),
 		"t1_sim": p.T1Sim,
-	}, ev.Seq)
+	})
 }
 
 // speedFold implements `fastest_surface_speed` and `fastest_orbital_speed`
@@ -424,11 +424,11 @@ func (f speedFold) Apply(ctx context.Context, tx *sql.Tx, ev Event, fs FlightSta
 	if err != nil || !ok {
 		return err
 	}
-	return putRecord(ctx, tx, ev.PlayerID, f.stat, value, map[string]any{
+	return putRecord(ctx, tx, ev, f.stat, value, map[string]any{
 		"body":   p.Body,
 		"flight": ids.String(ev.FlightID),
 		"t1_sim": p.T1Sim,
-	}, ev.Seq)
+	})
 }
 
 // --- counter folds -----------------------------------------------------------
@@ -450,7 +450,7 @@ func (f countFold) Apply(ctx context.Context, tx *sql.Tx, ev Event, fs FlightSta
 	if err != nil || !ok {
 		return err
 	}
-	return addCount(ctx, tx, ev.PlayerID, f.stat, 1, ev.Seq)
+	return addCount(ctx, tx, ev, f.stat, 1)
 }
 
 // rudFold implements `rud_total` and the `rud_<cause>` family (§5.6).
@@ -467,7 +467,7 @@ func (rudFold) Apply(ctx context.Context, tx *sql.Tx, ev Event, fs FlightStateRe
 	if err != nil || !ok {
 		return err
 	}
-	if err := addCount(ctx, tx, ev.PlayerID, StatRUDTotal, 1, ev.Seq); err != nil {
+	if err := addCount(ctx, tx, ev, StatRUDTotal, 1); err != nil {
 		return err
 	}
 	// The per-cause board comes from the cause the event carried, not from a
@@ -479,7 +479,7 @@ func (rudFold) Apply(ctx context.Context, tx *sql.Tx, ev Event, fs FlightStateRe
 	if !ok {
 		return nil
 	}
-	return addCount(ctx, tx, ev.PlayerID, stat, 1, ev.Seq)
+	return addCount(ctx, tx, ev, stat, 1)
 }
 
 // orbitsFold implements `orbits_achieved` (§5.6).
@@ -496,7 +496,7 @@ func (orbitsFold) Apply(ctx context.Context, tx *sql.Tx, ev Event, fs FlightStat
 	if err != nil || !ok {
 		return err
 	}
-	return addCount(ctx, tx, ev.PlayerID, StatOrbitsAchieved, 1, ev.Seq)
+	return addCount(ctx, tx, ev, StatOrbitsAchieved, 1)
 }
 
 // soiFold implements `soi_bodies` (§5.6): the number of distinct bodies whose
@@ -530,7 +530,7 @@ func (soiFold) Apply(ctx context.Context, tx *sql.Tx, ev Event, fs FlightStateRe
 	if n == 0 {
 		return nil // already visited
 	}
-	return addCount(ctx, tx, ev.PlayerID, StatSOIBodies, 1, ev.Seq)
+	return addCount(ctx, tx, ev, StatSOIBodies, 1)
 }
 
 // recoveredFold implements `kittens_recovered` (§5.6): the sum of
@@ -548,7 +548,7 @@ func (recoveredFold) Apply(ctx context.Context, tx *sql.Tx, ev Event, fs FlightS
 	if err != nil || !ok {
 		return err
 	}
-	return addCount(ctx, tx, ev.PlayerID, StatKittensRecovered, float64(p.CrewCount), ev.Seq)
+	return addCount(ctx, tx, ev, StatKittensRecovered, float64(p.CrewCount))
 }
 
 // distanceFold implements `distance_travelled` (§5.6): the sum, over a player's
@@ -600,7 +600,7 @@ func (distanceFold) Apply(ctx context.Context, tx *sql.Tx, ev Event, _ FlightSta
 	if !total.Valid || total.Float64 <= 0 {
 		return nil
 	}
-	return setValue(ctx, tx, ev.PlayerID, StatDistanceTravelled, total.Float64, ev.Seq)
+	return setValue(ctx, tx, ev, StatDistanceTravelled, total.Float64)
 }
 
 // --- career-time folds --------------------------------------------------------
@@ -643,6 +643,17 @@ func careerTime(ctx context.Context, ev Event, fs FlightStateReader) (float64, b
 	return ev.SimTime, true, nil
 }
 
+// careerMillis converts a career-relative time from the seconds the wire
+// carries to the milliseconds the boards publish.
+//
+// `sim_t` stays seconds on the wire and in `player_body.first_sim_t`: stored
+// events are immutable and there is no envelope-level upcaster, so changing the
+// unit of a logged field would strand every event already written in a unit
+// nothing could identify (docs/DECISIONS.md, WP-CLOCK). A projection has no such
+// problem — it is rebuildable by definition — so the conversion happens here, at
+// the one place a career time becomes a board value.
+func careerMillis(seconds float64) float64 { return seconds * 1000 }
+
 // toOrbitFold implements `fastest_to_orbit`: how long into a career the player
 // first put something into a stable orbit around anything.
 type toOrbitFold struct{}
@@ -658,11 +669,11 @@ func (toOrbitFold) Apply(ctx context.Context, tx *sql.Tx, ev Event, fs FlightSta
 	if err != nil || !ok {
 		return err
 	}
-	return putBest(ctx, tx, ev.PlayerID, StatFastestToOrbit, t, map[string]any{
+	return putBest(ctx, tx, ev, StatFastestToOrbit, careerMillis(t), map[string]any{
 		"career": ev.Career,
 		"body":   p.Body,
 		"flight": ids.String(ev.FlightID),
-	}, ev.Seq)
+	})
 }
 
 // toBodyFold implements the `fastest_to_<body>` family: how long into a career
@@ -704,9 +715,9 @@ func (toBodyFold) Apply(ctx context.Context, tx *sql.Tx, ev Event, fs FlightStat
 		// board of its own.
 		return nil
 	}
-	return putBest(ctx, tx, ev.PlayerID, stat, t, map[string]any{
+	return putBest(ctx, tx, ev, stat, careerMillis(t), map[string]any{
 		"career": ev.Career,
 		"from":   p.FromBody,
 		"flight": ids.String(ev.FlightID),
-	}, ev.Seq)
+	})
 }

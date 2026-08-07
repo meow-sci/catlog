@@ -104,12 +104,12 @@ func TestMigrationsCreateTheFullDDL(t *testing.T) {
 		p := testutil.Projections(t)
 		want := []string{
 			"career", "feed", "flight_state", "kitten", "player_body",
-			"player_stat", "proj_checkpoint", "schema_version",
+			"player_stat", "player_stat_period", "proj_checkpoint", "schema_version",
 		}
 		if got := tableNames(t, p.DB); !equal(got, want) {
 			t.Errorf("tables = %v, want %v", got, want)
 		}
-		wantIdx := []string{"fs_player", "stat_rank"}
+		wantIdx := []string{"fs_player", "stat_period_age", "stat_period_rank", "stat_rank"}
 		if got := indexNames(t, p.DB); !equal(got, wantIdx) {
 			t.Errorf("indexes = %v, want %v", got, wantIdx)
 		}

@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"slices"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/meow-sci/catlog/server/internal/authz"
 	"github.com/meow-sci/catlog/server/internal/directory"
@@ -62,6 +64,14 @@ type Deps struct {
 	// thousand body names": one comparison, no new table, no new pipeline stage,
 	// and nothing an honest player can trip. See stats.Catalog.
 	MinBoardPlayers int
+	// Now is the server clock. Defaults to [time.Now].
+	//
+	// Read for exactly one thing: deciding which rolling window "this week"
+	// means when `?period=` is given without `?at=`. It is the same clock that
+	// stamps recv_time and therefore the same clock the buckets were computed
+	// from, which is what stops the live weekly board from pointing at a window
+	// the folds are not writing to.
+	Now func() time.Time
 	// AllowedOrigins is [config.CORS.AllowedOrigins] — the browser origins that
 	// may read these endpoints cross-origin. Empty means same-origin only.
 	//
@@ -92,6 +102,9 @@ func New(deps Deps) (*Server, error) {
 	}
 	if deps.Log == nil {
 		deps.Log = slog.Default()
+	}
+	if deps.Now == nil {
+		deps.Now = time.Now
 	}
 	minPlayers := deps.MinBoardPlayers
 	if minPlayers < 1 {
@@ -157,6 +170,14 @@ type BoardSummary struct {
 	// filtered on every request, and the number exists to say "this board has
 	// entries", not to be summed against anything.
 	Count int64 `json:"count"`
+	// Periods are the windows `/v1/leaderboards/{stat}?period=` accepts.
+	//
+	// A period is a **dimension of a board, not a board**. Listing
+	// `rud_total@weekly` as its own entry would multiply the index by five, and
+	// with `fastest_to_<body>` taking its keys from the data that multiplier
+	// applies to an unbounded list. So the index stays one row per board and
+	// says which windows that board can be read over.
+	Periods []string `json:"periods"`
 }
 
 func (s *Server) handleBoards(w http.ResponseWriter, r *http.Request) {
@@ -177,6 +198,14 @@ type BoardResponse struct {
 	Unit  string `json:"unit"`
 	// Ascending reports that the smallest value ranks first (§4.8).
 	Ascending bool `json:"ascending"`
+	// Period is the window these rows cover: `alltime` unless `?period=` asked
+	// otherwise. Echoed so a client never has to remember what it requested.
+	Period string `json:"period"`
+	// Bucket names the window — `2026-08-07`, `2026-W32`, `2026-08`, `2026` —
+	// and is empty for `alltime`. When `?at=` was not given this is the window
+	// the server's clock is currently in, so a client can tell which week it is
+	// looking at without computing one.
+	Bucket string `json:"bucket,omitempty"`
 	// Limit and Offset echo the effective paging after clamping.
 	Limit  int        `json:"limit"`
 	Offset int        `json:"offset"`
@@ -204,7 +233,20 @@ func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	out, known, err := s.Board(r.Context(), r.PathValue("stat"), limit, offset)
+	period, ok := stats.ValidPeriod(r.URL.Query().Get("period"))
+	if !ok {
+		s.writeError(w, http.StatusBadRequest, authz.CodeBadRequest,
+			"period must be one of "+strings.Join(stats.Periods(), ", "))
+		return
+	}
+	bucket := r.URL.Query().Get("at")
+	if bucket != "" && (period == stats.PeriodAllTime || !stats.ParseBucket(period, bucket)) {
+		s.writeError(w, http.StatusBadRequest, authz.CodeBadRequest,
+			"at is not a well-formed "+period+" window")
+		return
+	}
+
+	out, known, err := s.Board(r.Context(), r.PathValue("stat"), period, bucket, limit, offset)
 	switch {
 	case !known:
 		s.writeError(w, http.StatusNotFound, authz.CodeNotFound, "no such leaderboard")
@@ -221,7 +263,7 @@ func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
 // file (§5.4) — so the page is assembled by over-fetching and dropping. Ranks
 // are positional over the visible rows, which is why a ban closes the gap it
 // leaves rather than leaving a hole in the numbering.
-func (s *Server) visibleRows(ctx context.Context, stat string, asc bool, limit, offset int) ([]store.StatRow, []string, error) {
+func (s *Server) visibleRows(ctx context.Context, stat, period, bucket string, asc bool, limit, offset int) ([]store.StatRow, []string, error) {
 	need := offset + limit
 	var (
 		visible []store.StatRow
@@ -233,7 +275,11 @@ func (s *Server) visibleRows(ctx context.Context, stat string, asc bool, limit, 
 		var batch []store.StatRow
 		err := s.deps.Projections.With(func(p *store.Projections) error {
 			var err error
-			batch, err = p.Leaderboard(ctx, stat, asc, page, scanned)
+			if period == stats.PeriodAllTime {
+				batch, err = p.Leaderboard(ctx, stat, asc, page, scanned)
+			} else {
+				batch, err = p.LeaderboardPeriod(ctx, stat, period, bucket, asc, page, scanned)
+			}
 			return err
 		})
 		if err != nil {

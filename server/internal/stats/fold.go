@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/meow-sci/catlog/server/internal/ids"
@@ -100,7 +101,7 @@ func BoardFolds() []Fold {
 //
 // This is what every "fastest career time to X" board is: the value is seconds
 // since the career began, and lower is better.
-func putBest(ctx context.Context, tx *sql.Tx, playerID int64, stat string, value float64, context map[string]any, seq int64) error {
+func putBest(ctx context.Context, tx *sql.Tx, ev Event, stat string, value float64, context map[string]any) error {
 	cx, err := encodeContext(context)
 	if err != nil {
 		return err
@@ -110,17 +111,17 @@ func putBest(ctx context.Context, tx *sql.Tx, playerID int64, stat string, value
 		 ON CONFLICT (player_id, stat) DO UPDATE SET
 		   value = excluded.value, context = excluded.context, updated_seq = excluded.updated_seq
 		 WHERE excluded.value < player_stat.value`,
-		playerID, stat, value, cx, seq)
+		ev.PlayerID, stat, value, cx, ev.Seq)
 	if err != nil {
-		return fmt.Errorf("stats: best %s for player %d: %w", stat, playerID, err)
+		return fmt.Errorf("stats: best %s for player %d: %w", stat, ev.PlayerID, err)
 	}
-	return nil
+	return periodBest(ctx, tx, ev, stat, value, cx)
 }
 
 // putRecord writes a record (max) board. The row is replaced only by a strictly
 // larger value, so an equal value leaves the earlier updated_seq — and therefore
 // the earlier claimant's rank — untouched (§5.6).
-func putRecord(ctx context.Context, tx *sql.Tx, playerID int64, stat string, value float64, context map[string]any, seq int64) error {
+func putRecord(ctx context.Context, tx *sql.Tx, ev Event, stat string, value float64, context map[string]any) error {
 	cx, err := encodeContext(context)
 	if err != nil {
 		return err
@@ -130,40 +131,59 @@ func putRecord(ctx context.Context, tx *sql.Tx, playerID int64, stat string, val
 		 ON CONFLICT (player_id, stat) DO UPDATE SET
 		   value = excluded.value, context = excluded.context, updated_seq = excluded.updated_seq
 		 WHERE excluded.value > player_stat.value`,
-		playerID, stat, value, cx, seq)
+		ev.PlayerID, stat, value, cx, ev.Seq)
 	if err != nil {
-		return fmt.Errorf("stats: record %s for player %d: %w", stat, playerID, err)
+		return fmt.Errorf("stats: record %s for player %d: %w", stat, ev.PlayerID, err)
 	}
-	return nil
+	return periodRecord(ctx, tx, ev, stat, value, cx)
 }
 
 // addCount advances a counter board. updated_seq becomes the seq at which the
 // counter reached its new value, which is what makes the tie-break "whoever got
 // to N first" rather than "whoever was written last".
-func addCount(ctx context.Context, tx *sql.Tx, playerID int64, stat string, delta float64, seq int64) error {
+func addCount(ctx context.Context, tx *sql.Tx, ev Event, stat string, delta float64) error {
 	_, err := tx.ExecContext(ctx,
 		`INSERT INTO player_stat (player_id, stat, value, context, updated_seq) VALUES (?, ?, ?, NULL, ?)
 		 ON CONFLICT (player_id, stat) DO UPDATE SET
 		   value = player_stat.value + excluded.value, updated_seq = excluded.updated_seq`,
-		playerID, stat, delta, seq)
+		ev.PlayerID, stat, delta, ev.Seq)
 	if err != nil {
-		return fmt.Errorf("stats: count %s for player %d: %w", stat, playerID, err)
+		return fmt.Errorf("stats: count %s for player %d: %w", stat, ev.PlayerID, err)
 	}
-	return nil
+	return periodAdd(ctx, tx, ev, stat, delta)
 }
 
 // setValue writes a derived total, replacing whatever was there. Used by the two
 // boards whose value is a function of another table (`soi_bodies` counts
 // player_body, `distance_travelled` sums kitten) rather than an accumulation.
-func setValue(ctx context.Context, tx *sql.Tx, playerID int64, stat string, value float64, seq int64) error {
+func setValue(ctx context.Context, tx *sql.Tx, ev Event, stat string, value float64) error {
+	// A derived total's *window* value is what it grew by inside that window —
+	// "distance travelled this month", not "lifetime distance as of this
+	// month", which would be a cumulative number wearing a monthly label. That
+	// needs the previous total, so it is read before the write. A rebuild
+	// replays the same events in the same seq order and therefore reads the
+	// same previous value, which is what keeps rebuild == incremental.
+	var prev float64
+	switch err := tx.QueryRowContext(ctx,
+		`SELECT value FROM player_stat WHERE player_id = ? AND stat = ?`,
+		ev.PlayerID, stat).Scan(&prev); {
+	case errors.Is(err, sql.ErrNoRows):
+		prev = 0
+	case err != nil:
+		return fmt.Errorf("stats: read %s for player %d: %w", stat, ev.PlayerID, err)
+	}
+
 	_, err := tx.ExecContext(ctx,
 		`INSERT INTO player_stat (player_id, stat, value, context, updated_seq) VALUES (?, ?, ?, NULL, ?)
 		 ON CONFLICT (player_id, stat) DO UPDATE SET
 		   value = excluded.value, updated_seq = excluded.updated_seq
 		 WHERE excluded.value <> player_stat.value`,
-		playerID, stat, value, seq)
+		ev.PlayerID, stat, value, ev.Seq)
 	if err != nil {
-		return fmt.Errorf("stats: set %s for player %d: %w", stat, playerID, err)
+		return fmt.Errorf("stats: set %s for player %d: %w", stat, ev.PlayerID, err)
+	}
+	if delta := value - prev; delta > 0 {
+		return periodAdd(ctx, tx, ev, stat, delta)
 	}
 	return nil
 }

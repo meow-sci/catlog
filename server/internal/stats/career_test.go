@@ -71,12 +71,12 @@ func TestFastestToOrbitTakesTheEarliestAchievedOrbit(t *testing.T) {
 		{flight: f, typ: "vehicle.orbit", payload: stats.VehicleOrbit{Phase: "achieved", Body: "earth", ApM: 320000, PeM: 295000}, simT: 190},
 		{flight: f, typ: "vehicle.orbit", payload: stats.VehicleOrbit{Phase: "achieved", Body: "luna"}, simT: 90000},
 	})
-	if got["1/fastest_to_orbit"].Value != 190 {
-		t.Errorf("fastest_to_orbit = %v, want 190 — the first orbit of the career, not the last",
+	if got["1/fastest_to_orbit"].Value != 190_000 {
+		t.Errorf("fastest_to_orbit = %v, want 190000 ms — the first orbit of the career, not the last",
 			got["1/fastest_to_orbit"].Value)
 	}
 	wantRow(t, got, "1/fastest_to_orbit", row{
-		Value:   190,
+		Value:   190_000,
 		Seq:     4,
 		Context: `{"body":"earth","career":"testcareer000001","flight":"` + ids.String(f) + `"}`,
 	})
@@ -91,7 +91,7 @@ func TestFastestToOrbitTakesTheBestCareer(t *testing.T) {
 		{flight: f2, career: otherCareer, typ: "vehicle.orbit", payload: stats.VehicleOrbit{Phase: "achieved", Body: "earth"}, simT: 260},
 	})
 	wantRow(t, got, "1/fastest_to_orbit", row{
-		Value:   260,
+		Value:   260_000,
 		Seq:     2,
 		Context: `{"body":"earth","career":"` + otherCareer + `","flight":"` + ids.String(f2) + `"}`,
 	})
@@ -106,8 +106,8 @@ func TestFastestToOrbitKeepsTheEarliestClaimOnATie(t *testing.T) {
 		{flight: f2, career: otherCareer, typ: "vehicle.orbit", payload: stats.VehicleOrbit{Phase: "achieved", Body: "earth"}, simT: 900},
 		{flight: f3, career: otherCareer, typ: "vehicle.orbit", payload: stats.VehicleOrbit{Phase: "achieved", Body: "earth"}, simT: 300},
 	})
-	if got["1/fastest_to_orbit"].Value != 300 || got["1/fastest_to_orbit"].Seq != 1 {
-		t.Errorf("fastest_to_orbit = %v at seq %d, want 300 at seq 1 — an equal time keeps the earlier claim",
+	if got["1/fastest_to_orbit"].Value != 300_000 || got["1/fastest_to_orbit"].Seq != 1 {
+		t.Errorf("fastest_to_orbit = %v at seq %d, want 300000 ms at seq 1 — an equal time keeps the earlier claim",
 			got["1/fastest_to_orbit"].Value, got["1/fastest_to_orbit"].Seq)
 	}
 }
@@ -150,9 +150,9 @@ func TestFastestToBodyScoresWhateverBodyTheEventNamed(t *testing.T) {
 
 	got := readStats(t, proj)
 	for stat, wantValue := range map[string]float64{
-		"1/fastest_to_luna": 300_000,
-		"1/fastest_to_sol":  400_000,
-		"1/fastest_to_mars": 21_000_000,
+		"1/fastest_to_luna": 300_000_000,
+		"1/fastest_to_sol":  400_000_000,
+		"1/fastest_to_mars": 21_000_000_000, // ms
 		"1/soi_bodies":      3,
 	} {
 		if got[stat].Value != wantValue {
@@ -185,8 +185,8 @@ func TestFastestToBodyMintsABoardForABodyNoListMentions(t *testing.T) {
 	}, 0, false)
 
 	got := readStats(t, proj)
-	if got["1/fastest_to_zephyria_prime"].Value != 500 {
-		t.Errorf("fastest_to_zephyria_prime = %v, want 500 — a body is a board because the data said so",
+	if got["1/fastest_to_zephyria_prime"].Value != 500_000 {
+		t.Errorf("fastest_to_zephyria_prime = %v, want 500000 ms — a body is a board because the data said so",
 			got["1/fastest_to_zephyria_prime"].Value)
 	}
 	if got["1/soi_bodies"].Value != 1 {
@@ -195,7 +195,7 @@ func TestFastestToBodyMintsABoardForABodyNoListMentions(t *testing.T) {
 
 	// And its metadata is derived from the key, with no lookup table anywhere.
 	b, ok := stats.Describe("fastest_to_zephyria_prime")
-	if !ok || b.Title != "Fastest to Zephyria Prime" || b.Unit != "s" || !b.Ascending || !b.Career {
+	if !ok || b.Title != "Fastest to Zephyria Prime" || b.Unit != "ms" || !b.Ascending || !b.Career {
 		t.Errorf("Describe = %+v (ok=%v), want an ascending career board titled from the key", b, ok)
 	}
 }
@@ -247,10 +247,10 @@ func TestFastestToBodyNeverCollidesWithAFixedBoard(t *testing.T) {
 
 func TestBoardDirectionAndUnitsAreDerivedFromTheKey(t *testing.T) {
 	for stat, want := range map[string]stats.Board{
-		"fastest_to_orbit": {Stat: "fastest_to_orbit", Title: "Fastest to Orbit", Unit: "s", Ascending: true, Career: true},
-		"fastest_to_luna":  {Stat: "fastest_to_luna", Title: "Fastest to Luna", Unit: "s", Ascending: true, Career: true},
+		"fastest_to_orbit": {Stat: "fastest_to_orbit", Title: "Fastest to Orbit", Unit: "ms", Ascending: true, Career: true},
+		"fastest_to_luna":  {Stat: "fastest_to_luna", Title: "Fastest to Luna", Unit: "ms", Ascending: true, Career: true},
 		"fastest_to_kerbin_ii": {
-			Stat: "fastest_to_kerbin_ii", Title: "Fastest to Kerbin Ii", Unit: "s", Ascending: true, Career: true,
+			Stat: "fastest_to_kerbin_ii", Title: "Fastest to Kerbin Ii", Unit: "ms", Ascending: true, Career: true,
 		},
 		"rud_total":         {Stat: "rud_total", Title: "Rapid Unscheduled Disassemblies", Unit: "RUDs"},
 		"rud_ground_impact": {Stat: "rud_ground_impact", Title: "RUDs — Ground Impact", Unit: "RUDs"},
@@ -319,8 +319,8 @@ func TestBackwardsClockMarksTheCareerRewound(t *testing.T) {
 	// reloading, and does not try. The faster time stands, and the career says
 	// its clock went backwards.
 	got := readStats(t, proj)
-	if got["1/fastest_to_orbit"].Value != 480 {
-		t.Errorf("fastest_to_orbit = %v, want 480 — the mark must not exclude the run",
+	if got["1/fastest_to_orbit"].Value != 480_000 {
+		t.Errorf("fastest_to_orbit = %v, want 480000 ms — the mark must not exclude the run",
 			got["1/fastest_to_orbit"].Value)
 	}
 }
@@ -345,8 +345,8 @@ func TestTwoCareersInterleavedAreNotARewind(t *testing.T) {
 			t.Errorf("career %s was marked rewound; switching saves is not a rewind", career)
 		}
 	}
-	if got := readStats(t, proj)["1/fastest_to_orbit"].Value; got != 220 {
-		t.Errorf("fastest_to_orbit = %v, want 220 — the min is across careers", got)
+	if got := readStats(t, proj)["1/fastest_to_orbit"].Value; got != 220_000 {
+		t.Errorf("fastest_to_orbit = %v, want 220000 ms — the min is across careers", got)
 	}
 }
 

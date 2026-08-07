@@ -36,8 +36,16 @@ public sealed class OrbitAndBackScenario : IScenario
     private const double PeM = 300_000;
     private const double SplashdownMs = 6.4;
 
-    /// <summary>Sim time at which the orbit-achieved latch fires — the value `fastest_to_orbit` must end at.</summary>
+    /// <summary>Sim time at which the orbit-achieved latch fires.</summary>
     private const double OrbitAchievedSimT = 190.0;
+
+    /// <summary>
+    /// The value `fastest_to_orbit` must end at. The board publishes career time in
+    /// <b>milliseconds</b> while `sim_t` stays seconds on the wire: the log is immutable and has no
+    /// envelope-level upcaster, so the unit conversion lives in the projection, which is
+    /// rebuildable (docs/DECISIONS.md, WP-CLOCK).
+    /// </summary>
+    private const double OrbitAchievedMs = OrbitAchievedSimT * 1000.0;
 
     /// <inheritdoc />
     public string Name => "orbit-and-back";
@@ -46,7 +54,7 @@ public sealed class OrbitAndBackScenario : IScenario
     public string Summary => "launch to a 300×320 km kerbin orbit, coast, deorbit, splash down and recover 3 crew";
 
     /// <inheritdoc />
-    public string Asserts => "orbits_achieved += 1 · fastest_orbital_speed = 7784 · fastest_to_orbit = 190";
+    public string Asserts => "orbits_achieved += 1 · fastest_orbital_speed = 7784 · fastest_to_orbit = 190000 ms";
 
     /// <inheritdoc />
     public IEnumerable<SimStep> Steps()
@@ -139,8 +147,8 @@ public sealed class OrbitAndBackScenario : IScenario
         api.ExpectCounter(handle, "orbits_achieved", 1);
         api.ExpectRecord(handle, "fastest_orbital_speed", OrbitalSpeedMs);
         // Career time, not wall time: the scenario's clock starts at 0 and the
-        // periapsis clears atmosphere + 1 km at t = 190 s (§4.1).
-        api.ExpectBest(handle, "fastest_to_orbit", OrbitAchievedSimT);
+        // periapsis clears atmosphere + 1 km at t = 190 s (§4.1), published in ms.
+        api.ExpectBest(handle, "fastest_to_orbit", OrbitAchievedMs);
     }
 
     private static TelemetrySnapshot Ascend(SimVehicle v, double t, double t0, double t1)

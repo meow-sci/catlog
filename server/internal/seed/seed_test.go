@@ -100,11 +100,13 @@ func TestSeedProducesTheExpectedBoards(t *testing.T) {
 		// demo_ace's second career is the fast one: its clock restarts at 0 and
 		// the builder ticks 12.5 s per event, so orbit lands at 37.5 s into the
 		// career and Mars at 75 s. Career-relative, not wall-clock — that is the
-		// whole point of the boards.
-		"demo_ace/fastest_to_orbit": 37.5,
-		"demo_ace/fastest_to_luna":  50,
-		"demo_ace/fastest_to_sol":   62.5,
-		"demo_ace/fastest_to_mars":  75,
+		// whole point of the boards. Published in milliseconds: `sim_t` stays
+		// seconds on the wire and the projection converts (docs/DECISIONS.md,
+		// WP-CLOCK).
+		"demo_ace/fastest_to_orbit": 37_500,
+		"demo_ace/fastest_to_luna":  50_000,
+		"demo_ace/fastest_to_sol":   62_500,
+		"demo_ace/fastest_to_mars":  75_000,
 
 		"demo_tumbler/kitten_tumbles":     4,
 		"demo_tumbler/soi_bodies":         2,

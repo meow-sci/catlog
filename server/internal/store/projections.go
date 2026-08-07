@@ -93,6 +93,32 @@ func (p *Projections) Leaderboard(ctx context.Context, stat string, asc bool, li
 	return scanStatRows(rows)
 }
 
+// LeaderboardPeriod is [Projections.Leaderboard] for one rolling window.
+//
+// Same shape, same ordering, same tie-break — the only difference is which
+// table the rows come from, which is what lets the read API treat a period as a
+// dimension of a board rather than as a different kind of thing.
+func (p *Projections) LeaderboardPeriod(
+	ctx context.Context, stat, period, bucket string, asc bool, limit, offset int,
+) ([]StatRow, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	order := "DESC"
+	if asc {
+		order = "ASC"
+	}
+	rows, err := p.Reader().QueryContext(ctx,
+		`SELECT player_id, stat, value, context, updated_seq FROM player_stat_period
+		 WHERE stat = ? AND period = ? AND bucket = ?
+		 ORDER BY value `+order+`, updated_seq ASC, player_id ASC LIMIT ? OFFSET ?`,
+		stat, period, bucket, limit, max(offset, 0))
+	if err != nil {
+		return nil, fmt.Errorf("store: read %s leaderboard %q for %s: %w", period, stat, bucket, err)
+	}
+	return scanStatRows(rows)
+}
+
 // PlayerStats reads every board a player appears on, in stat order.
 func (p *Projections) PlayerStats(ctx context.Context, playerID int64) ([]StatRow, error) {
 	rows, err := p.Reader().QueryContext(ctx,

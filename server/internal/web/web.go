@@ -64,7 +64,11 @@ const BoardRows = 100
 // Read is the subset of [readapi.Server] the pages need.
 type Read interface {
 	BoardList(ctx context.Context) (readapi.BoardsResponse, error)
-	Board(ctx context.Context, stat string, limit, offset int) (readapi.BoardResponse, bool, error)
+	// Board takes the window as well as the page. The server-rendered site
+	// always asks for `alltime`: the rolling windows are a JSON-API dimension
+	// (`?period=`), and adding a period selector to these pages is a UI
+	// decision, not a consequence of the projection existing.
+	Board(ctx context.Context, stat, period, bucket string, limit, offset int) (readapi.BoardResponse, bool, error)
 	Player(ctx context.Context, handle string) (readapi.PlayerResponse, bool, error)
 }
 

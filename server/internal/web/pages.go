@@ -1,6 +1,7 @@
 package web
 
 import (
+	"github.com/meow-sci/catlog/server/internal/stats"
 	"net/http"
 
 	"github.com/meow-sci/catlog/server/internal/readapi"
@@ -39,7 +40,7 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, stat := range FeaturedBoards {
-		board, known, err := s.deps.Read.Board(r.Context(), stat, FeaturedRows, 0)
+		board, known, err := s.deps.Read.Board(r.Context(), stat, stats.PeriodAllTime, "", FeaturedRows, 0)
 		if err != nil {
 			s.serverError(w, r, err, "read the featured boards")
 			return
@@ -77,7 +78,7 @@ func (s *Server) handleBoards(w http.ResponseWriter, r *http.Request) {
 // --- GET /boards/{stat} ---------------------------------------------------------
 
 func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
-	board, known, err := s.deps.Read.Board(r.Context(), r.PathValue("stat"), BoardRows, 0)
+	board, known, err := s.deps.Read.Board(r.Context(), r.PathValue("stat"), stats.PeriodAllTime, "", BoardRows, 0)
 	switch {
 	case !known:
 		s.notFound(w, r, "No such leaderboard.")
