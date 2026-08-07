@@ -51,11 +51,13 @@ public sealed class SimOptions
     /// Events per batch, and also the pending-count ship trigger.
     /// </summary>
     /// <remarks>
-    /// The mod's own trigger is 64 pending events (§7.2), which is right for a real session that
-    /// produces them over minutes. A scenario produces the same events in milliseconds, so a
-    /// 64-event trigger would ship dozens of tiny batches straight into the §4.3 token bucket
-    /// (1 batch / 2 s, burst 5) and spend the run in backoff. Shipping full batches keeps a
-    /// compressed 30 minutes of play inside a real player's rate budget.
+    /// The mod's own normal trigger is the ~60 s age trigger (§7.2), with a 500-event safety
+    /// valve; both are right for a real session that produces events over minutes. A scenario
+    /// produces the same events in milliseconds, where the age trigger would only ever fire on
+    /// the final drain — so the runner pins the count trigger to this value and disables the age
+    /// trigger outright (<see cref="ScenarioRunner"/>). Shipping deterministic full batches keeps
+    /// a compressed 30 minutes of play inside the §4.3 token bucket (1 batch / 2 s, burst 5)
+    /// instead of spending the run in backoff.
     /// </remarks>
     public int BatchEvents { get; private set; } = Wire.DefaultBatchEventCap;
 

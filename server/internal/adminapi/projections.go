@@ -138,10 +138,26 @@ const rebuildTimeout = 30 * time.Minute
 type StatsResponse struct {
 	Events      EventStats             `json:"events"`
 	Ingest      IngestStats            `json:"ingest"`
+	Streams     StreamStats            `json:"streams"`
 	Projector   ProjectorStats         `json:"projector"`
 	Projections store.ProjectionCounts `json:"projections"`
 	Storage     StorageStats           `json:"storage"`
 	Boards      []BoardCount           `json:"boards"`
+}
+
+// StreamStats surfaces the §4.5.3 step-12 chain's one genuinely useful output:
+// how many client streams have a hole in them.
+//
+// A gap means a batch left a client and never arrived — accepted anyway,
+// because telemetry is loss-tolerant, but marked permanently. Without this the
+// `gap` column was written on every commit and read by nobody, which made the
+// chain's cost real and its benefit theoretical. Rising `gapped` against a flat
+// `total` is the shape to watch: it means shipments are being lost in transit,
+// not that clients are restarting.
+type StreamStats struct {
+	Total         int64 `json:"total"`
+	Gapped        int64 `json:"gapped"`
+	GappedPlayers int64 `json:"gapped_players"`
 }
 
 // EventStats counts what is in events.db.
@@ -201,7 +217,15 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 			s.fail(w, err, "count players")
 			return
 		}
+		census, err := s.deps.Events.StreamCensus(ctx)
+		if err != nil {
+			s.fail(w, err, "count streams")
+			return
+		}
 		out.Events = EventStats{Total: total, MaxSeq: maxSeq, Players: players, Banned: banned}
+		out.Streams = StreamStats{
+			Total: census.Total, Gapped: census.Gapped, GappedPlayers: census.GappedPlayers,
+		}
 		out.Storage.EventsDBBytes = s.deps.Events.FileSize()
 		out.Storage.EventsWALBytes = s.deps.Events.WALSize()
 	}

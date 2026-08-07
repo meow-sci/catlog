@@ -112,6 +112,19 @@ type shipOpts struct {
 	NoPH            bool
 	JTI             string
 	SkipCompression bool
+	// As ships under a different credential — a second player on the same
+	// server. Its own stream is tracked in asSID/asSeq/asPrev.
+	As     *testutil.Cred
+	AsSID  ids.ID
+	AsSeq  int64
+	AsPrev []byte
+}
+
+// otherPlayer mints a second credential backed by its own player row, so a test
+// can prove that identity is per-credential and not global.
+func (r *rig) otherPlayer(handle string) testutil.Cred {
+	r.t.Helper()
+	return testutil.CredentialAt(r.t, r.events, r.keys, testIssuer, handle, r.now.Add(-time.Hour), 180*24*time.Hour)
 }
 
 // ship posts one batch and returns the response with its decoded body.
@@ -132,28 +145,38 @@ func (r *rig) ship(ndjson []byte, opts ...func(*shipOpts)) (*http.Response, map[
 		}
 	}
 
+	// The shipping identity: the rig's own credential and stream, or the second
+	// player the caller named.
+	cred, streamSeq, streamSID, streamPrev := r.cred, r.seq, r.sid, r.prev
+	if o.As != nil {
+		cred, streamSeq, streamSID, streamPrev = *o.As, o.AsSeq, o.AsSID, o.AsPrev
+		if streamSeq == 0 {
+			streamSeq = 1
+		}
+	}
+
 	seq := o.Seq
 	if seq == 0 {
-		seq = r.seq
+		seq = streamSeq
 	}
 	sid := o.SID
 	if sid == ids.Zero {
-		sid = r.sid
+		sid = streamSID
 	}
-	prev := r.prev
+	prev := streamPrev
 	if o.NoPH || seq == 1 {
 		prev = nil
 	}
 
 	proof := o.Proof
 	if proof == "" {
-		proof = r.cred.Proof(r.t, testutil.ProofOpts{
+		proof = cred.Proof(r.t, testutil.ProofOpts{
 			HTU: testHTU, At: r.now, SID: sid, Seq: seq, Body: body, PrevBody: prev, JTI: o.JTI,
 		})
 	}
 	license := o.License
 	if license == "" {
-		license = r.cred.License
+		license = cred.License
 	}
 
 	req, err := http.NewRequest(http.MethodPost, r.srv.URL+Path, bytes.NewReader(body))
@@ -189,8 +212,9 @@ func (r *rig) ship(ndjson []byte, opts ...func(*shipOpts)) (*http.Response, map[
 	}
 
 	// A batch the server accepted advances the local chain the way the mod's
-	// shipper would.
-	if res.StatusCode == http.StatusOK && decoded["replay"] != true {
+	// shipper would. Only the rig's own stream is tracked; a second player's
+	// chain is the caller's to carry in shipOpts.
+	if res.StatusCode == http.StatusOK && decoded["replay"] != true && o.As == nil {
 		r.prev = body
 		r.seq = seq + 1
 	}

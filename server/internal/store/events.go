@@ -611,6 +611,40 @@ func (e *Events) UpsertStreamState(ctx context.Context, q Querier, s StreamState
 	return nil
 }
 
+// StreamCensus is the population of `stream_state`, split by the sticky `gap`
+// marker (§4.5.3 step 12) — the numbers `GET /admin/stats` reports.
+type StreamCensus struct {
+	// Total is how many streams exist across every player.
+	Total int64
+	// Gapped is how many of them skipped a seq at least once.
+	Gapped int64
+	// GappedPlayers is how many distinct players own at least one gapped
+	// stream. A single player churning through streams inflates Gapped; this
+	// says how widely it is happening.
+	GappedPlayers int64
+}
+
+// StreamCensus counts streams and gaps.
+//
+// This is the one thing the §4.5.3 stream chain genuinely buys that nothing
+// else in the system provides: a batch that never arrived leaves a permanent,
+// per-stream mark. It is deliberately loss-tolerant — a gap is accepted and
+// recorded, never rejected — so it is only worth maintaining if somebody
+// actually looks at it, which is what this query is for.
+func (e *Events) StreamCensus(ctx context.Context) (StreamCensus, error) {
+	var c StreamCensus
+	err := e.Reader().QueryRowContext(ctx,
+		`SELECT count(*),
+		        coalesce(sum(CASE WHEN gap != 0 THEN 1 ELSE 0 END), 0),
+		        count(DISTINCT CASE WHEN gap != 0 THEN player_id END)
+		 FROM stream_state`).
+		Scan(&c.Total, &c.Gapped, &c.GappedPlayers)
+	if err != nil {
+		return StreamCensus{}, fmt.Errorf("store: stream census: %w", err)
+	}
+	return c, nil
+}
+
 // --- tombstones ------------------------------------------------------------
 
 // Tombstone is a row of `tombstone` (§4.7): what a purge leaves behind.

@@ -47,6 +47,67 @@ Responses (JSON body; `Date` header always present — the mod uses it for clock
 
 Public read endpoints below. Health: `GET /healthz` → `200 {"ok": true}` (no auth, no DB write).
 
+## Idempotency contract
+
+> **This is a hard requirement, not a best-effort property.** A client that is unsure whether a
+> request landed must be able to send it again, blindly, with no ill effect. Everything in this
+> section is enforced by a database index and covered by tests
+> (`server/internal/ingest/idempotency_test.go`, `server/integration/idempotency_test.go`,
+> `server/internal/store/events_test.go`, `mod/catlog.lib.tests/Ship/BatchShipperTests.cs`).
+
+### The key
+
+| Level | Key | Client half | Server half | Enforced by |
+|---|---|---|---|---|
+| Event | `(player_id, event_id)` | envelope `id` — a ULID the client mints, one per event, stable across every resend | `player_id`, resolved from the verified credential | `CREATE UNIQUE INDEX ev_dedup ON event(player_id, event_id)` + `INSERT OR IGNORE` |
+| Batch | `(player_id, batch_id)` | proof `jti` — a ULID the client mints, one per batch | `player_id`, same derivation | `PRIMARY KEY (player_id, batch_id)` on `ingest_batch` (verification step 11) |
+
+**The server never trusts a client-supplied identity.** `player_id` comes from exactly one place:
+step 5 looks up the `credential` row by the proof key's thumbprint (`cnf.jkt`), and cross-checks
+that the row's player has the `user_key` the license `sub` names. There is no player, handle,
+subject or account field anywhere in the request body, and §4.1 rejects **unknown envelope keys**
+outright — so a hostile client cannot invent one and cannot write into another player's namespace.
+Unknown *payload* keys are preserved verbatim for forward compatibility, and are never read as
+identity: a payload containing `"player_id": 7` is stored as data and attributed to the sender.
+
+Consequences a client can rely on:
+
+- Two players who mint the **same** event id get two distinct rows. Dedup is per player, never global.
+- One player cannot suppress another's writes by guessing batch ids: replay is scoped per player too.
+- A ULID collision within one player is the only way to lose an event, which is what ULIDs are for.
+
+### Which retries are safe
+
+| You did this | Server answers | Stored |
+|---|---|---|
+| Resend the identical request (same `jti`, same body), N times | `200 {"accepted": 0, "deduped": n, "replay": true}` every time | unchanged |
+| Resend the same events under a **new** `jti` on the **next** `seq` | `200 {"accepted": 0, "deduped": n}` | unchanged |
+| Send a batch that **overlaps** an earlier one | `200 {"accepted": <new>, "deduped": <already had>}` | only the new events |
+| Any of the above after a server restart | identical — the guarantee is index-backed, not in-memory | unchanged |
+| Resend the same events under a **new** `jti` on the **same** `seq` | `409 stream_fork` — see below | unchanged |
+
+Nothing is ever double-counted, and no retry can corrupt a projection: the projector folds the
+event log, and a deduped event never enters it.
+
+### The one rule for clients: keep the batch id across retries of the same bytes
+
+A timeout is the case that matters — you did not see a response, so you cannot know whether the
+batch committed, and you cannot advance `seq`. If you also mint a **fresh** `jti` for the resend,
+you miss the step-11 replay short-circuit and fall through to step 12, where your unchanged `seq`
+reads as a reused one and earns `409 stream_fork`. The events were already safe; the duplicate
+would have been harmless; the chain rejects it anyway.
+
+So: **mint the batch id once per batch *body*, and reuse it for every retry of those bytes.**
+Mint a new one only when the batch contents change (after a `413` halving, or when the batch is
+rebuilt from a different set of pending events). The mod does exactly this and persists the pairing
+to its outbox, so a game crash mid-ship replays cleanly rather than forking
+(`BatchShipper.BatchIdFor`).
+
+A client that ignores this rule still loses nothing: `409` is recoverable — mint a new `sid`, reset
+`seq = 1`, resend — and the event dedup index absorbs the resend so the data converges either way.
+It costs a round trip and an abandoned chain, not a row. That residual is pinned by
+`TestRetryWithANewBatchID/a_fresh_batch_id_on_the_same_seq_forks_the_stream`.
+
 ## Auth: license + proof JWS (ES256 only)
 
 All JWS are **compact serialization**, alg allow-list `{ES256}` (reject anything else — no `none`, no RSA). Base64url without padding. .NET note: `ECDsa.SignData(..., SHA256)` already emits the r‖s IEEE-P1363 format JWS requires — no DER conversion.
@@ -108,6 +169,36 @@ Claims:
 13. Decompress (cap 8 MiB), parse NDJSON, validate envelopes, txn: insert events (`INSERT OR IGNORE` on `(player_id,event_id)`), upsert `stream_state`, insert `ingest_batch`, commit.
 
 Mod-side failure handling: `401 clock_skew` → recompute offset from `Date` header, re-sign, retry once; `409` → mint new `sid`, reset `seq=1`, continue (old chain abandoned); `413` → halve batch event cap (floor 50), retry; `429`/`5xx`/network → exponential backoff 1 s·2ⁿ + full jitter, cap 5 min, batches coalesce.
+
+### What the stream chain actually buys (`sid` / `seq` / `ph`)
+
+Stated plainly, because it is easy to over-claim and the wire cost is real (a `seq`, a 43-byte `ph`,
+and a `stream_state` row per stream):
+
+**It does provide:**
+
+- **Gap visibility.** A skipped `seq` is accepted — telemetry is loss-tolerant — and marks the
+  stream permanently. That marker is the only signal in the system that distinguishes "this client
+  shipped less" from "this client's batches were lost in transit", and it is surfaced at
+  `GET /admin/stats` as `streams.{total, gapped, gapped_players}` (and by `catlogctl stats`).
+- **Ordering hygiene and debuggability.** `ph` chains each batch to the bytes of the previous one,
+  so a support question of the form "did batch N really precede batch N+1 from this install?" has
+  an answer.
+
+**It does not provide:**
+
+- **Dedup.** That is the `(player_id, event_id)` unique index plus the `(player_id, batch_id)`
+  replay short-circuit, both of which work with the chain removed. See the idempotency contract above.
+- **Ordering of the stored log.** That is the server-local `event.seq` rowid.
+- **Credential-theft detection.** Earlier design notes framed a fork as "a high-signal indicator of
+  credential theft". It is not, and nothing in the server treats it as one: a fork is not counted
+  per player, not alerted on, and not retained — and the documented client recovery is to mint a new
+  `sid` and carry on, so a thief pays exactly one `409` and is otherwise unimpeded. Treat a `409` as
+  what it is: a client whose local chain state and the server's disagree, usually because of a lost
+  response or a restored save.
+
+The chain stays (D5, the wire contract, the mod mirror and the §4.10 conformance vectors all pin
+it), but it must not be relied on for anything in the second list.
 
 ### Sessions & CSRF (website only — unrelated to ingest)
 

@@ -141,11 +141,44 @@ public static class Wire
     /// <summary>Margin above the atmosphere that a periapsis must clear to count as orbit achieved, in metres (§7.2).</summary>
     public const double OrbitAchievedMarginM = 1000.0;
 
-    /// <summary>Ship as soon as this many events are pending in the outbox (§7.2).</summary>
-    public const int ShipPendingTrigger = 64;
+    /// <summary>
+    /// The <b>safety valve</b>: ship early when this many events are pending, regardless of age.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This is deliberately <i>not</i> the normal reason to ship —
+    /// <see cref="ShipAgeTriggerSeconds"/> is. The mod buffers into the outbox and a background
+    /// worker pumps in bulk about once a minute; the count trigger exists only so an unusually
+    /// busy minute (or a backlog draining after an outage) cannot grow an unbounded batch.
+    /// </para>
+    /// <para>
+    /// 500 is chosen against a real minute of play. Passive <c>telemetry.window</c> events are one
+    /// per active vehicle per 30 s, so a busy save with two dozen vehicles emits ~48 of them per
+    /// minute, and the discrete events of an eventful launch add a few dozen more — call a busy
+    /// minute ≤150 events. 500 is over three times that, so the age trigger stays the normal path.
+    /// It is also exactly <see cref="DefaultBatchEventCap"/>, so when the valve does open there is
+    /// precisely one full batch to send rather than a partial one.
+    /// </para>
+    /// <para>
+    /// Headroom against the §4.3 limits at 500 events: 25% of the 2000-event cap; a measured
+    /// 90.5 KiB Brotli body (8.8% of the 1 MiB cap) for worst-case incompressible
+    /// <c>telemetry.window</c> lines; 0.31 MiB decompressed (3.9% of the 8 MiB cap). Against the
+    /// token bucket (1 batch / 2 s, burst 5), one batch a minute is 3% of the sustained allowance.
+    /// </para>
+    /// </remarks>
+    public const int ShipPendingTrigger = 500;
 
-    /// <summary>Ship when the oldest pending event is at least this old, in seconds (§7.2).</summary>
-    public const double ShipAgeTriggerSeconds = 15.0;
+    /// <summary>
+    /// The normal ship trigger: ship when the oldest pending event is at least this old, in
+    /// seconds (§7.2). One minute — the mod is a bulk telemetry pump, not a live feed.
+    /// </summary>
+    public const double ShipAgeTriggerSeconds = 60.0;
+
+    /// <summary>Lower clamp for a configured ship interval, in seconds.</summary>
+    public const double MinShipAgeTriggerSeconds = 1.0;
+
+    /// <summary>Upper clamp for a configured ship interval, in seconds (one hour).</summary>
+    public const double MaxShipAgeTriggerSeconds = 3600.0;
 
     /// <summary>Initial events-per-batch cap; halved on <c>413</c>, never below <see cref="MinBatchEventCap"/>.</summary>
     public const int DefaultBatchEventCap = 500;
@@ -175,6 +208,17 @@ public static class Wire
 
         /// <summary>Body hash of the last accepted batch — the next proof's <c>ph</c>.</summary>
         public const string LastBh = "last_bh";
+
+        /// <summary>
+        /// The batch id (proof <c>jti</c>) minted for the batch currently in flight, and
+        /// <see cref="PendingBh"/> the body it belongs to. Held across retries so a resend of an
+        /// identical body reuses its batch id and lands on the server's §4.5.3 step-11 replay
+        /// short-circuit instead of its step-12 stream check. Cleared once the batch is accepted.
+        /// </summary>
+        public const string PendingBatchId = "pending_batch_id";
+
+        /// <summary>The body hash <see cref="PendingBatchId"/> was minted for.</summary>
+        public const string PendingBh = "pending_bh";
 
         /// <summary>Server-clock offset in milliseconds, learned from the <c>Date</c> header.</summary>
         public const string ClockOffsetMs = "clock_offset_ms";

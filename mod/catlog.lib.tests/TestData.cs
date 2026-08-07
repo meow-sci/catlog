@@ -84,11 +84,12 @@ internal static class TestData
         => EventEnvelope.Create(
             type, session, flight, simT, wallMs, payload ?? new VehicleStagingPayload(1), id);
 
-    internal static IReadOnlyList<EventEnvelope> Envelopes(int count, string type = EventTypes.VehicleStaging)
+    internal static IReadOnlyList<EventEnvelope> Envelopes(
+        int count, string type = EventTypes.VehicleStaging, long wallMs = WallMs)
     {
         var list = new List<EventEnvelope>(count);
         for (int i = 0; i < count; i++)
-            list.Add(Envelope(type: type, simT: i, payload: new VehicleStagingPayload(i)));
+            list.Add(Envelope(type: type, simT: i, wallMs: wallMs, payload: new VehicleStagingPayload(i)));
         return list;
     }
 

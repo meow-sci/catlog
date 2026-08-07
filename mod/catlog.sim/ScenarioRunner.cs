@@ -113,9 +113,12 @@ public sealed class ScenarioRunner : IDisposable
             new ShipperOptions(
                 IngestUrl: options.IngestUrl,
                 BatchEventCap: options.BatchEvents,
+                // WP7 pins both triggers for determinism, and that is deliberately independent of
+                // the mod's shipped defaults: a scenario must ship on a fixed event count, not on
+                // a wall clock. The age trigger — the mod's *normal* path at ~60 s — is disabled
+                // because a scenario has no idle time and it would only ever fire on the final
+                // drain, at which point the explicit Drain() has already done the work.
                 PendingTrigger: options.BatchEvents,
-                // The age trigger is what makes a real session ship a trickle of events promptly.
-                // A scenario has no idle time, so it would only ever fire on the final drain.
                 AgeTriggerSeconds: double.MaxValue,
                 OutboxCapBytes: 0),
             _outbox,

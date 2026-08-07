@@ -139,6 +139,8 @@ func runStats(args []string) error {
 	fmt.Printf("events        %d stored, head seq %d\n", res.Events.Total, res.Events.MaxSeq)
 	fmt.Printf("players       %d (%d banned), %d live handles\n", res.Events.Players, res.Events.Banned, res.Events.Handles)
 	fmt.Printf("ingest queue  %d / %d\n", res.Ingest.QueueDepth, res.Ingest.QueueCap)
+	fmt.Printf("streams       %d, %d with a gap across %d player(s)\n",
+		res.Streams.Total, res.Streams.Gapped, res.Streams.GappedPlayers)
 	fmt.Printf("projector     checkpoint %d, lag %d, %d folds\n",
 		res.Projector.CheckpointSeq, res.Projector.LagSeq, len(res.Projector.Folds))
 	fmt.Printf("projections   %d stat rows, %d flights (%d flagged), %d kittens, %d feed rows\n",

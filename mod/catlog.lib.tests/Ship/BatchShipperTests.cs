@@ -158,10 +158,15 @@ public sealed class BatchShipperTests
         Assert.Equal(localNow.ToUnixTimeSeconds(), firstIat);
         Assert.Equal(serverNow.ToUnixTimeSeconds(), secondIat);
 
-        // The re-signed proof is a distinct batch id but the same body and the same seq.
-        Assert.NotEqual(
+        // Only `iat` moved. The body, the seq and — because this is a retry of the same bytes —
+        // the batch id are all unchanged, so the resend is idempotent even if the "skewed" request
+        // had somehow been stored.
+        Assert.Equal(
             handler.Requests[0].ProofClaims.GetProperty("jti").GetString(),
             handler.Requests[1].ProofClaims.GetProperty("jti").GetString());
+        Assert.Equal(
+            handler.Requests[0].ProofClaims.GetProperty("seq").GetInt64(),
+            handler.Requests[1].ProofClaims.GetProperty("seq").GetInt64());
         Assert.Equal(handler.Requests[0].Body, handler.Requests[1].Body);
     }
 
@@ -347,6 +352,125 @@ public sealed class BatchShipperTests
         Assert.Equal(5, harness.Outbox.PendingCount);
     }
 
+    // ----- idempotent retries (the client half of the contract) -------------------------
+
+    /// <summary>
+    /// The client half of the idempotency guarantee: a resend of unchanged bytes must carry the
+    /// batch id the server already knows, so it lands on the §4.5.3 step-11 replay short-circuit
+    /// rather than falling through to the step-12 stream check and earning a <c>409</c> for a
+    /// request that was already safe.
+    /// </summary>
+    [Fact]
+    public async Task RetryingAFailedBatch_ReusesTheBatchId()
+    {
+        var handler = FakeHttpHandler.Scripted(
+            () => FakeHttpHandler.Error(HttpStatusCode.ServiceUnavailable, Wire.Errors.Internal),
+            () => FakeHttpHandler.Error(HttpStatusCode.ServiceUnavailable, Wire.Errors.Internal),
+            () => FakeHttpHandler.Ok(3));
+        using var harness = new Harness(handler);
+        harness.Outbox.Append(TestData.Envelopes(3));
+
+        Assert.Equal(ShipOutcome.ServerError, (await harness.Shipper.ShipOnceAsync()).Outcome);
+        Assert.Equal(ShipOutcome.ServerError, (await harness.Shipper.ShipOnceAsync()).Outcome);
+        Assert.Equal(ShipOutcome.Accepted, (await harness.Shipper.ShipOnceAsync()).Outcome);
+
+        string[] batchIds = [.. handler.Requests.Select(r => r.ProofClaims.GetProperty("jti").GetString()!)];
+        Assert.Equal(3, batchIds.Length);
+        Assert.Single(batchIds.Distinct());
+
+        // The seq did not move either — three attempts, one batch.
+        Assert.All(handler.Requests, r => Assert.Equal(1, r.ProofClaims.GetProperty("seq").GetInt64()));
+    }
+
+    /// <summary>
+    /// The id is bound to the bytes, not to "there is a batch in flight". A <c>413</c> halving
+    /// changes what the batch contains, so it must change the batch id too — reusing it would let
+    /// a replay short-circuit retire outbox rows the server never saw.
+    /// </summary>
+    [Fact]
+    public async Task AResizedBatch_GetsAFreshBatchId()
+    {
+        var handler = FakeHttpHandler.Scripted(
+            () => FakeHttpHandler.Error(HttpStatusCode.RequestEntityTooLarge, Wire.Errors.TooLarge),
+            () => FakeHttpHandler.Ok(50));
+        using var harness = new Harness(handler, batchEventCap: 100);
+        harness.Outbox.Append(TestData.Envelopes(100));
+
+        Assert.Equal(ShipOutcome.TooLarge, (await harness.Shipper.ShipOnceAsync()).Outcome);
+        Assert.Equal(ShipOutcome.Accepted, (await harness.Shipper.ShipOnceAsync()).Outcome);
+
+        Assert.Equal(2, handler.Requests.Count);
+        Assert.NotEqual(
+            handler.Requests[0].ProofClaims.GetProperty("jti").GetString(),
+            handler.Requests[1].ProofClaims.GetProperty("jti").GetString());
+        Assert.NotEqual(
+            handler.Requests[0].ProofClaims.GetProperty("bh").GetString(),
+            handler.Requests[1].ProofClaims.GetProperty("bh").GetString());
+    }
+
+    /// <summary>
+    /// A game crash mid-ship is the same "did it land?" question as a timeout, only with a process
+    /// boundary in the middle — so the batch id has to be durable, not just in memory.
+    /// </summary>
+    [Fact]
+    public async Task TheBatchIdSurvivesAShipperRestart()
+    {
+        using var dir = new TempDir();
+        string path = dir.File("outbox.db");
+        (Credential credential, ECDsa serverKey, _) = TestKeys.Credential();
+        using (credential)
+        using (serverKey)
+        {
+            string firstBatchId;
+            using (OutboxDb outbox = OutboxDb.Open(path))
+            {
+                var handler = FakeHttpHandler.Always(
+                    () => FakeHttpHandler.Error(HttpStatusCode.ServiceUnavailable, Wire.Errors.Internal));
+                using var shipper = new BatchShipper(
+                    new ShipperOptions(IngestUrl), outbox, credential, handler, new FakeShipperClock());
+                outbox.Append(TestData.Envelopes(4));
+                await shipper.ShipOnceAsync();
+                firstBatchId = handler.Requests[0].ProofClaims.GetProperty("jti").GetString()!;
+            }
+
+            using (OutboxDb reopened = OutboxDb.Open(path))
+            {
+                // Whether the pre-crash request actually committed is unknowable, so the resend is
+                // sent under the same id and the server decides: replay if it landed, insert if not.
+                var handler = FakeHttpHandler.Always(() => FakeHttpHandler.Ok(0, replay: true));
+                using var restarted = new BatchShipper(
+                    new ShipperOptions(IngestUrl), reopened, credential, handler, new FakeShipperClock());
+
+                Assert.Equal(ShipOutcome.Replayed, (await restarted.ShipOnceAsync()).Outcome);
+                Assert.Equal(firstBatchId, handler.Requests[0].ProofClaims.GetProperty("jti").GetString());
+                Assert.Equal(0, reopened.PendingCount);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Once a batch is accepted its id is retired: the next batch is a different batch and must say
+    /// so, or the server would replay-short-circuit events it has never seen.
+    /// </summary>
+    [Fact]
+    public async Task AnAcceptedBatch_RetiresItsBatchId()
+    {
+        var handler = FakeHttpHandler.Always(() => FakeHttpHandler.Ok());
+        using var harness = new Harness(handler);
+
+        harness.Outbox.Append(TestData.Envelopes(2));
+        await harness.Shipper.ShipOnceAsync();
+        Assert.Null(harness.Outbox.GetState(Wire.StateKeys.PendingBatchId));
+
+        harness.Outbox.Append(TestData.Envelopes(2));
+        await harness.Shipper.ShipOnceAsync();
+
+        Assert.Equal(2, handler.Requests.Count);
+        Assert.NotEqual(
+            handler.Requests[0].ProofClaims.GetProperty("jti").GetString(),
+            handler.Requests[1].ProofClaims.GetProperty("jti").GetString());
+    }
+
     // ----- triggers, loop, persistence -------------------------------------------------
 
     [Fact]
@@ -357,10 +481,52 @@ public sealed class BatchShipperTests
         Assert.False(harness.Shipper.ShouldShip(), "an empty outbox never triggers");
 
         harness.Outbox.Append(TestData.Envelopes(Wire.ShipPendingTrigger - 1));
-        Assert.False(harness.Shipper.ShouldShip(), "63 pending is under the 64-event trigger");
+        Assert.False(
+            harness.Shipper.ShouldShip(),
+            $"{Wire.ShipPendingTrigger - 1} pending is under the {Wire.ShipPendingTrigger}-event safety valve");
 
         harness.Outbox.Append([TestData.Envelope()]);
         Assert.True(harness.Shipper.ShouldShip());
+    }
+
+    /// <summary>
+    /// The shipped cadence (§7.2 as retuned): the <b>age</b> trigger is the normal path at ~60 s
+    /// and the count trigger is only a safety valve, sized so an ordinary busy minute of play
+    /// never reaches it. Passive <c>telemetry.window</c> events are one per vehicle per 30 s, so
+    /// a two-dozen-vehicle save emits ~48 a minute; the valve must sit far above that, and far
+    /// below the §4.3 2000-event batch cap.
+    /// </summary>
+    [Fact]
+    public void Defaults_MakeTheAgeTriggerTheNormalPath()
+    {
+        Assert.Equal(60.0, Wire.ShipAgeTriggerSeconds);
+
+        // Three times the ~150 events a busy minute can produce, so the valve stays shut.
+        Assert.True(Wire.ShipPendingTrigger >= 450, "the count trigger would fire during ordinary play");
+
+        // Real headroom under the §4.3 caps, and exactly one full batch when it does open.
+        Assert.True(Wire.ShipPendingTrigger <= Wire.MaxEventsPerBatch / 2);
+        Assert.Equal(Wire.DefaultBatchEventCap, Wire.ShipPendingTrigger);
+    }
+
+    /// <summary>
+    /// A minute of a busy save must ship on the clock, not on the count: the events pile up
+    /// silently until the age trigger fires.
+    /// </summary>
+    [Fact]
+    public void ShouldShip_ABusyMinuteFiresOnAgeNotOnCount()
+    {
+        var clock = new FakeShipperClock();
+        using var harness = new Harness(FakeHttpHandler.Always(() => FakeHttpHandler.Ok()), clock: clock);
+
+        // 24 vehicles × 2 telemetry.window per minute, plus a generous 100 discrete events.
+        harness.Outbox.Append(TestData.Envelopes(148, wallMs: clock.UtcNow.ToUnixTimeMilliseconds()));
+
+        clock.Advance(TimeSpan.FromSeconds(Wire.ShipAgeTriggerSeconds - 1));
+        Assert.False(harness.Shipper.ShouldShip(), "a busy minute must not trip the count safety valve");
+
+        clock.Advance(TimeSpan.FromSeconds(1));
+        Assert.True(harness.Shipper.ShouldShip(), "the age trigger is the normal ship path");
     }
 
     [Fact]
@@ -374,7 +540,8 @@ public sealed class BatchShipperTests
 
         clock.Advance(TimeSpan.FromSeconds(Wire.ShipAgeTriggerSeconds));
 
-        Assert.True(harness.Shipper.ShouldShip(), "the oldest event is now 15 s old");
+        Assert.True(
+            harness.Shipper.ShouldShip(), $"the oldest event is now {Wire.ShipAgeTriggerSeconds} s old");
     }
 
     /// <summary>
@@ -392,7 +559,9 @@ public sealed class BatchShipperTests
                 cts.Cancel();
             return FakeHttpHandler.Error(HttpStatusCode.ServiceUnavailable, Wire.Errors.Internal);
         });
-        using var harness = new Harness(handler, clock: clock, jitter: () => 1.0);
+        // The trigger is pinned so this measures the backoff ladder and nothing else; the shipped
+        // ~60 s cadence has its own tests above.
+        using var harness = new Harness(handler, clock: clock, jitter: () => 1.0, pendingTrigger: 1);
         harness.Outbox.Append(TestData.Envelopes(100));
 
         try
@@ -421,7 +590,8 @@ public sealed class BatchShipperTests
                 cts.Cancel();
             return FakeHttpHandler.Ok();
         });
-        using var harness = new Harness(handler, clock: clock, batchEventCap: Wire.MinBatchEventCap);
+        using var harness = new Harness(
+            handler, clock: clock, batchEventCap: Wire.MinBatchEventCap, pendingTrigger: 1);
         harness.Outbox.Append(TestData.Envelopes(200));
 
         try
@@ -639,7 +809,9 @@ public sealed class BatchShipperTests
             HttpMessageHandler handler,
             FakeShipperClock? clock = null,
             int batchEventCap = Wire.DefaultBatchEventCap,
-            Func<double>? jitter = null)
+            Func<double>? jitter = null,
+            int pendingTrigger = Wire.ShipPendingTrigger,
+            double ageTriggerSeconds = Wire.ShipAgeTriggerSeconds)
         {
             (Credential credential, ECDsa serverKey, _) = TestKeys.Credential();
             Credential = credential;
@@ -648,7 +820,12 @@ public sealed class BatchShipperTests
             Clock = clock ?? new FakeShipperClock();
             Outbox = OutboxDb.Open(_dir.File("outbox.db"));
             Shipper = new BatchShipper(
-                new ShipperOptions(IngestUrl, BatchEventCap: batchEventCap, OutboxCapBytes: 0),
+                new ShipperOptions(
+                    IngestUrl,
+                    BatchEventCap: batchEventCap,
+                    PendingTrigger: pendingTrigger,
+                    AgeTriggerSeconds: ageTriggerSeconds,
+                    OutboxCapBytes: 0),
                 Outbox,
                 Credential,
                 handler,

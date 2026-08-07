@@ -43,6 +43,10 @@ type server struct {
 	stderr    *bytes.Buffer
 	stopped   bool
 	catlogctl string
+	// env is the exact environment the process was started with, kept so
+	// [server.restart] can bring the same server back up on the same data
+	// directory and the same ports (§4.5.2 pins the port into `iss` and `htu`).
+	env []string
 }
 
 // startServer builds catlogd and catlogctl, boots catlogd against a fresh data
@@ -72,8 +76,7 @@ func startServer(t *testing.T, extraEnv ...string) *server {
 		catlogctl: filepath.Join(binDir, "catlogctl"),
 	}
 
-	s.cmd = exec.Command(filepath.Join(binDir, "catlogd"))
-	s.cmd.Env = append(os.Environ(),
+	s.env = append(os.Environ(),
 		"CATLOG_DATA_DIR="+s.dataDir,
 		"CATLOG_DATA_CHECKPOINT_INTERVAL_S=1",
 		fmt.Sprintf("CATLOG_SERVER_LISTEN=127.0.0.1:%d", public),
@@ -81,17 +84,30 @@ func startServer(t *testing.T, extraEnv ...string) *server {
 		"CATLOG_SERVER_BASE_URL="+baseURL,
 		"CATLOG_INGEST_ACCEPTED_HTU="+baseURL+"/v1/ingest",
 	)
-	s.cmd.Env = append(s.cmd.Env, extraEnv...)
+	s.env = append(s.env, extraEnv...)
+
+	s.spawn()
+	t.Cleanup(func() { s.stop() })
+	return s
+}
+
+// spawn starts one catlogd process from [server.env] and blocks until it is
+// healthy. Split out of startServer so [server.restart] can reuse it.
+func (s *server) spawn() {
+	s.t.Helper()
+
+	s.cmd = exec.Command(filepath.Join(s.binDir, "catlogd"))
+	s.cmd.Env = s.env
 	s.cmd.Stdout = s.stdout
 	s.cmd.Stderr = s.stderr
 	if err := s.cmd.Start(); err != nil {
-		t.Fatalf("start catlogd: %v", err)
+		s.t.Fatalf("start catlogd: %v", err)
 	}
 	// Registered before the cleanup, so a process that somehow escapes its
 	// t.Cleanup is still reaped by TestMain (see main_test.go): a catlogd that
 	// outlives its test holds an exclusive database file lock (§5.4).
 	trackChild(s.cmd, "catlogd")
-	t.Cleanup(func() { s.stop() })
+	s.stopped = false
 
 	deadline := time.Now().Add(startupTimeout)
 	for time.Now().Before(deadline) {
@@ -99,16 +115,24 @@ func startServer(t *testing.T, extraEnv ...string) *server {
 		if err == nil {
 			res.Body.Close()
 			if res.StatusCode == http.StatusOK {
-				return s
+				return
 			}
 		}
 		if s.cmd.ProcessState != nil {
-			t.Fatalf("catlogd exited during startup\nstdout:\n%s\nstderr:\n%s", s.stdout, s.stderr)
+			s.t.Fatalf("catlogd exited during startup\nstdout:\n%s\nstderr:\n%s", s.stdout, s.stderr)
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	t.Fatalf("catlogd never answered /healthz\nstdout:\n%s\nstderr:\n%s", s.stdout, s.stderr)
-	return nil
+	s.t.Fatalf("catlogd never answered /healthz\nstdout:\n%s\nstderr:\n%s", s.stdout, s.stderr)
+}
+
+// restart stops the server and brings it back up on the same data directory and
+// the same ports — a cold process with an empty heap in front of the same two
+// database files. Anything that still holds afterwards is on disk, not in RAM.
+func (s *server) restart() {
+	s.t.Helper()
+	s.stop()
+	s.spawn()
 }
 
 // stop sends SIGTERM and waits for a clean exit, which is also what releases

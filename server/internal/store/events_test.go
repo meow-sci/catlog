@@ -562,6 +562,54 @@ func TestStreamState(t *testing.T) {
 	}
 }
 
+// TestStreamCensus covers the query that finally reads `stream_state.gap`: it
+// was written on every commit and read by nothing, which made the §4.5.3 chain
+// all cost and no benefit. Gap visibility is the one thing the chain provides,
+// so it has to reach /admin/stats.
+func TestStreamCensus(t *testing.T) {
+	e := testutil.MemEvents(t)
+	set := testutil.Keys(t)
+	alice := testutil.Player(t, e, set, "discord", "alice")
+	bob := testutil.Player(t, e, set, "google", "bob")
+
+	if c, err := e.StreamCensus(t.Context()); err != nil || c != (store.StreamCensus{}) {
+		t.Fatalf("census on an empty server = %+v (err %v), want zeroes", c, err)
+	}
+
+	upsert := func(player int64, sid ids.ID, gap bool) {
+		t.Helper()
+		if err := e.UpsertStreamState(t.Context(), nil, store.StreamState{
+			PlayerID: player, SID: sid, JKT: "jkt", LastSeq: 1, LastBH: "bh", Gap: gap, UpdatedAt: 1,
+		}); err != nil {
+			t.Fatalf("upsert stream state: %v", err)
+		}
+	}
+
+	upsert(alice, testutil.ULID(t), false)
+	upsert(alice, testutil.ULID(t), true)
+	upsert(alice, testutil.ULID(t), true) // one player, two gapped streams
+	upsert(bob, testutil.ULID(t), false)
+
+	c, err := e.StreamCensus(t.Context())
+	if err != nil {
+		t.Fatalf("StreamCensus: %v", err)
+	}
+	want := store.StreamCensus{Total: 4, Gapped: 2, GappedPlayers: 1}
+	if c != want {
+		t.Errorf("census = %+v, want %+v", c, want)
+	}
+
+	// GappedPlayers is what separates "one client churning" from "everybody is
+	// losing batches".
+	upsert(bob, testutil.ULID(t), true)
+	if c, err = e.StreamCensus(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if c.GappedPlayers != 2 {
+		t.Errorf("gapped players = %d, want 2", c.GappedPlayers)
+	}
+}
+
 // --- credentials -----------------------------------------------------------
 
 func TestCredentials(t *testing.T) {

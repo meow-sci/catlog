@@ -1,5 +1,6 @@
 using System.IO;
 using MeowSci.Catlog.Lib.Config;
+using MeowSci.Catlog.Lib.Ship;
 using Xunit;
 
 namespace MeowSci.Catlog.Lib.Tests.Config;
@@ -27,6 +28,8 @@ public sealed class ModConfigTests
             SampleHz = 4.0,
             WindowS = 60.0,
             OutboxCapMb = 128,
+            ShipIntervalS = 120.0,
+            ShipMaxPending = 250,
             LogLevel = "debug",
         };
 
@@ -39,6 +42,8 @@ public sealed class ModConfigTests
         Assert.Contains("sample_hz", text);
         Assert.Contains("window_s", text);
         Assert.Contains("outbox_cap_mb", text);
+        Assert.Contains("ship_interval_s", text);
+        Assert.Contains("ship_max_pending", text);
         Assert.Contains("log_level", text);
 
         Assert.False(loaded.Enabled);
@@ -47,6 +52,8 @@ public sealed class ModConfigTests
         Assert.Equal(4.0, loaded.SampleHz);
         Assert.Equal(60.0, loaded.WindowS);
         Assert.Equal(128, loaded.OutboxCapMb);
+        Assert.Equal(120.0, loaded.ShipIntervalS);
+        Assert.Equal(250, loaded.ShipMaxPending);
         Assert.Equal("debug", loaded.LogLevel);
     }
 
@@ -63,6 +70,10 @@ public sealed class ModConfigTests
         Assert.Equal(Wire.DefaultSampleHz, config.SampleHz);
         Assert.Equal(Wire.TelemetryWindowSeconds, config.WindowS);
         Assert.Equal(Wire.DefaultOutboxCapMb, config.OutboxCapMb);
+
+        // The shipped cadence: pump roughly once a minute, with the count trigger as a valve.
+        Assert.Equal(60.0, config.ShipIntervalS);
+        Assert.Equal(Wire.ShipPendingTrigger, config.ShipMaxPending);
     }
 
     /// <summary>
@@ -148,6 +159,60 @@ public sealed class ModConfigTests
         config.Normalize();
 
         Assert.Equal(expected, config.OutboxCapMb);
+    }
+
+    /// <summary>
+    /// The cadence knobs follow the same clamp-don't-reject rule as everything else: a player who
+    /// asks for a 0 s or a one-day interval gets the nearest legal value and a warning, never a
+    /// refused config.
+    /// </summary>
+    [Theory]
+    [InlineData(0.0, Wire.MinShipAgeTriggerSeconds)]
+    [InlineData(-30.0, Wire.MinShipAgeTriggerSeconds)]
+    [InlineData(86_400.0, Wire.MaxShipAgeTriggerSeconds)]
+    [InlineData(double.NaN, Wire.MinShipAgeTriggerSeconds)]
+    [InlineData(5.0, 5.0)]
+    [InlineData(60.0, 60.0)]
+    public void ShipIntervalIsClamped(double input, double expected)
+    {
+        var config = new ModConfig { ShipIntervalS = input };
+
+        config.Normalize();
+
+        Assert.Equal(expected, config.ShipIntervalS);
+    }
+
+    [Theory]
+    [InlineData(0, Wire.MinBatchEventCap)]
+    [InlineData(-1, Wire.MinBatchEventCap)]
+    [InlineData(1_000_000, Wire.MaxEventsPerBatch)]
+    [InlineData(120, 120)]
+    public void ShipMaxPendingIsClamped(int input, int expected)
+    {
+        var config = new ModConfig { ShipMaxPending = input };
+
+        config.Normalize();
+
+        Assert.Equal(expected, config.ShipMaxPending);
+    }
+
+    /// <summary>
+    /// A tightened cadence must actually reach the shipper: a test (or an impatient player) sets
+    /// <c>ship_interval_s</c> and the trigger moves with it.
+    /// </summary>
+    [Fact]
+    public void CadenceKnobsFlowIntoShipperOptions()
+    {
+        var config = new ModConfig { ShipIntervalS = 2.0, ShipMaxPending = 75 };
+        config.Normalize();
+
+        var options = new ShipperOptions(
+            config.IngestUrl,
+            PendingTrigger: config.ShipMaxPending,
+            AgeTriggerSeconds: config.ShipIntervalS);
+
+        Assert.Equal(2.0, options.AgeTriggerSeconds);
+        Assert.Equal(75, options.PendingTrigger);
     }
 
     [Theory]

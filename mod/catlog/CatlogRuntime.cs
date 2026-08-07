@@ -196,6 +196,10 @@ public sealed class CatlogRuntime : IDisposable
                 shipper = new BatchShipper(
                     new ShipperOptions(
                         IngestUrl: config.IngestUrl,
+                        // The player's cadence knobs: ship_interval_s is the normal trigger
+                        // (~60 s), ship_max_pending only the safety valve.
+                        PendingTrigger: config.ShipMaxPending,
+                        AgeTriggerSeconds: config.ShipIntervalS,
                         // Pruning is the worker's job — exactly one pruner, whether or not a
                         // shipper exists (see the class remarks).
                         OutboxCapBytes: 0),

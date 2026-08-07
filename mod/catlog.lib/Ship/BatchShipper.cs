@@ -19,8 +19,13 @@ namespace MeowSci.Catlog.Lib.Ship;
 /// round-tripped through <see cref="Uri"/>.
 /// </param>
 /// <param name="BatchEventCap">Initial events-per-batch cap; halved on <c>413</c>.</param>
-/// <param name="PendingTrigger">Ship as soon as this many events are pending.</param>
-/// <param name="AgeTriggerSeconds">Ship when the oldest pending event reaches this age.</param>
+/// <param name="PendingTrigger">
+/// Safety valve: ship early when this many events are pending. Not the normal trigger — see
+/// <see cref="Wire.ShipPendingTrigger"/>.
+/// </param>
+/// <param name="AgeTriggerSeconds">
+/// The normal trigger: ship when the oldest pending event reaches this age (~60 s by default).
+/// </param>
 /// <param name="PollSeconds">How long the run loop idles when there is nothing to do.</param>
 /// <param name="OutboxCapBytes">Outbox size cap; 0 disables pruning.</param>
 public sealed record ShipperOptions(
@@ -121,6 +126,12 @@ public sealed record ShipAttempt(
 ///   <item><term>429 / 5xx / network</term><description>Exponential backoff <c>1 s · 2ⁿ</c> with full jitter, capped at 5 min.</description></item>
 ///   <item><term>400 / 415</term><description>Latch dead. The batch is <b>not</b> dropped — a poison-pill batch must be visible, not silently destroyed.</description></item>
 /// </list>
+/// <para>
+/// Every one of those retries is safe to repeat blindly, because the batch id is minted per
+/// <i>body</i> rather than per attempt (see <c>BatchIdFor</c>): a resend of unchanged bytes carries
+/// the batch id the server already knows and short-circuits at §4.5.3 step 11. That is the client
+/// half of the idempotency contract in <c>docs/ingest-api.md</c>.
+/// </para>
 /// </remarks>
 public sealed class BatchShipper : IDisposable
 {
@@ -136,6 +147,8 @@ public sealed class BatchShipper : IDisposable
     private string _sid;
     private long _seq;
     private string? _lastBh;
+    private string? _pendingBatchId;
+    private string? _pendingBh;
     private long _clockOffsetMs;
     private int _batchEventCap;
     private int _consecutiveFailures;
@@ -179,6 +192,8 @@ public sealed class BatchShipper : IDisposable
         if (_seq < 1)
             _seq = 1;
         _lastBh = _outbox.GetState(Wire.StateKeys.LastBh);
+        _pendingBatchId = _outbox.GetState(Wire.StateKeys.PendingBatchId);
+        _pendingBh = _outbox.GetState(Wire.StateKeys.PendingBh);
         _clockOffsetMs = ParseLong(_outbox.GetState(Wire.StateKeys.ClockOffsetMs), 0);
     }
 
@@ -220,7 +235,11 @@ public sealed class BatchShipper : IDisposable
     /// <summary>Local time corrected by the learned server offset — the basis for the proof's <c>iat</c>.</summary>
     public DateTimeOffset Now => _clock.UtcNow.AddMilliseconds(_clockOffsetMs);
 
-    /// <summary>True when a batch is due under either trigger (§7.2: ≥64 pending, or oldest ≥15 s).</summary>
+    /// <summary>
+    /// True when a batch is due under either trigger: the oldest pending event has reached
+    /// <see cref="ShipperOptions.AgeTriggerSeconds"/> (the normal path, ~60 s), or
+    /// <see cref="ShipperOptions.PendingTrigger"/> events have piled up (the safety valve).
+    /// </summary>
     /// <returns>True when the run loop should ship now.</returns>
     public bool ShouldShip()
     {
@@ -349,7 +368,7 @@ public sealed class BatchShipper : IDisposable
     {
         string bh = Bytes.Sha256Base64Url(body);
         var claims = new ProofClaims(
-            Jti: Ids.NewUlid(),
+            Jti: BatchIdFor(bh),
             Iat: Now.ToUnixTimeSeconds(),
             Htm: Wire.HttpMethod,
             Htu: _options.IngestUrl,
@@ -455,6 +474,54 @@ public sealed class BatchShipper : IDisposable
         }
     }
 
+    /// <summary>
+    /// The batch id (proof <c>jti</c>) to send this body under: the one already minted for it if
+    /// this is a resend, a fresh ULID otherwise.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This is what makes "retry when in doubt" free. A request whose response never arrived —
+    /// a timeout, a dropped connection, a 503 from a full write queue — may or may not have
+    /// committed server-side, and the client cannot tell. Minting a fresh <c>jti</c> for the
+    /// resend would miss the §4.5.3 step-11 replay short-circuit and fall through to step 12,
+    /// where the unchanged <c>seq</c> reads as a reused one and earns a <c>409 stream_fork</c>.
+    /// Reusing the id turns exactly that case into the <c>200 {"replay": true}</c> it should be.
+    /// </para>
+    /// <para>
+    /// It is keyed on the body hash, not on "there is a batch in flight", and that is the
+    /// load-bearing part: the id must never outlive the bytes it was minted for. If a prune or a
+    /// <c>413</c> halving changes what the next batch contains, the hash changes with it and a
+    /// new id is minted — otherwise a replay short-circuit would retire outbox rows the server
+    /// had never seen.
+    /// </para>
+    /// <para>
+    /// Persisted, so the same reasoning holds across a game crash mid-ship. A restart that
+    /// re-sends the identical body replays cleanly instead of forking the stream.
+    /// </para>
+    /// </remarks>
+    /// <param name="bh">The body hash this batch will carry as the proof's <c>bh</c>.</param>
+    /// <returns>The batch id.</returns>
+    private string BatchIdFor(string bh)
+    {
+        if (_pendingBatchId is { Length: > 0 } existing && string.Equals(_pendingBh, bh, StringComparison.Ordinal))
+            return existing;
+
+        string minted = Ids.NewUlid();
+        _pendingBatchId = minted;
+        _pendingBh = bh;
+        _outbox.SetState(Wire.StateKeys.PendingBatchId, minted);
+        _outbox.SetState(Wire.StateKeys.PendingBh, bh);
+        return minted;
+    }
+
+    private void ClearPendingBatchId()
+    {
+        _pendingBatchId = null;
+        _pendingBh = null;
+        _outbox.ClearState(Wire.StateKeys.PendingBatchId);
+        _outbox.ClearState(Wire.StateKeys.PendingBh);
+    }
+
     private ShipAttempt OnAccepted(OutboxBatch batch, string bh, string payload, int status)
     {
         bool replay = ReadBool(payload, "replay");
@@ -462,6 +529,7 @@ public sealed class BatchShipper : IDisposable
         long usedSeq = _seq;
 
         _outbox.MarkShipped(batch.LastRowId);
+        ClearPendingBatchId();
 
         // A replay means this exact batch id was already stored, which means the stream state was
         // already advanced for it server-side — so the local chain advances either way.

@@ -69,6 +69,21 @@ public sealed class ModConfig
     /// <summary>Local outbox size cap in megabytes. Clamped to [1, 1000].</summary>
     public int OutboxCapMb { get; set; } = Wire.DefaultOutboxCapMb;
 
+    /// <summary>
+    /// How long an event may sit in the outbox before the shipper pumps, in seconds. This is the
+    /// normal ship cadence — the mod is a bulk telemetry pump, not a live feed. Clamped to
+    /// [<see cref="Wire.MinShipAgeTriggerSeconds"/>, <see cref="Wire.MaxShipAgeTriggerSeconds"/>].
+    /// </summary>
+    public double ShipIntervalS { get; set; } = Wire.ShipAgeTriggerSeconds;
+
+    /// <summary>
+    /// Safety valve: ship early once this many events are pending, whatever
+    /// <see cref="ShipIntervalS"/> says. Not the normal trigger (see
+    /// <see cref="Wire.ShipPendingTrigger"/>). Clamped to
+    /// [<see cref="Wire.MinBatchEventCap"/>, <see cref="Wire.MaxEventsPerBatch"/>].
+    /// </summary>
+    public int ShipMaxPending { get; set; } = Wire.ShipPendingTrigger;
+
     /// <summary>Log verbosity: one of <c>debug</c>, <c>info</c>, <c>warn</c>, <c>error</c>.</summary>
     public string LogLevel { get; set; } = "info";
 
@@ -192,6 +207,9 @@ public sealed class ModConfig
         SampleHz = Clamp(nameof(SampleHz), SampleHz, 0.1, 20.0);
         WindowS = Clamp(nameof(WindowS), WindowS, 5.0, 300.0);
         OutboxCapMb = Clamp(nameof(OutboxCapMb), OutboxCapMb, 1, 1000);
+        ShipIntervalS = Clamp(
+            nameof(ShipIntervalS), ShipIntervalS, Wire.MinShipAgeTriggerSeconds, Wire.MaxShipAgeTriggerSeconds);
+        ShipMaxPending = Clamp(nameof(ShipMaxPending), ShipMaxPending, Wire.MinBatchEventCap, Wire.MaxEventsPerBatch);
         LogLevel = OneOf(nameof(LogLevel), LogLevel, "info", ["debug", "info", "warn", "error"]);
         IngestUrl = (IngestUrl ?? string.Empty).Trim();
         CredentialPath = (CredentialPath ?? string.Empty).Trim();
