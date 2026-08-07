@@ -23,14 +23,20 @@ const assetsDir = path.join(siteDir, "assets");
 const distDir = path.join(siteDir, "dist");
 
 /**
- * Files copied verbatim into dist/vendor/. Resolved through node's resolver so a
- * version bump in package.json cannot silently leave a stale path behind.
+ * Files copied verbatim into dist/vendor/. npm-sourced entries are resolved through
+ * node's resolver so a version bump in package.json cannot silently leave a stale
+ * path behind.
  *
- * TODO(WP5): add the datastar browser bundle here. The npm package name under the
- * starfederation org must be resolved at `pnpm add` time and recorded in
- * docs/DECISIONS.md — do not guess it.
+ * datastar is NOT on npm: the package named `datastar` is an unrelated GoDaddy
+ * library, and `@starfederation/datastar` was abandoned at 1.0.0-beta.11 and never
+ * became v1. The v1.x browser bundle ships only from the git repo, so it is
+ * vendored into assets/vendor/ and committed — which also keeps the build hermetic
+ * (D2). See docs/DECISIONS.md for the pinned version and its SRI hash.
  */
-const vendorFiles = [{ from: require.resolve("@picocss/pico/css/pico.min.css"), to: "pico.min.css" }];
+const vendorFiles = [
+  { from: require.resolve("@picocss/pico/css/pico.min.css"), to: "pico.min.css" },
+  { from: path.join(assetsDir, "vendor", "datastar.js"), to: "datastar.js" },
+];
 
 /** @param {string} dir @returns {Promise<string[]>} entries, or [] when dir is absent */
 async function listDir(dir) {
