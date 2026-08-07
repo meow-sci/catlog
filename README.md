@@ -65,7 +65,7 @@ make keys && make site-build && make dev
 download your credential file, and drive a scenario through the real pipeline:
 
 ```sh
-make sim SCENARIO=hop-lithobrake CRED=~/Downloads/catlog-credential.json
+make sim SCENARIO=hop-lithobrake CRED=$HOME/Downloads/catlog-credential.json
 ```
 
 The board and the live feed update while it runs — the feed over server-sent events, with no reload.
