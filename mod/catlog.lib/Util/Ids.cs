@@ -42,12 +42,54 @@ public static class Ids
     /// the server never learns that two players named a kitten the same thing.
     /// </remarks>
     public static string KittenId(string installId, string rosterName)
-    {
-        byte[] digest = SHA256.HashData(
-            Encoding.UTF8.GetBytes($"catlog-kitten:{installId}:{rosterName}"));
+        => Hash16($"catlog-kitten:{installId}:{rosterName}");
 
-        // 10 bytes = 80 bits = exactly 16 base32 characters, no padding.
-        Span<char> chars = stackalloc char[16];
+    /// <summary>Length in characters of a <c>kid</c> or a <c>career</c> id.</summary>
+    public const int Hash16Length = 16;
+
+    /// <summary>
+    /// The §4.1 career id: lowercase Crockford base32 of the first 10 bytes of
+    /// <c>SHA-256("catlog-career:" + install_id + ":" + save_key)</c>, 16 characters.
+    /// </summary>
+    /// <param name="installId">The install ULID (stable per installation).</param>
+    /// <param name="saveKey">
+    /// What identifies the save this career lives in. The shipped mod uses <c>"save:" + save name</c>
+    /// for a named KSA save and <c>"new:" + a fresh ULID</c> for a game that has not been saved yet
+    /// (<c>docs/events.md</c>); nothing here depends on the shape.
+    /// </param>
+    /// <returns>The 16-character career id.</returns>
+    /// <remarks>
+    /// Salted with the install id for the same reason <see cref="KittenId"/> is: the server never
+    /// learns a save's name, and two players who both call a save <c>"apollo"</c> do not collide.
+    /// </remarks>
+    public static string CareerId(string installId, string saveKey)
+        => Hash16($"catlog-career:{installId}:{saveKey}");
+
+    /// <summary>True when <paramref name="value"/> is a well-formed 16-character Crockford id.</summary>
+    /// <param name="value">Candidate text.</param>
+    /// <returns>True when the text is 16 lowercase Crockford base32 characters.</returns>
+    public static bool IsHash16(string? value)
+    {
+        if (value is null || value.Length != Hash16Length)
+            return false;
+        foreach (char c in value)
+        {
+            if (Crockford.IndexOf(c) < 0)
+                return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Lowercase Crockford base32 of the first 10 bytes of the UTF-8 SHA-256 of
+    /// <paramref name="material"/> — 80 bits, exactly 16 characters, no padding.
+    /// </summary>
+    private static string Hash16(string material)
+    {
+        byte[] digest = SHA256.HashData(Encoding.UTF8.GetBytes(material));
+
+        Span<char> chars = stackalloc char[Hash16Length];
         ulong acc = 0;
         int bits = 0;
         int outIndex = 0;

@@ -17,13 +17,46 @@ One event = one JSON object (one NDJSON line). snake_case keys. Unknown envelope
   "ver":     1,                             // payload schema version, int ≥1
   "flight":  "01J9V5M3E8...",               // flight_id ULID; null for session/roster events
   "session": "01J9V5M3E8...",               // session_id ULID, never null
-  "sim_t":   12345.678,                     // Universe sim seconds (float); may jump backwards across loads
+  "career":  "b7k2q9x4m0nrt3vz",            // career id, 16 chars, never null — see below
+  "sim_t":   12345.678,                     // seconds since this career's game started (float)
   "wall_t":  1770000000123,                 // client unix ms (untrusted)
   "payload": { }                            // per-type object, may be {}
 }
 ```
 
-Validation (server): `id` parses as ULID; `type` matches known registry or event is stored with `flagged` marker in payload? — **No**: unknown `type` → the whole batch is rejected `400 malformed_batch` (the mod and server ship together; unknown types mean version skew, surface it loudly). `ver` unknown-but-higher → accept and store (projector skips what it can't decode, logs once).
+Validation (server): `id` parses as ULID; `type` matches known registry or event is stored with `flagged` marker in payload? — **No**: unknown `type` → the whole batch is rejected `400 malformed_batch` (the mod and server ship together; unknown types mean version skew, surface it loudly). `ver` unknown-but-higher → accept and store (projector skips what it can't decode, logs once). `career` must be exactly 16 lowercase Crockford base32 characters (`0-9 a-z` minus `i l o u`); anything else rejects the batch.
+
+### `career` and `sim_t` — the career clock
+
+**A career is one KSA save played over time.** It is the unit `sim_t` is measured in, and the unit the time-to-milestone boards rank.
+
+- `sim_t` is the game's `Universe.GetElapsedSimTime()`. KSA starts a new game at **exactly 0** and serialises the clock into the save (`UniverseData.GameTime`, restored by `Universe.DeserializeSave`), so `sim_t` **is** "seconds since this career's game started" and it survives quitting the game. There is no second clock and no per-career origin on the wire, because none is needed. Evidence with `file:line` in [ksa-integration.md](ksa-integration.md) §5.
+- `session` is minted at every save-**load** boundary, so **one career is many sessions**. Two events are comparable in time when they share a `(player, career)`, and never otherwise: two different saves interleave freely in one player's log and their `sim_t` values have nothing to do with each other.
+- `career` is opaque to the server: 16 characters, no meaning, no ordering. A client must keep it **stable for the lifetime of one save** and **different between saves**.
+
+**How the catlog mod derives it** (normative for the shipped mod, not for the wire — any client may choose its own scheme as long as the two rules above hold):
+
+```
+career = crockford32_lower(SHA-256("catlog-career:" + install_id + ":" + save_key)[0..10])
+```
+
+where `save_key` is `"save:" + <KSA save name>` once the career has a save, and `"new:" + <a fresh ULID>` for a game that has not been saved yet. The mod learns the save name by patching `UncompressedSave.Load` (adopt on load, before the session boundary) and `UncompressedSave.Make` (adopt on write, so a career that began unsaved keeps its identity through its first save, and a "save as" carries the career with it). The install-id salt means the server never learns what a player called a save, and two players who both call one `apollo` do not collide.
+
+**Why a save name and not something better:** KSA has no career, save or player identifier of any kind. The save root `UniverseData` has exactly four fields — `GameTime`, `Camera`, `CelestialSystems`, `KittenRoster` — and none is an id, a GUID, a seed or a creation stamp; `SaveMetaData.created` looks like an anchor and is re-stamped on every overwrite. Verified against build 2026.8.5.5168; citations in [ksa-integration.md](ksa-integration.md) §5.
+
+### The clock going backwards
+
+`sim_t` moves backwards within a career only when an **earlier save of that career was loaded**. The server states that and does nothing else about it:
+
+> **Rewind rule.** A career is marked *rewound* when a `session.started` for it arrives carrying a `sim_t` lower than the highest `sim_t` already seen in that career. The mark is permanent, career-wide, and appears as `"rewound": true` on that career's rows on the career-time boards.
+
+The mark **excludes nothing and scores nothing**. The row is ranked normally and the player is treated no differently; it qualifies a number, in the same way an absent `peak_g` is absent rather than zero. Comparing only at session boundaries is what keeps the rule threshold-free — inside a session, event emission is slightly out of order by design (a telemetry window closes with the sim time of its *end*), so "any decrease" would need a tuned epsilon, and a save load has no such ambiguity.
+
+**The honest limitation, stated:** *catlog cannot tell save-scumming from ordinary reloading, and does not try.* Reloading before a tricky burn and reloading to retry a milestone look identical from here, and both are trivially available to everyone. Reaching a milestone faster after a reload still counts. Three further limits fall out of the anchor being a save name:
+
+- deleting a save and starting a new game under the same name re-uses the career id, so the new game's clock reads as a rewind of the old one;
+- a career that has never been saved gets a fresh id at every game start, and its events are unlinked from the save it is later written to only for the part before that first save;
+- if the mod cannot read the save name at all, the career stays whatever it was and the mark simply never fires.
 
 ## Event taxonomy (launch set, all `ver: 1`)
 

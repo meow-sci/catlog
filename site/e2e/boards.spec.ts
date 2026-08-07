@@ -36,8 +36,11 @@ test.describe("boards", () => {
     await expect(page.locator("#boards-title")).toBeVisible();
 
     const rows = page.locator("#boards-index tr.boards-row");
-    // 12 launch boards plus the six per-cause RUD boards (§5.6).
-    await expect(rows).toHaveCount(18);
+    // 12 launch boards, the six per-cause RUD boards (§5.6), and the 12 career-time
+    // boards (fastest_to_orbit plus one per stock body). Bump this deliberately when a
+    // board is added — the count is the only thing that catches a board that silently
+    // stopped being published.
+    await expect(rows).toHaveCount(30);
 
     const lithobrake = page.locator(`#boards-index tr[data-stat="${LITHOBRAKE}"]`);
     await expect(lithobrake).toContainText("Biggest Lithobrake Survived");

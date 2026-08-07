@@ -6,8 +6,8 @@ using MeowSci.Catlog.Lib.Util;
 namespace MeowSci.Catlog.Lib.Detect;
 
 /// <summary>
-/// Owns the identifiers every envelope needs: the session ULID, the per-vehicle flight ULID, and
-/// the set of integrity flags raised against each flight.
+/// Owns the identifiers every envelope needs: the career id, the session ULID, the per-vehicle
+/// flight ULID, and the set of integrity flags raised against each flight.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -15,6 +15,11 @@ namespace MeowSci.Catlog.Lib.Detect;
 /// <c>Vehicle.LaunchGameTime</c> is set at construction and survives a save load
 /// (<c>docs/ksa-integration.md</c> §1), so reloading a save re-uses the same flight rather than
 /// minting a second one, while a genuinely new vehicle with a recycled id gets a fresh flight.
+/// </para>
+/// <para>
+/// A <b>career</b> is one KSA save played over time. It outlives a session: a session is minted at
+/// every save-load boundary, so one career is many sessions, and <c>sim_t</c> is only comparable
+/// within a career (§4.1). The career changes only when <see cref="NewSession"/> is told it has.
 /// </para>
 /// <para>
 /// Flags are accumulated per flight and deduped: a teleport detected on twenty consecutive frames
@@ -27,12 +32,18 @@ public sealed class FlightTracker
     private readonly Dictionary<string, FlightRecord> _active = new(StringComparer.Ordinal);
 
     /// <summary>Creates a tracker.</summary>
-    /// <param name="installId">The install ULID; salts every <c>kid</c> (§4.2).</param>
+    /// <param name="installId">The install ULID; salts every <c>kid</c> (§4.2) and every career id.</param>
     /// <param name="sessionId">The session ULID; a fresh one is minted when null.</param>
-    public FlightTracker(string installId, string? sessionId = null)
+    /// <param name="careerId">
+    /// The career id. When null, a per-install career id is derived — the right answer for any
+    /// caller that has no concept of a save (the load harness, the conformance tests), because
+    /// such a caller has exactly one career.
+    /// </param>
+    public FlightTracker(string installId, string? sessionId = null, string? careerId = null)
     {
         InstallId = installId;
         SessionId = sessionId ?? Ids.NewUlid();
+        CareerId = careerId ?? Ids.CareerId(installId, "install");
     }
 
     /// <summary>The install ULID, stable across sessions on one machine.</summary>
@@ -41,6 +52,9 @@ public sealed class FlightTracker
     /// <summary>The current session ULID. Never null.</summary>
     public string SessionId { get; private set; }
 
+    /// <summary>The current career id — 16 Crockford characters, never null (§4.1).</summary>
+    public string CareerId { get; private set; }
+
     /// <summary>Vehicle ids with an open flight.</summary>
     public IReadOnlyCollection<string> ActiveVehicleIds => _active.Keys;
 
@@ -48,11 +62,18 @@ public sealed class FlightTracker
     /// Starts a new session: mints a session ULID and drops every open flight. Called on a save
     /// load, which is a hard teardown-and-rebuild boundary in the game.
     /// </summary>
+    /// <param name="careerId">
+    /// The career the new session belongs to, or null to stay in the current one. Null is the
+    /// honest answer when the mod could not tell which save was loaded — the boundary still ends
+    /// the session, it just does not claim the career changed.
+    /// </param>
     /// <returns>The new session ULID.</returns>
-    public string NewSession()
+    public string NewSession(string? careerId = null)
     {
         _active.Clear();
         SessionId = Ids.NewUlid();
+        if (!string.IsNullOrEmpty(careerId))
+            CareerId = careerId;
         return SessionId;
     }
 

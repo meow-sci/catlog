@@ -652,7 +652,7 @@ func (r *rig) batch(t *testing.T, session ids.ID, n int) []byte {
 	var b strings.Builder
 	for i := range n {
 		fmt.Fprintf(&b,
-			`{"id":%q,"type":"vehicle.impact","ver":1,"flight":%q,"session":%q,"sim_t":%d.5,"wall_t":%d,`+
+			`{"id":%q,"type":"vehicle.impact","ver":1,"flight":%q,"session":%q,"career":"0123456789abcdef","sim_t":%d.5,"wall_t":%d,`+
 				`"payload":{"speed_ms":%d,"energy_j":1000,"survived":true,"launch_pad":false,"body":"earth","crew_count":2}}`+"\n",
 			ids.String(testutil.ULID(t)), ids.String(session), ids.String(session),
 			i, time.Now().UnixMilli(), 60+i)

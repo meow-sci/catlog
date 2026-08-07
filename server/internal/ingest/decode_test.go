@@ -11,14 +11,14 @@ import (
 	"github.com/meow-sci/catlog/server/internal/authz"
 )
 
-const validLine = `{"id":"01JZ0000000000000000000001","type":"vehicle.rud","ver":1,"flight":"01JZ0000000000000000000002","session":"01JZ0000000000000000000003","sim_t":12345.678,"wall_t":1770000000123,"payload":{"cause":"ground_impact"}}`
+const validLine = `{"id":"01JZ0000000000000000000001","type":"vehicle.rud","ver":1,"flight":"01JZ0000000000000000000002","session":"01JZ0000000000000000000003","career":"0123456789abcdef","sim_t":12345.678,"wall_t":1770000000123,"payload":{"cause":"ground_impact"}}`
 
 // TestDecodeNDJSONValid checks the fields that reach the store, including the
 // two forward-compatibility rules of §4.1: a null flight becomes SQL NULL, and
 // unknown *payload* keys survive verbatim.
 func TestDecodeNDJSONValid(t *testing.T) {
 	batch := validLine + "\n" +
-		`{"id":"01JZ0000000000000000000004","type":"session.started","ver":1,"flight":null,"session":"01JZ0000000000000000000003","sim_t":0,"wall_t":1770000000124,"payload":{"mod_ver":"0.1.0","future_key":{"nested":true}}}` + "\n"
+		`{"id":"01JZ0000000000000000000004","type":"session.started","ver":1,"flight":null,"session":"01JZ0000000000000000000003","career":"0123456789abcdef","sim_t":0,"wall_t":1770000000124,"payload":{"mod_ver":"0.1.0","future_key":{"nested":true}}}` + "\n"
 
 	events, aerr := decodeNDJSON([]byte(batch), DefaultLimits())
 	if aerr != nil {

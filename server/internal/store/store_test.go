@@ -95,16 +95,16 @@ func TestMigrationsCreateTheFullDDL(t *testing.T) {
 		if got := indexNames(t, e.DB); !equal(got, wantIdx) {
 			t.Errorf("indexes = %v, want %v", got, wantIdx)
 		}
-		if e.Version != 1 {
-			t.Errorf("schema version = %d, want 1", e.Version)
+		if e.Version != 2 {
+			t.Errorf("schema version = %d, want 2", e.Version)
 		}
 	})
 
 	t.Run("projections", func(t *testing.T) {
 		p := testutil.Projections(t)
 		want := []string{
-			"feed", "flight_state", "kitten", "player_body", "player_stat",
-			"proj_checkpoint", "schema_version",
+			"career", "feed", "flight_state", "kitten", "player_body",
+			"player_stat", "proj_checkpoint", "schema_version",
 		}
 		if got := tableNames(t, p.DB); !equal(got, want) {
 			t.Errorf("tables = %v, want %v", got, want)
@@ -177,8 +177,8 @@ func TestMigrationsAreIdempotent(t *testing.T) {
 
 func TestMigrationsRunOnMemoryStores(t *testing.T) {
 	e := testutil.MemEvents(t)
-	if e.Version != 1 {
-		t.Errorf("version = %d, want 1", e.Version)
+	if e.Version != 2 {
+		t.Errorf("version = %d, want 2", e.Version)
 	}
 	if got := len(tableNames(t, e.DB)); got == 0 {
 		t.Error("in-memory store has no tables")

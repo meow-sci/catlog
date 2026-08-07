@@ -277,9 +277,38 @@ public static class Patcher
         // | Universe.LoadSystem | VERIFIED | public static void LoadSystem(string id) |
         // | KSA/Universe.cs:167 | Creates a fresh KittenRosterData (:176), calls
         // | AssignStartingCrew() (:181), then OnLoaded() (:178). |
+        // Its only caller is the boot path (KSA/Program.cs:965) — there is no runtime "new game"
+        // — so this is exactly "a career that has never been saved is starting".
         Install(harmony, "Universe.LoadSystem",
             AccessTools.Method(typeof(Universe), nameof(Universe.LoadSystem)),
+            prefix: nameof(LoadSystemPrefix),
             postfix: nameof(SessionBoundaryPostfix));
+
+        // ── career identity (§4.1) ──────────────────────────────────────────────────────────
+        // KSA has no save/career/player id anywhere; the save's own folder name is the only
+        // stable per-save string that exists (see VehicleTelemetry's career section for the
+        // decomp citations). These two patches are the only places it is reachable.
+        //
+        // | UncompressedSave.Load() | VERIFIED | public override void Load() |
+        // | KSA/UncompressedSave.cs:45 | Instance, zero args — __instance carries Id. |
+        // PREFIX, not postfix: Load() calls Universe.DeserializeSave (:57) itself, so the
+        // SessionBoundaryPostfix above fires *inside* this method. The career has to be adopted
+        // before that, or the first session of every load would be stamped with the previous
+        // career's id.
+        Install(harmony, "UncompressedSave.Load",
+            AccessTools.Method(typeof(UncompressedSave), nameof(UncompressedSave.Load)),
+            prefix: nameof(SaveLoadPrefix));
+
+        // | UncompressedSave.Make(string) | VERIFIED | public static GameSave Make(string name) |
+        // | KSA/UncompressedSave.cs:104 | The single write path: the terminal `save <name>`
+        // | command (KSA/GameSaves.cs:252) and the UI popup (KSA/GameSaves.cs:229) both land here,
+        // | and Overwrite() is Delete()+Make() (:85-89). |
+        // Postfix so the career only moves once the save actually exists on disk. This is what
+        // lets a career that began unsaved keep its identity across the first save, and what
+        // carries a career through a "save as".
+        Install(harmony, "UncompressedSave.Make",
+            AccessTools.Method(typeof(UncompressedSave), nameof(UncompressedSave.Make), [typeof(string)]),
+            postfix: nameof(SaveMakePostfix));
     }
 
     private static void Install(
@@ -664,6 +693,47 @@ public static class Patcher
         try
         {
             _runtime?.OnSessionBoundary();
+        }
+        catch (Exception ex)
+        {
+            NoteBodyError(ex);
+        }
+    }
+
+    /// <summary>A brand-new game is being built: start a career that has never been saved (§4.1).</summary>
+    private static void LoadSystemPrefix()
+    {
+        try
+        {
+            VehicleTelemetry.BeginUnsavedCareer();
+        }
+        catch (Exception ex)
+        {
+            NoteBodyError(ex);
+        }
+    }
+
+    /// <summary>A save is about to be deserialised: adopt its career before the session boundary.</summary>
+    /// <param name="__instance">The save being loaded.</param>
+    private static void SaveLoadPrefix(UncompressedSave __instance)
+    {
+        try
+        {
+            VehicleTelemetry.AdoptSaveCareer(__instance);
+        }
+        catch (Exception ex)
+        {
+            NoteBodyError(ex);
+        }
+    }
+
+    /// <summary>A save was just written: the career now lives in that slot (§4.1).</summary>
+    /// <param name="__result">The save that was written.</param>
+    private static void SaveMakePostfix(GameSave __result)
+    {
+        try
+        {
+            VehicleTelemetry.AdoptSaveCareer(__result);
         }
         catch (Exception ex)
         {

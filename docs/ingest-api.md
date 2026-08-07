@@ -10,6 +10,7 @@ Origin: [INITIAL_IMPL_PLAN.md](../INITIAL_IMPL_PLAN.md) §4.3–§4.5 and §4.8�
 
 - Batch = NDJSON (one envelope per line, `\n` separated, UTF-8, no BOM), compressed with **Brotli**; request header `Content-Encoding: br`, `Content-Type: application/x-ndjson`.
 - Events within a batch are ordered by outbox append order (oldest first). A batch never mixes streams.
+- The envelope's keys are exactly those in [events.md](events.md) §4.1 and **unknown envelope keys reject the batch**. Every one is required, including `career` — 16 lowercase Crockford base32 characters (`0-9 a-z` minus `i l o u`), stable for the lifetime of one KSA save. A malformed or missing `career` is `400 malformed_batch`, like any other envelope error.
 - Limits (server-enforced; mirror in mod constants):
 
 | Limit | Value | Violation |
@@ -62,6 +63,7 @@ Public read endpoints below. Health: `GET /healthz` → `200 {"ok": true}` (no a
 | Level | Key | Client half | Server half | Enforced by |
 |---|---|---|---|---|
 | Event | `(player_id, event_id)` | envelope `id` — a ULID the client mints, one per event, stable across every resend | `player_id`, resolved from the verified credential | `CREATE UNIQUE INDEX ev_dedup ON event(player_id, event_id)` + `INSERT OR IGNORE` |
+| Career | `(player_id, career)` | envelope `career` — opaque to the server; the client keeps it stable per save | `player_id`, same derivation | Grouping key only: it scopes `sim_t` so the career-time boards are comparable (see [events.md](events.md)) |
 | Batch | `(player_id, batch_id)` | proof `jti` — a ULID the client mints, one per batch | `player_id`, same derivation | `PRIMARY KEY (player_id, batch_id)` on `ingest_batch` (verification step 11) |
 
 **The server never trusts a client-supplied identity.** `player_id` comes from exactly one place:
@@ -212,9 +214,11 @@ Cookie `catlog_sess` (prod: `__Host-catlog_sess`): value `b64u(user_key) + "." +
 
 All responses `Cache-Control: public, s-maxage=30, stale-while-revalidate=300` except SSE.
 
-- `GET /v1/leaderboards` → `{"boards": [{"stat": "biggest_lithobrake_survived", "title": s, "unit": "m/s", "count": n}]}`
-- `GET /v1/leaderboards/{stat}?limit=50&offset=0` (limit ≤ 200) → `{"stat": s, "rows": [{"rank": 1, "handle": s, "value": f, "context": {…}, "updated": unix_ms}]}`
-- `GET /v1/players/{handle}` → `{"handle": s, "since": unix_ms, "stats": [{"stat": s, "value": f, "rank": n, "context": {…}}]}` (404 if unknown/banned)
+- `GET /v1/leaderboards` → `{"boards": [{"stat": "biggest_lithobrake_survived", "title": s, "unit": "m/s", "ascending": false, "count": n}]}`
+- `GET /v1/leaderboards/{stat}?limit=50&offset=0` (limit ≤ 200) → `{"stat": s, "ascending": b, "rows": [{"rank": 1, "handle": s, "value": f, "context": {…}, "updated": unix_ms, "rewound"?: true}]}`
+- `GET /v1/players/{handle}` → `{"handle": s, "since": unix_ms, "stats": [{"stat": s, "value": f, "rank": n, "context": {…}, "rewound"?: true}]}` (404 if unknown/banned)
+
+`ascending` is `true` on the career-time boards (`fastest_to_orbit`, `fastest_to_<body>`), where the value is seconds since the career began and the **smallest** value ranks first; it is `false` on every record and counter board. The tie rule does not change with it: an equal value keeps the earlier claimant's rank. `rewound` is emitted only when true, and only on a career-time row whose career has had an earlier save loaded — it qualifies the number and has no other effect (see [events.md](events.md)).
 - `GET /v1/feed/sse` → datastar SSE stream of recent-activity fragments (no cache)
 - `GET /.well-known/catlog-jwks.json`, `GET /.well-known/catlog-denylist.json` (§5.8)
 

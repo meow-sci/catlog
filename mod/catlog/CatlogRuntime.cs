@@ -189,7 +189,8 @@ public sealed class CatlogRuntime : IDisposable
             InstallId: installId,
             ModVersion: ModVersion,
             GameBuild: VehicleTelemetry.GameBuild(),
-            WindowSeconds: config.WindowS));
+            WindowSeconds: config.WindowS,
+            CareerId: VehicleTelemetry.CareerId(installId)));
 
         BatchShipper? shipper = null;
         if (credential is not null && shipperOutbox is not null)
@@ -295,7 +296,8 @@ public sealed class CatlogRuntime : IDisposable
         _clock.Reset();
         double simT = VehicleTelemetry.SimTimeSeconds();
         _bridge.Signal(new SessionLoadedSignal(
-            simT, WallMs(), VehicleTelemetry.GameBuild(), ModVersion));
+            simT, WallMs(), VehicleTelemetry.GameBuild(), ModVersion,
+            VehicleTelemetry.CareerId(InstallId)));
     }
 
     /// <summary>

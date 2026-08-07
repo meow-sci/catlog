@@ -36,6 +36,9 @@ public sealed class OrbitAndBackScenario : IScenario
     private const double PeM = 300_000;
     private const double SplashdownMs = 6.4;
 
+    /// <summary>Sim time at which the orbit-achieved latch fires — the value `fastest_to_orbit` must end at.</summary>
+    private const double OrbitAchievedSimT = 190.0;
+
     /// <inheritdoc />
     public string Name => "orbit-and-back";
 
@@ -43,7 +46,7 @@ public sealed class OrbitAndBackScenario : IScenario
     public string Summary => "launch to a 300×320 km kerbin orbit, coast, deorbit, splash down and recover 3 crew";
 
     /// <inheritdoc />
-    public string Asserts => "orbits_achieved += 1 · fastest_orbital_speed = 7784";
+    public string Asserts => "orbits_achieved += 1 · fastest_orbital_speed = 7784 · fastest_to_orbit = 190";
 
     /// <inheritdoc />
     public IEnumerable<SimStep> Steps()
@@ -135,6 +138,9 @@ public sealed class OrbitAndBackScenario : IScenario
     {
         api.ExpectCounter(handle, "orbits_achieved", 1);
         api.ExpectRecord(handle, "fastest_orbital_speed", OrbitalSpeedMs);
+        // Career time, not wall time: the scenario's clock starts at 0 and the
+        // periapsis clears atmosphere + 1 km at t = 190 s (§4.1).
+        api.ExpectBest(handle, "fastest_to_orbit", OrbitAchievedSimT);
     }
 
     private static TelemetrySnapshot Ascend(SimVehicle v, double t, double t0, double t1)

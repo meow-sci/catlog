@@ -27,7 +27,7 @@ import (
 func (r *rig) eventLine(id ids.ID) string {
 	r.t.Helper()
 	return fmt.Sprintf(
-		`{"id":%q,"type":"vehicle.rud","ver":1,"flight":%q,"session":%q,"sim_t":1.5,"wall_t":%d,"payload":{"cause":"ground_impact","speed_ms":62}}`,
+		`{"id":%q,"type":"vehicle.rud","ver":1,"flight":%q,"session":%q,"career":"0123456789abcdef","sim_t":1.5,"wall_t":%d,"payload":{"cause":"ground_impact","speed_ms":62}}`,
 		ids.String(id), ids.String(r.sid), ids.String(r.sid), r.now.UnixMilli())
 }
 
@@ -74,7 +74,7 @@ func TestIdempotencyKeyIsServerScoped(t *testing.T) {
 		// invent one and hope a future decoder reads it.
 		for _, forged := range []string{"player_id", "player", "handle", "sub", "user_key", "jkt"} {
 			line := fmt.Sprintf(
-				`{"id":%q,"type":"vehicle.rud","ver":1,"flight":null,"session":%q,"sim_t":1.5,"wall_t":%d,"payload":{},%q:9999}`,
+				`{"id":%q,"type":"vehicle.rud","ver":1,"flight":null,"session":%q,"career":"0123456789abcdef","sim_t":1.5,"wall_t":%d,"payload":{},%q:9999}`,
 				ids.String(testutil.ULID(t)), ids.String(r.sid), r.now.UnixMilli(), forged)
 			res, body := r.ship([]byte(line+"\n"), func(o *shipOpts) { o.Seq = 1 })
 			wantError(t, res, body, http.StatusBadRequest, authz.CodeMalformedBatch)
@@ -91,7 +91,7 @@ func TestIdempotencyKeyIsServerScoped(t *testing.T) {
 		// Unknown *payload* keys are preserved verbatim (§4.1) — so this one is
 		// stored. What must not happen is for it to affect attribution.
 		line := fmt.Sprintf(
-			`{"id":%q,"type":"vehicle.rud","ver":1,"flight":null,"session":%q,"sim_t":1.5,"wall_t":%d,"payload":{"cause":"collision","player_id":%d,"handle":%q}}`,
+			`{"id":%q,"type":"vehicle.rud","ver":1,"flight":null,"session":%q,"career":"0123456789abcdef","sim_t":1.5,"wall_t":%d,"payload":{"cause":"collision","player_id":%d,"handle":%q}}`,
 			ids.String(testutil.ULID(t)), ids.String(r.sid), r.now.UnixMilli(), victim.PlayerID, victim.Handle)
 		res, body := r.ship([]byte(line + "\n"))
 		wantStatus(t, res, body, http.StatusOK)

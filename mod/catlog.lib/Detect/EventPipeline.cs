@@ -12,12 +12,18 @@ namespace MeowSci.Catlog.Lib.Detect;
 /// <param name="GameBuild">The game build string.</param>
 /// <param name="SessionId">Session ULID; a fresh one is minted when null.</param>
 /// <param name="WindowSeconds">Telemetry window length in sim seconds.</param>
+/// <param name="CareerId">
+/// Career id for the save being played (§4.1 <c>career</c>). Null derives a stable per-install
+/// career, which is the correct answer for any caller that has no concept of a KSA save — one such
+/// caller has exactly one career, forever.
+/// </param>
 public sealed record EventPipelineOptions(
     string InstallId,
     string ModVersion = "0.1.0",
     string GameBuild = "unknown",
     string? SessionId = null,
-    double WindowSeconds = Wire.TelemetryWindowSeconds);
+    double WindowSeconds = Wire.TelemetryWindowSeconds,
+    string? CareerId = null);
 
 /// <summary>
 /// The worker-side pipeline: telemetry frames and game signals in, <see cref="EventEnvelope"/>s
@@ -51,7 +57,7 @@ public sealed class EventPipeline
     {
         _options = options;
         _windows = new WindowAccumulator(options.WindowSeconds);
-        Tracker = new FlightTracker(options.InstallId, options.SessionId);
+        Tracker = new FlightTracker(options.InstallId, options.SessionId, options.CareerId);
     }
 
     /// <summary>The identity bookkeeper. Exposed for the simulator and the status window.</summary>
@@ -59,6 +65,9 @@ public sealed class EventPipeline
 
     /// <summary>The current session ULID.</summary>
     public string SessionId => Tracker.SessionId;
+
+    /// <summary>The current career id (§4.1).</summary>
+    public string CareerId => Tracker.CareerId;
 
     /// <summary>Timing for the per-frame detect + window pass.</summary>
     public PerfStat FrameStats { get; } = new();
@@ -76,6 +85,7 @@ public sealed class EventPipeline
         => EventEnvelope.Create(
             EventTypes.SessionStarted,
             Tracker.SessionId,
+            Tracker.CareerId,
             flight: null,
             simT,
             wallMs,
@@ -238,7 +248,7 @@ public sealed class EventPipeline
 
             case EvaStartSignal eva:
                 Add(ref envelopes, EventEnvelope.Create(
-                    EventTypes.KittenEvaStart, Tracker.SessionId,
+                    EventTypes.KittenEvaStart, Tracker.SessionId, Tracker.CareerId,
                     eva.VehicleId is null ? null : Tracker.FlightFor(eva.VehicleId),
                     eva.SimT, eva.WallMs,
                     new KittenEvaStartPayload(Kid(eva.KittenName), Ids.SanitizeName(eva.KittenName))));
@@ -246,14 +256,14 @@ public sealed class EventPipeline
 
             case EvaEndSignal eva:
                 Add(ref envelopes, EventEnvelope.Create(
-                    EventTypes.KittenEvaEnd, Tracker.SessionId, flight: null, eva.SimT, eva.WallMs,
+                    EventTypes.KittenEvaEnd, Tracker.SessionId, Tracker.CareerId, flight: null, eva.SimT, eva.WallMs,
                     new KittenEvaEndPayload(
                         Kid(eva.KittenName), Ids.SanitizeName(eva.KittenName), eva.DurationS)));
                 break;
 
             case TumbleSignal tumble:
                 Add(ref envelopes, EventEnvelope.Create(
-                    EventTypes.KittenTumble, Tracker.SessionId, flight: null, tumble.SimT, tumble.WallMs,
+                    EventTypes.KittenTumble, Tracker.SessionId, Tracker.CareerId, flight: null, tumble.SimT, tumble.WallMs,
                     new KittenTumblePayload(
                         Kid(tumble.KittenName), Ids.SanitizeName(tumble.KittenName),
                         tumble.SpeedMs, tumble.Body)));
@@ -261,7 +271,7 @@ public sealed class EventPipeline
 
             case KiaSignal kia:
                 Add(ref envelopes, EventEnvelope.Create(
-                    EventTypes.KittenKia, Tracker.SessionId, flight: null, kia.SimT, kia.WallMs,
+                    EventTypes.KittenKia, Tracker.SessionId, Tracker.CareerId, flight: null, kia.SimT, kia.WallMs,
                     new KittenKiaPayload(
                         Kid(kia.KittenName), Ids.SanitizeName(kia.KittenName),
                         EventTypes.ToWire(kia.Context))));
@@ -273,7 +283,7 @@ public sealed class EventPipeline
 
             case RosterSampleSignal roster:
                 Add(ref envelopes, EventEnvelope.Create(
-                    EventTypes.RosterSnapshot, Tracker.SessionId, flight: null,
+                    EventTypes.RosterSnapshot, Tracker.SessionId, Tracker.CareerId, flight: null,
                     roster.SimT, roster.WallMs,
                     EventFactory.RosterPayload(_options.InstallId, roster.Kittens)));
                 break;
@@ -296,10 +306,10 @@ public sealed class EventPipeline
         _correlator = new ImpactCorrelator();
         _liveVehicles.Clear();
         _sessionFlags.Clear();
-        Tracker.NewSession();
+        Tracker.NewSession(loaded.CareerId);
 
         Add(ref envelopes, EventEnvelope.Create(
-            EventTypes.SessionStarted, Tracker.SessionId, flight: null, loaded.SimT, loaded.WallMs,
+            EventTypes.SessionStarted, Tracker.SessionId, Tracker.CareerId, flight: null, loaded.SimT, loaded.WallMs,
             new SessionStartedPayload(loaded.ModVersion, loaded.GameBuild, _options.InstallId)));
     }
 
@@ -308,7 +318,7 @@ public sealed class EventPipeline
         string flight = Tracker.FlightFor(created.VehicleId, created.LaunchGameTime);
 
         Add(ref envelopes, EventEnvelope.Create(
-            EventTypes.FlightStarted, Tracker.SessionId, flight, created.SimT, created.WallMs,
+            EventTypes.FlightStarted, Tracker.SessionId, Tracker.CareerId, flight, created.SimT, created.WallMs,
             new FlightStartedPayload(
                 VehicleName: Ids.SanitizeVehicleName(created.VehicleName),
                 Body: created.Body,
@@ -323,7 +333,7 @@ public sealed class EventPipeline
             if (Tracker.AddFlag(created.VehicleId, flag))
             {
                 Add(ref envelopes, EventEnvelope.Create(
-                    EventTypes.FlightFlagged, Tracker.SessionId, flight, created.SimT, created.WallMs,
+                    EventTypes.FlightFlagged, Tracker.SessionId, Tracker.CareerId, flight, created.SimT, created.WallMs,
                     new FlightFlaggedPayload(EventTypes.ToWire(flag), "session-wide flag")));
             }
         }
@@ -385,7 +395,7 @@ public sealed class EventPipeline
             Add(ref envelopes, EventFactory.FromWindow(Tracker, window, wallMs));
 
         Add(ref envelopes, EventEnvelope.Create(
-            EventTypes.FlightEnded, Tracker.SessionId, flight, simT, wallMs,
+            EventTypes.FlightEnded, Tracker.SessionId, Tracker.CareerId, flight, simT, wallMs,
             new FlightEndedPayload(EventTypes.ToWire(reason), crewCount)));
 
         Tracker.EndFlight(vehicleId);
@@ -394,7 +404,7 @@ public sealed class EventPipeline
     }
 
     private EventEnvelope Vehicle(string vehicleId, string type, double simT, long wallMs, object payload)
-        => EventEnvelope.Create(type, Tracker.SessionId, Tracker.FlightFor(vehicleId), simT, wallMs, payload);
+        => EventEnvelope.Create(type, Tracker.SessionId, Tracker.CareerId, Tracker.FlightFor(vehicleId), simT, wallMs, payload);
 
     private string Kid(string kittenName) => Ids.KittenId(_options.InstallId, kittenName);
 

@@ -13,10 +13,15 @@ import (
 // field that must never be derived from anything the client sent: it is the
 // server-local rowid of events.db.
 type Event struct {
-	Seq        int64
-	PlayerID   int64
-	FlightID   ids.ID // ids.Zero for session.started and roster.snapshot
-	SessionID  ids.ID
+	Seq       int64
+	PlayerID  int64
+	FlightID  ids.ID // ids.Zero for session.started and roster.snapshot
+	SessionID ids.ID
+	// Career is the §4.1 career id: which KSA save this session is playing.
+	// SimTime is seconds since *that* career began, so it is only comparable
+	// between events sharing a (PlayerID, Career). Empty for a stored event
+	// written before the key existed.
+	Career     string
 	Type       string
 	Ver        int
 	SimTime    float64
@@ -34,6 +39,10 @@ type Event struct {
 // the flag exclusion cannot apply to them.
 func (e Event) HasFlight() bool { return e.FlightID != ids.Zero }
 
+// HasCareer reports whether the event can be placed in a career. Only the
+// career-time boards care; every other fold ignores it.
+func (e Event) HasCareer() bool { return e.Career != "" }
+
 // Decode turns a stored row into a foldable event. payload is passed separately
 // so the projector can hand in an upcast payload without mutating the row it
 // read (stored events are immutable forever — §5.6).
@@ -50,6 +59,7 @@ func Decode(se store.StoredEvent, payload json.RawMessage) (Event, error) {
 		PlayerID:   se.PlayerID,
 		FlightID:   se.FlightID,
 		SessionID:  se.SessionID,
+		Career:     se.Career,
 		Type:       se.Type,
 		Ver:        se.Ver,
 		SimTime:    se.SimTime.Float64,

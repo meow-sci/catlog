@@ -105,10 +105,16 @@ public sealed class ScenarioRunner : IDisposable
         _outboxDir = Path.Combine(Path.GetTempPath(), "catlog-sim-" + Ids.NewUlid());
         _outbox = OutboxDb.Open(Path.Combine(_outboxDir, "outbox.db"));
 
+        string installId = options.InstallIdFor(credential.Handle);
         _pipeline = new EventPipeline(new EventPipelineOptions(
-            InstallId: options.InstallIdFor(credential.Handle),
+            InstallId: installId,
             ModVersion: ModVersion,
-            GameBuild: GameBuild));
+            GameBuild: GameBuild,
+            // One scenario is one KSA save: its clock starts at zero and runs
+            // forward, which is exactly a career (§4.1). Deriving the id from the
+            // scenario name rather than minting one keeps a re-run comparable
+            // with the run before it, so the career-time assertions are stable.
+            CareerId: Ids.CareerId(installId, "sim:" + options.Scenario)));
 
         _shipper = new BatchShipper(
             new ShipperOptions(

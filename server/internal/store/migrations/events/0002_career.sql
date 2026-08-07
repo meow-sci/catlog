@@ -1,0 +1,14 @@
+-- events.db 0002 — the §4.1 `career` envelope key.
+--
+-- A career is one KSA save played over time. `sim_t` counts seconds since the
+-- career began (KSA starts a new game at 0 and serialises the clock into the
+-- save), so two events are only comparable in time when they share a
+-- (player_id, career). Without this column "fastest time from game start" is
+-- not computable: session_id is minted per save *load*, so one career looks
+-- like many sessions and two unrelated saves interleave in one player's log.
+--
+-- Nullable because rows written before this migration have no career and
+-- because an event whose career could not be determined is stored honestly
+-- rather than given a made-up one. Boards that measure career time skip those
+-- rows; nothing else cares.
+ALTER TABLE event ADD COLUMN career TEXT;

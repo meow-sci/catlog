@@ -143,8 +143,17 @@ public sealed record FrameBoundarySignal(double SimT, long WallMs, long Sequence
 /// <param name="WallMs">Client unix milliseconds.</param>
 /// <param name="GameBuild">The game build string, e.g. <c>2026.8.5.5168</c>.</param>
 /// <param name="ModVersion">The catlog mod version.</param>
-public sealed record SessionLoadedSignal(double SimT, long WallMs, string GameBuild, string ModVersion)
-    : GameSignal(SimT, WallMs);
+/// <param name="CareerId">
+/// The career the new session belongs to (§4.1), or null to stay in the current one. A save load
+/// is the only moment the career can change, which is why it rides on this signal and nowhere else.
+/// Null is the honest value when the game project could not tell which save was loaded.
+/// </param>
+public sealed record SessionLoadedSignal(
+    double SimT,
+    long WallMs,
+    string GameBuild,
+    string ModVersion,
+    string? CareerId = null) : GameSignal(SimT, WallMs);
 
 /// <summary>A vehicle entered the simulation — the start of a flight.</summary>
 /// <param name="SimT">Universe sim seconds.</param>

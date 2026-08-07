@@ -266,6 +266,108 @@ Items the older plan could not have covered.
 
 ---
 
+## 5b. Career identity and the career clock — **re-verified 2026-08-07 against 2026.8.5.5168**
+
+The question: catlog wants "fastest time from game start to first orbit". That needs two things — a
+clock that counts from the start of the save, and a way to tell one save from another.
+
+### 5b.1 The clock is career-relative and it is in the save — **VERIFIED**
+
+| Claim | Evidence |
+|---|---|
+| `Universe.GetElapsedSimTime()` returns `_lastSimStep.NextTime` | `KSA/Universe.cs:2108-2112`, field at `:42` |
+| `SimTime` is a `readonly struct` over **one `double` of seconds** | `KSA/SimTime.cs:6-8`; accessor `Seconds()` `:67-70` |
+| A new game starts at exactly **0.0** | `_lastSimStep` is never initialised at boot — the static ctor `KSA/Universe.cs:2337-2351` does not touch it, and `Universe.LoadSystem` `:167-179` does not either, so it is `default(SimStep)` ⇒ `SimTime` 0.0 |
+| Elapsed time is **written to the save** | `UniverseData.Create()` sets `GameTime = new SimTimeReference(Universe.GetElapsedSimTime())` `KSA/UniverseData.cs:43`; field `:10-11`; written to `universe.xml` `:55-58` |
+| …and **restored on load** | `Universe.DeserializeSave` builds `new SimTime(universeData.GetElapsedSeconds())` and assigns `_lastSimStep`/`_nextSimStep` `KSA/Universe.cs:2160-2167`; getter `KSA/UniverseData.cs:108-111` |
+| There is **no calendar epoch in code** | No `StartDate`/`Epoch`/`J2000` identifier exists. The ephemerides are anchored at JD 2461009.5 (2025-11-30T00:00Z) but only as an XML comment, `Content/Core/Astronomicals.xml:12` |
+
+**Consequence for catlog:** `sim_t` already *is* the career clock. `docs/events.md` needs no `game_t`
+and no per-career origin — only a way to say which career a `sim_t` belongs to.
+
+Two caveats worth knowing:
+
+- **Save round-trip quantisation.** `SimTimeReference : TimeSpanReference` decomposes the value into
+  seven `[XmlAttribute]` doubles (`KSA/TimeSpanReference.cs:11-30`, `Populate()` `:51-74`,
+  `GetTotalSeconds()` `:417-455`), and `NaNFilteringXmlWriter` rounds every attribute to **4 decimal
+  places** (`KSA/NaNFilteringXmlWriter.cs:12-14, 82-88`). Elapsed time therefore round-trips with
+  ±5e-5 s of error — irrelevant to a leaderboard in seconds, but it is not bit-exact.
+- **A missing `<GameTime/>` loads as 0 with no error.** `TimeSpanReference._value` is only assigned
+  when `GetTotalSeconds()` is non-NaN (`:53-57`) and `IsValid()` still returns true (`:99-102`).
+
+### 5b.2 There is no career, save or player identifier — **CONFIRMED, the plan's claim holds**
+
+`plans/CATLOG_PROPOSALS.md` §1.4 says "KSA has no player/account/save GUID anywhere (verified)"
+against a build that is not on disk. Re-verified here against 5168, and it is correct.
+
+The save root is `UniverseData` and it has **exactly four fields** — every one of them enumerated:
+
+| # | Field | Line |
+|---|---|---|
+| 1 | `GameTime` (`SimTimeReference`) | `KSA/UniverseData.cs:10-11` |
+| 2 | `Camera` (`CameraData`) | `KSA/UniverseData.cs:13-14` |
+| 3 | `CelestialSystems` (`List<CelestialSystemData>`) | `KSA/UniverseData.cs:16-17` |
+| 4 | `KittenRoster` (`KittenRosterData`) | `KSA/UniverseData.cs:19-20` |
+
+No id, no GUID, no creation timestamp, no seed, no save name, no version. Negative results:
+`rg "Guid" KSA/` finds only four `OnCursorEnter(Guid, bool)` input callbacks; `rg -i "career|campaign"`
+finds **zero**; `rg "Seed"` finds only terrain-noise seeds from templates — the system is a
+hand-authored XML template (`Content/Core/Astronomicals.xml`), not generated, so there is no universe
+seed to hash.
+
+Everything that is *nearly* an anchor, and why each fails:
+
+| Candidate | Location | Why it fails |
+|---|---|---|
+| `SaveMetaData.Created` | `KSA/SaveMetaData.cs:16-17` | **The trap.** An overwrite is `Delete(); Make(Id);` (`KSA/UncompressedSave.cs:85-89`) and `Make` constructs a fresh `SaveMetaData` whose field initialiser re-stamps `DateTime.UtcNow`. It is a "last written" time wearing a "created" label. |
+| `CelestialSystemData.Id` | `KSA/CelestialSystemData.cs:8-9` | The system template name (`"Sol"`). Constant per install, and **never read back** — `CelestialSystem.DeserializeSave` `KSA/CelestialSystem.cs:612-754` ignores it. |
+| Procedural kitten names | `KSA/KittenRosterData.cs:29-47` | 17 of the 20 starting kittens are named from `Random.Shared` with no stored seed, so the roster is an accidental fingerprint — but it mutates as kittens are created (`:49-75`) and die. |
+| `GameTime` itself | `KSA/UniverseData.cs:10-11` | Monotone within a career, and exactly the thing you are trying to disambiguate. |
+| `SaveMetaData.Version` | `KSA/SaveMetaData.cs:22-23` | The game build string. |
+
+### 5b.3 The save's **name** is the only stable per-save string, and it is reachable
+
+`GameSave.Id` (`KSA/GameSave.cs:13`) is the folder under
+`Documents/My Games/Kitten Space Agency/saves` (`KSA/UncompressedSave.cs:19`,
+`KSA/GameSaves.cs:105,117`, `KSA/Constants.cs:264`). It is user-typed and unvalidated except for
+empty (`KSA/GameSaves.cs:42,229-242`).
+
+It is reachable in exactly two places, and **not** at the boundary catlog already patches:
+
+| Method | Signature | Carries the save? |
+|---|---|---|
+| `UncompressedSave.Load()` | `KSA/UncompressedSave.cs:45` — instance, **zero args** | **Yes, via `__instance`**: `Id`, `Directory`, `MetaData`, `UniverseData` |
+| `UncompressedSave.Make(string)` | `KSA/UncompressedSave.cs:104` — static, returns `GameSave` | **Yes**, via the argument or `__result`. Every write path lands here: terminal `save <name>` `KSA/GameSaves.cs:252-259`, the UI popup `:229-242`, and `Overwrite()` `KSA/UncompressedSave.cs:85-89` |
+| `Universe.DeserializeSave(UniverseData)` | `KSA/Universe.cs:2140` | **No.** No name, no path, no stream — only the four-field blob |
+| `Program.OnGameLoaded()` | `KSA/Program.cs:2258-2265` | **No.** Body just closes menus |
+| `GameSaves.Selected` | `KSA/GameSaves.cs:125` | **Do not use.** It tracks *UI selection*, is unset after a terminal `load`, and `GameSaves.Refresh()` `:211-221` rebuilds every `UncompressedSave` so it can dangle |
+
+**Ordering, and why catlog patches `Load` with a prefix:** `Load()` calls `Universe.DeserializeSave`
+itself (`KSA/UncompressedSave.cs:57`), so catlog's existing `SessionBoundaryPostfix` on
+`DeserializeSave` fires *inside* `Load`. The career has to be adopted in a **prefix** on `Load`, or
+the first session after every load is stamped with the previous career's id.
+
+**Timing hazard, for anyone tempted by `UniverseData.LoadFrom`:** every save in the folder is fully
+XML-deserialised at application start (`UncompressedSave` ctor `:23-30` ← `FromDirectory` `:139-173`
+← `GameSaves.Refresh()` `KSA/GameSaves.cs:211-221` ← `OnApplicationStart()` `:205-209` ←
+`KSA/Program.cs:702`). Patching `LoadFrom` fires N times at boot, not once at load.
+
+**Also:** `Universe.DeserializeSave` assigns `KittenRoster = universeData.KittenRoster`
+(`KSA/Universe.cs:2178`) — the live roster becomes the object the cached `UncompressedSave` holds,
+and `UniverseData.Create()` assigns it back (`KSA/UniverseData.cs:51`). In-memory save data mutates
+as you play, so loading the same slot twice in one session may not give you the original roster.
+
+### 5b.4 Can the mod tell "a different save" from "an earlier point in the same save"?
+
+**Yes, but only by name.** With the two patches above, a load of `apollo` is always the same career
+id, so an `apollo` load whose clock is below what catlog has already seen in that career is a rewind
+of `apollo`. A load of `gemini` is a different career and is not compared to it at all.
+
+What it cannot tell apart: two saves that share a name after `Delete` + `Make`, and a save folder
+copied under a new name. Both are stated as limitations in `docs/events.md` rather than worked
+around, because working around them would mean writing catlog state into the player's save
+directory.
+
 ## 6. Unverifiable / open
 
 | Item | Status | Why |

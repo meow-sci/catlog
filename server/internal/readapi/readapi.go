@@ -121,6 +121,9 @@ type BoardSummary struct {
 	Stat  string `json:"stat"`
 	Title string `json:"title"`
 	Unit  string `json:"unit"`
+	// Ascending reports that the smallest value ranks first — true for the
+	// career-time boards and false for every record and counter board.
+	Ascending bool `json:"ascending"`
 	// Count is how many players appear on the board. It counts rows, banned
 	// players included: an exact figure would need the whole board read and
 	// filtered on every request, and the number exists to say "this board has
@@ -144,6 +147,8 @@ type BoardResponse struct {
 	Stat  string `json:"stat"`
 	Title string `json:"title"`
 	Unit  string `json:"unit"`
+	// Ascending reports that the smallest value ranks first (§4.8).
+	Ascending bool `json:"ascending"`
 	// Limit and Offset echo the effective paging after clamping.
 	Limit  int        `json:"limit"`
 	Offset int        `json:"offset"`
@@ -160,6 +165,10 @@ type BoardRow struct {
 	Context json.RawMessage `json:"context,omitempty"`
 	// Updated is the receive time of the event that set this value, unix ms.
 	Updated int64 `json:"updated"`
+	// Rewound is set on a career-time row whose career has had an earlier save
+	// loaded (§4.1). It qualifies the number and does nothing else: the row is
+	// ranked normally and the player is treated no differently.
+	Rewound bool `json:"rewound,omitempty"`
 }
 
 func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
@@ -184,7 +193,7 @@ func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
 // file (§5.4) — so the page is assembled by over-fetching and dropping. Ranks
 // are positional over the visible rows, which is why a ban closes the gap it
 // leaves rather than leaving a hole in the numbering.
-func (s *Server) visibleRows(ctx context.Context, stat string, limit, offset int) ([]store.StatRow, []string, error) {
+func (s *Server) visibleRows(ctx context.Context, stat string, asc bool, limit, offset int) ([]store.StatRow, []string, error) {
 	need := offset + limit
 	var (
 		visible []store.StatRow
@@ -196,7 +205,7 @@ func (s *Server) visibleRows(ctx context.Context, stat string, limit, offset int
 		var batch []store.StatRow
 		err := s.deps.Projections.With(func(p *store.Projections) error {
 			var err error
-			batch, err = p.Leaderboard(ctx, stat, page, scanned)
+			batch, err = p.Leaderboard(ctx, stat, asc, page, scanned)
 			return err
 		})
 		if err != nil {
@@ -274,6 +283,8 @@ type PlayerRow struct {
 	Rank    int             `json:"rank"`
 	Context json.RawMessage `json:"context,omitempty"`
 	Updated int64           `json:"updated"`
+	// Rewound qualifies a career-time value; see [BoardRow.Rewound].
+	Rewound bool `json:"rewound,omitempty"`
 }
 
 func (s *Server) handlePlayer(w http.ResponseWriter, r *http.Request) {
@@ -296,11 +307,11 @@ func (s *Server) handlePlayer(w http.ResponseWriter, r *http.Request) {
 // The subtraction is what keeps a profile's rank consistent with the board page
 // the same player appears on. Bans are rare, so the extra query only runs when
 // somebody actually is banned.
-func (s *Server) rank(ctx context.Context, row store.StatRow, banned []int64) (int, error) {
+func (s *Server) rank(ctx context.Context, row store.StatRow, asc bool, banned []int64) (int, error) {
 	var ahead int64
 	err := s.deps.Projections.With(func(p *store.Projections) error {
 		var err error
-		ahead, err = p.StatAhead(ctx, row.Stat, row.Value, row.UpdatedSeq)
+		ahead, err = p.StatAhead(ctx, row.Stat, asc, row.Value, row.UpdatedSeq)
 		return err
 	})
 	if err != nil {
@@ -321,7 +332,11 @@ func (s *Server) rank(ctx context.Context, row store.StatRow, banned []int64) (i
 	}
 	var hiddenAhead int64
 	for _, h := range hidden {
-		if h.Value > row.Value || (h.Value == row.Value && h.UpdatedSeq < row.UpdatedSeq) {
+		better := h.Value > row.Value
+		if asc {
+			better = h.Value < row.Value
+		}
+		if better || (h.Value == row.Value && h.UpdatedSeq < row.UpdatedSeq) {
 			hiddenAhead++
 		}
 	}

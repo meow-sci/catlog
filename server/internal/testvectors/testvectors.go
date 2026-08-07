@@ -411,6 +411,9 @@ func signProof(key *ecdsa.PrivateKey, claims authz.ProofClaims) (string, error) 
 func batch001() []byte {
 	session := ids.String(fixedULID(ReferenceTime*1000, "session-001"))
 	flight := ids.String(fixedULID(ReferenceTime*1000+10, "flight-001"))
+	// A §4.1 career id: 16 lowercase Crockford base32 characters. Fixed here like
+	// every other identifier in this file, so regeneration stays byte-identical.
+	const career = "b7k2q9x4m0nrt3vz"
 
 	type env struct {
 		ID      string  `json:"id"`
@@ -418,6 +421,7 @@ func batch001() []byte {
 		Ver     int     `json:"ver"`
 		Flight  *string `json:"flight"`
 		Session string  `json:"session"`
+		Career  string  `json:"career"`
 		SimT    float64 `json:"sim_t"`
 		WallT   int64   `json:"wall_t"`
 		Payload any     `json:"payload"`
@@ -429,21 +433,21 @@ func batch001() []byte {
 
 	events := []env{{
 		ID: ids.String(fixedULID(ReferenceTime*1000, "ev-1")), Type: "session.started", Ver: 1,
-		Flight: nil, Session: session, SimT: 0, WallT: ReferenceTime * 1000,
+		Flight: nil, Session: session, Career: career, SimT: 0, WallT: ReferenceTime * 1000,
 		Payload: map[string]any{
 			"mod_ver": "0.1.0", "game_build": "2026.8.5.5168",
 			"install": ids.String(fixedULID(ReferenceTime*1000, "install")),
 		},
 	}, {
 		ID: ids.String(fixedULID(ReferenceTime*1000+1000, "ev-2")), Type: "flight.started", Ver: 1,
-		Flight: &flight, Session: session, SimT: 100.5, WallT: ReferenceTime*1000 + 1000,
+		Flight: &flight, Session: session, Career: career, SimT: 100.5, WallT: ReferenceTime*1000 + 1000,
 		Payload: map[string]any{
 			"vehicle_name": "Kitten I", "body": "earth",
 			"mass_kg": 12500.5, "part_count": 24, "crew_count": 2,
 		},
 	}, {
 		ID: ids.String(fixedULID(ReferenceTime*1000+2000, "ev-3")), Type: "telemetry.window", Ver: 1,
-		Flight: &flight, Session: session, SimT: 130.5, WallT: ReferenceTime*1000 + 2000,
+		Flight: &flight, Session: session, Career: career, SimT: 130.5, WallT: ReferenceTime*1000 + 2000,
 		Payload: map[string]any{
 			"t0_sim": 100.5, "t1_sim": 130.5, "n": 60, "body": "earth",
 			"alt_m":            agg(0, 42000.25, 21000.125, 42000.25),
@@ -456,14 +460,14 @@ func batch001() []byte {
 		},
 	}, {
 		ID: ids.String(fixedULID(ReferenceTime*1000+3000, "ev-4")), Type: "vehicle.impact", Ver: 1,
-		Flight: &flight, Session: session, SimT: 214.75, WallT: ReferenceTime*1000 + 3000,
+		Flight: &flight, Session: session, Career: career, SimT: 214.75, WallT: ReferenceTime*1000 + 3000,
 		Payload: map[string]any{
 			"speed_ms": 214.5, "energy_j": 2.25e8, "survived": true,
 			"launch_pad": false, "body": "duna", "crew_count": 2,
 		},
 	}, {
 		ID: ids.String(fixedULID(ReferenceTime*1000+4000, "ev-5")), Type: "flight.ended", Ver: 1,
-		Flight: &flight, Session: session, SimT: 300, WallT: ReferenceTime*1000 + 4000,
+		Flight: &flight, Session: session, Career: career, SimT: 300, WallT: ReferenceTime*1000 + 4000,
 		Payload: map[string]any{"reason": "recovered", "crew_count": 2},
 	}}
 

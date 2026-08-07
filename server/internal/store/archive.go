@@ -137,8 +137,8 @@ func (e *Events) RestoreEvents(ctx context.Context, q Querier, playerID int64, e
 		q = e.Writer()
 	}
 	const insertSQL = `INSERT OR IGNORE INTO event
-	  (seq, event_id, player_id, flight_id, session_id, type, ver, sim_time, wall_time, recv_time, payload)
-	  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	  (seq, event_id, player_id, flight_id, session_id, career, type, ver, sim_time, wall_time, recv_time, payload)
+	  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	for _, se := range evs {
 		if se.Seq <= 0 {
@@ -150,7 +150,7 @@ func (e *Events) RestoreEvents(ctx context.Context, q Querier, playerID int64, e
 		}
 		res, err := q.ExecContext(ctx, insertSQL,
 			se.Seq, ids.Bytes(se.ID), playerID, ids.NullBytes(se.FlightID), ids.NullBytes(se.SessionID),
-			se.Type, se.Ver, se.SimTime, se.WallTime, se.RecvTime, string(payload))
+			nullString(se.Career), se.Type, se.Ver, se.SimTime, se.WallTime, se.RecvTime, string(payload))
 		if err != nil {
 			return inserted, deduped, fmt.Errorf("store: restore event %s: %w", ids.String(se.ID), err)
 		}

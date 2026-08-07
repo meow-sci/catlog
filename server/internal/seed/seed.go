@@ -143,6 +143,21 @@ func ace() PlayerData {
 	b.add("vehicle.docked", stats.VehicleDock{OtherFlight: ids.String(seedULID("docking-target", 1))})
 	b.add("telemetry.window", window("mun", 640, 9450, 6.8))
 	b.endFlight(stats.FlightEnded{Reason: "recovered", CrewCount: 3})
+	// A second save, flown fast and using the stock KSA body names — this is what
+	// puts `demo_ace` on `fastest_to_orbit` and the per-body boards. Its clock
+	// restarts near zero because sim_t is seconds since *this* career began.
+	b.newCareer(2, 0)
+	b.startFlight(9, stats.FlightStarted{
+		VehicleName: "Direct Ascent", Body: "earth", MassKg: 51000, PartCount: 41, CrewCount: 2,
+	})
+	b.add("vehicle.orbit", stats.VehicleOrbit{
+		Phase: "achieved", Body: "earth", ApM: 410000, PeM: 402000, Ecc: 0.001, IncDeg: 51.6,
+	})
+	b.add("vehicle.soi", stats.VehicleSOI{FromBody: "earth", ToBody: "luna"})
+	b.add("vehicle.soi", stats.VehicleSOI{FromBody: "luna", ToBody: "sol"})
+	b.add("vehicle.soi", stats.VehicleSOI{FromBody: "sol", ToBody: "mars"})
+	b.endFlight(stats.FlightEnded{Reason: "recovered", CrewCount: 2})
+
 	b.roster(
 		stats.RosterKitten{Kid: "ace0000000000001", Name: "Comet", TravelledM: 1_820_000, FastestMs: 29_812, Missions: 4, MissionTimeS: 41200, KIA: false},
 		stats.RosterKitten{Kid: "ace0000000000002", Name: "Nimbus", TravelledM: 1_410_000, FastestMs: 29_804, Missions: 3, MissionTimeS: 33100, KIA: false},
@@ -252,6 +267,7 @@ func window(body string, surfaceMax, orbitalMax, peakG float64) stats.TelemetryW
 type builder struct {
 	handle    string
 	sessionID ids.ID
+	career    string
 	flight    ids.ID
 	n         int
 	simT      float64
@@ -259,7 +275,11 @@ type builder struct {
 }
 
 func newBuilder(handle string) *builder {
-	return &builder{handle: handle, sessionID: seedULID(handle+":session", 1)}
+	return &builder{
+		handle:    handle,
+		sessionID: seedULID(handle+":session", 1),
+		career:    seedCareer(handle, 1),
+	}
 }
 
 func (b *builder) session() {
@@ -267,6 +287,17 @@ func (b *builder) session() {
 	b.add("session.started", stats.SessionStarted{
 		ModVer: "0.1.0", GameBuild: "2026.8.5.5168", Install: ids.String(seedULID(b.handle+":install", 1)),
 	})
+}
+
+// career starts a second save for this player: a fresh session, a fresh career
+// id and a clock that restarts near zero, because `sim_t` counts seconds since
+// *that* career began (§4.1). It is what makes the demo dataset exercise the
+// career-time boards honestly rather than by accident.
+func (b *builder) newCareer(n int, simT float64) {
+	b.sessionID = seedULID(b.handle+":session", n)
+	b.career = seedCareer(b.handle, n)
+	b.simT = simT
+	b.session()
 }
 
 func (b *builder) startFlight(n int, p stats.FlightStarted) {
@@ -298,6 +329,7 @@ func (b *builder) add(typ string, payload any) {
 		ID:        seedULID(b.handle, b.n),
 		FlightID:  b.flight,
 		SessionID: b.sessionID,
+		Career:    b.career,
 		Type:      typ,
 		Ver:       1,
 		SimTime:   nullFloat(b.simT),
@@ -308,6 +340,19 @@ func (b *builder) add(typ string, payload any) {
 
 func (b *builder) done() PlayerData {
 	return PlayerData{Handle: b.handle, Events: b.evs}
+}
+
+// seedCareer derives a §4.1 career id (16 lowercase Crockford base32
+// characters) from a handle, the same shape the mod produces. Stable across
+// machines and runs for the same reason seedULID is.
+func seedCareer(handle string, n int) string {
+	const crockford = "0123456789abcdefghjkmnpqrstvwxyz"
+	sum := sha256.Sum256([]byte("catlog-seed-career:" + handle + ":" + strconv.Itoa(n)))
+	out := make([]byte, 16)
+	for i := range out {
+		out[i] = crockford[sum[i]&0x1F]
+	}
+	return string(out)
 }
 
 // seedULID derives a ULID from a fixed string. The timestamp half is the fixed

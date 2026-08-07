@@ -487,6 +487,80 @@ public static class VehicleTelemetry
         }
     }
 
+    // ----- career identity (§4.1 `career`) -------------------------------------------------
+    //
+    // KSA ships no career, save or player identifier of any kind. Verified against the current
+    // decomp (build 2026.8.5.5168), and recorded in docs/ksa-integration.md §5:
+    //
+    //   * the save root `UniverseData` has exactly four fields — GameTime, Camera,
+    //     CelestialSystems, KittenRoster (KSA/UniverseData.cs:10-20) — and none of them is an id,
+    //     a GUID, a creation stamp or a seed;
+    //   * `Universe.DeserializeSave(UniverseData)` (KSA/Universe.cs:2140) receives no name, no
+    //     path and no stream, so the mod's existing session-boundary patch cannot tell which save
+    //     was loaded;
+    //   * `SaveMetaData.Created` (KSA/SaveMetaData.cs:16-17) looks like an anchor and is not — a
+    //     save overwrite is Delete-then-Make (KSA/UncompressedSave.cs:85-89) and the field
+    //     initialiser re-stamps DateTime.UtcNow on every write.
+    //
+    // The one thing that *is* stable is the save's own name, `GameSave.Id` (KSA/GameSave.cs:13),
+    // which is the folder under Documents/My Games/Kitten Space Agency/saves. It is reachable in
+    // exactly two places, both patched by Patcher: the instance receiver of
+    // `UncompressedSave.Load()` (KSA/UncompressedSave.cs:45) and the argument of the static
+    // `UncompressedSave.Make(string)` (KSA/UncompressedSave.cs:104).
+
+    private static string _careerKey = NewUnsavedCareerKey();
+
+    /// <summary>
+    /// The current career id — 16 Crockford characters, install-salted so the server never learns
+    /// a save's name (§4.1).
+    /// </summary>
+    /// <param name="installId">The install ULID.</param>
+    /// <returns>The career id.</returns>
+    public static string CareerId(string installId) => Ids.CareerId(installId, _careerKey);
+
+    /// <summary>
+    /// Adopts the career of a KSA save. Called from the <c>UncompressedSave.Load</c> prefix (so the
+    /// career is already correct when <c>Universe.DeserializeSave</c> raises the session boundary)
+    /// and from the <c>UncompressedSave.Make</c> postfix (so a game that started unsaved joins the
+    /// career of the slot it is first written to, and a "save as" carries the career with it).
+    /// </summary>
+    /// <param name="save">The save being loaded or written.</param>
+    [KsaAnchor("GameSave.Id",
+        SourceFile = "KSA/GameSave.cs:13 / KSA/UncompressedSave.cs:19",
+        Verified = "2026-08-07", GameVersion = "2026.8.5.5168", Risk = ChurnRisk.Medium,
+        Notes = "The save-folder name the player typed. The ONLY stable per-save identifier KSA has: "
+                + "UniverseData carries no id/GUID/seed/creation stamp (KSA/UniverseData.cs:10-20) and "
+                + "SaveMetaData.Created is re-stamped on every overwrite (KSA/UncompressedSave.cs:85-89). "
+                + "Deleting a save and recreating it under the same name therefore re-uses the career id "
+                + "— see docs/events.md for the stated limitation.")]
+    public static void AdoptSaveCareer(GameSave? save)
+    {
+        try
+        {
+            string? id = save?.Id;
+            if (!string.IsNullOrEmpty(id))
+                _careerKey = "save:" + id;
+        }
+        catch (Exception ex)
+        {
+            // A career we cannot read is not worth a frame: keep the one we have and say so once.
+            ModLog.Log.Warn($"catlog: could not read the loaded save's name: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Starts a fresh, not-yet-saved career. Called from the <c>Universe.LoadSystem</c> postfix,
+    /// which is the game's only new-game path (KSA/Universe.cs:167, sole caller KSA/Program.cs:965).
+    /// </summary>
+    /// <remarks>
+    /// The key is random rather than a constant "unsaved" bucket on purpose: two fresh starts on
+    /// one install are two different careers, and giving them one id would make the second one's
+    /// clock look like the first one's clock running backwards.
+    /// </remarks>
+    public static void BeginUnsavedCareer() => _careerKey = NewUnsavedCareerKey();
+
+    private static string NewUnsavedCareerKey() => "new:" + Ids.NewUlid();
+
     /// <summary>Every live vehicle in the current system, appended to <paramref name="into"/>.</summary>
     /// <remarks>
     /// Uses <c>UnsafeAsList()</c> + a type test rather than LINQ's <c>OfType&lt;Vehicle&gt;().ToList()</c>,

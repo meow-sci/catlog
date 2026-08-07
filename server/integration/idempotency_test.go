@@ -115,7 +115,7 @@ func TestIngestIdempotency(t *testing.T) {
 
 	t.Run("a forged identity field in the envelope is rejected", func(t *testing.T) {
 		line := fmt.Sprintf(
-			`{"id":%q,"type":"vehicle.rud","ver":1,"flight":null,"session":%q,"sim_t":1.5,"wall_t":%d,"payload":{},"player_id":1}`,
+			`{"id":%q,"type":"vehicle.rud","ver":1,"flight":null,"session":%q,"career":"0123456789abcdef","sim_t":1.5,"wall_t":%d,"payload":{},"player_id":1}`,
 			ids.String(newULID(t)), ids.String(sessionID), time.Now().UnixMilli())
 		res := sh.ship([]byte(line+"\n"), func(o *shipOpts) { o.NoAdvace = true })
 		if res.Status != http.StatusBadRequest {
@@ -201,7 +201,7 @@ func batchOf(session ids.ID, eventIDs []ids.ID) []byte {
 	var b strings.Builder
 	for i, id := range eventIDs {
 		fmt.Fprintf(&b,
-			`{"id":%q,"type":"vehicle.rud","ver":1,"flight":null,"session":%q,"sim_t":%d.5,"wall_t":%d,"payload":{"cause":"ground_impact","speed_ms":%d}}`+"\n",
+			`{"id":%q,"type":"vehicle.rud","ver":1,"flight":null,"session":%q,"career":"0123456789abcdef","sim_t":%d.5,"wall_t":%d,"payload":{"cause":"ground_impact","speed_ms":%d}}`+"\n",
 			ids.String(id), ids.String(session), i, 1_770_000_000_000+int64(i), 60+i)
 	}
 	return []byte(b.String())

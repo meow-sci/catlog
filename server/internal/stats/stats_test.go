@@ -26,13 +26,21 @@ const (
 
 // input is one event in a golden sequence.
 type input struct {
-	player  int64
-	flight  ids.ID // ids.Zero for session/roster events
-	typ     string
-	payload any
-	simT    float64
-	noSimT  bool
+	player int64
+	flight ids.ID // ids.Zero for session/roster events
+	typ    string
+	// career is the §4.1 career id. Empty means [defaultCareer]; the one test
+	// that needs "no career at all" says so with noCareer.
+	career   string
+	noCareer bool
+	payload  any
+	simT     float64
+	noSimT   bool
 }
+
+// defaultCareer is the career every golden event belongs to unless it says
+// otherwise. Sixteen lowercase Crockford characters, like the wire form.
+const defaultCareer = "testcareer000001"
 
 // row is a `player_stat` row as a golden test cares about it.
 type row struct {
@@ -102,7 +110,7 @@ func apply(t *testing.T, proj *store.Projections, in []input, base int64, refine
 			kia[e.flight] = append(kia[e.flight], e.simT)
 		}
 	}
-	run([]stats.Fold{stats.FlightFold()}, func(tx *sql.Tx) stats.FlightStateReader { return stats.NewFlights(tx) })
+	run(stats.StateFolds(), func(tx *sql.Tx) stats.FlightStateReader { return stats.NewFlights(tx) })
 	run(stats.BoardFolds(), func(tx *sql.Tx) stats.FlightStateReader { return stats.NewRefinedFlights(tx, kia) })
 }
 
@@ -119,6 +127,10 @@ func decode(t *testing.T, e input, seq int64) stats.Event {
 	if player == 0 {
 		player = alice
 	}
+	career := e.career
+	if career == "" && !e.noCareer {
+		career = defaultCareer
+	}
 	se := store.StoredEvent{
 		Seq:      seq,
 		PlayerID: player,
@@ -127,6 +139,7 @@ func decode(t *testing.T, e input, seq int64) stats.Event {
 			ID:        flightN(byte(seq)),
 			FlightID:  e.flight,
 			SessionID: flightN(0xff),
+			Career:    career,
 			Type:      e.typ,
 			Ver:       1,
 			SimTime:   sql.NullFloat64{Float64: e.simT, Valid: !e.noSimT},
@@ -394,7 +407,12 @@ func TestOrbitsCountOnlyAchieved(t *testing.T) {
 		{flight: f, typ: "vehicle.orbit", payload: stats.VehicleOrbit{Phase: "achieved", Body: "kerbin", ApM: 320000, PeM: 295000}},
 		{flight: f, typ: "vehicle.orbit", payload: stats.VehicleOrbit{Phase: "escaped", Body: "kerbin"}},
 		{flight: f, typ: "vehicle.orbit", payload: stats.VehicleOrbit{Phase: "achieved", Body: "mun"}},
-	}), map[string]float64{"1/orbits_achieved": 2})
+	}), map[string]float64{
+		"1/orbits_achieved": 2,
+		// The first achieved orbit is also this career's fastest-to-orbit; the
+		// input has no simT, so it lands at 0.
+		"1/fastest_to_orbit": 0,
+	})
 }
 
 func TestSOIBodiesCountsDistinctDestinations(t *testing.T) {
@@ -665,6 +683,10 @@ func TestBoardMetadataCoversEveryStatAFoldWrites(t *testing.T) {
 	for _, cause := range stats.RUDCauses {
 		produced = append(produced, stats.RUDStat(cause))
 	}
+	produced = append(produced, stats.StatFastestToOrbit)
+	for _, body := range stats.TimedBodies {
+		produced = append(produced, stats.FastestToStat(body))
+	}
 	for _, stat := range produced {
 		if !declared[stat] {
 			t.Errorf("fold writes %q but no board declares it", stat)
@@ -678,13 +700,23 @@ func TestBoardMetadataCoversEveryStatAFoldWrites(t *testing.T) {
 	}
 }
 
-func TestFoldOrderPutsFlightStateFirst(t *testing.T) {
+func TestFoldOrderPutsStateFoldsFirst(t *testing.T) {
 	all := stats.Folds()
-	if len(all) != len(stats.BoardFolds())+1 {
-		t.Fatalf("Folds() has %d entries, BoardFolds() %d", len(all), len(stats.BoardFolds()))
+	state := stats.StateFolds()
+	if len(all) != len(stats.BoardFolds())+len(state) {
+		t.Fatalf("Folds() has %d entries, StateFolds() %d, BoardFolds() %d",
+			len(all), len(state), len(stats.BoardFolds()))
 	}
-	if all[0].Name() != stats.FlightFold().Name() {
-		t.Errorf("first fold is %q, want the flight-state fold: every other fold reads it", all[0].Name())
+	// Every board fold reads flight_state for the flag exclusion, and the
+	// career-time boards need the career row to exist, so the state folds have
+	// to run first — and flight_state first among them.
+	for i, f := range state {
+		if all[i].Name() != f.Name() {
+			t.Errorf("fold %d is %q, want %q", i, all[i].Name(), f.Name())
+		}
+	}
+	if state[0].Name() != stats.FlightFold().Name() {
+		t.Errorf("first state fold is %q, want the flight-state fold", state[0].Name())
 	}
 }
 

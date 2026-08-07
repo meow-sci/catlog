@@ -70,18 +70,27 @@ type StatRow struct {
 	UpdatedSeq int64
 }
 
-// Leaderboard reads a board page in rank order: value descending, and within a
-// tie the earliest updated_seq first — whoever reached the number first (§5.6).
+// Leaderboard reads a board page in rank order: best value first, and within a
+// tie the earliest updated_seq — whoever reached the number first (§5.6).
+//
+// asc inverts what "best" means. It is false for every record and counter board
+// (bigger is better) and true for the career-time boards, where the value is
+// seconds since the career began and the smallest wins. The tie rule does not
+// change with it: the earliest claimant keeps the rank either way.
 //
 // limit and offset are raw: the caller over-fetches and drops hidden players
 // itself, because this file knows nothing about bans.
-func (p *Projections) Leaderboard(ctx context.Context, stat string, limit, offset int) ([]StatRow, error) {
+func (p *Projections) Leaderboard(ctx context.Context, stat string, asc bool, limit, offset int) ([]StatRow, error) {
 	if limit <= 0 {
 		return nil, nil
 	}
+	order := "DESC"
+	if asc {
+		order = "ASC"
+	}
 	rows, err := p.Reader().QueryContext(ctx,
 		`SELECT player_id, stat, value, context, updated_seq FROM player_stat
-		 WHERE stat = ? ORDER BY value DESC, updated_seq ASC, player_id ASC LIMIT ? OFFSET ?`,
+		 WHERE stat = ? ORDER BY value `+order+`, updated_seq ASC, player_id ASC LIMIT ? OFFSET ?`,
 		stat, limit, max(offset, 0))
 	if err != nil {
 		return nil, fmt.Errorf("store: read leaderboard %q: %w", stat, err)
@@ -134,12 +143,18 @@ func (p *Projections) StatsForPlayers(ctx context.Context, stat string, playerID
 }
 
 // StatAhead counts the rows that outrank (value, updatedSeq) on a board — the
-// unfiltered half of a player's rank.
-func (p *Projections) StatAhead(ctx context.Context, stat string, value float64, updatedSeq int64) (int64, error) {
+// unfiltered half of a player's rank. asc has the same meaning as in
+// [Projections.Leaderboard] and must agree with it, or a profile would report a
+// rank the board page contradicts.
+func (p *Projections) StatAhead(ctx context.Context, stat string, asc bool, value float64, updatedSeq int64) (int64, error) {
+	cmp := ">"
+	if asc {
+		cmp = "<"
+	}
 	var n int64
 	err := p.Reader().QueryRowContext(ctx,
 		`SELECT count(*) FROM player_stat
-		 WHERE stat = ? AND (value > ? OR (value = ? AND updated_seq < ?))`,
+		 WHERE stat = ? AND (value `+cmp+` ? OR (value = ? AND updated_seq < ?))`,
 		stat, value, value, updatedSeq).Scan(&n)
 	if err != nil {
 		return 0, fmt.Errorf("store: rank on %q: %w", stat, err)
@@ -193,6 +208,41 @@ func placeholders(n int) string {
 		return ""
 	}
 	return strings.TrimSuffix(strings.Repeat("?,", n), ",")
+}
+
+// RewoundCareers reports which of the given careers have had an earlier save
+// loaded (§4.1). The read API calls it once per board page and once per profile,
+// so a career-time row can be shown qualified.
+//
+// Resolving the mark here rather than baking it into `player_stat.context` at
+// fold time is what makes it exact: a career rewound long after a record was set
+// still shows, with no rebuild needed.
+func (p *Projections) RewoundCareers(ctx context.Context, playerID int64, careers []string) (map[string]bool, error) {
+	if len(careers) == 0 {
+		return nil, nil
+	}
+	args := make([]any, 0, len(careers)+1)
+	args = append(args, playerID)
+	for _, c := range careers {
+		args = append(args, c)
+	}
+	rows, err := p.Reader().QueryContext(ctx,
+		`SELECT career FROM career WHERE player_id = ? AND rewound <> 0 AND career IN (`+
+			placeholders(len(careers))+`)`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("store: read rewound careers: %w", err)
+	}
+	defer rows.Close()
+
+	out := map[string]bool{}
+	for rows.Next() {
+		var career string
+		if err := rows.Scan(&career); err != nil {
+			return nil, fmt.Errorf("store: scan rewound career: %w", err)
+		}
+		out[career] = true
+	}
+	return out, rows.Err()
 }
 
 // --- feed --------------------------------------------------------------------
@@ -275,11 +325,15 @@ type ProjectionCounts struct {
 	PlayerStat  int64 `json:"player_stat"`
 	FlightState int64 `json:"flight_state"`
 	PlayerBody  int64 `json:"player_body"`
+	Career      int64 `json:"career"`
 	Kitten      int64 `json:"kitten"`
 	Feed        int64 `json:"feed"`
 	// FlaggedFlights is how many flights carry at least one flag bit — the
 	// number that says whether the anti-cheat surface is doing anything.
 	FlaggedFlights int64 `json:"flagged_flights"`
+	// RewoundCareers is how many careers have had an earlier save loaded. Not an
+	// anti-cheat number: it says how much of the career-time data is qualified.
+	RewoundCareers int64 `json:"rewound_careers"`
 }
 
 // Counts reads the row census.
@@ -292,6 +346,8 @@ func (p *Projections) Counts(ctx context.Context) (ProjectionCounts, error) {
 		{`SELECT count(*) FROM player_stat`, &c.PlayerStat},
 		{`SELECT count(*) FROM flight_state`, &c.FlightState},
 		{`SELECT count(*) FROM player_body`, &c.PlayerBody},
+		{`SELECT count(*) FROM career`, &c.Career},
+		{`SELECT count(*) FROM career WHERE rewound <> 0`, &c.RewoundCareers},
 		{`SELECT count(*) FROM kitten`, &c.Kitten},
 		{`SELECT count(*) FROM feed`, &c.Feed},
 		{`SELECT count(*) FROM flight_state WHERE flags <> 0`, &c.FlaggedFlights},

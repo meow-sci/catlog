@@ -138,7 +138,7 @@ func (p *Projector) Rebuild(ctx context.Context) (RebuildResult, error) {
 // the kitten.kia index the crew-survival window needs (§4.2).
 func (p *Projector) rebuildPass1(ctx context.Context, proj *store.Projections, head int64) (map[ids.ID][]float64, error) {
 	kia := map[ids.ID][]float64{}
-	folds := []stats.Fold{p.flightFold}
+	folds := p.stateFolds
 
 	err := p.scan(ctx, head, func(evs []store.StoredEvent) error {
 		return proj.WithWriteTx(ctx, func(tx *sql.Tx) error {

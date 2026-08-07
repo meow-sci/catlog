@@ -33,7 +33,20 @@ public sealed record EventEnvelope
     [JsonPropertyName("session")]
     public required string Session { get; init; }
 
-    /// <summary>Universe sim seconds. May jump backwards across a save load.</summary>
+    /// <summary>
+    /// Career id — 16 lowercase Crockford base32 characters, never null. The save this session is
+    /// playing (§4.1). <see cref="SimT"/> is only comparable between events that share a
+    /// <c>(player, career)</c>.
+    /// </summary>
+    [JsonPropertyName("career")]
+    public required string Career { get; init; }
+
+    /// <summary>
+    /// Universe sim seconds — <b>seconds since this career began</b>. KSA starts a new game at
+    /// exactly 0 and serialises the clock into the save (<c>UniverseData.GameTime</c>), so this is
+    /// career-relative and survives quitting the game. It jumps backwards only when an earlier save
+    /// of the same career is loaded; see <c>docs/events.md</c>.
+    /// </summary>
     [JsonPropertyName("sim_t")]
     public double SimT { get; init; }
 
@@ -60,8 +73,9 @@ public sealed record EventEnvelope
     /// <summary>Convenience constructor used by <see cref="Detect.EventFactory"/> and tests.</summary>
     /// <param name="type">Event type name.</param>
     /// <param name="session">Session ULID.</param>
+    /// <param name="career">Career id (16 Crockford characters).</param>
     /// <param name="flight">Flight ULID, or null.</param>
-    /// <param name="simT">Universe sim seconds.</param>
+    /// <param name="simT">Universe sim seconds since the career began.</param>
     /// <param name="wallMs">Client unix milliseconds.</param>
     /// <param name="payload">The payload record.</param>
     /// <param name="id">Event ULID; a fresh one is minted when null.</param>
@@ -69,6 +83,7 @@ public sealed record EventEnvelope
     public static EventEnvelope Create(
         string type,
         string session,
+        string career,
         string? flight,
         double simT,
         long wallMs,
@@ -80,6 +95,7 @@ public sealed record EventEnvelope
             Ver = EventTypes.VersionOf(type),
             Flight = flight,
             Session = session,
+            Career = career,
             SimT = simT,
             WallT = wallMs,
             Payload = payload,

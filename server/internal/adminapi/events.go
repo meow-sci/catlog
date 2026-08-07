@@ -75,6 +75,7 @@ type adminEnvelope struct {
 	Ver     int             `json:"ver"`
 	Flight  string          `json:"flight"`
 	Session string          `json:"session"`
+	Career  string          `json:"career"`
 	SimT    *float64        `json:"sim_t"`
 	WallT   int64           `json:"wall_t"`
 	Payload json.RawMessage `json:"payload"`
@@ -148,6 +149,10 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+// DefaultCareer is the §4.1 career id a hand-written admin event lands in when
+// it names none — the demo dataset's single career.
+const DefaultCareer = "0000000000000000"
+
 // decodeAdminEvent turns one hand-written envelope into a storable event,
 // minting the identifiers a human should not have to.
 func decodeAdminEvent(raw json.RawMessage, now time.Time) (store.Event, error) {
@@ -181,6 +186,17 @@ func decodeAdminEvent(raw json.RawMessage, now time.Time) (store.Event, error) {
 		if ev.FlightID, err = ids.Parse(env.Flight); err != nil {
 			return store.Event{}, fmt.Errorf("flight: %w", err)
 		}
+	}
+	// career is a §4.1 envelope key with no sensible mint: a hand-written event
+	// belongs to whatever career the author says, and to DefaultCareer when they
+	// do not care. Making one up per event would put every seeded event in its
+	// own career and silently empty the career-time boards.
+	ev.Career = env.Career
+	if ev.Career == "" {
+		ev.Career = DefaultCareer
+	}
+	if !ingest.ValidCareer(ev.Career) {
+		return store.Event{}, fmt.Errorf("career: not 16 lowercase Crockford base32 characters")
 	}
 	if env.SimT != nil {
 		ev.SimTime.Float64, ev.SimTime.Valid = *env.SimT, true

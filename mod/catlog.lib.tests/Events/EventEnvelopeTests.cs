@@ -66,7 +66,8 @@ public sealed class EventEnvelopeTests
     public void Create_MintsAUlidAndPicksUpTheRegistryVersion()
     {
         EventEnvelope envelope = EventEnvelope.Create(
-            EventTypes.VehicleStaging, "session", "flight", 1, 2, new VehicleStagingPayload(3));
+            EventTypes.VehicleStaging, "session", TestData.CareerId, "flight", 1, 2,
+            new VehicleStagingPayload(3));
 
         Assert.True(Ids.IsUlid(envelope.Id));
         Assert.Equal(EventTypes.VersionOf(EventTypes.VehicleStaging), envelope.Ver);

@@ -24,7 +24,44 @@ const (
 	StatStagings                  = "stagings"
 	StatKittensRecovered          = "kittens_recovered"
 	StatDistanceTravelled         = "distance_travelled"
+	StatFastestToOrbit            = "fastest_to_orbit"
 )
+
+// TimedBodies is the allow-list of celestial bodies that get a "fastest career
+// time to reach" board, in system order. It is the stock KSA body set for build
+// 2026.8.5.5168, lowercased: `Content/Core/Astronomicals.xml` declares exactly
+// these as permanent members of the system (`StellarBody`, `PlanetaryBody`,
+// `AtmosphericBody`, `MinorBody`).
+//
+// It is an allow-list for the same reason [RUDCauses] is: `vehicle.soi.to_body`
+// is an opaque string from the client, and a board key built from client text
+// would let anyone mint a leaderboard — and a million of them (§6, "stat keys
+// are compile-time constants"). A body outside this set still lands in
+// `player_body` and still counts towards `soi_bodies`; it simply gets no board
+// of its own.
+//
+// Comets (`PeriodicComet`, `InterstellarComet` in the same file) are left out on
+// purpose: they are the transient half of the system, and the line "the bodies
+// KSA ships as permanent members" is one a reader can check. Adding them, or a
+// body a future build introduces, is one entry here plus a rebuild — the
+// per-body arrival *times* are recorded for every body regardless, in
+// `player_body.first_sim_t`, so nothing is lost in the meantime.
+var TimedBodies = []string{
+	"sol",
+	"mercury",
+	"venus",
+	"earth",
+	"luna",
+	"mars",
+	"phobos",
+	"deimos",
+	"jupiter",
+	"saturn",
+	"uranus",
+}
+
+// FastestToStat is the per-body board key for a [TimedBodies] entry.
+func FastestToStat(body string) string { return "fastest_to_" + body }
 
 // RUDCauses is the §4.2 `vehicle.rud.cause` enum, in the order the per-cause
 // boards are listed. A cause outside this set counts towards `rud_total` only —
@@ -48,32 +85,53 @@ type Board struct {
 	// Title is the human name; the web UI renders it verbatim.
 	Title string `json:"title"`
 	// Unit labels the value column. Not a conversion factor: values are always
-	// in the unit the event carried (metres, m/s, g) or a plain count.
+	// in the unit the event carried (metres, m/s, g, seconds) or a plain count.
 	Unit string `json:"unit"`
+	// Ascending reports that a *smaller* value ranks higher. True for every
+	// "fastest career time to X" board and false for everything else, and it is
+	// published so a client never has to guess which way a board reads.
+	Ascending bool `json:"ascending"`
+	// Career is true when the value is a career-relative time and the row's
+	// context therefore carries `career` (and may be qualified by the career's
+	// rewind mark). See career.go.
+	Career bool `json:"career"`
 }
 
 // boards is the §5.6 table, in display order: the three "how did you survive
 // that" records first, then the speed records, then the counters.
 var boards = func() []Board {
+	rec := func(stat, title, unit string) Board { return Board{Stat: stat, Title: title, Unit: unit} }
+	fastest := func(stat, title string) Board {
+		return Board{Stat: stat, Title: title, Unit: "s", Ascending: true, Career: true}
+	}
+
 	out := []Board{
-		{StatBiggestLithobrakeSurvived, "Biggest Lithobrake Survived", "m/s"},
-		{StatPeakGSurvived, "Peak G Survived", "g"},
-		{StatFastestSurfaceSpeed, "Fastest Surface Speed", "m/s"},
-		{StatFastestOrbitalSpeed, "Fastest Orbital Speed", "m/s"},
-		{StatKittenTumbles, "Kitten Tumbles", "tumbles"},
-		{StatRUDTotal, "Rapid Unscheduled Disassemblies", "RUDs"},
+		rec(StatBiggestLithobrakeSurvived, "Biggest Lithobrake Survived", "m/s"),
+		rec(StatPeakGSurvived, "Peak G Survived", "g"),
+		rec(StatFastestSurfaceSpeed, "Fastest Surface Speed", "m/s"),
+		rec(StatFastestOrbitalSpeed, "Fastest Orbital Speed", "m/s"),
+		rec(StatKittenTumbles, "Kitten Tumbles", "tumbles"),
+		rec(StatRUDTotal, "Rapid Unscheduled Disassemblies", "RUDs"),
 	}
 	for _, cause := range RUDCauses {
-		out = append(out, Board{RUDStat(cause), "RUDs — " + causeTitle(cause), "RUDs"})
+		out = append(out, rec(RUDStat(cause), "RUDs — "+causeTitle(cause), "RUDs"))
 	}
-	return append(out,
-		Board{StatOrbitsAchieved, "Orbits Achieved", "orbits"},
-		Board{StatSOIBodies, "Bodies Visited", "bodies"},
-		Board{StatDockings, "Dockings", "dockings"},
-		Board{StatStagings, "Stagings", "stagings"},
-		Board{StatKittensRecovered, "Kittens Recovered", "kittens"},
-		Board{StatDistanceTravelled, "Distance Travelled", "m"},
+	out = append(out,
+		rec(StatOrbitsAchieved, "Orbits Achieved", "orbits"),
+		rec(StatSOIBodies, "Bodies Visited", "bodies"),
+		rec(StatDockings, "Dockings", "dockings"),
+		rec(StatStagings, "Stagings", "stagings"),
+		rec(StatKittensRecovered, "Kittens Recovered", "kittens"),
+		rec(StatDistanceTravelled, "Distance Travelled", "m"),
 	)
+
+	// The career-time boards last, as their own block: they are the only ones
+	// where the smallest number wins.
+	out = append(out, fastest(StatFastestToOrbit, "Fastest to Orbit"))
+	for _, body := range TimedBodies {
+		out = append(out, fastest(FastestToStat(body), "Fastest to "+bodyTitle(body)))
+	}
+	return out
 }()
 
 var boardByStat = func() map[string]Board {
@@ -93,6 +151,15 @@ func Boards() []Board { return slices.Clone(boards) }
 func BoardFor(stat string) (Board, bool) {
 	b, ok := boardByStat[stat]
 	return b, ok
+}
+
+// bodyTitle capitalizes a [TimedBodies] entry for display. The wire form is
+// lowercase and opaque (§4.2); this is presentation only.
+func bodyTitle(body string) string {
+	if body == "" {
+		return body
+	}
+	return string(body[0]-32) + body[1:]
 }
 
 func causeTitle(cause string) string {
@@ -390,4 +457,109 @@ func (distanceFold) Apply(ctx context.Context, tx *sql.Tx, ev Event, _ FlightSta
 		return nil
 	}
 	return setValue(ctx, tx, ev.PlayerID, StatDistanceTravelled, total.Float64, ev.Seq)
+}
+
+// --- career-time folds --------------------------------------------------------
+//
+// Both boards below are the same rule with a different milestone:
+//
+//	the smallest sim_t at which an unflagged flight of this player reached the
+//	milestone, where sim_t is seconds since that career began.
+//
+// Three conditions, each a one-liner:
+//
+//   - the event must carry a career (§4.1). Without one, sim_t is a number with
+//     no origin and cannot be a career time; the event is skipped rather than
+//     guessed at.
+//   - the event must carry a sim_t, and it must be ≥ 0. Absent is not zero — a
+//     missing clock reading scored as 0 would be an unbeatable record.
+//   - the flight must be unflagged, exactly like every other board (§5.6). A
+//     teleport to orbit is not a fast ascent.
+//
+// The minimum is taken per player, not per career, which is what a leaderboard
+// wants: your best career is the one that represents you. Which career it was is
+// recorded in the row's context, and the read API qualifies it with that
+// career's rewind mark (career.go).
+//
+// No "first in the career" bookkeeping is needed to make that correct. Within a
+// career the clock only moves forward, so the earliest arrival *is* the minimum;
+// the only way a later arrival can undercut an earlier one is an earlier save
+// being loaded, which is precisely the case the rewind mark exists to state.
+
+// careerTime reports the career-relative time an event happened at, and whether
+// the event is eligible to set one of the boards above.
+func careerTime(ctx context.Context, ev Event, fs FlightStateReader) (float64, bool, error) {
+	if !ev.HasCareer() || !ev.HasSimTime || ev.SimTime < 0 {
+		return 0, false, nil
+	}
+	ok, err := scoreable(ctx, ev, fs)
+	if err != nil || !ok {
+		return 0, false, err
+	}
+	return ev.SimTime, true, nil
+}
+
+// toOrbitFold implements `fastest_to_orbit`: how long into a career the player
+// first put something into a stable orbit around anything.
+type toOrbitFold struct{}
+
+func (toOrbitFold) Name() string { return StatFastestToOrbit }
+
+func (toOrbitFold) Apply(ctx context.Context, tx *sql.Tx, ev Event, fs FlightStateReader) error {
+	p, ok := payloadOf[VehicleOrbit](ev)
+	if !ok || p.Phase != "achieved" {
+		return nil
+	}
+	t, ok, err := careerTime(ctx, ev, fs)
+	if err != nil || !ok {
+		return err
+	}
+	return putBest(ctx, tx, ev.PlayerID, StatFastestToOrbit, t, map[string]any{
+		"career": ev.Career,
+		"body":   p.Body,
+		"flight": ids.String(ev.FlightID),
+	}, ev.Seq)
+}
+
+// toBodyFold implements the `fastest_to_<body>` family: how long into a career
+// the player first entered each body's sphere of influence.
+//
+// It writes `player_body.first_sim_t` for *every* body — including ones with no
+// board — so that adding a body to [TimedBodies] later is a rebuild rather than
+// a data-loss discovery.
+type toBodyFold struct{}
+
+func (toBodyFold) Name() string { return "fastest_to_body" }
+
+func (toBodyFold) Apply(ctx context.Context, tx *sql.Tx, ev Event, fs FlightStateReader) error {
+	p, ok := payloadOf[VehicleSOI](ev)
+	if !ok || p.ToBody == "" {
+		return nil
+	}
+	t, ok, err := careerTime(ctx, ev, fs)
+	if err != nil || !ok {
+		return err
+	}
+
+	// soiFold owns the row's existence; this only ever lowers its time. It runs
+	// after soiFold (fold order in fold.go), so the row is already there. The
+	// coalesce covers a row soiFold inserted on a career-less event, which has
+	// no time yet — min() over NULL is NULL in SQLite.
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE player_body SET first_sim_t = min(coalesce(first_sim_t, ?), ?)
+		 WHERE player_id = ? AND kind = 'soi' AND body = ?`,
+		t, t, ev.PlayerID, p.ToBody); err != nil {
+		return fmt.Errorf("stats: record arrival time at %q: %w", p.ToBody, err)
+	}
+
+	if !slices.Contains(TimedBodies, p.ToBody) {
+		// A body outside the stock set counts towards `soi_bodies` and keeps its
+		// arrival time, but it does not get to mint a board (§6).
+		return nil
+	}
+	return putBest(ctx, tx, ev.PlayerID, FastestToStat(p.ToBody), t, map[string]any{
+		"career": ev.Career,
+		"from":   p.FromBody,
+		"flight": ids.String(ev.FlightID),
+	}, ev.Seq)
 }

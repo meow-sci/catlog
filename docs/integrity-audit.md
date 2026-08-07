@@ -204,6 +204,38 @@ audit's.
 
 ---
 
+### F4 — The career rewind mark is a fact about the clock, not an accusation (2026-08-07) · **Borderline**
+
+**What it does.** `careerFold` keeps `career.max_sim_t` per `(player, career)` and sets
+`career.rewound` when a `session.started` for that career arrives with a lower `sim_t`. That is
+exactly "an earlier save of this career was loaded". The read API surfaces it as
+`"rewound": true` on that career's rows on the career-time boards.
+
+**Against the five-part test, honestly.** It passes 1 (it compares against catlog's own wire
+contract — KSA's own clock is monotone within a save unless an earlier one is loaded, verified in
+`docs/ksa-integration.md` §5b), 2 (one sentence, one place), and 5 (its only effect is a boolean
+next to a number: nothing is excluded, nothing is scored, no human is queued, no history
+accumulates against a *player*). It fails 3 on a literal reading — it adds a table and a
+high-water mark that accumulates across events — and 4 on a literal reading, because an honest
+player who reloads an earlier save does set it.
+
+**Why it is here rather than deleted.** §8 governs *integrity checks*: mechanisms that try to
+infer cheating. This one does not try, and could not — save-scumming and ordinary reloading are the
+same event and catlog says so in `docs/events.md` in as many words. What it does is qualify a
+derived number: "seconds from game start to orbit" only means anything if the clock ran forward,
+so when it did not, the board says so. It is the same category as `telemetry.window.peak_g` being
+*absent* rather than zero — provenance on a measurement, not suspicion about a person. Note also
+that the *career grouping* it sits on is what stops the mark firing on an honest player with two
+saves; without it, every save switch would look like a rewind, and rule 4 would be failed for
+real.
+
+**Recommendation: keep it, and delete it if the owner disagrees.** Removing it is a small,
+self-contained change — drop `rewound` from the `career` table and the two read-API sites, and the
+boards keep working unchanged. The career grouping itself is load-bearing and must stay: without
+it the career-time boards cannot be defined at all.
+
+---
+
 ## Not governed by this principle
 
 Listed explicitly so a future reader does not cite §8 as a reason to delete them. None of these

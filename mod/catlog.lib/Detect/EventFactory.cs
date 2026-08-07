@@ -11,20 +11,21 @@ namespace MeowSci.Catlog.Lib.Detect;
 public static class EventFactory
 {
     /// <summary>Wraps a detected polled event.</summary>
-    /// <param name="tracker">Supplies the session and flight ULIDs.</param>
+    /// <param name="tracker">Supplies the career, session and flight ids.</param>
     /// <param name="detected">The detector's output.</param>
     /// <returns>The envelope.</returns>
     public static EventEnvelope FromDetected(FlightTracker tracker, DetectedEvent detected)
         => EventEnvelope.Create(
             detected.Type,
             tracker.SessionId,
+            tracker.CareerId,
             tracker.FlightFor(detected.VehicleId),
             detected.SimT,
             detected.WallMs,
             detected.Payload);
 
     /// <summary>Wraps a closed telemetry window.</summary>
-    /// <param name="tracker">Supplies the session and flight ULIDs.</param>
+    /// <param name="tracker">Supplies the career, session and flight ids.</param>
     /// <param name="window">The closed window.</param>
     /// <param name="wallMs">Client unix milliseconds at close time.</param>
     /// <returns>The envelope.</returns>
@@ -32,6 +33,7 @@ public static class EventFactory
         => EventEnvelope.Create(
             EventTypes.TelemetryWindow,
             tracker.SessionId,
+            tracker.CareerId,
             tracker.FlightFor(window.VehicleId),
             window.Payload.T1Sim,
             wallMs,
@@ -41,7 +43,7 @@ public static class EventFactory
     /// Wraps an impact whose survival verdict is now known, minting a flight for the vehicle if it
     /// does not have one.
     /// </summary>
-    /// <param name="tracker">Supplies the session and flight ULIDs.</param>
+    /// <param name="tracker">Supplies the career, session and flight ids.</param>
     /// <param name="impact">The resolved impact.</param>
     /// <returns>The envelope.</returns>
     public static EventEnvelope FromResolvedImpact(FlightTracker tracker, ResolvedImpact impact)
@@ -52,7 +54,7 @@ public static class EventFactory
     /// must <b>not</b> mint one (<see cref="EventPipeline.Flush"/> resolves impacts after flights
     /// have ended, and a minted flight there would be a phantom with no <c>flight.started</c>).
     /// </summary>
-    /// <param name="tracker">Supplies the session ULID.</param>
+    /// <param name="tracker">Supplies the career id and the session ULID.</param>
     /// <param name="impact">The resolved impact.</param>
     /// <param name="flight">The flight ULID to attribute the impact to.</param>
     /// <returns>The envelope.</returns>
@@ -60,6 +62,7 @@ public static class EventFactory
         => EventEnvelope.Create(
             EventTypes.VehicleImpact,
             tracker.SessionId,
+            tracker.CareerId,
             flight,
             impact.Signal.SimT,
             impact.Signal.WallMs,

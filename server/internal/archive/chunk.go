@@ -36,6 +36,7 @@ type line struct {
 	Ver     int             `json:"ver"`
 	Flight  *string         `json:"flight"`
 	Session string          `json:"session"`
+	Career  string          `json:"career"`
 	SimT    *float64        `json:"sim_t"`
 	WallT   int64           `json:"wall_t"`
 	Payload json.RawMessage `json:"payload"`
@@ -56,6 +57,7 @@ func encodeLine(se store.StoredEvent) ([]byte, error) {
 		Type:    se.Type,
 		Ver:     se.Ver,
 		Session: ids.String(se.SessionID),
+		Career:  se.Career,
 		WallT:   se.WallTime,
 		Payload: se.Payload,
 		Seq:     se.Seq,
@@ -128,6 +130,7 @@ func decodeLine(b []byte) (store.StoredEvent, error) {
 			ID:        id,
 			FlightID:  flight,
 			SessionID: session,
+			Career:    l.Career,
 			Type:      l.Type,
 			Ver:       l.Ver,
 			WallTime:  l.WallT,

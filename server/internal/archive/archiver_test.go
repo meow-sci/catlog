@@ -415,7 +415,7 @@ func TestChunkLineIsTheWireEnvelopePlusSeq(t *testing.T) {
 		t.Fatalf("chunk holds %d lines, want 2", len(lines))
 	}
 
-	wantKeys := []string{"id", "type", "ver", "flight", "session", "sim_t", "wall_t", "payload", "_seq", "_recv"}
+	wantKeys := []string{"id", "type", "ver", "flight", "session", "career", "sim_t", "wall_t", "payload", "_seq", "_recv"}
 	for i, l := range lines {
 		var obj map[string]json.RawMessage
 		if err := json.Unmarshal([]byte(l), &obj); err != nil {

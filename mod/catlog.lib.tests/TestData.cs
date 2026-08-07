@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using MeowSci.Catlog.Lib.Detect;
 using MeowSci.Catlog.Lib.Events;
 using MeowSci.Catlog.Lib.Telemetry;
+using MeowSci.Catlog.Lib.Util;
 
 namespace MeowSci.Catlog.Lib.Tests;
 
@@ -77,12 +78,14 @@ internal static class TestData
         string type = EventTypes.VehicleStaging,
         string? id = null,
         string session = "01J9V5M3E8Z0FAKESESSION01",
+        string? career = null,
         string? flight = "01J9V5M3E8Z0FAKEFLIGHT001",
         double simT = 12.5,
         long wallMs = WallMs,
         object? payload = null)
         => EventEnvelope.Create(
-            type, session, flight, simT, wallMs, payload ?? new VehicleStagingPayload(1), id);
+            type, session, career ?? CareerId, flight, simT, wallMs,
+            payload ?? new VehicleStagingPayload(1), id);
 
     internal static IReadOnlyList<EventEnvelope> Envelopes(
         int count, string type = EventTypes.VehicleStaging, long wallMs = WallMs)
@@ -132,11 +135,20 @@ internal static class TestData
     /// <summary>Deterministic session id so envelopes are reproducible.</summary>
     internal const string SessionId = "01J9V5M3E8Z0FAKESESSION01";
 
+    /// <summary>Deterministic career id (§4.1) so envelopes are reproducible.</summary>
+    internal static readonly string CareerId = Ids.CareerId(InstallId, "save:apollo");
+
+    /// <summary>A second career, for tests that need two saves to be distinguishable.</summary>
+    internal static readonly string OtherCareerId = Ids.CareerId(InstallId, "save:gemini");
+
     internal static EventPipelineOptions PipelineOptions(
         double windowSeconds = Wire.TelemetryWindowSeconds,
-        string? sessionId = SessionId)
-        => new(InstallId, "0.1.0", "2026.8.5.5168", sessionId, windowSeconds);
+        string? sessionId = SessionId,
+        string? careerId = null)
+        => new(InstallId, "0.1.0", "2026.8.5.5168", sessionId, windowSeconds, careerId ?? CareerId);
 
-    internal static EventPipeline Pipeline(double windowSeconds = Wire.TelemetryWindowSeconds)
-        => new(PipelineOptions(windowSeconds));
+    internal static EventPipeline Pipeline(
+        double windowSeconds = Wire.TelemetryWindowSeconds,
+        string? careerId = null)
+        => new(PipelineOptions(windowSeconds, careerId: careerId));
 }

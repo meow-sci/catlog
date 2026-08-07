@@ -103,6 +103,7 @@ type envelope struct {
 	Ver     *int            `json:"ver"`
 	Flight  *string         `json:"flight"`
 	Session *string         `json:"session"`
+	Career  *string         `json:"career"`
 	SimT    *float64        `json:"sim_t"`
 	WallT   *int64          `json:"wall_t"`
 	Payload json.RawMessage `json:"payload"`
@@ -195,6 +196,12 @@ func decodeEnvelope(line string, limits Limits) (store.Event, *authz.Error) {
 			return store.Event{}, malformed("flight is not a ULID")
 		}
 	}
+	if env.Career == nil {
+		return store.Event{}, malformed("career is missing")
+	}
+	if !validCareer(*env.Career) {
+		return store.Event{}, malformed("career is not " + careerShape)
+	}
 	if env.WallT == nil {
 		return store.Event{}, malformed("wall_t is missing")
 	}
@@ -210,6 +217,7 @@ func decodeEnvelope(line string, limits Limits) (store.Event, *authz.Error) {
 		ID:        id,
 		FlightID:  flight,
 		SessionID: session,
+		Career:    *env.Career,
 		Type:      env.Type,
 		Ver:       *env.Ver,
 		WallTime:  *env.WallT,
@@ -222,6 +230,36 @@ func decodeEnvelope(line string, limits Limits) (store.Event, *authz.Error) {
 		ev.SimTime = sql.NullFloat64{Float64: *env.SimT, Valid: true}
 	}
 	return ev, nil
+}
+
+// CareerLength is the character length of the §4.1 `career` id: 16 lowercase
+// Crockford base32 characters, the same construction as a `kid`.
+const CareerLength = 16
+
+const careerShape = "16 lowercase Crockford base32 characters"
+
+// ValidCareer reports whether s is a well-formed §4.1 career id. Exported so the
+// admin event endpoint applies exactly the same rule as the wire does.
+func ValidCareer(s string) bool { return validCareer(s) }
+
+// validCareer checks the §4.1 career id. Fixed length and a closed alphabet,
+// because this value becomes a grouping key on a public board: anything looser
+// would let a client mint visually confusable careers, and anything longer would
+// be a free text column on every stored row.
+func validCareer(s string) bool {
+	if len(s) != CareerLength {
+		return false
+	}
+	for i := range len(s) {
+		c := s[i]
+		switch {
+		case c >= '0' && c <= '9':
+		case c >= 'a' && c <= 'z' && c != 'i' && c != 'l' && c != 'o' && c != 'u':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // envelopeError turns a decoder error into a client-safe detail. json's

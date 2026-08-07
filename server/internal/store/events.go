@@ -394,9 +394,10 @@ type Event struct {
 	ID        ids.ID          // envelope `id`, the dedup key
 	FlightID  ids.ID          // ids.Zero → NULL (session and roster events)
 	SessionID ids.ID          // never zero in a valid envelope
+	Career    string          // envelope `career`: which save this session is playing (§4.1)
 	Type      string          // e.g. "vehicle.rud"
 	Ver       int             // payload schema version, ≥1
-	SimTime   sql.NullFloat64 // Universe sim seconds
+	SimTime   sql.NullFloat64 // Universe sim seconds since the career began
 	WallTime  int64           // client unix ms, untrusted
 	Payload   json.RawMessage // per-type object, may be {}
 }
@@ -421,8 +422,8 @@ func (e *Events) InsertEvents(ctx context.Context, q Querier, playerID int64, ev
 		q = e.Writer()
 	}
 	const q1 = `INSERT OR IGNORE INTO event
-	  (event_id, player_id, flight_id, session_id, type, ver, sim_time, wall_time, recv_time, payload)
-	  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	  (event_id, player_id, flight_id, session_id, career, type, ver, sim_time, wall_time, recv_time, payload)
+	  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	recv := nowMillis()
 	for i, ev := range evs {
@@ -435,7 +436,7 @@ func (e *Events) InsertEvents(ctx context.Context, q Querier, playerID int64, ev
 		}
 		res, err := q.ExecContext(ctx, q1,
 			ids.Bytes(ev.ID), playerID, ids.NullBytes(ev.FlightID), ids.NullBytes(ev.SessionID),
-			ev.Type, ev.Ver, ev.SimTime, ev.WallTime, recv, string(payload))
+			nullString(ev.Career), ev.Type, ev.Ver, ev.SimTime, ev.WallTime, recv, string(payload))
 		if err != nil {
 			return accepted, deduped, fmt.Errorf("store: insert event %s: %w", ids.String(ev.ID), err)
 		}
@@ -452,6 +453,17 @@ func (e *Events) InsertEvents(ctx context.Context, q Querier, playerID int64, ev
 	return accepted, deduped, nil
 }
 
+// nullString stores "" as SQL NULL. Every ULID column already distinguishes
+// "absent" from "zero bytes" that way (ids.NullBytes); career is text and gets
+// the same treatment, so a pre-career row and a row whose client omitted it are
+// the same thing to every reader.
+func nullString(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}
+
 // EventsSince reads up to limit events with seq > after, in seq order — the
 // projector's cursor scan (§5.6) and the archiver's chunk scan (§5.10).
 func (e *Events) EventsSince(ctx context.Context, after int64, limit int) ([]StoredEvent, error) {
@@ -459,7 +471,7 @@ func (e *Events) EventsSince(ctx context.Context, after int64, limit int) ([]Sto
 		return nil, nil
 	}
 	rows, err := e.Reader().QueryContext(ctx,
-		`SELECT seq, event_id, player_id, flight_id, session_id, type, ver, sim_time, wall_time, recv_time, payload
+		`SELECT seq, event_id, player_id, flight_id, session_id, career, type, ver, sim_time, wall_time, recv_time, payload
 		 FROM event WHERE seq > ? ORDER BY seq LIMIT ?`, after, limit)
 	if err != nil {
 		return nil, fmt.Errorf("store: read events: %w", err)
@@ -471,12 +483,14 @@ func (e *Events) EventsSince(ctx context.Context, after int64, limit int) ([]Sto
 		var (
 			se                    StoredEvent
 			eventID, flight, sess []byte
+			career                sql.NullString
 			payload               string
 		)
-		if err := rows.Scan(&se.Seq, &eventID, &se.PlayerID, &flight, &sess, &se.Type, &se.Ver,
+		if err := rows.Scan(&se.Seq, &eventID, &se.PlayerID, &flight, &sess, &career, &se.Type, &se.Ver,
 			&se.SimTime, &se.WallTime, &se.RecvTime, &payload); err != nil {
 			return nil, fmt.Errorf("store: scan event: %w", err)
 		}
+		se.Career = career.String
 		if se.ID, err = ids.FromBytes(eventID); err != nil {
 			return nil, fmt.Errorf("store: event seq %d: %w", se.Seq, err)
 		}

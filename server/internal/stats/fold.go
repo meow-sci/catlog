@@ -49,20 +49,25 @@ type FlightStateReader interface {
 // KIAWindowSeconds is the ±window of §4.2's crew-survival rule.
 const KIAWindowSeconds = 2.0
 
-// Folds returns every fold in application order: flight state first (§5.6), then
-// the boards. The order of the boards among themselves does not matter — no two
-// write the same (player_id, stat).
+// Folds returns every fold in application order: the state folds first (§5.6),
+// then the boards. The order of the boards among themselves does not matter — no
+// two write the same (player_id, stat).
 func Folds() []Fold {
-	return append([]Fold{FlightFold()}, BoardFolds()...)
+	return append(StateFolds(), BoardFolds()...)
 }
 
-// FlightFold returns the flight_state fold, which every other fold depends on.
+// StateFolds returns the folds that maintain the tables the boards read:
+// `flight_state` (the flag exclusion) and `career` (the time-to-milestone
+// grouping and its rewind mark). A rebuild runs these alone on its first pass.
+func StateFolds() []Fold { return []Fold{flightFold{}, careerFold{}} }
+
+// FlightFold returns the flight_state fold, which every board fold depends on.
 func FlightFold() Fold { return flightFold{} }
 
 // BoardFolds returns every leaderboard fold, in board-metadata order.
 //
-// A rebuild applies these on its second pass, after [FlightFold] alone has built
-// a complete flight_state on the first (§5.6).
+// A rebuild applies these on its second pass, after [StateFolds] alone has built
+// a complete flight_state and career table on the first (§5.6).
 func BoardFolds() []Fold {
 	return []Fold{
 		lithobrakeFold{},
@@ -77,14 +82,40 @@ func BoardFolds() []Fold {
 		countFold{stat: StatStagings, eventType: "vehicle.staging"},
 		recoveredFold{},
 		distanceFold{},
+		toOrbitFold{},
+		toBodyFold{},
 	}
 }
 
 // --- shared write helpers ----------------------------------------------------
 //
-// These are the two shapes every board write takes. They are here rather than in
+// These are the shapes every board write takes. They are here rather than in
 // package store because the SQL *is* the rule: the WHERE guard on the upsert is
 // how "ties keep the earliest updated_seq" is spelled.
+
+// putBest writes a min-record board: the row is replaced only by a strictly
+// *smaller* value. It is the exact mirror of [putRecord], including the tie
+// rule — an equal time leaves the earlier updated_seq, so whoever got there
+// first keeps the rank (§5.6).
+//
+// This is what every "fastest career time to X" board is: the value is seconds
+// since the career began, and lower is better.
+func putBest(ctx context.Context, tx *sql.Tx, playerID int64, stat string, value float64, context map[string]any, seq int64) error {
+	cx, err := encodeContext(context)
+	if err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx,
+		`INSERT INTO player_stat (player_id, stat, value, context, updated_seq) VALUES (?, ?, ?, ?, ?)
+		 ON CONFLICT (player_id, stat) DO UPDATE SET
+		   value = excluded.value, context = excluded.context, updated_seq = excluded.updated_seq
+		 WHERE excluded.value < player_stat.value`,
+		playerID, stat, value, cx, seq)
+	if err != nil {
+		return fmt.Errorf("stats: best %s for player %d: %w", stat, playerID, err)
+	}
+	return nil
+}
 
 // putRecord writes a record (max) board. The row is replaced only by a strictly
 // larger value, so an equal value leaves the earlier updated_seq — and therefore

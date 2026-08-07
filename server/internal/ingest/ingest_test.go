@@ -95,7 +95,7 @@ func (r *rig) batch(n int) []byte {
 	r.t.Helper()
 	var b strings.Builder
 	for range n {
-		fmt.Fprintf(&b, `{"id":%q,"type":"vehicle.rud","ver":1,"flight":%q,"session":%q,"sim_t":%d.5,"wall_t":%d,"payload":{"cause":"ground_impact","speed_ms":%d}}`+"\n",
+		fmt.Fprintf(&b, `{"id":%q,"type":"vehicle.rud","ver":1,"flight":%q,"session":%q,"career":"0123456789abcdef","sim_t":%d.5,"wall_t":%d,"payload":{"cause":"ground_impact","speed_ms":%d}}`+"\n",
 			ids.String(testutil.ULID(r.t)), ids.String(r.sid), ids.String(r.sid), n, r.now.UnixMilli(), n*7)
 	}
 	return []byte(b.String())

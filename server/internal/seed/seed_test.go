@@ -90,12 +90,21 @@ func TestSeedProducesTheExpectedBoards(t *testing.T) {
 		"demo_ace/fastest_surface_speed": 2410,
 		"demo_ace/fastest_orbital_speed": 9450,
 		"demo_ace/peak_g_survived":       6.8,
-		"demo_ace/orbits_achieved":       2,
+		"demo_ace/orbits_achieved":       3,
 		"demo_ace/dockings":              1,
 		"demo_ace/stagings":              3,
-		"demo_ace/soi_bodies":            1,
-		"demo_ace/kittens_recovered":     3,
+		"demo_ace/soi_bodies":            4,
+		"demo_ace/kittens_recovered":     5,
 		"demo_ace/distance_travelled":    4_210_000,
+
+		// demo_ace's second career is the fast one: its clock restarts at 0 and
+		// the builder ticks 12.5 s per event, so orbit lands at 37.5 s into the
+		// career and Mars at 75 s. Career-relative, not wall-clock — that is the
+		// whole point of the boards.
+		"demo_ace/fastest_to_orbit": 37.5,
+		"demo_ace/fastest_to_luna":  50,
+		"demo_ace/fastest_to_sol":   62.5,
+		"demo_ace/fastest_to_mars":  75,
 
 		"demo_tumbler/kitten_tumbles":     4,
 		"demo_tumbler/soi_bodies":         2,

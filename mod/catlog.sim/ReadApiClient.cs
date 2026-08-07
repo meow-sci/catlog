@@ -145,17 +145,18 @@ public sealed class ReadApiClient : IDisposable
     /// <remarks>
     /// <para>
     /// The read side resolves <c>player_id → handle</c> through an in-memory directory (§5.4),
-    /// because the two Turso files cannot be joined. That directory is loaded at start and
-    /// reloaded by the admin routes that mutate identity — but <c>POST /admin/issue</c>, the
-    /// dev/test issuance path <c>catlogctl issue</c> uses, does <b>not</b> reload it. A credential
-    /// minted against a running catlogd therefore ships fine and folds fine, and then every board
-    /// row for it is filtered out as "holding no handle yet" until the process restarts.
+    /// because the two Turso files cannot be joined. A handle claimed against a *running* catlogd
+    /// that never reached that directory ships fine and folds fine, and is then filtered out of
+    /// every board as "holding no handle yet" — a failure that is completely silent from the
+    /// client's side.
     /// </para>
     /// <para>
-    /// <c>POST /admin/seed</c> does reload the directory (and is idempotent, and drains the
-    /// projector before returning), so it is used here as the reload. This is a workaround for a
-    /// server-side gap, recorded in <c>docs/DECISIONS.md</c>; the fix belongs in WP3, which owns
-    /// handle claims.
+    /// That gap is fixed: <c>POST /admin/issue</c> and <c>POST /api/handles</c> both reload the
+    /// directory now, so this method should never find an unresolvable handle. It is kept as a
+    /// backstop precisely because the failure is silent — <c>POST /admin/seed</c> forces a reload
+    /// (idempotent, and it drains the projector before returning), and the note it prints is the
+    /// only thing that would tell you the reload had regressed rather than the scenario being
+    /// wrong.
     /// </para>
     /// </remarks>
     public void EnsureHandleVisible(string handle)
@@ -339,6 +340,38 @@ public sealed class ReadApiClient : IDisposable
             note: baseline is null
                 ? $"record board; scenario set {Num(value)}"
                 : $"record board; max(baseline {Num(baseline.Value)}, {Num(value)})");
+
+        (int Rank, double Value)? row = BoardRow(stat, handle);
+        Record(
+            ok: row is { } r && Math.Abs(r.Value - expected) < 1e-6,
+            label: stat + " (board page)",
+            expected: Num(expected),
+            actual: row is null ? "(handle absent from the board)" : $"{Num(row.Value.Value)} at rank {row.Value.Rank}",
+            note: "GET /v1/leaderboards/" + stat);
+    }
+
+    /// <summary>
+    /// Asserts a <b>career-time</b> board: the player's value must end at the <i>smaller</i> of the
+    /// baseline and <paramref name="value"/>, because the value is seconds since the career began
+    /// and the fastest run wins (§4.1). The board page must agree with the profile page.
+    /// </summary>
+    /// <param name="handle">The player.</param>
+    /// <param name="stat">The board's stat key.</param>
+    /// <param name="value">The career time the scenario should have set.</param>
+    public void ExpectBest(string handle, string stat, double value)
+    {
+        double? baseline = Baseline.Player.Get(stat);
+        double expected = baseline is { } b ? Math.Min(b, value) : value;
+        double? actual = Player(handle).Get(stat);
+
+        Record(
+            ok: actual is { } a && Math.Abs(a - expected) < 1e-6,
+            label: stat,
+            expected: Num(expected),
+            actual: actual is null ? "(not on the board)" : Num(actual.Value),
+            note: baseline is null
+                ? $"career-time board; scenario set {Num(value)} s"
+                : $"career-time board; min(baseline {Num(baseline.Value)}, {Num(value)}) s");
 
         (int Rank, double Value)? row = BoardRow(stat, handle);
         Record(

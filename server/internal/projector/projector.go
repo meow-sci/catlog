@@ -70,7 +70,7 @@ type Projector struct {
 
 	folds      []stats.Fold
 	boardFolds []stats.Fold
-	flightFold stats.Fold
+	stateFolds []stats.Fold
 
 	// applyMu serializes the incremental loop against a rebuild. Both mutate
 	// the same projections database, and a rebuild also swaps the handle out
@@ -137,7 +137,7 @@ func New(opts Options) (*Projector, error) {
 		log:        opts.Log.With("component", "projector"),
 		folds:      stats.Folds(),
 		boardFolds: stats.BoardFolds(),
-		flightFold: stats.FlightFold(),
+		stateFolds: stats.StateFolds(),
 		skipped:    map[string]struct{}{},
 		done:       make(chan struct{}),
 	}, nil
