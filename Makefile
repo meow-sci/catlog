@@ -15,19 +15,44 @@ SHELL := /bin/bash
 
 SERVER_URL ?= http://127.0.0.1:8080
 ADMIN_URL  ?= http://127.0.0.1:6060
+MOCKIDP_URL ?= http://127.0.0.1:9090
 SCENARIO   ?=
 CRED       ?=
 # make sim ASSERT=1 …  checks the leaderboards after the run (§7.3).
+# make loadgen ASSERT=1 … checks the load harness's end-to-end invariants.
 ASSERT     ?=
 # make sim SPEED=100 … paces the run at 100 sim seconds per wall second; unset runs flat out.
 SPEED      ?=
+
+# --- catlog.loadgen ---------------------------------------------------------
+# The high-volume harness. Everything below is a pass-through: unset variables
+# are simply not forwarded, so the tool's own defaults apply and `--help` stays
+# the single place they are documented.
+PLAYERS     ?=
+DURATION    ?=
+SEED        ?=
+NAMESPACE   ?=
+CONCURRENCY ?=
+BATCH       ?=
+SHIP_AGE    ?=
+AUTH        ?=
+IDP         ?=
+CLOCK       ?=
+READERS     ?=
+READ_RPS    ?=
+MODERATION  ?=
+TOO_NEW     ?=
+REPORT      ?=
+TIMEOUT     ?=
+VERBOSE     ?=
+LOADGEN_ARGS ?=
 # Throwaway data directory for `make e2e` (§8). Never ./data — see the target.
 E2E_DATA_DIR ?= data-e2e
 
 .PHONY: help bootstrap build server-build mod-build site-build \
         test server-test mod-test test-integration test-nginx \
         e2e e2e-browser e2e-full server-run-test-env \
-        sim dev mockidp-run keys seed testvectors clean
+        sim loadgen dev mockidp-run keys seed testvectors clean
 
 ## help: list targets
 help:
@@ -135,6 +160,40 @@ sim:
 	  $(if $(strip $(CRED)),--credential "$(CRED)",) \
 	  $(if $(strip $(ASSERT)),--assert,) \
 	  $(if $(strip $(SPEED)),--speed "$(SPEED)",)
+
+## loadgen: high-volume harness — many randomised players at a live server (PLAYERS=, DURATION=, SEED=, …; --help lists them all)
+# Needs `make dev` in another terminal: it provisions every player through the
+# real mockidp OAuth flow and ships through the real catlog.lib pipeline.
+#
+#   make loadgen                                     # 25 players, 45 simulated minutes
+#   make loadgen PLAYERS=250 DURATION=3h ASSERT=1    # a serious run, invariants checked
+#   make loadgen SEED=4242 REPORT=json               # reproducible; JSON on stdout, progress on stderr
+#   make loadgen LOADGEN_ARGS="--auth admin --no-feed"   # anything not given its own variable
+#
+# Unset variables are not forwarded at all, so the tool's defaults apply and
+# `make loadgen LOADGEN_ARGS=--help` remains the one place they are documented.
+loadgen:
+	@dotnet run --project mod/catlog.loadgen -c Release -v quiet -- \
+	  --server "$(SERVER_URL)" --admin "$(ADMIN_URL)" --mockidp "$(MOCKIDP_URL)" \
+	  $(if $(strip $(PLAYERS)),--players "$(PLAYERS)",) \
+	  $(if $(strip $(DURATION)),--duration "$(DURATION)",) \
+	  $(if $(strip $(SEED)),--seed "$(SEED)",) \
+	  $(if $(strip $(NAMESPACE)),--namespace "$(NAMESPACE)",) \
+	  $(if $(strip $(CONCURRENCY)),--concurrency "$(CONCURRENCY)",) \
+	  $(if $(strip $(BATCH)),--batch "$(BATCH)",) \
+	  $(if $(strip $(SHIP_AGE)),--ship-age "$(SHIP_AGE)",) \
+	  $(if $(strip $(AUTH)),--auth "$(AUTH)",) \
+	  $(if $(strip $(IDP)),--idp "$(IDP)",) \
+	  $(if $(strip $(CLOCK)),--clock "$(CLOCK)",) \
+	  $(if $(strip $(READERS)),--readers "$(READERS)",) \
+	  $(if $(strip $(READ_RPS)),--read-rps "$(READ_RPS)",) \
+	  $(if $(strip $(MODERATION)),--moderation "$(MODERATION)",) \
+	  $(if $(strip $(TOO_NEW)),--too-new "$(TOO_NEW)",) \
+	  $(if $(strip $(REPORT)),--report "$(REPORT)",) \
+	  $(if $(strip $(TIMEOUT)),--timeout "$(TIMEOUT)",) \
+	  $(if $(strip $(ASSERT)),--assert,) \
+	  $(if $(strip $(VERBOSE)),--verbose,) \
+	  $(LOADGEN_ARGS)
 
 ## dev: run catlogd + mockidp in the foreground (Ctrl-C stops both)
 dev: server-build

@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+        <AssemblyName>MeowSci.Catlog.LoadGen</AssemblyName>
+        <RootNamespace>MeowSci.Catlog.LoadGen</RootNamespace>
+        <Description>High-volume load-testing harness: provisions N players through the real
+            mockidp OAuth flow, generates randomised-but-plausible gameplay for each of them over a
+            simulated time span, and drives every one of them through the real catlog.lib
+            EventPipeline → OutboxDb → BatchShipper path at a live catlogd. Reports throughput,
+            ingest latency percentiles, an HTTP status histogram and projector catch-up, and checks
+            end-to-end invariants under --assert.
+
+            Deliberately separate from catlog.sim: the sim is a *deterministic acceptance* tool
+            whose six scenarios are asserted to exact leaderboard values, and it must stay that
+            way. This project reuses its vehicle/step modelling and its read-API client and adds
+            the randomised, many-player, flag-driven half on top.</Description>
+        <!-- Referenced from catlog.sim, which is an Exe. Only this project's own Main is an entry
+             point; the reference contributes types, not a second one. -->
+        <NoWarn>$(NoWarn)</NoWarn>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\catlog.lib\catlog.lib.csproj" />
+        <!--
+            catlog.sim is referenced for SimVehicle / SimBody / SimStep / SimShipperClock and
+            ReadApiClient — the modelling and the read-API plumbing §7.3 already got right. The
+            dependency points this way on purpose: nothing in catlog.sim knows this project
+            exists, so no scenario's determinism can be disturbed from here.
+        -->
+        <ProjectReference Include="..\catlog.sim\catlog.sim.csproj" />
+    </ItemGroup>
+
+</Project>

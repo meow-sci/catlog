@@ -13,6 +13,7 @@
 //	GET  /github/login/oauth/authorize     consent page → 302 with ?code=
 //	POST /github/login/oauth/access_token  form-encoded, or JSON on request
 //	GET  /github/user                      {"id": 4242, "created_at": "…", …}
+//	POST /generate                         mint N synthetic subjects (see generate.go)
 //	GET  /healthz                          {"ok": true}
 //
 // The cast lives in `server/mockidp.toml`: one aged Discord account and one
@@ -20,6 +21,11 @@
 // both directions, and the same pair for GitHub. Every consent-page button
 // carries the stable DOM id `#login-as-<slug(label)>` that WP5's playwright
 // suite clicks.
+//
+// `POST /generate` adds a second, unrendered population for `catlog.loadgen`:
+// hundreds of aged (and, on request, deliberately too-new) subjects that sign
+// in through the identical flow. It leaves the committed cast and its DOM ids
+// untouched, and requires nothing of catlogd.
 //
 // mockidp holds nothing worth persisting: codes and tokens live in memory and
 // the Google signing key is generated fresh at every start.

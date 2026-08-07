@@ -44,6 +44,11 @@ type Server struct {
 	mu     sync.Mutex
 	codes  map[string]grant
 	tokens map[string]grant
+	// generated is the second population: subjects minted by POST /generate
+	// for the load harness (see generate.go). Kept apart from [Server.accounts]
+	// on purpose — nothing renders it, so the §5.8.1 `#login-as-<slug>` DOM ids
+	// stay exactly the five the playwright suite clicks.
+	generated map[string]Account
 }
 
 // grant is an issued authorization code or access token: which account it
@@ -77,6 +82,7 @@ func NewServer(cfg Config, baseURL string, log *slog.Logger) (*Server, error) {
 		googleKey: key,
 		codes:     map[string]grant{},
 		tokens:    map[string]grant{},
+		generated: map[string]Account{},
 	}, nil
 }
 
@@ -100,6 +106,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /github/login/oauth/authorize", s.authorize(IdPGitHub))
 	mux.HandleFunc("POST /github/login/oauth/access_token", s.handleGitHubToken)
 	mux.HandleFunc("GET /github/user", s.handleGitHubUser)
+
+	// Programmatic subjects for the load harness (generate.go). Dev-only, like
+	// the rest of this binary; it adds a second population of accounts and
+	// changes nothing else, least of all catlogd.
+	mux.HandleFunc("POST /generate", s.handleGenerate)
 
 	return mux
 }
@@ -263,13 +274,17 @@ func (s *Server) handleIndex(w http.ResponseWriter, _ *http.Request) {
 
 // --- code / token plumbing ---------------------------------------------------
 
+// account resolves a subject to the account behind it: the committed cast
+// first, then the accounts POST /generate minted. Both populations redeem codes
+// and answer userinfo through exactly the same code below — the only difference
+// between them is that one is rendered as a button and the other is not.
 func (s *Server) account(idp, sub string) (Account, bool) {
 	for _, a := range s.accounts {
 		if a.IdP == idp && a.Sub == sub {
 			return a, true
 		}
 	}
-	return Account{}, false
+	return s.generatedAccount(idp, sub)
 }
 
 func (s *Server) mintCode(idp, sub, redirectURI string) (string, error) {

@@ -163,9 +163,15 @@ public sealed class ReadApiClient : IDisposable
         if (Player(handle).Exists)
             return;
 
+        // The bug this worked around is fixed: POST /admin/issue and POST /api/handles both call
+        // reloadDirectory now, so this branch should be unreachable. It is kept as a cheap backstop
+        // because the failure it catches is silent — the events fold perfectly and the player is
+        // simply absent from every board — and the note below is the only thing that would tell you
+        // the reload regressed rather than the scenario being wrong.
         Console.WriteLine(
-            $"note: the server cannot resolve '{handle}' yet — POST /admin/issue does not reload the "
-            + "handle directory. Forcing a reload via POST /admin/seed (idempotent).");
+            $"note: the server cannot resolve '{handle}' yet, which should no longer happen — the "
+            + "handle-directory reload may have regressed. Forcing a reload via POST /admin/seed "
+            + "(idempotent).");
 
         using var request = new HttpRequestMessage(HttpMethod.Post, _adminUrl + "/admin/seed");
         request.Content = new StringContent("{}", Encoding.UTF8, "application/json");

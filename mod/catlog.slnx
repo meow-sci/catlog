@@ -14,6 +14,15 @@
     <Project Path="catlog.lib/catlog.lib.csproj" />
     <Project Path="catlog/catlog.csproj" />
     <Project Path="catlog.sim/catlog.sim.csproj" />
+    <!--
+        catlog.loadgen is the high-volume harness (many randomised players against a live
+        catlogd). It sits beside catlog.sim rather than inside it because the sim is a
+        deterministic acceptance tool whose six scenarios are asserted to exact leaderboard
+        values, and mixing a randomised mode into it would put that at risk. The dependency
+        runs one way only: loadgen references the sim for its vehicle/step modelling and its
+        read-API client, and nothing in the sim knows loadgen exists.
+    -->
+    <Project Path="catlog.loadgen/catlog.loadgen.csproj" />
     <Project Path="catlog.lib.tests/catlog.lib.tests.csproj" />
     <Project Path="catlog.integration.tests/catlog.integration.tests.csproj" />
 </Solution>

@@ -18,7 +18,7 @@ game** — the mod's core is a KSA-free library exercised by a console gameplay 
 | Path | What |
 |---|---|
 | `server/` | Go module `github.com/meow-sci/catlog/server` — `catlogd`, `catlogctl`, `mockidp` |
-| `mod/` | .NET 10 solution — `catlog.lib` (KSA-free core), `catlog.sim`, tests; the game mod joins in WP8 |
+| `mod/` | .NET 10 solution — `catlog.lib` (KSA-free core), `catlog.sim`, `catlog.loadgen`, tests, and the game mod |
 | `site/` | Static assets (CSS/JS) + the Playwright e2e suite. HTML is rendered by the Go server. |
 | `docs/` | The [constitution](docs/CONSTITUTION.md) plus the normative contracts, extracted from the plan: [events](docs/events.md), [ingest & read API](docs/ingest-api.md), [credential](docs/credential.md), [identity](docs/identity.md), [decisions](docs/DECISIONS.md) |
 | `contracts/` | Cross-language conformance vectors consumed by both the Go and C# test suites |
@@ -72,6 +72,48 @@ The board and the live feed update while it runs — the feed over server-sent e
 
 `make dev` serves `site/dist` at `/static/`, so run `make site-build` after changing anything under
 `site/assets/`. In production nginx serves the same tree and `[server] static_dir` is left empty.
+
+## Load testing
+
+`make sim` plays one scripted flight for one player and asserts exact leaderboard values.
+`make loadgen` is the other half: **hundreds of players, randomised play, real identities**.
+
+```sh
+make loadgen                                     # 25 players, 45 simulated minutes each
+make loadgen PLAYERS=250 DURATION=3h ASSERT=1    # a serious run, invariants checked
+make loadgen SEED=4242 REPORT=json               # reproducible; JSON on stdout, progress on stderr
+make loadgen LOADGEN_ARGS=--help                 # every flag, with what it measures
+```
+
+It needs `make dev` running in another terminal, and it touches nothing outside 127.0.0.1.
+
+Each player is provisioned the way a real one is — `mockidp` mints a subject, catlogd runs the
+OAuth code exchange, sets a session cookie and issues a license against a key pair generated in
+the harness — and then drives the **real** `catlog.lib` pipeline: detector → SQLite outbox → ES256
+proof → Brotli batch → `POST /v1/ingest`. No envelope is ever hand-authored. `--auth admin` swaps
+the identity stack for `POST /admin/issue` when the question is about ingest alone.
+
+Play is invented, not scripted: fleets, launches, orbits, escapes, SOI changes, EVAs, dockings,
+tumbles, all six RUD causes, integrity flags and save reloads, weighted so most flights are
+ordinary and records are rare. A small proportion of accounts are minted deliberately too young
+for the 30-day age gate and are expected to be **refused**; another few exercise reissue, revoke,
+admin ban and delete-my-data. The read API and the live feed are hammered throughout.
+
+`--seed` makes a run replayable: the same seed produces the same event stream whatever the
+concurrency, and the report prints a digest of it to prove two runs agree. `--namespace` controls
+the *identities* separately, so a seed can be re-run against a database that already holds the
+last run's players.
+
+`--assert` checks the invariants a run must have whatever it generated: zero silent loss
+(`events.total` moved by exactly the number of envelopes produced), no unexplained non-2xx, no
+duplicate delivery, a re-sent batch swallowed by the replay short-circuit, every too-young login
+refused, the projector at the head of the log, and every player visible on at least one board.
+
+The client's hard 30-second ship floor is measured against an injected clock, exactly as
+`catlog.sim` does, so a run compresses hours of play into seconds. **Every server-side limit stays
+real** — the per-credential token bucket, the bounded write channel, the ±300 s proof-skew window —
+and the report says which of them was actually binding. See `docs/DECISIONS.md` for what a run on
+one laptop measured.
 
 ## End-to-end
 
