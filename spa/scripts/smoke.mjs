@@ -24,31 +24,49 @@
 // `http://localhost:4173/catlog/` for a subpath build. Every URL below is
 // derived from it, so the same script proves either deployment shape.
 //
-// It asserts against the deterministic demo dataset `POST /admin/seed` inserts,
-// so a change to that fixture is supposed to break this.
+// It asserts against the deterministic demo dataset `POST /admin/seed` inserts.
+//
+// Most of what it expects is *fetched from the read API at run time* and then
+// looked for on screen, because the question a browser smoke test answers is
+// "does the SPA render what the server said", not "does the server still say the
+// number somebody typed here in 2026". That matters more than it used to: the
+// board index is now assembled from the data — catlog keeps no list of celestial
+// bodies — so its membership changes as people fly, and any list of board names
+// hard-coded here would be wrong within a week.
+//
+// One value stays hard-coded on purpose. `ANCHOR` below is §5.6's own worked
+// example, and it is the tripwire that says the demo dataset is still the
+// dataset: if `server/internal/seed/seed.go` stops producing it, this fails
+// loudly and says so. Change it there and here together.
 import { chromium } from 'playwright';
 
 const BASE = (process.env.SPA_URL ?? 'http://localhost:4173/').replace(/\/*$/, '/');
 const ADMIN = process.env.ADMIN_URL ?? 'http://127.0.0.1:6060';
+// The read API the bundle was built against (VITE_CATLOG_API_BASE). Under
+// `pnpm dev` the API is proxied through the app's own origin, so point this at
+// SPA_URL in that case.
+const API = (process.env.CATLOG_API_URL ?? 'http://127.0.0.1:8080').replace(/\/+$/, '');
 
 /** An absolute URL for an app-relative path like `/boards/rud_total`. */
 const urlFor = (path) => new URL(path.replace(/^\//, ''), BASE).toString();
 
-/** The seeded records, verbatim from server/internal/seed. */
-const SEEDED = [
-  { path: '/boards/biggest_lithobrake_survived', expect: ['demo_crasher', '214 m/s'] },
-  { path: '/boards/orbits_achieved', expect: ['demo_ace', '2 orbits'] },
-  { path: '/boards/kitten_tumbles', expect: ['demo_tumbler', '4 tumbles'] },
-  { path: '/p/demo_ace', expect: ['Orbits Achieved', 'rank #1', '2 orbits'] },
-  { path: '/p/demo_crasher', expect: ['Biggest Lithobrake Survived', '214 m/s'] },
-  { path: '/boards', expect: ['Biggest Lithobrake Survived', 'Kitten Tumbles', 'Dockings'] },
-  { path: '/', expect: ['demo_crasher', 'Live activity'] },
-  // §4.8 answers 404 identically for unknown, retired and banned handles.
-  { path: '/p/definitely_not_a_player', expect: ['No such player'] },
-  // A path no route matches renders the app's own not-found state — not the
-  // host's 404 page, and not a blank screen.
-  { path: '/not-a-real-page', expect: ['Page not found', '/not-a-real-page'] },
-];
+/**
+ * The one hard-coded seeded value: §5.6's worked example, from
+ * `server/internal/seed/seed.go`. Everything else is read back from the API.
+ */
+const ANCHOR = {
+  stat: 'biggest_lithobrake_survived',
+  title: 'Biggest Lithobrake Survived',
+  handle: 'demo_crasher',
+  value: 214,
+  rendered: '214 m/s',
+};
+
+async function apiGet(path) {
+  const res = await fetch(API + path);
+  if (!res.ok) throw new Error(`GET ${API + path} → ${String(res.status)}`);
+  return res.json();
+}
 
 /**
  * Matches against `innerText`, which is the *rendered* text — CSS
@@ -122,9 +140,72 @@ function check(label, text, needles) {
 
 const page = watch(await browser.newPage());
 
+// ---------------------------------------------------------------------------
+// What the server says, first. The page assertions below are built from it.
+// ---------------------------------------------------------------------------
+const index = await apiGet('/v1/leaderboards');
+const anchorBoard = await apiGet(`/v1/leaderboards/${ANCHOR.stat}`);
+const acePlayer = await apiGet('/v1/players/demo_ace');
+
+{
+  const top = anchorBoard.rows[0];
+  const ok = top?.handle === ANCHOR.handle && top?.value === ANCHOR.value;
+  console.log(
+    `${ok ? 'ok  ' : 'FAIL'} the demo dataset is the one this script knows: ` +
+      `${ANCHOR.stat} rank 1 = ${String(top?.handle)} at ${String(top?.value)}`,
+  );
+  if (!ok) {
+    failures.push(
+      `the seeded anchor moved: expected ${ANCHOR.handle} at ${String(ANCHOR.value)} on ` +
+        `${ANCHOR.stat}, got ${JSON.stringify(top)}. If server/internal/seed/seed.go changed ` +
+        `on purpose, update ANCHOR at the top of this file.`,
+    );
+  }
+  if (index.boards.length === 0) failures.push('GET /v1/leaderboards listed no boards at all');
+}
+
+/** A board's top row as the app renders the handle: the API is the expectation. */
+const topHandle = (board) => board.rows[0]?.handle;
+
+const SEEDED = [
+  { path: `/boards/${ANCHOR.stat}`, expect: [ANCHOR.handle, ANCHOR.rendered] },
+  // Everything below is whatever the server currently says, so a seed change is
+  // not a smoke failure — only a *rendering* difference is.
+  ...index.boards
+    .filter((b) => b.count > 0)
+    .slice(0, 4)
+    .map((b) => ({ path: `/boards/${b.stat}`, expect: [b.title] })),
+  {
+    path: '/p/demo_ace',
+    expect: [
+      ...acePlayer.stats.slice(0, 5).map((s) => s.title),
+      `rank #${String(acePlayer.stats[0]?.rank ?? 1)}`,
+    ],
+  },
+  { path: '/p/demo_crasher', expect: [ANCHOR.title, ANCHOR.rendered] },
+  // The whole index, board for board: the set is dynamic, so the assertion is
+  // "the page shows what the server listed" rather than any particular names.
+  { path: '/boards', expect: index.boards.map((b) => b.title) },
+  { path: '/', expect: [ANCHOR.handle, 'Live activity'] },
+  // §4.8 answers 404 identically for unknown, retired and banned handles.
+  { path: '/p/definitely_not_a_player', expect: ['No such player'] },
+  // A path no route matches renders the app's own not-found state — not the
+  // host's 404 page, and not a blank screen.
+  { path: '/not-a-real-page', expect: ['Page not found', '/not-a-real-page'] },
+];
+
 for (const { path, expect } of SEEDED) {
   await page.goto(urlFor(path), { waitUntil: 'domcontentloaded' });
   check(path, await textWith(page, expect[0]), expect);
+}
+
+// A board page whose rows the server sent must show the server's top handle.
+for (const board of index.boards.filter((b) => b.count > 0).slice(0, 2)) {
+  const rows = await apiGet(`/v1/leaderboards/${board.stat}`);
+  const want = topHandle(rows);
+  if (want === undefined) continue;
+  await page.goto(urlFor(`/boards/${board.stat}`), { waitUntil: 'domcontentloaded' });
+  check(`/boards/${board.stat} (top row from the API)`, await textWith(page, want), [want]);
 }
 
 // ---------------------------------------------------------------------------
@@ -141,12 +222,12 @@ for (const { path, expect } of SEEDED) {
 {
   const context = await browser.newContext();
   const cold = watch(await context.newPage());
-  const target = urlFor('/boards/biggest_lithobrake_survived');
+  const target = urlFor(`/boards/${ANCHOR.stat}`);
   const response = await cold.goto(target, { waitUntil: 'domcontentloaded' });
-  const text = await textWith(cold, 'demo_crasher');
+  const text = await textWith(cold, ANCHOR.handle);
 
   console.log(`ok   cold deep link: GET ${target} → ${String(response?.status() ?? '?')}`);
-  check('deep link (cold context, no home page first)', text, ['demo_crasher', '214 m/s']);
+  check('deep link (cold context, no home page first)', text, [ANCHOR.handle, ANCHOR.rendered]);
   if (new URL(cold.url()).pathname !== new URL(target).pathname) {
     failures.push(`the deep link was redirected: asked for ${target}, ended at ${cold.url()}`);
   }
@@ -161,7 +242,7 @@ for (const { path, expect } of SEEDED) {
 // ---------------------------------------------------------------------------
 {
   await page.goto(BASE, { waitUntil: 'domcontentloaded' });
-  await textWith(page, 'demo_crasher');
+  await textWith(page, ANCHOR.handle);
 
   const pathOf = () => new URL(page.url()).pathname;
   const appPath = (path) => new URL(urlFor(path)).pathname;
@@ -171,38 +252,38 @@ for (const { path, expect } of SEEDED) {
   const atBoards = pathOf();
 
   await page
-    .getByRole('link', { name: /Biggest Lithobrake Survived/ })
+    .getByRole('link', { name: new RegExp(ANCHOR.title) })
     .first()
     .click();
-  await textWith(page, 'demo_crasher');
+  await textWith(page, ANCHOR.handle);
   const atBoard = pathOf();
 
   // A link inside the React Aria table — the one place a component library
   // could plausibly eat the click before the router sees it.
-  await page.getByRole('link', { name: 'demo_crasher' }).first().click();
+  await page.getByRole('link', { name: ANCHOR.handle }).first().click();
   const atPlayer = await textWith(page, 'Handle claimed');
   const playerPath = pathOf();
 
   const steps = [
     ['clicked  Boards', atBoards, appPath('/boards')],
-    ['clicked  a board', atBoard, appPath('/boards/biggest_lithobrake_survived')],
-    ['clicked  a handle', playerPath, appPath('/p/demo_crasher')],
+    ['clicked  a board', atBoard, appPath(`/boards/${ANCHOR.stat}`)],
+    ['clicked  a handle', playerPath, appPath(`/p/${ANCHOR.handle}`)],
   ];
   for (const [label, got, want] of steps) {
     const ok = got === want;
     console.log(`${ok ? 'ok  ' : 'FAIL'} ${label} → ${got}`);
     if (!ok) failures.push(`${label}: expected ${want}, got ${got}`);
   }
-  check('clicked through to the profile', atPlayer, ['demo_crasher', 'Biggest Lithobrake']);
+  check('clicked through to the profile', atPlayer, [ANCHOR.handle, ANCHOR.title]);
 
   // Three pushStates deep; walk all the way back out and all the way forward in.
   const walk = [
-    ['back    ', () => page.goBack(), appPath('/boards/biggest_lithobrake_survived'), 'Standings'],
+    ['back    ', () => page.goBack(), appPath(`/boards/${ANCHOR.stat}`), 'Standings'],
     ['back    ', () => page.goBack(), appPath('/boards'), 'Every board catlog publishes'],
     ['back    ', () => page.goBack(), appPath('/'), 'Leaderboards for things that went wrong'],
     ['forward ', () => page.goForward(), appPath('/boards'), 'Every board catlog publishes'],
-    ['forward ', () => page.goForward(), appPath('/boards/biggest_lithobrake_survived'), '214 m/s'],
-    ['forward ', () => page.goForward(), appPath('/p/demo_crasher'), 'Handle claimed'],
+    ['forward ', () => page.goForward(), appPath(`/boards/${ANCHOR.stat}`), ANCHOR.rendered],
+    ['forward ', () => page.goForward(), appPath(`/p/${ANCHOR.handle}`), 'Handle claimed'],
   ];
   for (const [label, move, wantPath, wantText] of walk) {
     await move();
@@ -236,7 +317,7 @@ for (const { path, expect } of SEEDED) {
   page.context().on('page', onPopup);
 
   await page
-    .getByRole('link', { name: /Biggest Lithobrake Survived/ })
+    .getByRole('link', { name: new RegExp(ANCHOR.title) })
     .first()
     .click({ modifiers: ['ControlOrMeta'] });
   // No navigation to wait for — that is the point — so give the router the
@@ -316,7 +397,7 @@ if (process.env.SMOKE_SHOT !== undefined && process.env.SMOKE_SHOT !== '') {
   // Never `networkidle`: the SSE feed holds a connection open for the life of
   // the page, so the network is never idle by design.
   await page.goto(BASE, { waitUntil: 'domcontentloaded' });
-  await textWith(page, 'demo_crasher');
+  await textWith(page, ANCHOR.handle);
   await page.screenshot({ path: process.env.SMOKE_SHOT, fullPage: true });
   console.log(`ok   screenshot written to ${process.env.SMOKE_SHOT}`);
 }

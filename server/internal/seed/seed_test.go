@@ -116,10 +116,36 @@ func TestSeedProducesTheExpectedBoards(t *testing.T) {
 			t.Errorf("%s = %v, want %v", key, got[key], v)
 		}
 	}
-	for _, cause := range stats.RUDCauses {
-		key := "demo_crasher/" + stats.RUDStat(cause)
-		if got[key] != 1 {
-			t.Errorf("%s = %v, want 1 — every RUD cause must have a demo entry", key, got[key])
+	// Two players per cause on purpose: a `rud_<cause>` board is only *listed*
+	// once two distinct players are on it (stats.Catalog), so a demo where only
+	// demo_crasher had ever had a RUD would show none of the per-cause boards.
+	for _, cause := range seed.RUDCauses {
+		stat, ok := stats.RUDStat(cause)
+		if !ok {
+			t.Fatalf("the demo flies a cause that cannot be a stat key: %q", cause)
+		}
+		for _, handle := range []string{seed.HandleCrasher, seed.HandleTumbler} {
+			key := handle + "/" + stat
+			if got[key] != 1 {
+				t.Errorf("%s = %v, want 1 — every RUD cause needs two demo entrants", key, got[key])
+			}
+		}
+	}
+	// Same for the per-body boards: demo_ace owns them, demo_crasher makes them
+	// publishable.
+	for _, soi := range seed.StockBodyRun {
+		stat, ok := stats.FastestToStat(soi.ToBody)
+		if !ok {
+			t.Fatalf("the demo visits a body that cannot be a stat key: %q", soi.ToBody)
+		}
+		for _, handle := range []string{seed.HandleAce, seed.HandleCrasher} {
+			if _, on := got[handle+"/"+stat]; !on {
+				t.Errorf("%s/%s is missing — a per-body board needs two demo entrants", handle, stat)
+			}
+		}
+		if got[seed.HandleAce+"/"+stat] >= got[seed.HandleCrasher+"/"+stat] {
+			t.Errorf("%s: demo_ace %v is not faster than demo_crasher %v",
+				stat, got[seed.HandleAce+"/"+stat], got[seed.HandleCrasher+"/"+stat])
 		}
 	}
 	// The flagged flight must not have leaked into anything.

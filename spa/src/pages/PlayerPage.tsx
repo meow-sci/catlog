@@ -73,11 +73,21 @@ export function PlayerPage(props: { readonly handle: string }) {
                   </span>
                 </span>
                 <Pill className="shrink-0">rank #{stat.rank}</Pill>
-                <span
-                  className="text-flare-400 w-32 shrink-0 text-right font-mono text-sm tabular-nums"
-                  title={exactValue(stat.value, stat.unit)}
-                >
-                  {formatValue(stat.value, stat.unit)}
+                <span className="text-flare-400 w-32 shrink-0 text-right font-mono text-sm tabular-nums">
+                  <span title={exactValue(stat.value, stat.unit)}>
+                    {formatValue(stat.value, stat.unit)}
+                  </span>
+                  {/* A career whose save was rewound qualifies the number and
+                      does nothing else: the rank is unaffected (§4.1). */}
+                  {stat.rewound === true && (
+                    <span
+                      className="text-ink-400 ml-1 cursor-help"
+                      title="An earlier save of this career was loaded, so its clock did not only run forwards."
+                    >
+                      <span aria-hidden>†</span>
+                      <span className="sr-only"> (career rewound)</span>
+                    </span>
+                  )}
                 </span>
               </li>
             ))}

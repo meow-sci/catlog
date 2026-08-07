@@ -5,12 +5,13 @@ import (
 	"database/sql"
 	"fmt"
 	"slices"
+	"strings"
+	"unicode"
 
 	"github.com/meow-sci/catlog/server/internal/ids"
 )
 
-// The §5.6 launch boards. Every stat key catlog serves is one of these
-// constants; nothing constructs a stat key from user input.
+// The §5.6 launch boards: one per fold, every key a compile-time constant.
 const (
 	StatBiggestLithobrakeSurvived = "biggest_lithobrake_survived"
 	StatPeakGSurvived             = "peak_g_survived"
@@ -26,57 +27,6 @@ const (
 	StatDistanceTravelled         = "distance_travelled"
 	StatFastestToOrbit            = "fastest_to_orbit"
 )
-
-// TimedBodies is the allow-list of celestial bodies that get a "fastest career
-// time to reach" board, in system order. It is the stock KSA body set for build
-// 2026.8.5.5168, lowercased: `Content/Core/Astronomicals.xml` declares exactly
-// these as permanent members of the system (`StellarBody`, `PlanetaryBody`,
-// `AtmosphericBody`, `MinorBody`).
-//
-// It is an allow-list for the same reason [RUDCauses] is: `vehicle.soi.to_body`
-// is an opaque string from the client, and a board key built from client text
-// would let anyone mint a leaderboard — and a million of them (§6, "stat keys
-// are compile-time constants"). A body outside this set still lands in
-// `player_body` and still counts towards `soi_bodies`; it simply gets no board
-// of its own.
-//
-// Comets (`PeriodicComet`, `InterstellarComet` in the same file) are left out on
-// purpose: they are the transient half of the system, and the line "the bodies
-// KSA ships as permanent members" is one a reader can check. Adding them, or a
-// body a future build introduces, is one entry here plus a rebuild — the
-// per-body arrival *times* are recorded for every body regardless, in
-// `player_body.first_sim_t`, so nothing is lost in the meantime.
-var TimedBodies = []string{
-	"sol",
-	"mercury",
-	"venus",
-	"earth",
-	"luna",
-	"mars",
-	"phobos",
-	"deimos",
-	"jupiter",
-	"saturn",
-	"uranus",
-}
-
-// FastestToStat is the per-body board key for a [TimedBodies] entry.
-func FastestToStat(body string) string { return "fastest_to_" + body }
-
-// RUDCauses is the §4.2 `vehicle.rud.cause` enum, in the order the per-cause
-// boards are listed. A cause outside this set counts towards `rud_total` only —
-// a newer mod must not be able to mint a leaderboard key.
-var RUDCauses = []string{
-	"ground_impact",
-	"ocean_impact",
-	"collision",
-	"excessive_g_force",
-	"aerodynamic_forces",
-	"hydrodynamic_forces",
-}
-
-// RUDStat is the per-cause board key for a §4.2 cause.
-func RUDStat(cause string) string { return "rud_" + cause }
 
 // Board is the metadata `GET /v1/leaderboards` publishes for one stat (§4.8).
 type Board struct {
@@ -97,88 +47,278 @@ type Board struct {
 	Career bool `json:"career"`
 }
 
-// boards is the §5.6 table, in display order: the three "how did you survive
-// that" records first, then the speed records, then the counters.
-var boards = func() []Board {
+// fixedBoards is the §5.6 table, in display order: the "how did you survive
+// that" records first, then the speed records, then the counters, then the one
+// career-time board whose key is a constant.
+//
+// Every entry here is a board because a fold with that name exists, so the list
+// is a property of the build. The two *families* below are not: their keys come
+// out of the data.
+var fixedBoards = func() []Board {
 	rec := func(stat, title, unit string) Board { return Board{Stat: stat, Title: title, Unit: unit} }
-	fastest := func(stat, title string) Board {
-		return Board{Stat: stat, Title: title, Unit: "s", Ascending: true, Career: true}
-	}
 
-	out := []Board{
+	return []Board{
 		rec(StatBiggestLithobrakeSurvived, "Biggest Lithobrake Survived", "m/s"),
 		rec(StatPeakGSurvived, "Peak G Survived", "g"),
 		rec(StatFastestSurfaceSpeed, "Fastest Surface Speed", "m/s"),
 		rec(StatFastestOrbitalSpeed, "Fastest Orbital Speed", "m/s"),
 		rec(StatKittenTumbles, "Kitten Tumbles", "tumbles"),
 		rec(StatRUDTotal, "Rapid Unscheduled Disassemblies", "RUDs"),
-	}
-	for _, cause := range RUDCauses {
-		out = append(out, rec(RUDStat(cause), "RUDs — "+causeTitle(cause), "RUDs"))
-	}
-	out = append(out,
 		rec(StatOrbitsAchieved, "Orbits Achieved", "orbits"),
 		rec(StatSOIBodies, "Bodies Visited", "bodies"),
 		rec(StatDockings, "Dockings", "dockings"),
 		rec(StatStagings, "Stagings", "stagings"),
 		rec(StatKittensRecovered, "Kittens Recovered", "kittens"),
 		rec(StatDistanceTravelled, "Distance Travelled", "m"),
-	)
-
-	// The career-time boards last, as their own block: they are the only ones
-	// where the smallest number wins.
-	out = append(out, fastest(StatFastestToOrbit, "Fastest to Orbit"))
-	for _, body := range TimedBodies {
-		out = append(out, fastest(FastestToStat(body), "Fastest to "+bodyTitle(body)))
+		{Stat: StatFastestToOrbit, Title: "Fastest to Orbit", Unit: "s", Ascending: true, Career: true},
 	}
-	return out
 }()
 
-var boardByStat = func() map[string]Board {
-	m := make(map[string]Board, len(boards))
-	for _, b := range boards {
+var fixedByStat = func() map[string]Board {
+	m := make(map[string]Board, len(fixedBoards))
+	for _, b := range fixedBoards {
 		m[b.Stat] = b
 	}
 	return m
 }()
 
-// Boards returns the board metadata in display order (§4.8 `/v1/leaderboards`).
-func Boards() []Board { return slices.Clone(boards) }
+// FixedBoards returns the boards every build publishes whether or not anybody is
+// on them, in display order.
+func FixedBoards() []Board { return slices.Clone(fixedBoards) }
 
-// BoardFor looks a board up by stat key, reporting false for an unknown key —
-// which is how the read API turns a typo'd URL into a 404 rather than an empty
-// board.
-func BoardFor(stat string) (Board, bool) {
-	b, ok := boardByStat[stat]
-	return b, ok
+// --- the dynamic board families ------------------------------------------------
+//
+// Two board keys are not constants. `fastest_to_<body>` and `rud_<cause>` take
+// their second half from the event stream — a celestial body, a destruction
+// cause — and catlog holds no list of either.
+//
+// It held one, and that was wrong. KSA's celestial systems are hand-authored
+// content that ships as data and that mods extend or replace, and docs/events.md
+// has always said `body` is "opaque to server"; a compiled-in list of bodies is
+// guaranteed to be wrong for somebody, and wrong *silently* — a player who
+// reaches a body we never heard of simply gets no board. The same argument
+// applies to `cause`: a destruction cause a future build adds would count
+// towards `rud_total` and vanish from the per-cause boards.
+//
+// So a family board exists because a value appeared in the data. Two rules stop
+// that from being a way to mint leaderboards, and neither is a model of what a
+// player "ought" to be able to do (docs/CONSTITUTION.md §8):
+//
+//   - the value must be able to *be* half of a stat key: see [statSuffix]. That
+//     is protocol hygiene — a stat key is a URL path segment — and not an
+//     opinion about which bodies are real.
+//   - a family board is *listed* only once [DefaultMinPlayers] distinct players
+//     hold a value on it. A leaderboard with one entrant is not a leaderboard,
+//     and one modified client cannot fill the public index on its own.
+//
+// The threshold is a listing rule and never data loss: the per-player value is
+// written for every body and every cause regardless, so lowering it publishes
+// history that was already there rather than starting to collect it.
+
+// DefaultMinPlayers is how many distinct players a family board needs before
+// `GET /v1/leaderboards` lists it. Configurable as `[boards] min_players`.
+const DefaultMinPlayers = 2
+
+// MaxStatSuffixLen bounds the content-derived half of a family stat key. Long
+// enough for any name a body could plausibly carry, short enough that the key
+// stays a comfortable URL path segment.
+const MaxStatSuffixLen = 40
+
+// family is one dynamic board family: a stat-key prefix whose members come from
+// the data, listed after the fixed board they belong with.
+type family struct {
+	// prefix is the stat-key prefix, trailing underscore included.
+	prefix string
+	// after is the fixed board this family's members are listed under.
+	after string
+	// board derives one member's metadata from its stat key and suffix.
+	board func(stat, suffix string) Board
 }
 
-// bodyTitle capitalizes a [TimedBodies] entry for display. The wire form is
-// lowercase and opaque (§4.2); this is presentation only.
-func bodyTitle(body string) string {
-	if body == "" {
-		return body
+var families = []family{{
+	prefix: "rud_",
+	after:  StatRUDTotal,
+	board: func(stat, cause string) Board {
+		return Board{Stat: stat, Title: "RUDs — " + titleize(cause), Unit: "RUDs"}
+	},
+}, {
+	prefix: "fastest_to_",
+	after:  StatFastestToOrbit,
+	board: func(stat, body string) Board {
+		return Board{Stat: stat, Title: "Fastest to " + titleize(body), Unit: "s", Ascending: true, Career: true}
+	},
+}}
+
+// FastestToStat is the career-time board key for a body, reporting false when
+// the body's name cannot be half of a stat key.
+func FastestToStat(body string) (string, bool) { return familyStat("fastest_to_", body) }
+
+// RUDStat is the per-cause board key for a §4.2 cause, reporting false when the
+// cause cannot be half of a stat key.
+func RUDStat(cause string) (string, bool) { return familyStat("rud_", cause) }
+
+// familyStat builds a family stat key out of a value the wire carried.
+func familyStat(prefix, value string) (string, bool) {
+	suffix, ok := statSuffix(value)
+	if !ok {
+		return "", false
 	}
-	return string(body[0]-32) + body[1:]
+	stat := prefix + suffix
+	if _, fixed := fixedByStat[stat]; fixed {
+		// A body literally named "orbit", or a cause named "total", would
+		// otherwise land on a fixed board and merge with it. The value keeps
+		// every other consequence it had; it just does not get this key.
+		return "", false
+	}
+	return stat, true
 }
 
-func causeTitle(cause string) string {
-	switch cause {
-	case "ground_impact":
-		return "Ground Impact"
-	case "ocean_impact":
-		return "Ocean Impact"
-	case "collision":
-		return "Collision"
-	case "excessive_g_force":
-		return "Excessive G-Force"
-	case "aerodynamic_forces":
-		return "Aerodynamic Forces"
-	case "hydrodynamic_forces":
-		return "Hydrodynamic Forces"
-	default:
-		return cause
+// statSuffix normalises a wire value into the half of a stat key it can be, or
+// reports that it cannot be one.
+//
+// Lowercased because §4.2 says these values already are, so folding case can
+// only merge two spellings of one name. Then `[a-z0-9]` followed by
+// `[a-z0-9._-]`, bounded by [MaxStatSuffixLen], because a stat key is a URL path
+// segment and an entry in a public index. That is the whole rule, and it is
+// protocol hygiene rather than an allow-list: a value that fails it keeps every
+// other consequence it had — it still lands in `player_body`, still counts
+// towards `soi_bodies` or `rud_total`, still keeps its arrival time. It just
+// gets no board of its own.
+func statSuffix(v string) (string, bool) {
+	if v == "" || len(v) > MaxStatSuffixLen {
+		return "", false
 	}
+	out := strings.ToLower(v)
+	for i := range len(out) {
+		c := out[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= '0' && c <= '9':
+		case (c == '.' || c == '_' || c == '-') && i > 0:
+		default:
+			return "", false
+		}
+	}
+	return out, true
+}
+
+// titleize renders the content half of a stat key as a display name: "luna" →
+// "Luna", "ground_impact" → "Ground Impact".
+//
+// Derived, never looked up. A table of pretty names is a table of the bodies we
+// happen to have heard of, which is the thing this file no longer keeps.
+func titleize(suffix string) string {
+	words := strings.FieldsFunc(suffix, func(r rune) bool {
+		return r == '_' || r == '-' || r == '.'
+	})
+	if len(words) == 0 {
+		return suffix
+	}
+	for i, w := range words {
+		r := []rune(w)
+		r[0] = unicode.ToUpper(r[0])
+		words[i] = string(r)
+	}
+	return strings.Join(words, " ")
+}
+
+// Describe derives a board's metadata from its stat key, reporting false for a
+// key that is neither a fixed board nor a well-formed member of a family.
+//
+// It reads nothing: a board's title, unit and direction are a pure function of
+// its key. That is what lets a profile row, a board page and a rebuilt
+// projection agree about a body nobody had heard of when this was written.
+func Describe(stat string) (Board, bool) {
+	if b, ok := fixedByStat[stat]; ok {
+		return b, true
+	}
+	for _, f := range families {
+		suffix, cut := strings.CutPrefix(stat, f.prefix)
+		if !cut {
+			continue
+		}
+		// The key must be exactly what familyStat would have produced, so that
+		// one board never has two spellings.
+		norm, ok := statSuffix(suffix)
+		if !ok || norm != suffix {
+			return Board{}, false
+		}
+		return f.board(stat, suffix), true
+	}
+	return Board{}, false
+}
+
+// Known reports the metadata for a stat a server may serve a board page for.
+// players is how many players hold a value on it (`player_stat` has one row per
+// player per stat, so that is a row count).
+//
+// A fixed board is always servable — an empty board is still a board. A family
+// board is servable once anybody at all is on it, which is what makes the link
+// on a profile row resolve. Listing it publicly is the stricter question
+// [Catalog] answers.
+func Known(stat string, players int64) (Board, bool) {
+	b, ok := Describe(stat)
+	if !ok {
+		return Board{}, false
+	}
+	if _, fixed := fixedByStat[stat]; fixed {
+		return b, true
+	}
+	return b, players > 0
+}
+
+// Catalog is the board list a server holding these per-board player counts
+// publishes, in display order: every fixed board whether or not anyone is on it,
+// plus each family's members that at least minPlayers distinct players have
+// reached, listed under the fixed board they belong with.
+//
+// counts is `player_stat` grouped by stat. Because (player_id, stat) is that
+// table's primary key, the count *is* the number of distinct players on the
+// board — the threshold needs no second query and no `DISTINCT`.
+//
+// Family members are ordered by key. Any other order would need to know
+// something about bodies (which one is nearer the star), which is exactly the
+// knowledge that does not belong here.
+func Catalog(counts map[string]int64, minPlayers int) []Board {
+	if minPlayers < 1 {
+		minPlayers = DefaultMinPlayers
+	}
+	members := map[string][]Board{}
+	for stat, n := range counts {
+		if n < int64(minPlayers) {
+			continue
+		}
+		if _, fixed := fixedByStat[stat]; fixed {
+			continue
+		}
+		f, ok := familyOf(stat)
+		if !ok {
+			continue // a board this build no longer publishes; awaiting a rebuild
+		}
+		b, ok := Describe(stat)
+		if !ok {
+			continue
+		}
+		members[f.after] = append(members[f.after], b)
+	}
+	for _, group := range members {
+		slices.SortFunc(group, func(a, b Board) int { return strings.Compare(a.Stat, b.Stat) })
+	}
+
+	out := make([]Board, 0, len(fixedBoards)+len(counts))
+	for _, b := range fixedBoards {
+		out = append(out, b)
+		out = append(out, members[b.Stat]...)
+	}
+	return out
+}
+
+func familyOf(stat string) (family, bool) {
+	for _, f := range families {
+		if strings.HasPrefix(stat, f.prefix) {
+			return f, true
+		}
+	}
+	return family{}, false
 }
 
 // --- record folds ------------------------------------------------------------
@@ -313,7 +453,7 @@ func (f countFold) Apply(ctx context.Context, tx *sql.Tx, ev Event, fs FlightSta
 	return addCount(ctx, tx, ev.PlayerID, f.stat, 1, ev.Seq)
 }
 
-// rudFold implements `rud_total` and the six `rud_<cause>` boards (§5.6).
+// rudFold implements `rud_total` and the `rud_<cause>` family (§5.6).
 type rudFold struct{}
 
 func (rudFold) Name() string { return StatRUDTotal }
@@ -330,12 +470,16 @@ func (rudFold) Apply(ctx context.Context, tx *sql.Tx, ev Event, fs FlightStateRe
 	if err := addCount(ctx, tx, ev.PlayerID, StatRUDTotal, 1, ev.Seq); err != nil {
 		return err
 	}
-	// An unknown cause counts towards the total and nothing else: the per-cause
-	// boards are a fixed enum, not a namespace the wire can extend.
-	if !slices.Contains(RUDCauses, p.Cause) {
+	// The per-cause board comes from the cause the event carried, not from a
+	// list of the causes this build happens to know: a cause a newer game or mod
+	// introduces gets its own board rather than disappearing into the total.
+	// Only a cause that cannot be half of a stat key counts towards `rud_total`
+	// alone.
+	stat, ok := RUDStat(p.Cause)
+	if !ok {
 		return nil
 	}
-	return addCount(ctx, tx, ev.PlayerID, RUDStat(p.Cause), 1, ev.Seq)
+	return addCount(ctx, tx, ev.PlayerID, stat, 1, ev.Seq)
 }
 
 // orbitsFold implements `orbits_achieved` (§5.6).
@@ -524,9 +668,10 @@ func (toOrbitFold) Apply(ctx context.Context, tx *sql.Tx, ev Event, fs FlightSta
 // toBodyFold implements the `fastest_to_<body>` family: how long into a career
 // the player first entered each body's sphere of influence.
 //
-// It writes `player_body.first_sim_t` for *every* body — including ones with no
-// board — so that adding a body to [TimedBodies] later is a rebuild rather than
-// a data-loss discovery.
+// The body comes from the event and nothing checks it against a list — that is
+// the point of the family (see the commentary above [DefaultMinPlayers]). It
+// also writes `player_body.first_sim_t` for *every* body, including one whose
+// name cannot be a stat key at all, so no arrival time is ever lost.
 type toBodyFold struct{}
 
 func (toBodyFold) Name() string { return "fastest_to_body" }
@@ -552,12 +697,14 @@ func (toBodyFold) Apply(ctx context.Context, tx *sql.Tx, ev Event, fs FlightStat
 		return fmt.Errorf("stats: record arrival time at %q: %w", p.ToBody, err)
 	}
 
-	if !slices.Contains(TimedBodies, p.ToBody) {
-		// A body outside the stock set counts towards `soi_bodies` and keeps its
-		// arrival time, but it does not get to mint a board (§6).
+	stat, ok := FastestToStat(p.ToBody)
+	if !ok {
+		// A name that cannot be half of a stat key still counts towards
+		// `soi_bodies` and still keeps its arrival time above; it just has no
+		// board of its own.
 		return nil
 	}
-	return putBest(ctx, tx, ev.PlayerID, FastestToStat(p.ToBody), t, map[string]any{
+	return putBest(ctx, tx, ev.PlayerID, stat, t, map[string]any{
 		"career": ev.Career,
 		"from":   p.FromBody,
 		"flight": ids.String(ev.FlightID),

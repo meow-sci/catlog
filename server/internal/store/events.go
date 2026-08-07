@@ -425,7 +425,7 @@ func (e *Events) InsertEvents(ctx context.Context, q Querier, playerID int64, ev
 	  (event_id, player_id, flight_id, session_id, career, type, ver, sim_time, wall_time, recv_time, payload)
 	  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
-	recv := nowMillis()
+	recv := e.nowMillis()
 	for i, ev := range evs {
 		if ev.Type == "" {
 			return accepted, deduped, fmt.Errorf("store: event %d has no type", i)

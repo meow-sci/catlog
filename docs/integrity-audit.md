@@ -51,7 +51,7 @@ document as a to-do list.
 | **Server side** ||||
 | S1 | `flight_state.flags` and the `flags = 0` exclusion applied by every fold | `server/internal/stats/flight.go:99`, `server/internal/stats/fold.go:159` | **In scope** | Keep — highest value per line in the repo |
 | S2 | `FlagOther` (bit 5): an unrecognised flag value excludes the flight | `server/internal/stats/flight.go:32`, `:37` | **In scope** | Keep |
-| S3 | Boards derived from events; stat keys are constants; `RUDCauses` is an allow-list | `server/internal/stats/boards.go:14`, `:32`, `:268` | **In scope** | Keep |
+| S3 | Boards derived from events; fixed stat keys are constants; a data-driven board (`fastest_to_<body>`, `rud_<cause>`) is listed only once ≥2 distinct players are on it | `server/internal/stats/boards.go` (`fixedBoards`, `statSuffix`, `Catalog`) | **In scope** | Keep — the allow-lists this row used to cite are gone; see below |
 | S4 | `seq` is a server-local rowid; `wall_t` is untrusted and the feed uses `recv_time` | `server/internal/stats/event.go:15` | **In scope** | Keep |
 | S5 | Rebuild pass 1/2 — a late `flight.flagged` retroactively unscoring its flight | `server/internal/projector/rebuild.go:71`, `:139`, `:169` | **In scope** | Keep |
 | S6 | `/admin/stats` reports `flagged_flights` | `server/internal/store/projections.go:280` | **In scope** | Keep |
@@ -93,10 +93,28 @@ bit 5 and excludes the flight. Fail-closed, and it means a newer mod is never a 
 while the server catches up. Two lines.
 
 **Boards are derived (S3, S4).** This is `CATLOG_PROPOSALS` §4.3 layer 1, implemented and correct.
-Nothing on the wire can name a stat key, mint a leaderboard, or influence ordering: `seq` is the
-events.db rowid, tie-breaks use it, and the feed timestamps with `recv_time` rather than the
+Every *value* is computed by folding events and none is ever accepted as a submitted stat; `seq` is
+the events.db rowid, tie-breaks use it, and the feed timestamps with `recv_time` rather than the
 client's `wall_t`. This costs nothing extra — it is just what event sourcing looks like — and it
 is doing more real work than every flag combined.
+
+The one thing that has changed since this audit was first written is **which stat keys exist**. Two
+board families, `fastest_to_<body>` and `rud_<cause>`, used to be gated by compiled-in lists — the
+eleven stock KSA bodies, the six shipped RUD causes — on the reasoning that a key built from client
+text would let anyone mint a leaderboard. That reasoning was half right and the remedy was wrong.
+KSA's celestial systems are hand-authored content that mods extend, `docs/events.md` has always
+said `body` is opaque to the server, and a compiled-in list denies a board to whoever gets somewhere
+new *silently*. The lists are gone. What replaced them is one clause: such a board is **listed** by
+`GET /v1/leaderboards` once at least **2 distinct players** hold a value on it.
+
+Against the five-part test that clause passes cleanly. It compares against nothing about the game
+(1); it is one sentence and one comparison in one place (2); it adds no table, no stage, no job and
+no accumulated state — the count it reads is the one the index query already computes (3); it
+cannot punish an honest player, because their value is recorded either way and appears on their own
+profile and at the board's own URL regardless (4); and its only effect is on what a public list
+contains (5). It is also correct on its own merits, independent of abuse: a leaderboard with one
+entrant is not a leaderboard. Lowering or raising it publishes or unpublishes history that is
+already in the projection, so it is a tunable rather than a data decision.
 
 **The impact correlator (M8).** The largest single piece of code in this audit at 170 lines, and
 still in scope. It is not pattern-hunting: it is the *definition* of `survived`, derived from
@@ -245,6 +263,7 @@ exist to stop stat manipulation.
 |---|---|
 | License + proof JWS chain, cheap-first verification order, `Verifier.Stats()` counters | Authentication and DoS resistance — an unauthenticated stranger must not be able to buy an ECDSA verify with garbage |
 | Body size caps, decompression cap, max events/batch, strict NDJSON framing, known-type allow-list | Protocol hygiene; turns silent truncation into a loud rejection |
+| The shape a body name or a RUD cause must have to become a stat key (`[a-z0-9]` then `[a-z0-9._-]`, ≤40 chars) | Protocol hygiene; a stat key is a URL path segment. It is not a judgement about which bodies are real — a name that fails it keeps every other consequence it had |
 | Token bucket per `jkt`, nginx `limit_req`/`limit_conn` zones | Rate limiting / DoS |
 | Deny-list, bans, purges, tombstones, retired handles | Moderation (constitution §7) |
 | Handle quota (5), issuance quota (3/day), `min_account_age_days` (30) | Handle squatting and ban evasion — identity abuse, not stat manipulation. Each is one comparison |

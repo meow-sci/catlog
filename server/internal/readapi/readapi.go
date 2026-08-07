@@ -11,6 +11,7 @@ import (
 
 	"github.com/meow-sci/catlog/server/internal/authz"
 	"github.com/meow-sci/catlog/server/internal/directory"
+	"github.com/meow-sci/catlog/server/internal/stats"
 	"github.com/meow-sci/catlog/server/internal/store"
 )
 
@@ -53,6 +54,14 @@ type Deps struct {
 	// Feed is the §5.6 broadcaster behind `GET /v1/feed/stream`. Optional: a
 	// Server built without one serves the feed snapshot but not the stream.
 	Feed Feed
+	// MinBoardPlayers is how many distinct players a board whose key came out of
+	// the event stream (`fastest_to_<body>`, `rud_<cause>`) needs before
+	// `GET /v1/leaderboards` lists it. Zero or less means [stats.DefaultMinPlayers].
+	//
+	// It is the whole of the answer to "a modified client could invent ten
+	// thousand body names": one comparison, no new table, no new pipeline stage,
+	// and nothing an honest player can trip. See stats.Catalog.
+	MinBoardPlayers int
 	// AllowedOrigins is [config.CORS.AllowedOrigins] — the browser origins that
 	// may read these endpoints cross-origin. Empty means same-origin only.
 	//
@@ -67,6 +76,8 @@ type Deps struct {
 type Server struct {
 	deps Deps
 	cors cors
+	// minBoardPlayers is [Deps.MinBoardPlayers] with its default applied.
+	minBoardPlayers int
 }
 
 // New builds the read API.
@@ -82,7 +93,15 @@ func New(deps Deps) (*Server, error) {
 	if deps.Log == nil {
 		deps.Log = slog.Default()
 	}
-	return &Server{deps: deps, cors: cors{allowed: slices.Clone(deps.AllowedOrigins)}}, nil
+	minPlayers := deps.MinBoardPlayers
+	if minPlayers < 1 {
+		minPlayers = stats.DefaultMinPlayers
+	}
+	return &Server{
+		deps:            deps,
+		cors:            cors{allowed: slices.Clone(deps.AllowedOrigins)},
+		minBoardPlayers: minPlayers,
+	}, nil
 }
 
 // Register mounts the §4.8 routes on a mux.
@@ -114,6 +133,15 @@ func (s *Server) public(mux *http.ServeMux, pattern string, h http.HandlerFunc) 
 // BoardsResponse is `GET /v1/leaderboards` (§4.8).
 type BoardsResponse struct {
 	Boards []BoardSummary `json:"boards"`
+	// MinPlayers is how many distinct players a board whose key came out of the
+	// event stream (`fastest_to_<body>`, `rud_<cause>`) needs before it appears
+	// in Boards.
+	//
+	// Published because otherwise the list is inexplicable: a player who has
+	// been somewhere new and sees no board for it deserves to be told that it
+	// needs a second visitor, rather than to file a bug. It is also what lets a
+	// client say so without hard-coding the number.
+	MinPlayers int `json:"min_players"`
 }
 
 // BoardSummary is one entry of [BoardsResponse].

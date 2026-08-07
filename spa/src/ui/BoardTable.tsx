@@ -16,10 +16,20 @@ import { $now, exactValue, formatAgo, formatValue } from './format.ts';
 export function BoardTable(props: {
   readonly unit: string;
   readonly rows: readonly BoardRow[];
+  /**
+   * The smallest value ranks first.
+   *
+   * Published by the server per board (§4.8) and never inferred here: the
+   * career-time boards are seconds since a career began, and a table that
+   * presented the fastest ascent as though it were the worst one would be a
+   * wrong answer rather than a styling gap.
+   */
+  readonly ascending: boolean;
   readonly showContext?: boolean;
 }) {
   const now = useStore($now);
   const anyContext = props.showContext !== false && props.rows.some((r) => r.context !== undefined);
+  const direction = props.ascending ? 'lowest first' : 'highest first';
 
   return (
     <Table aria-label="Leaderboard" className="w-full border-collapse text-sm" selectionMode="none">
@@ -31,7 +41,11 @@ export function BoardTable(props: {
           Player
         </Column>
         <Column id="value" className="px-4 py-2 text-right font-medium">
-          {props.unit === '' ? 'Value' : props.unit}
+          <span title={`Ranked ${direction}`}>
+            {props.unit === '' ? 'Value' : props.unit}{' '}
+            <span aria-hidden>{props.ascending ? '↑' : '↓'}</span>
+            <span className="sr-only"> — ranked {direction}</span>
+          </span>
         </Column>
         {anyContext && (
           <Column id="context" className="hidden px-4 py-2 text-left font-medium sm:table-cell">
@@ -68,6 +82,17 @@ export function BoardTable(props: {
               <span title={exactValue(row.value, props.unit)}>
                 {formatValue(row.value, props.unit)}
               </span>
+              {/* A career whose save was rewound qualifies the number and does
+                  nothing else: the row is ranked normally (§4.1). */}
+              {row.rewound === true && (
+                <span
+                  className="text-ink-400 ml-1 cursor-help"
+                  title="An earlier save of this career was loaded, so its clock did not only run forwards."
+                >
+                  <span aria-hidden>†</span>
+                  <span className="sr-only"> (career rewound)</span>
+                </span>
+              )}
             </Cell>
             {anyContext && (
               <Cell className="text-ink-400 hidden px-4 py-2 font-mono text-xs sm:table-cell">

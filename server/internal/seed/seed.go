@@ -52,6 +52,34 @@ const (
 // Handles lists the demo handles in the order they are created.
 func Handles() []string { return []string{HandleAce, HandleTumbler, HandleCrasher} }
 
+// RUDCauses are the §4.2 `vehicle.rud.cause` values the demo dataset flies.
+//
+// This is fixture data, not an allow-list: the server holds no list of causes at
+// all any more, and `rud_<cause>` boards come into existence because a cause
+// appeared in the event stream (server/internal/stats/boards.go). It lives here
+// so the demo covers the causes the game ships today.
+var RUDCauses = []string{
+	"ground_impact",
+	"ocean_impact",
+	"collision",
+	"excessive_g_force",
+	"aerodynamic_forces",
+	"hydrodynamic_forces",
+}
+
+// StockBodyRun is the interplanetary SOI chain the demo flies, using KSA's own
+// body names: a lunar transfer never leaves Earth's SOI, and an interplanetary
+// cruise passes through the star's.
+//
+// Two demo players fly it, on purpose. A `fastest_to_<body>` board is only
+// *listed* once two distinct players are on it (stats.Catalog), so a demo where
+// one player had been everywhere alone would show none of them.
+var StockBodyRun = []stats.VehicleSOI{
+	{FromBody: "earth", ToBody: "luna"},
+	{FromBody: "luna", ToBody: "sol"},
+	{FromBody: "sol", ToBody: "mars"},
+}
+
 // EpochMS is the fixed wall-clock the dataset counts from: 2026-01-01T00:00:00Z.
 // A fixed epoch means the events sort the same way on every machine and the
 // derived ULIDs are byte-identical run to run.
@@ -153,9 +181,9 @@ func ace() PlayerData {
 	b.add("vehicle.orbit", stats.VehicleOrbit{
 		Phase: "achieved", Body: "earth", ApM: 410000, PeM: 402000, Ecc: 0.001, IncDeg: 51.6,
 	})
-	b.add("vehicle.soi", stats.VehicleSOI{FromBody: "earth", ToBody: "luna"})
-	b.add("vehicle.soi", stats.VehicleSOI{FromBody: "luna", ToBody: "sol"})
-	b.add("vehicle.soi", stats.VehicleSOI{FromBody: "sol", ToBody: "mars"})
+	for _, soi := range StockBodyRun {
+		b.add("vehicle.soi", soi)
+	}
 	b.endFlight(stats.FlightEnded{Reason: "recovered", CrewCount: 2})
 
 	b.roster(
@@ -185,6 +213,21 @@ func tumbler() PlayerData {
 	}
 	b.add("kitten.eva_end", map[string]any{"kid": "tum0000000000001", "name": "Bramble", "duration_s": 640.5})
 	b.endFlight(stats.FlightEnded{Reason: "recovered", CrewCount: 2})
+
+	// A second flier for every `rud_<cause>` board. `demo_crasher` sets them all
+	// too; a per-cause board is only listed once two distinct players are on it
+	// (stats.Catalog), so without this the demo index would show none of them.
+	for i, cause := range RUDCauses {
+		b.startFlight(2+i, stats.FlightStarted{
+			VehicleName: "Bad Idea " + strconv.Itoa(i+1), Body: "mun", MassKg: 2200, PartCount: 9, CrewCount: 0,
+		})
+		b.add("vehicle.rud", stats.VehicleRUD{
+			Cause: cause, PeakG: 6 + float64(i), PeakQPa: 21000 + float64(i)*900,
+			SpeedMs: 120 + float64(i)*30, AltitudeM: 900 - float64(i)*100, Body: "mun", CrewCount: 0,
+		})
+		b.endFlight(stats.FlightEnded{Reason: "destroyed", CrewCount: 0})
+	}
+
 	b.roster(
 		stats.RosterKitten{Kid: "tum0000000000001", Name: "Bramble", TravelledM: 620_000, FastestMs: 29_790, Missions: 6, MissionTimeS: 51000, KIA: false},
 		stats.RosterKitten{Kid: "tum0000000000002", Name: "Sorrel", TravelledM: 310_000, FastestMs: 29_781, Missions: 2, MissionTimeS: 14400, KIA: false},
@@ -210,7 +253,7 @@ func crasher() PlayerData {
 	b.endFlight(stats.FlightEnded{Reason: "recovered", CrewCount: 1})
 
 	// One flight per §4.2 RUD cause, so every `rud_<cause>` board has an entry.
-	for i, cause := range stats.RUDCauses {
+	for i, cause := range RUDCauses {
 		b.startFlight(2+i, stats.FlightStarted{
 			VehicleName: "Test Article " + strconv.Itoa(i+1), Body: "kerbin", MassKg: 5400, PartCount: 15, CrewCount: 0,
 		})
@@ -226,7 +269,7 @@ func crasher() PlayerData {
 	// the canonical answer, not a demonstration of the incremental path's known
 	// blind spot. That blind spot, and the rebuild that heals it, is covered by
 	// the projector tests instead.
-	b.startFlight(2+len(stats.RUDCauses), stats.FlightStarted{
+	b.startFlight(2+len(RUDCauses), stats.FlightStarted{
 		VehicleName: "Definitely Legitimate", Body: "kerbin", MassKg: 1200, PartCount: 4, CrewCount: 1,
 	})
 	b.add("flight.flagged", stats.FlightFlagged{
@@ -237,6 +280,19 @@ func crasher() PlayerData {
 	})
 	b.add("telemetry.window", window("kerbin", 9999, 99999, 99.9))
 	b.endFlight(stats.FlightEnded{Reason: "recovered", CrewCount: 1})
+
+	// A second save, flown slowly to the same stock bodies `demo_ace` visited.
+	// It is what puts two players on `fastest_to_luna`/`_sol`/`_mars`, which is
+	// what makes those boards appear in the index at all (stats.Catalog) — and
+	// `demo_ace` still owns every one of them, because slower is worse here.
+	b.newCareer(2, 500)
+	b.startFlight(20, stats.FlightStarted{
+		VehicleName: "Slow Boat", Body: "earth", MassKg: 47000, PartCount: 38, CrewCount: 1,
+	})
+	for _, soi := range StockBodyRun {
+		b.add("vehicle.soi", soi)
+	}
+	b.endFlight(stats.FlightEnded{Reason: "despawned", CrewCount: 0})
 
 	b.roster(
 		stats.RosterKitten{Kid: "cra0000000000001", Name: "Ferro", TravelledM: 205_000, FastestMs: 29_772, Missions: 8, MissionTimeS: 9200, KIA: false},

@@ -136,7 +136,7 @@ func TestFastestToOrbitIgnoresFlaggedFlightsAndMissingClocks(t *testing.T) {
 
 // --- fastest_to_<body> --------------------------------------------------------
 
-func TestFastestToBodyScoresEveryStockBody(t *testing.T) {
+func TestFastestToBodyScoresWhateverBodyTheEventNamed(t *testing.T) {
 	f := flightN(1)
 	proj := testutil.MemProjections(t)
 	apply(t, proj, []input{
@@ -160,8 +160,8 @@ func TestFastestToBodyScoresEveryStockBody(t *testing.T) {
 		}
 	}
 
-	// The arrival times are also written to player_body, for every body, so
-	// widening stats.TimedBodies later is a rebuild rather than a data loss.
+	// The arrival times are also written to player_body, for every body,
+	// including any whose name could not be a stat key at all.
 	var lunaFirst sql.NullFloat64
 	if err := proj.Reader().QueryRowContext(t.Context(),
 		`SELECT first_sim_t FROM player_body WHERE player_id = 1 AND kind = 'soi' AND body = 'luna'`).
@@ -173,46 +173,98 @@ func TestFastestToBodyScoresEveryStockBody(t *testing.T) {
 	}
 }
 
-// A body the game did not ship — or one a newer build added — keeps its arrival
-// time and counts towards soi_bodies, but must not mint a board (§6).
-func TestFastestToBodyDoesNotMintBoardsForUnknownBodies(t *testing.T) {
+// A body nobody has ever typed into this repository gets a board, because the
+// board comes from the data. This is the whole point of the family: KSA's system
+// is content, and a compiled-in list would silently deny a board to whoever got
+// somewhere new first.
+func TestFastestToBodyMintsABoardForABodyNoListMentions(t *testing.T) {
 	f := flightN(1)
 	proj := testutil.MemProjections(t)
 	apply(t, proj, []input{
-		{flight: f, typ: "vehicle.soi", payload: stats.VehicleSOI{FromBody: "earth", ToBody: "planet_x"}, simT: 500},
+		{flight: f, typ: "vehicle.soi", payload: stats.VehicleSOI{FromBody: "earth", ToBody: "zephyria_prime"}, simT: 500},
 	}, 0, false)
 
 	got := readStats(t, proj)
-	if _, minted := got["1/fastest_to_planet_x"]; minted {
-		t.Error("a client-supplied body name minted a leaderboard key")
+	if got["1/fastest_to_zephyria_prime"].Value != 500 {
+		t.Errorf("fastest_to_zephyria_prime = %v, want 500 — a body is a board because the data said so",
+			got["1/fastest_to_zephyria_prime"].Value)
 	}
 	if got["1/soi_bodies"].Value != 1 {
 		t.Errorf("soi_bodies = %v, want 1", got["1/soi_bodies"].Value)
 	}
+
+	// And its metadata is derived from the key, with no lookup table anywhere.
+	b, ok := stats.Describe("fastest_to_zephyria_prime")
+	if !ok || b.Title != "Fastest to Zephyria Prime" || b.Unit != "s" || !b.Ascending || !b.Career {
+		t.Errorf("Describe = %+v (ok=%v), want an ascending career board titled from the key", b, ok)
+	}
+}
+
+// A name that cannot be half of a stat key keeps every other consequence it had
+// — the visit, the count, the arrival time — and simply gets no board. That is
+// protocol hygiene (a stat key is a URL path segment), not a claim about which
+// bodies exist.
+func TestFastestToBodySkipsANameThatCannotBeAStatKey(t *testing.T) {
+	f := flightN(1)
+	proj := testutil.MemProjections(t)
+	apply(t, proj, []input{
+		{flight: f, typ: "vehicle.soi", payload: stats.VehicleSOI{FromBody: "earth", ToBody: "planet x/../../etc"}, simT: 500},
+	}, 0, false)
+
+	got := readStats(t, proj)
+	for stat := range got {
+		if stat != "1/soi_bodies" {
+			t.Errorf("a malformed body name produced the stat %q", stat)
+		}
+	}
+	if got["1/soi_bodies"].Value != 1 {
+		t.Errorf("soi_bodies = %v, want 1 — the visit still happened", got["1/soi_bodies"].Value)
+	}
 	var first sql.NullFloat64
 	if err := proj.Reader().QueryRowContext(t.Context(),
-		`SELECT first_sim_t FROM player_body WHERE player_id = 1 AND kind = 'soi' AND body = 'planet_x'`).
+		`SELECT first_sim_t FROM player_body WHERE player_id = 1 AND kind = 'soi' AND body = 'planet x/../../etc'`).
 		Scan(&first); err != nil {
 		t.Fatal(err)
 	}
 	if !first.Valid || first.Float64 != 500 {
-		t.Errorf("first_sim_t for an unlisted body = %v, want it recorded anyway", first)
+		t.Errorf("first_sim_t for an unkeyable body = %v, want it recorded anyway", first)
 	}
 }
 
-func TestEveryTimedBodyHasABoard(t *testing.T) {
-	for _, body := range stats.TimedBodies {
-		b, ok := stats.BoardFor(stats.FastestToStat(body))
-		if !ok {
-			t.Fatalf("no board declared for %q", body)
-		}
-		if !b.Ascending || !b.Career || b.Unit != "s" {
-			t.Errorf("board %q = %+v, want an ascending career board in seconds", b.Stat, b)
+// A body literally called "orbit" must not land on `fastest_to_orbit`: a fixed
+// board's key is reserved, or two different questions would share one row.
+func TestFastestToBodyNeverCollidesWithAFixedBoard(t *testing.T) {
+	f := flightN(1)
+	proj := testutil.MemProjections(t)
+	apply(t, proj, []input{
+		{flight: f, typ: "vehicle.soi", payload: stats.VehicleSOI{FromBody: "earth", ToBody: "orbit"}, simT: 500},
+	}, 0, false)
+
+	if got := readStats(t, proj); got["1/fastest_to_orbit"].Value != 0 {
+		t.Errorf("a body named %q scored on fastest_to_orbit: %v", "orbit", got["1/fastest_to_orbit"])
+	}
+}
+
+func TestBoardDirectionAndUnitsAreDerivedFromTheKey(t *testing.T) {
+	for stat, want := range map[string]stats.Board{
+		"fastest_to_orbit": {Stat: "fastest_to_orbit", Title: "Fastest to Orbit", Unit: "s", Ascending: true, Career: true},
+		"fastest_to_luna":  {Stat: "fastest_to_luna", Title: "Fastest to Luna", Unit: "s", Ascending: true, Career: true},
+		"fastest_to_kerbin_ii": {
+			Stat: "fastest_to_kerbin_ii", Title: "Fastest to Kerbin Ii", Unit: "s", Ascending: true, Career: true,
+		},
+		"rud_total":         {Stat: "rud_total", Title: "Rapid Unscheduled Disassemblies", Unit: "RUDs"},
+		"rud_ground_impact": {Stat: "rud_ground_impact", Title: "RUDs — Ground Impact", Unit: "RUDs"},
+		"rud_kraken":        {Stat: "rud_kraken", Title: "RUDs — Kraken", Unit: "RUDs"},
+	} {
+		got, ok := stats.Describe(stat)
+		if !ok || got != want {
+			t.Errorf("Describe(%q) = %+v (ok=%v), want %+v", stat, got, ok, want)
 		}
 	}
-	orbit, ok := stats.BoardFor(stats.StatFastestToOrbit)
-	if !ok || !orbit.Ascending || !orbit.Career {
-		t.Errorf("fastest_to_orbit board = %+v (ok=%v), want an ascending career board", orbit, ok)
+	for _, stat := range []string{"not_a_board", "fastest_to_", "fastest_to_Luna", "rud_a b", "fastest_to__x"} {
+		if b, ok := stats.Describe(stat); ok {
+			t.Errorf("Describe(%q) = %+v, want it rejected", stat, b)
+		}
 	}
 }
 

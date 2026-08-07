@@ -45,6 +45,7 @@ type Config struct {
 	Auth   Auth   `toml:"auth"`
 	IdP    IdP    `toml:"idp"`
 	Limits Limits `toml:"limits"`
+	Boards Boards `toml:"boards"`
 	CORS   CORS   `toml:"cors"`
 }
 
@@ -59,6 +60,20 @@ type Server struct {
 	// StaticDir is served at /static/ in dev; empty disables it because nginx
 	// serves the assets in prod (§5.7).
 	StaticDir string `toml:"static_dir"`
+	// ClockControl mounts `POST /admin/clock`, which lets a caller move the
+	// server's notion of now.
+	//
+	// **Development only, and off by default.** catlog's authoritative
+	// timestamps are all server-generated — an event's `recv_time`, a license's
+	// `iat`/`exp`, a session's expiry — so the server clock is the only thing
+	// that decides which day, week, month or year a leaderboard row lands in.
+	// Testing a yearly board otherwise means waiting a year.
+	//
+	// Three things keep it out of production: this defaults to false, the route
+	// only exists on the loopback-only admin mux (§5.9), and [Config.Validate]
+	// refuses the combination of `clock_control = true` with an https
+	// `base_url` — because a deployment reachable over TLS is not a laptop.
+	ClockControl bool `toml:"clock_control"`
 }
 
 // Data is the [data] section.
@@ -140,6 +155,26 @@ type Limits struct {
 	RateLimitBurst      int     `toml:"ratelimit_burst"`
 }
 
+// Boards is the [boards] section: how the public board index is assembled.
+//
+// Not in §5.3. It exists because two board families — `fastest_to_<body>` and
+// `rud_<cause>` — take their keys from the event stream rather than from a list
+// in the source, since KSA's celestial systems are content that mods extend
+// (docs/events.md: `body` is "opaque to server").
+type Boards struct {
+	// MinPlayers is how many distinct players must hold a value on such a board
+	// before `GET /v1/leaderboards` lists it.
+	//
+	// It is the whole of the answer to "a modified client could invent ten
+	// thousand body names and fill the index": one comparison against a count
+	// the index query already has. It is also correct on its own merits — a
+	// leaderboard with one entrant is not a leaderboard — and it can never
+	// punish an honest player, because the per-player value is recorded either
+	// way and lowering this publishes history that is already there
+	// (docs/CONSTITUTION.md §8, docs/DECISIONS.md).
+	MinPlayers int `toml:"min_players"`
+}
+
 // CORS is the [cors] section: which foreign origins may read the public §4.8
 // endpoints from a browser.
 //
@@ -173,6 +208,9 @@ func Default() Config {
 			AdminListen: "127.0.0.1:6060",
 			BaseURL:     "http://127.0.0.1:8080",
 			StaticDir:   "../site/dist",
+			// Off unless a config says otherwise. A default that allowed a real
+			// deployment would be a default that shipped one.
+			ClockControl: false,
 		},
 		Data: Data{
 			Dir: "./data",
@@ -194,6 +232,12 @@ func Default() Config {
 		Limits: Limits{
 			RateLimitPerJKTPerS: 0.5, // 1 batch / 2 s (§4.3)
 			RateLimitBurst:      5,
+		},
+		Boards: Boards{
+			// 2 == stats.DefaultMinPlayers; not imported, to keep config free of
+			// a dependency on the projection layer (same rule as the checkpoint
+			// interval above). The default is the protection, not an opt-in.
+			MinPlayers: 2,
 		},
 		CORS: CORS{
 			// Vite's dev server (5173) and its `preview` server (4173) on both
@@ -247,6 +291,14 @@ func (c Config) Validate() error {
 	if c.Server.Listen == "" {
 		errs = append(errs, errors.New("server.listen is empty"))
 	}
+	if c.Server.ClockControl && strings.HasPrefix(strings.ToLower(c.Server.BaseURL), "https://") {
+		// The one combination that must never exist: a TLS deployment whose
+		// clock a caller can move. Everything catlog signs and every rolling
+		// window it computes hangs off this clock, so this is a hard refusal at
+		// start-up rather than a warning somebody scrolls past.
+		errs = append(errs, errors.New(
+			"server.clock_control must not be enabled on an https deployment: it is a development-only control"))
+	}
 	if c.Server.BaseURL == "" {
 		errs = append(errs, errors.New("server.base_url is empty"))
 	} else if u, err := url.Parse(c.Server.BaseURL); err != nil {
@@ -288,6 +340,9 @@ func (c Config) Validate() error {
 	}
 	if c.Limits.RateLimitBurst <= 0 {
 		errs = append(errs, errors.New("limits.ratelimit_burst must be positive"))
+	}
+	if c.Boards.MinPlayers < 1 {
+		errs = append(errs, errors.New("boards.min_players must be at least 1"))
 	}
 	// A CORS origin is compared to the browser's `Origin` header by exact string
 	// equality, so a typo cannot fail at request time in any visible way — the

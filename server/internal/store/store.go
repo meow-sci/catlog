@@ -91,6 +91,22 @@ type Options struct {
 	// disabling it is safe for a short-lived store (a test) and unwise for a
 	// long-lived one. [DefaultCheckpointInterval] is what catlogd uses.
 	CheckpointInterval time.Duration
+	// Now is the server clock. Defaults to [time.Now].
+	//
+	// This is the seam that decides an event's `recv_time` — the timestamp
+	// catlog treats as authoritative, as opposed to the client's untrusted
+	// `wall_t` (§4.1). catlogd hands every package the same
+	// `internal/clock.Clock`, so a development build can move the whole
+	// server's notion of now and exercise time-bucketed projections without
+	// waiting a calendar year for one.
+	Now func() time.Time
+}
+
+func (o Options) now() func() time.Time {
+	if o.Now != nil {
+		return o.Now
+	}
+	return time.Now
 }
 
 func (o Options) logger() *slog.Logger {
@@ -116,11 +132,22 @@ type DB struct {
 	// Version is the schema version after migration.
 	Version int
 
+	// now is the server clock; see [Options.Now]. Never nil.
+	now func() time.Time
+
 	closeOnce sync.Once
 	closeErr  error
 	stop      chan struct{}
 	stopped   chan struct{}
 }
+
+// nowMillis is the store's clock, in unix milliseconds.
+//
+// It was a package-level function reading [time.Now] directly. It is a method
+// now because it stamps `recv_time`, and `recv_time` is the one timestamp in
+// catlog that is authoritative — so it has to be the same clock the rest of the
+// server is reading, not a second independent one.
+func (d *DB) nowMillis() int64 { return d.now().UnixMilli() }
 
 // Querier is the read/write surface shared by *sql.DB and *sql.Tx, so every
 // typed query in this package composes into a caller's transaction or runs
@@ -173,6 +200,7 @@ func open(ctx context.Context, path, name string, fsys fs.FS, dir string, opts O
 		name:    name,
 		memory:  memory,
 		log:     opts.logger().With("db", name),
+		now:     opts.now(),
 		stop:    make(chan struct{}),
 		stopped: make(chan struct{}),
 	}

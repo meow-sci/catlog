@@ -88,9 +88,12 @@ func newFixture(t *testing.T) *fixture {
 	}
 
 	read := &fakeRead{
-		boards: readapi.BoardsResponse{Boards: []readapi.BoardSummary{
+		boards: readapi.BoardsResponse{MinPlayers: 2, Boards: []readapi.BoardSummary{
 			{Stat: stats.StatBiggestLithobrakeSurvived, Title: "Biggest Lithobrake Survived", Unit: "m/s", Count: 2},
 			{Stat: stats.StatRUDTotal, Title: "Rapid Unscheduled Disassemblies", Unit: "RUDs", Count: 1},
+			// A board whose key came out of the event stream: no constant in the
+			// server mentions this place, and the index must render it anyway.
+			{Stat: "fastest_to_zephyria", Title: "Fastest to Zephyria", Unit: "s", Ascending: true, Count: 2},
 		}},
 		board: map[string]readapi.BoardResponse{},
 		player: map[string]readapi.PlayerResponse{
@@ -182,7 +185,12 @@ func TestEveryPageRenders(t *testing.T) {
 		want   []string
 	}{
 		{"/", 200, []string{`id="home-title"`, `id="featured-boards"`, `id="feed-panel"`, `<ul id="feed"`}},
-		{"/boards", 200, []string{`id="boards-index"`, `data-stat="rud_total"`, "Biggest Lithobrake Survived"}},
+		{"/boards", 200, []string{
+			`id="boards-index"`, `data-stat="rud_total"`, "Biggest Lithobrake Survived",
+			// The index is whatever the server listed, including a board no
+			// constant in this repository names.
+			`data-stat="fastest_to_zephyria"`, "Fastest to Zephyria", `id="boards-note"`,
+		}},
 		{"/boards/biggest_lithobrake_survived", 200, []string{`id="board-title"`, `data-handle="demo_crasher"`, `data-rank="2"`}},
 		{"/boards/no_such_board", 404, []string{`id="not-found"`}},
 		{"/p/demo_crasher", 200, []string{`id="profile-handle"`, `data-stat="biggest_lithobrake_survived"`, "#1"}},

@@ -214,11 +214,13 @@ Cookie `catlog_sess` (prod: `__Host-catlog_sess`): value `b64u(user_key) + "." +
 
 All responses `Cache-Control: public, s-maxage=30, stale-while-revalidate=300` except SSE.
 
-- `GET /v1/leaderboards` → `{"boards": [{"stat": "biggest_lithobrake_survived", "title": s, "unit": "m/s", "ascending": false, "count": n}]}`
+- `GET /v1/leaderboards` → `{"min_players": n, "boards": [{"stat": "biggest_lithobrake_survived", "title": s, "unit": "m/s", "ascending": false, "count": n}]}`
 - `GET /v1/leaderboards/{stat}?limit=50&offset=0` (limit ≤ 200) → `{"stat": s, "ascending": b, "rows": [{"rank": 1, "handle": s, "value": f, "context": {…}, "updated": unix_ms, "rewound"?: true}]}`
 - `GET /v1/players/{handle}` → `{"handle": s, "since": unix_ms, "stats": [{"stat": s, "value": f, "rank": n, "context": {…}, "rewound"?: true}]}` (404 if unknown/banned)
 
 `ascending` is `true` on the career-time boards (`fastest_to_orbit`, `fastest_to_<body>`), where the value is seconds since the career began and the **smallest** value ranks first; it is `false` on every record and counter board. The tie rule does not change with it: an equal value keeps the earlier claimant's rank. `rewound` is emitted only when true, and only on a career-time row whose career has had an earlier save loaded — it qualifies the number and has no other effect (see [events.md](events.md)).
+
+**The board list is not fixed, and a client must not treat it as one.** Most stat keys are compile-time constants — one per fold — but two families are not: `fastest_to_<body>` and `rud_<cause>` take their second half from the event stream, because KSA's celestial systems are game content and `body` is opaque to the server ([events.md](events.md)). Titles, units and `ascending` are derived from the key, so a board for a place nobody has ever named in this repository arrives fully described. `min_players` is how many *distinct* players such a board needs before it is listed here (default 2, `[boards] min_players`); below that it is still served at `/v1/leaderboards/{stat}` and still appears on the profile of whoever is on it, it is just not in the index. A key that is neither a fixed board nor a family board anybody holds a value on is a 404.
 - `GET /v1/feed/sse` → datastar SSE stream of recent-activity fragments (no cache)
 - `GET /.well-known/catlog-jwks.json`, `GET /.well-known/catlog-denylist.json` (§5.8)
 

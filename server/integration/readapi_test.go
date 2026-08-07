@@ -41,15 +41,41 @@ func TestSeededReadAPI(t *testing.T) {
 		}
 		var out readapi.BoardsResponse
 		mustJSON(t, body, &out)
-		if len(out.Boards) != len(stats.Boards()) {
-			t.Fatalf("%d boards, want %d", len(out.Boards), len(stats.Boards()))
-		}
 		byStat := map[string]readapi.BoardSummary{}
 		for _, b := range out.Boards {
 			byStat[b.Stat] = b
 		}
+		// Every board with a compile-time key is listed whether or not anyone is
+		// on it. There is deliberately no total to compare against: the rest of
+		// the index comes from the data, and hard-coding its size is what this
+		// change removed.
+		for _, b := range stats.FixedBoards() {
+			if _, listed := byStat[b.Stat]; !listed {
+				t.Errorf("%q is missing from the index", b.Stat)
+			}
+		}
 		if b := byStat[stats.StatBiggestLithobrakeSurvived]; b.Count != 1 || b.Unit != "m/s" {
 			t.Errorf("lithobrake board = %+v", b)
+		}
+		// And the two data-driven families, which the demo dataset gives two
+		// entrants each precisely so they are publishable.
+		for _, want := range []struct {
+			stat  string
+			title string
+			asc   bool
+		}{
+			{"rud_ground_impact", "RUDs — Ground Impact", false},
+			{"fastest_to_luna", "Fastest to Luna", true},
+			{"fastest_to_mars", "Fastest to Mars", true},
+		} {
+			b, listed := byStat[want.stat]
+			if !listed {
+				t.Errorf("%q came out of the event stream and was not listed", want.stat)
+				continue
+			}
+			if b.Title != want.title || b.Ascending != want.asc || b.Count != 2 {
+				t.Errorf("board %q = %+v, want title %q ascending=%v count=2", want.stat, b, want.title, want.asc)
+			}
 		}
 	})
 

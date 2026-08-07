@@ -37,9 +37,14 @@ export function PanelHeader(props: {
 }
 
 /** A small labelled chip: units, counts, statuses. */
-export function Pill(props: { readonly children: ReactNode; readonly className?: string }) {
+export function Pill(props: {
+  readonly children: ReactNode;
+  readonly className?: string;
+  readonly title?: string;
+}) {
   return (
     <span
+      title={props.title}
       className={cn(
         'bg-ink-850 text-ink-400 border-ink-800 rounded-full border px-2 py-0.5 font-mono text-[0.7rem]',
         props.className,

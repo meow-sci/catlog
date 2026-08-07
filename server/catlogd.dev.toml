@@ -22,6 +22,14 @@ base_url     = "http://127.0.0.1:8080"   # license `iss` AND the htu base (§4.5
 # the repo root. §5.3's literal "../site/dist" is written from server/'s point
 # of view and would resolve outside the repo here (docs/DECISIONS.md, WP5).
 static_dir   = "site/dist"               # served at /static/ in dev; nginx serves it in prod
+# Mounts POST /admin/clock, which moves this server's notion of now. Every
+# authoritative timestamp catlog produces is server-generated — an event's
+# recv_time, a license's iat/exp, a session's expiry — so the server clock is
+# the only thing that decides which day, week, month or year a leaderboard row
+# lands in, and a rolling yearly board is otherwise untestable without waiting a
+# year. Development only: it defaults to false, catlogd refuses to start with it
+# on an https base_url, and the route lives on the loopback-only admin mux.
+clock_control = true
 
 [data]
 dir = "./data"                            # events.db, projections.db, keys/, archive/ (§3)
@@ -74,6 +82,19 @@ client_secret = "dev"
 [limits]
 ratelimit_per_jkt_per_s = 0.5             # 1 batch / 2 s (§4.3)
 ratelimit_burst         = 5
+
+[boards]
+# `fastest_to_<body>` and `rud_<cause>` take their keys from the event stream —
+# KSA's celestial systems are content that mods extend, and catlog keeps no list
+# of bodies (docs/events.md: `body` is "opaque to server"). Such a board is
+# listed by GET /v1/leaderboards once this many distinct players are on it.
+#
+# 2 is the default and the point: it stops one modified client minting ten
+# thousand boards, and a leaderboard with one entrant is not a leaderboard. The
+# per-player value is recorded for every body and cause regardless, so lowering
+# this publishes history that is already there rather than starting to collect
+# it (docs/DECISIONS.md).
+min_players = 2
 
 # --- cross-origin reads (spa/) ----------------------------------------------
 #

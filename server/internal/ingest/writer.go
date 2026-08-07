@@ -67,6 +67,19 @@ type Writer struct {
 	// a slow or absent projector never stalls ingest.
 	notify chan struct{}
 	done   chan struct{}
+	// now is the server clock, stamping `stream_state.updated_at` and
+	// `ingest_batch.recv_time`. Defaults to [time.Now]; catlogd replaces it via
+	// [Writer.SetClock] with the same clock the store and the verifier read, so
+	// a batch's three timestamps cannot disagree about what day it is.
+	now func() time.Time
+}
+
+// SetClock replaces the writer's clock. catlogd calls this once at start-up
+// with its shared server clock; the default is [time.Now].
+func (w *Writer) SetClock(now func() time.Time) {
+	if now != nil {
+		w.now = now
+	}
 }
 
 // NewWriter builds the writer for one events database.
@@ -80,6 +93,7 @@ func NewWriter(events *store.Events, log *slog.Logger) *Writer {
 		jobs:   make(chan *WriteJob, QueueDepth),
 		notify: make(chan struct{}, 1),
 		done:   make(chan struct{}),
+		now:    time.Now,
 	}
 }
 
@@ -204,7 +218,7 @@ func (w *Writer) process(ctx context.Context, job *WriteJob) {
 		if err != nil {
 			return err
 		}
-		now := time.Now().UnixMilli()
+		now := w.now().UnixMilli()
 		if err := w.events.UpsertStreamState(ctx, tx, store.StreamState{
 			PlayerID: job.PlayerID, SID: job.SID, JKT: job.JKT,
 			LastSeq: job.Seq, LastBH: job.BH, Gap: gap, UpdatedAt: now,

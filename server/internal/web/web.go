@@ -42,6 +42,13 @@ import (
 // FeaturedBoards are the three boards the home page shows the top three of
 // (§5.7). One record, one speed record and one counter, so the front page shows
 // what the three kinds of board look like without anybody having to click.
+//
+// Every entry is deliberately a *fixed* board key — one of the constants above,
+// which exist because a fold of that name does. The board index is otherwise
+// assembled from the data (stats.Catalog), and a front page pinned to a board
+// that only exists while somebody keeps flying there would be a front page that
+// can empty itself. handleHome skips an entry that is not a board, so being
+// wrong here costs a log line rather than a blank page.
 var FeaturedBoards = []string{
 	stats.StatBiggestLithobrakeSurvived,
 	stats.StatFastestOrbitalSpeed,

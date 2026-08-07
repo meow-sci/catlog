@@ -45,6 +45,15 @@ export function BoardPage(props: { readonly stat: string; readonly offset: numbe
           {board.status === 'ready' ? board.data.title : stat}
         </h1>
         <p className="text-ink-400 mt-1 font-mono text-xs">{stat}</p>
+        {/* Which way the board reads comes from the server, per board. The
+            career-time boards rank the smallest value first, and a reader that
+            assumed otherwise would present the fastest ascent as the worst. */}
+        {board.status === 'ready' && (
+          <p className="text-ink-400 mt-1 text-xs">
+            Measured in {board.data.unit === '' ? 'plain counts' : board.data.unit}.{' '}
+            {board.data.ascending ? 'Lowest wins.' : 'Highest wins.'}
+          </p>
+        )}
       </div>
 
       <Panel>
@@ -71,7 +80,7 @@ export function BoardPage(props: { readonly stat: string; readonly offset: numbe
           </Empty>
         )}
         {board.status === 'ready' && rows.length > 0 && (
-          <BoardTable unit={board.data.unit} rows={rows} />
+          <BoardTable unit={board.data.unit} ascending={board.data.ascending} rows={rows} />
         )}
       </Panel>
 

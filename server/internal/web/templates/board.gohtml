@@ -3,7 +3,10 @@
 
 <hgroup>
   <h1 id="board-title" data-stat="{{.Data.Stat}}">{{.Data.Title}}</h1>
-  <p>Measured in {{.Data.Unit}}. Top {{.Data.Limit}}.</p>
+  {{- /* Which way the board reads is published, never guessed: the career-time
+         boards rank the *smallest* value first, and a reader that assumed
+         otherwise would present the fastest ascent as the worst one. */}}
+  <p id="board-direction" data-ascending="{{.Data.Ascending}}">Measured in {{.Data.Unit}}. Top {{.Data.Limit}}. {{if .Data.Ascending}}Lowest wins.{{else}}Highest wins.{{end}}</p>
 </hgroup>
 
 {{template "board-table" (dict "Board" .Data "Compact" false)}}

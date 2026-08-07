@@ -231,6 +231,16 @@ func TestValidateRejectsBadConfigs(t *testing.T) {
 		"cors no scheme":       func(c *Config) { c.CORS.AllowedOrigins = []string{"a.example"} },
 		"cors odd scheme":      func(c *Config) { c.CORS.AllowedOrigins = []string{"ftp://a.example"} },
 		"cors with a fragment": func(c *Config) { c.CORS.AllowedOrigins = []string{"https://a.example#x"} },
+
+		// The server clock is what stamps recv_time, signs license lifetimes
+		// and decides which rolling window a row lands in. Being able to move
+		// it is a development affordance; a TLS deployment is not a laptop, so
+		// the combination is refused at startup rather than warned about.
+		"clock control on https": func(c *Config) {
+			c.Server.BaseURL = "https://catlog.example"
+			c.Server.ClockControl = true
+			c.Ingest.AcceptedHTU = []string{"https://catlog.example/v1/ingest"}
+		},
 	}
 	for name, mutate := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -277,5 +287,19 @@ func TestCheckpointIntervalDisable(t *testing.T) {
 		if got := cfg.CheckpointInterval(); got > 0 {
 			t.Errorf("CheckpointInterval() = %v for setting %d, want <= 0 (timer off)", got, v)
 		}
+	}
+}
+
+// TestClockControlIsOffByDefaultAndAllowedOnlyLocally pins both halves of the
+// guard: a default config does not enable it, and a plain http dev server may.
+func TestClockControlIsOffByDefaultAndAllowedOnlyLocally(t *testing.T) {
+	cfg := Default()
+	if cfg.Server.ClockControl {
+		t.Error("clock_control defaults to true; it must default to off")
+	}
+
+	cfg.Server.ClockControl = true
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("clock_control on the default http dev server was refused: %v", err)
 	}
 }

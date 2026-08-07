@@ -71,6 +71,10 @@ type Server struct {
 	// identity carries the WP3 dependencies, installed by
 	// [Server.RegisterIdentity]. Same contract as projections.
 	identity IdentityDeps
+	// clock carries the development-only server clock, installed by
+	// [Server.RegisterClock]. Zero (and its routes unmounted) unless
+	// `[server] clock_control` is on.
+	clock ClockDeps
 	// archive carries the WP10 dependencies, installed by
 	// [Server.RegisterArchive]. Same contract again.
 	archive ArchiveDeps

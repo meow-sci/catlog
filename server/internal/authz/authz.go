@@ -113,8 +113,13 @@ func New(cfg Config, ks *keys.Set, events *store.Events, deny *DenyList) *Verifi
 	}
 }
 
-// SetClock replaces the verifier's clock. Tests only — production always runs
-// on time.Now.
+// SetClock replaces the verifier's clock, and the rate limiter's with it.
+//
+// catlogd calls this once at start-up with its shared server clock (which *is*
+// [time.Now] unless the deployment enabled `[server] clock_control`), so the
+// license-expiry check, the ±300 s proof-skew window, the `Date` header a
+// client resynchronises against and the token bucket all read one clock. Tests
+// use it the same way.
 func (v *Verifier) SetClock(now func() time.Time) {
 	v.now = now
 	v.limiter.now = now

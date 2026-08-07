@@ -30,11 +30,18 @@ func (s *Server) BoardList(ctx context.Context) (BoardsResponse, error) {
 		return BoardsResponse{}, err
 	}
 
-	// Every board is listed whether or not anyone is on it: the set of boards
-	// is a property of the build, not of the data, and a UI that discovers
-	// boards from this endpoint must not lose one because nobody has scored yet.
-	all := stats.Boards()
-	out := BoardsResponse{Boards: make([]BoardSummary, 0, len(all))}
+	// The board list is assembled from the data, not from a table in the source.
+	// Every board with a compile-time key is listed whether or not anyone is on
+	// it — an empty board is still a board, and a UI that discovers boards here
+	// must not lose one because nobody has scored yet. The two families whose
+	// keys come out of the event stream (`fastest_to_<body>`, `rud_<cause>`) are
+	// listed once [Deps.MinBoardPlayers] distinct players are on them; see
+	// stats.Catalog for why that is the whole of the mitigation.
+	all := stats.Catalog(counts, s.minBoardPlayers)
+	out := BoardsResponse{
+		Boards:     make([]BoardSummary, 0, len(all)),
+		MinPlayers: s.minBoardPlayers,
+	}
 	for _, b := range all {
 		out.Boards = append(out.Boards, BoardSummary{
 			Stat: b.Stat, Title: b.Title, Unit: b.Unit,
@@ -47,11 +54,14 @@ func (s *Server) BoardList(ctx context.Context) (BoardsResponse, error) {
 // Board assembles one page of `GET /v1/leaderboards/{stat}` (§4.8).
 //
 // limit and offset are clamped by [ClampPaging]; ok is false when stat is not a
-// board this build publishes.
+// board this server serves — a key that describes nothing, or a family key
+// nobody has ever scored on. A family board that exists but is not yet *listed*
+// is still served: the alternative is a profile row that links to a 404, and a
+// player's own achievement being hidden from them until somebody else repeats it.
 func (s *Server) Board(ctx context.Context, stat string, limit, offset int) (BoardResponse, bool, error) {
-	board, ok := stats.BoardFor(stat)
-	if !ok {
-		return BoardResponse{}, false, nil
+	board, ok, err := s.board(ctx, stat)
+	if err != nil || !ok {
+		return BoardResponse{}, false, err
 	}
 	limit, offset = ClampPaging(limit, offset)
 
@@ -91,6 +101,32 @@ func (s *Server) Board(ctx context.Context, stat string, limit, offset int) (Boa
 		})
 	}
 	return out, true, nil
+}
+
+// board resolves a stat key to the board it names, reporting false for a key
+// this server has no board for.
+//
+// A fixed key needs no query at all. A family key costs one indexed count, and
+// only then — the price of "this board exists because the data made it" is one
+// `SELECT count(*)` on the URLs that name a body.
+func (s *Server) board(ctx context.Context, stat string) (stats.Board, bool, error) {
+	if b, ok := stats.Known(stat, 0); ok {
+		return b, true, nil
+	}
+	if _, describable := stats.Describe(stat); !describable {
+		return stats.Board{}, false, nil
+	}
+	var players int64
+	err := s.deps.Projections.With(func(p *store.Projections) error {
+		var err error
+		players, err = p.StatPlayers(ctx, stat)
+		return err
+	})
+	if err != nil {
+		return stats.Board{}, false, err
+	}
+	b, ok := stats.Known(stat, players)
+	return b, ok, nil
 }
 
 // rowContext is the sliver of a board row's context this package reads. The
@@ -182,7 +218,7 @@ func (s *Server) Player(ctx context.Context, handle string) (PlayerResponse, boo
 
 	careers := make([]string, 0, len(rows))
 	for _, row := range rows {
-		if board, known := stats.BoardFor(row.Stat); known && board.Career {
+		if board, known := stats.Describe(row.Stat); known && board.Career {
 			if c := careerOf(row); c != "" {
 				careers = append(careers, c)
 			}
@@ -203,10 +239,14 @@ func (s *Server) Player(ctx context.Context, handle string) (PlayerResponse, boo
 	banned := s.deps.Directory.BannedIDs()
 	out := PlayerResponse{Handle: entry.Handle, Since: entry.Since, Stats: make([]PlayerRow, 0, len(rows))}
 	for _, row := range rows {
-		board, known := stats.BoardFor(row.Stat)
+		// Every row the player holds is shown, listed board or not: a profile is
+		// what this player did, not which leaderboards are big enough to appear
+		// in the index. The row's own existence is what makes its board servable
+		// (see [Server.board]), so the link is never dead.
+		board, known := stats.Describe(row.Stat)
 		if !known {
-			// A stat this build no longer publishes — a board removed between
-			// releases, still sitting in projections.db until the next rebuild.
+			// A stat this build cannot name — a board removed between releases,
+			// still sitting in projections.db until the next rebuild.
 			continue
 		}
 		rank, err := s.rank(ctx, row, board.Ascending, banned)

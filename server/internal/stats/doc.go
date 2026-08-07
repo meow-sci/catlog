@@ -32,6 +32,15 @@
 //     reached its current count, so whoever got there first outranks whoever
 //     arrived later at the same number.
 //
+// # Where a board's key comes from
+//
+// Most board keys are constants — one per fold, listed in [FixedBoards]. Two
+// families are not: `fastest_to_<body>` and `rud_<cause>` take their second half
+// from the event stream, because KSA's celestial systems and its enums are
+// content that ships as data and that mods extend. [Describe] derives a board's
+// title, unit and direction from its key alone, and [Catalog] decides which of
+// them the public index lists. See the commentary above [DefaultMinPlayers].
+//
 // # Rebuild refinements
 //
 // Two boards cannot be computed exactly by a single forward pass, because they

@@ -8,10 +8,15 @@ mod/**/bin/
 mod/**/obj/
 
 # --- runtime data (§3: ./data/ holds events.db, projections.db, keys/, archive/) ---
+#
+# A PATTERN, not a list. These directories hold key material — the pepper, the
+# session key and the license signing key — and every new tool that takes a
+# `--data-dir` invents another one: data-e2e/ and data-e2e-full/ for §8, then
+# data-loadgen/ for the load harness, which enumerating had already missed.
+# Committing a signing key because a directory was named something new is not a
+# mistake worth leaving available.
 data/
-# Throwaway data directories for `make e2e` / `make e2e-full` (§8).
-data-e2e/
-data-e2e-full/
+data-*/
 *.db
 *.db-wal
 *.db-shm

@@ -64,7 +64,12 @@ test.describe("the credential wizard", () => {
     expect(header.typ).toBe("catlog-license+jwt");
     expect(header.kid).toMatch(/^catlog-\d{6}$/);
     expect(claims.handle).toBe(HANDLE);
-    expect(claims.iss).toBe("http://127.0.0.1:8080");
+    // The issuer is the server's own base URL, so read it from where the test is
+    // actually pointed rather than pinning the default port — pinning it makes the
+    // whole serial file fail (and skip everything after it) the moment the suite
+    // runs anywhere but :8080, which is exactly what happens when a dev server
+    // already holds it.
+    expect(claims.iss).toBe(new URL(page.url()).origin);
     expect(claims.ver).toBe(1);
     expect(claims.jti).toMatch(/^lic_/);
     expect(claims.exp - claims.iat).toBe(180 * 24 * 60 * 60);

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 
 	"github.com/meow-sci/catlog/server/internal/directory"
@@ -156,8 +157,8 @@ func TestBoardsListsEveryBoardEvenTheEmptyOnes(t *testing.T) {
 		t.Fatalf("status = %d", rec.Code)
 	}
 	got := decode[readapi.BoardsResponse](t, rec)
-	if len(got.Boards) != len(stats.Boards()) {
-		t.Fatalf("%d boards, want %d — an empty board is still a board", len(got.Boards), len(stats.Boards()))
+	if len(got.Boards) != len(stats.FixedBoards()) {
+		t.Fatalf("%d boards, want %d — an empty board is still a board", len(got.Boards), len(stats.FixedBoards()))
 	}
 	for _, b := range got.Boards {
 		if b.Title == "" || b.Unit == "" {
@@ -173,6 +174,52 @@ func TestBoardsListsEveryBoardEvenTheEmptyOnes(t *testing.T) {
 				t.Errorf("board %q count = %d, want 0", b.Stat, b.Count)
 			}
 		}
+	}
+}
+
+// A board whose key came out of the event stream appears in the index the moment
+// a second player is on it, and is served — but not listed — before that.
+func TestBoardsListsADataDrivenBoardOnceEnoughPlayersAreOnIt(t *testing.T) {
+	f := newFixture(t)
+	one := f.player("first_there")
+	f.stat(one, "fastest_to_zephyria", 900, 1)
+
+	listed := func() []string {
+		f.t.Helper()
+		out := []string{}
+		for _, b := range decode[readapi.BoardsResponse](t, f.get("/v1/leaderboards")).Boards {
+			out = append(out, b.Stat)
+		}
+		return out
+	}
+
+	if slices.Contains(listed(), "fastest_to_zephyria") {
+		t.Error("a board with one player was listed; the threshold is the whole mitigation")
+	}
+	// Served all the same: the player's own profile row has to link somewhere.
+	page := decode[readapi.BoardResponse](t, f.get("/v1/leaderboards/fastest_to_zephyria"))
+	if page.Title != "Fastest to Zephyria" || !page.Ascending || len(page.Rows) != 1 {
+		t.Errorf("board page = %+v, want one row on an ascending board titled from the key", page)
+	}
+	if rec := f.get("/v1/leaderboards/fastest_to_nobody_went_there"); rec.Code != http.StatusNotFound {
+		t.Errorf("a family key nobody is on = %d, want 404", rec.Code)
+	}
+
+	two := f.player("second_there")
+	f.stat(two, "fastest_to_zephyria", 400, 2)
+	all := listed()
+	if !slices.Contains(all, "fastest_to_zephyria") {
+		t.Errorf("boards = %v, want fastest_to_zephyria listed once two players are on it", all)
+	}
+	// And it lands under the fixed career-time board it belongs with.
+	if i, j := slices.Index(all, stats.StatFastestToOrbit), slices.Index(all, "fastest_to_zephyria"); j != i+1 {
+		t.Errorf("boards = %v, want fastest_to_zephyria right after fastest_to_orbit", all)
+	}
+
+	// The profile shows the row either way, and titles it from the key.
+	profile := decode[readapi.PlayerResponse](t, f.get("/v1/players/first_there"))
+	if len(profile.Stats) != 1 || profile.Stats[0].Title != "Fastest to Zephyria" {
+		t.Errorf("profile = %+v, want the row titled from the key", profile.Stats)
 	}
 }
 

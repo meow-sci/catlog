@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 )
 
 // AllProjections is the single checkpoint key every fold shares (§5.6).
@@ -40,15 +39,11 @@ func (p *Projections) SetCheckpoint(ctx context.Context, q Querier, projection s
 	if _, err := q.ExecContext(ctx,
 		`INSERT INTO proj_checkpoint (projection, last_seq, updated_at) VALUES (?, ?, ?)
 		 ON CONFLICT (projection) DO UPDATE SET last_seq = excluded.last_seq, updated_at = excluded.updated_at`,
-		projection, lastSeq, time.Now().UnixMilli()); err != nil {
+		projection, lastSeq, p.nowMillis()); err != nil {
 		return fmt.Errorf("store: set checkpoint %q: %w", projection, err)
 	}
 	return nil
 }
-
-// nowMillis is the store's clock. A package-level function so tests can read
-// the same value the writes use without threading a clock through every call.
-func nowMillis() int64 { return time.Now().UnixMilli() }
 
 // --- leaderboards ------------------------------------------------------------
 //
@@ -158,6 +153,22 @@ func (p *Projections) StatAhead(ctx context.Context, stat string, asc bool, valu
 		stat, value, value, updatedSeq).Scan(&n)
 	if err != nil {
 		return 0, fmt.Errorf("store: rank on %q: %w", stat, err)
+	}
+	return n, nil
+}
+
+// StatPlayers is how many players hold a value on one board.
+//
+// `player_stat` has one row per (player, stat), so the row count *is* the number
+// of distinct players — which is what decides whether a board whose key came out
+// of the data is published (stats.Known, stats.Catalog). It runs off the
+// `stat_rank` index rather than [Projections.StatCounts]' full group-by, because
+// a single board page must not pay for a census of every board.
+func (p *Projections) StatPlayers(ctx context.Context, stat string) (int64, error) {
+	var n int64
+	if err := p.Reader().QueryRowContext(ctx,
+		`SELECT count(*) FROM player_stat WHERE stat = ?`, stat).Scan(&n); err != nil {
+		return 0, fmt.Errorf("store: count players on %q: %w", stat, err)
 	}
 	return n, nil
 }

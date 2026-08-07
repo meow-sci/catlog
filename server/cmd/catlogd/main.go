@@ -32,6 +32,7 @@ import (
 	"github.com/meow-sci/catlog/server/internal/adminapi"
 	"github.com/meow-sci/catlog/server/internal/archive"
 	"github.com/meow-sci/catlog/server/internal/authz"
+	"github.com/meow-sci/catlog/server/internal/clock"
 	"github.com/meow-sci/catlog/server/internal/config"
 	"github.com/meow-sci/catlog/server/internal/directory"
 	"github.com/meow-sci/catlog/server/internal/identity"
@@ -105,7 +106,23 @@ func run(ctx context.Context, cfg config.Config, log *slog.Logger, ready func(pu
 	}
 	log.Info("keys ready", "keys", keySet)
 
-	storeOpts := store.Options{Logger: log, CheckpointInterval: cfg.CheckpointInterval()}
+	// One clock for the whole server. Every authoritative timestamp catlog
+	// produces — an event's `recv_time`, a license's `iat`/`exp`, a session's
+	// expiry, the `Date` header a client resynchronises against — reads this,
+	// so they cannot disagree about what day it is. It is [time.Now] unless
+	// `[server] clock_control` is on, which Validate refuses for an https
+	// deployment.
+	srvClock := clock.New(cfg.Server.ClockControl)
+	if srvClock.Controllable() {
+		log.Warn("server clock control is ENABLED — POST /admin/clock can move this server's notion of now",
+			"base_url", cfg.Server.BaseURL)
+	}
+
+	storeOpts := store.Options{
+		Logger:             log,
+		CheckpointInterval: cfg.CheckpointInterval(),
+		Now:                srvClock.Now,
+	}
 
 	events, err := store.OpenEvents(ctx, cfg.EventsDBPath(), storeOpts)
 	if err != nil {
@@ -132,12 +149,16 @@ func run(ctx context.Context, cfg config.Config, log *slog.Logger, ready func(pu
 		RatePerSecond: cfg.Limits.RateLimitPerJKTPerS,
 		Burst:         cfg.Limits.RateLimitBurst,
 	}, keySet, events, deny)
+	// Also re-points the rate limiter, so the token bucket and the skew window
+	// agree with the clock that stamps recv_time.
+	verifier.SetClock(srvClock.Now)
 
 	// One writer goroutine owns every write to events.db (§5.5). It runs on its
 	// own context so shutdown can drain HTTP first and only then stop it.
 	writerCtx, stopWriter := context.WithCancel(context.Background())
 	defer stopWriter()
 	writer := ingest.NewWriter(events, log)
+	writer.SetClock(srvClock.Now)
 	go writer.Run(writerCtx)
 	ingest.PublishQueueDepth(writer)
 
@@ -193,6 +214,9 @@ func run(ctx context.Context, cfg config.Config, log *slog.Logger, ready func(pu
 		// The JSON half of the activity feed, for the `spa/` frontend: the
 		// datastar stream in package web is HTML and stays where it is.
 		Feed: broadcaster,
+		// How many players a board whose key came out of the event stream needs
+		// before the public index lists it (config.Boards).
+		MinBoardPlayers: cfg.Boards.MinPlayers,
 		// Cross-origin reads, and nothing else — see readapi/cors.go. The
 		// dashboard API, the auth flows and the admin mux never see this list.
 		AllowedOrigins: cfg.CORS.AllowedOrigins,
@@ -215,7 +239,11 @@ func run(ctx context.Context, cfg config.Config, log *slog.Logger, ready func(pu
 		Events:   events,
 		Verifier: verifier,
 		Log:      log,
+		Now:      srvClock.Now,
 	})
+	// Unmounted unless the clock is controllable, so on a normal server
+	// /admin/clock does not exist at all.
+	admin.RegisterClock(adminapi.ClockDeps{Clock: srvClock})
 	admin.RegisterProjections(adminapi.ProjectionDeps{
 		Projector: proj,
 		Directory: dir,
@@ -230,7 +258,9 @@ func run(ctx context.Context, cfg config.Config, log *slog.Logger, ready func(pu
 	if err != nil {
 		return fmt.Errorf("open archive store: %w", err)
 	}
-	archiver, err := archive.New(archive.Options{Events: events, Store: archiveStore, Log: log})
+	archiver, err := archive.New(archive.Options{
+		Events: events, Store: archiveStore, Log: log, Now: srvClock.Now,
+	})
 	if err != nil {
 		return fmt.Errorf("build archiver: %w", err)
 	}
@@ -252,6 +282,7 @@ func run(ctx context.Context, cfg config.Config, log *slog.Logger, ready func(pu
 		// log in storage is the one thing a purge exists to prevent.
 		Archive: archiver,
 		Log:     log,
+		Now:     srvClock.Now,
 	})
 	if err != nil {
 		return fmt.Errorf("build identity: %w", err)

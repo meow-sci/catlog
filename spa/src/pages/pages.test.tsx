@@ -2,6 +2,7 @@ import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import type { BoardResponse, BoardsResponse, PlayerResponse } from '../api/types.ts';
 import { stubFetch } from '../test/http.ts';
+import { pickFeatured } from '../ui/featured.ts';
 import { BoardPage } from './BoardPage.tsx';
 import { BoardsPage } from './BoardsPage.tsx';
 import { PlayerPage } from './PlayerPage.tsx';
@@ -18,15 +19,32 @@ import { PlayerPage } from './PlayerPage.tsx';
  */
 
 const BOARDS: BoardsResponse = {
+  min_players: 2,
   boards: [
     {
       stat: 'biggest_lithobrake_survived',
       title: 'Biggest Lithobrake Survived',
       unit: 'm/s',
+      ascending: false,
       count: 1,
     },
-    { stat: 'orbits_achieved', title: 'Orbits Achieved', unit: 'orbits', count: 1 },
-    { stat: 'dockings', title: 'Dockings', unit: 'dockings', count: 0 },
+    {
+      stat: 'orbits_achieved',
+      title: 'Orbits Achieved',
+      unit: 'orbits',
+      ascending: false,
+      count: 1,
+    },
+    { stat: 'dockings', title: 'Dockings', unit: 'dockings', ascending: false, count: 0 },
+    // A board whose key came out of the event stream. Nothing in the SPA names
+    // this place; it is here because players went there.
+    {
+      stat: 'fastest_to_zephyria',
+      title: 'Fastest to Zephyria',
+      unit: 's',
+      ascending: true,
+      count: 2,
+    },
   ],
 };
 
@@ -34,6 +52,7 @@ const LITHOBRAKE: BoardResponse = {
   stat: 'biggest_lithobrake_survived',
   title: 'Biggest Lithobrake Survived',
   unit: 'm/s',
+  ascending: false,
   limit: 50,
   offset: 0,
   rows: [
@@ -63,6 +82,20 @@ describe('BoardsPage', () => {
     // copied out of the address bar and pasted somewhere else.
     const link = screen.getByRole('link', { name: /Biggest Lithobrake Survived/ });
     expect(link.getAttribute('href')).toBe('/boards/biggest_lithobrake_survived');
+  });
+
+  it('renders a board whose key came out of the event stream, and says why one may be missing', async () => {
+    stubFetch([{ path: '/v1/leaderboards', body: BOARDS }]);
+    render(<BoardsPage />);
+
+    // No constant in this app names Zephyria: the index is the server's answer,
+    // not a list here, and the page must not assume its size or membership.
+    expect(await screen.findByText('Fastest to Zephyria')).toBeTruthy();
+    expect(screen.getByRole('link', { name: /Fastest to Zephyria/ }).getAttribute('href')).toBe(
+      '/boards/fastest_to_zephyria',
+    );
+    // The threshold is explained with the server's number, not one hard-coded.
+    expect(screen.getByText(/at least 2 different players/)).toBeTruthy();
   });
 
   it('shows the server error rather than an empty list when the read fails', async () => {
@@ -142,6 +175,41 @@ describe('BoardPage', () => {
     await screen.findByText(/nothing on this page/);
     expect(String(mock.mock.calls[0]?.[0])).toContain('offset=50');
   });
+
+  // A career-time board ranks the smallest value first. The server publishes
+  // which way each board reads; presenting a "fastest to" board as though a
+  // bigger number were better is a wrong answer, not a styling gap.
+  it('says which way the board reads, from the server and not from the key', async () => {
+    stubFetch([
+      {
+        path: '/v1/leaderboards/fastest_to_zephyria',
+        body: {
+          stat: 'fastest_to_zephyria',
+          title: 'Fastest to Zephyria',
+          unit: 's',
+          ascending: true,
+          limit: 50,
+          offset: 0,
+          rows: [
+            { rank: 1, handle: 'demo_ace', value: 50, updated: 1_800_000_000_000 },
+            {
+              rank: 2,
+              handle: 'demo_crasher',
+              value: 537.5,
+              updated: 1_800_000_000_000,
+              rewound: true,
+            },
+          ],
+        },
+      },
+    ]);
+    render(<BoardPage stat="fastest_to_zephyria" offset={0} />);
+
+    expect(await screen.findByRole('link', { name: 'demo_ace' })).toBeTruthy();
+    expect(screen.getByText(/Lowest wins\./)).toBeTruthy();
+    // And the rewind qualifier reaches the row it qualifies.
+    expect(screen.getByText(/career rewound/)).toBeTruthy();
+  });
 });
 
 describe('PlayerPage', () => {
@@ -197,5 +265,33 @@ describe('PlayerPage', () => {
     const alert = await screen.findByRole('alert');
     expect(alert.textContent).toContain('Could not load this profile');
     expect(screen.queryByText('No such player')).toBeNull();
+  });
+});
+
+describe('pickFeatured', () => {
+  // The front page's choice of previews is a preference, not a contract. The
+  // server-rendered site makes the same choice independently; the two are
+  // separate applications sharing an HTTP contract and nothing else. What keeps
+  // this from rotting is that the preference is filtered against what the server
+  // actually publishes.
+  it('prefers the named boards, in their stated order', () => {
+    expect(pickFeatured(['dockings', 'rud_total', 'biggest_lithobrake_survived'])).toEqual([
+      'biggest_lithobrake_survived',
+      'rud_total',
+      'dockings',
+    ]);
+  });
+
+  it('falls back to whatever the server does publish', () => {
+    expect(pickFeatured(['fastest_to_luna', 'soi_bodies', 'stagings', 'dockings'])).toEqual([
+      'fastest_to_luna',
+      'soi_bodies',
+      'stagings',
+    ]);
+  });
+
+  it('never asks for a board the server did not list', () => {
+    expect(pickFeatured([])).toEqual([]);
+    expect(pickFeatured(['rud_total'])).toEqual(['rud_total']);
   });
 });

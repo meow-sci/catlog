@@ -93,11 +93,28 @@ the harness — and then drives the **real** `catlog.lib` pipeline: detector →
 proof → Brotli batch → `POST /v1/ingest`. No envelope is ever hand-authored. `--auth admin` swaps
 the identity stack for `POST /admin/issue` when the question is about ingest alone.
 
-Play is invented, not scripted: fleets, launches, orbits, escapes, SOI changes, EVAs, dockings,
-tumbles, all six RUD causes, integrity flags and save reloads, weighted so most flights are
-ordinary and records are rare. A small proportion of accounts are minted deliberately too young
-for the 30-day age gate and are expected to be **refused**; another few exercise reissue, revoke,
-admin ban and delete-my-data. The read API and the live feed are hammered throughout.
+Play is invented, not scripted, and it is invented as a **career**. Each player arrives with
+in-game time already on the clock and is only capable of what that time has earned them: pad tests
+and hops, then suborbital lobs, then orbit and orbital manoeuvres, then rendezvous and docking,
+then transfers to other bodies, landings, and probes to the outer system. Fleet size and the
+number of craft in flight at once grow the same way — one thing at a time for a beginner, five for
+an explorer with a station, a lander on approach and a probe on its way to Saturn. Careers advance
+during the run, so players cross stage boundaries while you watch.
+
+Failure is career-appropriate and that is where the realism lives: beginners lose vehicles
+*early* — on the pad, on ascent, at max-Q — and veterans lose them on final approach, on touchdown
+and while closing on a docking port. The RUD cause follows from the phase, so all six occur in
+proportions that match what the player was attempting. A lost flight is truncated to where it was
+lost, so a pad failure really is four seconds of telemetry, one ignition and a crater.
+
+Everything is flown around the solar system KSA actually ships — Earth, Luna, Sol, Mars, Phobos,
+Venus, Jupiter and the rest — with radii, masses and atmosphere heights taken from the game's own
+`Astronomicals.xml`, so orbital speeds are derived rather than invented and EVAs only happen where
+a kitten could stand. On top of that: EVAs, dockings, tumbles, integrity flags and save reloads,
+weighted so most flights are ordinary and records are rare. A small proportion of accounts are
+minted deliberately too young for the 30-day age gate and are expected to be **refused**; another
+few exercise reissue, revoke, admin ban and delete-my-data. The read API and the live feed are
+hammered throughout.
 
 `--seed` makes a run replayable: the same seed produces the same event stream whatever the
 concurrency, and the report prints a digest of it to prove two runs agree. `--namespace` controls
@@ -107,7 +124,13 @@ last run's players.
 `--assert` checks the invariants a run must have whatever it generated: zero silent loss
 (`events.total` moved by exactly the number of envelopes produced), no unexplained non-2xx, no
 duplicate delivery, a re-sent batch swallowed by the replay short-circuit, every too-young login
-refused, the projector at the head of the log, and every player visible on at least one board.
+refused, the projector at the head of the log, every player visible on at least one board, all six
+RUD causes produced, and — at twelve players or more, which is one full rotation of the career
+ladder — every career stage populated with somebody off the home world.
+
+The report's `careers` section says whether the population looked like a plausible player base:
+stage distribution at the open and close of the window, career-age percentiles, fleet size per
+player by stage, missions attempted against completed, and losses broken down by flight phase.
 
 The client's hard 30-second ship floor is measured against an injected clock, exactly as
 `catlog.sim` does, so a run compresses hours of play into seconds. **Every server-side limit stays

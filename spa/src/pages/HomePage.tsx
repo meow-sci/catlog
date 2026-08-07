@@ -1,21 +1,27 @@
 import { ChevronRight } from 'lucide-react';
-import { getBoard } from '../api/client.ts';
+import { getBoard, getBoards } from '../api/client.ts';
 import { useResource } from '../api/useResource.ts';
 import { hrefFor } from '../state/router.ts';
 import { BoardTable } from '../ui/BoardTable.tsx';
+import { pickFeatured } from '../ui/featured.ts';
 import { FeedPanel } from '../ui/FeedPanel.tsx';
 import { Empty, Failure, Loading, Panel, PanelHeader } from '../ui/kit.tsx';
 
-/**
- * The three boards the front page previews: one record, one speed record and one
- * counter, so a first-time visitor sees what all three kinds of board look like
- * without clicking. Matches the server-rendered site's own selection.
- */
-const FEATURED = ['biggest_lithobrake_survived', 'fastest_orbital_speed', 'rud_total'] as const;
-
 const FEATURED_ROWS = 3;
 
+/**
+ * The front page.
+ *
+ * The boards it previews are chosen from the ones the server actually lists
+ * (`../ui/featured.ts`) rather than named here, because the board index changes
+ * at runtime: two families take their keys from the event stream, so a page
+ * pinned to three fixed names could be pinned to a board that does not exist.
+ */
 export function HomePage() {
+  const boards = useResource('boards', getBoards);
+  const featured =
+    boards.status === 'ready' ? pickFeatured(boards.data.boards.map((b) => b.stat)) : [];
+
   return (
     <div className="space-y-8">
       <header className="space-y-2">
@@ -31,7 +37,17 @@ export function HomePage() {
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
         <div className="space-y-6">
-          {FEATURED.map((stat) => (
+          {boards.status === 'loading' && (
+            <Panel>
+              <Loading label="Loading boards…" />
+            </Panel>
+          )}
+          {boards.status === 'error' && (
+            <Panel>
+              <Failure what="load the board list" error={boards.error} />
+            </Panel>
+          )}
+          {featured.map((stat) => (
             <FeaturedBoard key={stat} stat={stat} />
           ))}
           <a
@@ -74,7 +90,12 @@ function FeaturedBoard(props: { readonly stat: string }) {
         <Empty>Nobody is on this board yet.</Empty>
       )}
       {board.status === 'ready' && board.data.rows.length > 0 && (
-        <BoardTable unit={board.data.unit} rows={board.data.rows} showContext={false} />
+        <BoardTable
+          unit={board.data.unit}
+          ascending={board.data.ascending}
+          rows={board.data.rows}
+          showContext={false}
+        />
       )}
     </Panel>
   );

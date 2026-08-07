@@ -257,7 +257,11 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 			s.fail(w, err, "read the projection census")
 			return
 		}
-		for _, b := range stats.Boards() {
+		// minPlayers 1: the owner's view is every board that exists, including
+		// the ones `GET /v1/leaderboards` is still holding back because only one
+		// player is on them. Publication is a display rule; this endpoint is not
+		// a display.
+		for _, b := range stats.Catalog(counts, 1) {
 			out.Boards = append(out.Boards, BoardCount{Stat: b.Stat, Count: counts[b.Stat]})
 		}
 	}

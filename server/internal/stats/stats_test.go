@@ -369,18 +369,25 @@ func TestSpeedBoardsComeFromTelemetryWindows(t *testing.T) {
 
 func TestRUDCountersTotalAndPerCause(t *testing.T) {
 	f := flightN(1)
+	// The §4.2 causes plus one the enum does not contain. A cause a newer game
+	// or mod introduces gets its own board rather than vanishing into the total:
+	// the per-cause boards are a family whose keys come from the data, not an
+	// allow-list this build keeps.
+	causes := []string{
+		"ground_impact", "ocean_impact", "collision",
+		"excessive_g_force", "aerodynamic_forces", "hydrodynamic_forces",
+		"kraken",
+	}
 	in := []input{}
-	for _, cause := range stats.RUDCauses {
+	expect := map[string]float64{"1/rud_total": float64(len(causes)) + 1}
+	for _, cause := range causes {
 		in = append(in, input{flight: f, typ: "vehicle.rud", payload: stats.VehicleRUD{Cause: cause, SpeedMs: 100}})
+		expect["1/rud_"+cause] = 1
 	}
-	// A cause outside the §4.2 enum counts towards the total only: the per-cause
-	// boards must not be a namespace the wire can extend.
-	in = append(in, input{flight: f, typ: "vehicle.rud", payload: stats.VehicleRUD{Cause: "kraken", SpeedMs: 100}})
+	// A cause that cannot be half of a stat key still counts towards the total
+	// and nothing else.
+	in = append(in, input{flight: f, typ: "vehicle.rud", payload: stats.VehicleRUD{Cause: "who knows", SpeedMs: 100}})
 
-	expect := map[string]float64{"1/rud_total": 7}
-	for _, cause := range stats.RUDCauses {
-		expect["1/"+stats.RUDStat(cause)] = 1
-	}
 	want(t, fold(t, in), expect)
 }
 
@@ -424,7 +431,16 @@ func TestSOIBodiesCountsDistinctDestinations(t *testing.T) {
 		{flight: f, typ: "vehicle.soi", payload: stats.VehicleSOI{FromBody: "kerbin", ToBody: "mun"}}, // repeat
 		{flight: f, typ: "vehicle.soi", payload: stats.VehicleSOI{FromBody: "kerbin", ToBody: "duna"}},
 	}, 0, false)
-	want(t, readStats(t, proj), map[string]float64{"1/soi_bodies": 3})
+	// Three distinct destinations, and — because the per-body boards come from
+	// the data rather than a list — a career-time board for each of them. These
+	// are `catlog.sim`'s body names, which the stock game does not ship: that is
+	// exactly the case the old allow-list got wrong.
+	want(t, readStats(t, proj), map[string]float64{
+		"1/soi_bodies":        3,
+		"1/fastest_to_mun":    0,
+		"1/fastest_to_kerbin": 0,
+		"1/fastest_to_duna":   0,
+	})
 
 	var bodies int
 	if err := proj.Reader().QueryRowContext(t.Context(),
@@ -660,10 +676,10 @@ func TestFeedSkipsNonEventsAndFlaggedFlights(t *testing.T) {
 // --- board metadata ----------------------------------------------------------
 
 func TestBoardMetadataCoversEveryStatAFoldWrites(t *testing.T) {
-	// Every board key a fold can produce must have metadata, or /v1/leaderboards
-	// would publish a board the read API then 404s.
+	// Every board key a fold can produce must describe, or the read API would
+	// hold a row it can neither title nor serve.
 	declared := map[string]bool{}
-	for _, b := range stats.Boards() {
+	for _, b := range stats.FixedBoards() {
 		if declared[b.Stat] {
 			t.Errorf("duplicate board %q", b.Stat)
 		}
@@ -673,30 +689,123 @@ func TestBoardMetadataCoversEveryStatAFoldWrites(t *testing.T) {
 		declared[b.Stat] = true
 	}
 
-	produced := []string{
+	fixed := []string{
 		stats.StatBiggestLithobrakeSurvived, stats.StatPeakGSurvived,
 		stats.StatFastestSurfaceSpeed, stats.StatFastestOrbitalSpeed,
 		stats.StatKittenTumbles, stats.StatRUDTotal, stats.StatOrbitsAchieved,
 		stats.StatSOIBodies, stats.StatDockings, stats.StatStagings,
 		stats.StatKittensRecovered, stats.StatDistanceTravelled,
+		stats.StatFastestToOrbit,
 	}
-	for _, cause := range stats.RUDCauses {
-		produced = append(produced, stats.RUDStat(cause))
-	}
-	produced = append(produced, stats.StatFastestToOrbit)
-	for _, body := range stats.TimedBodies {
-		produced = append(produced, stats.FastestToStat(body))
-	}
-	for _, stat := range produced {
+	for _, stat := range fixed {
 		if !declared[stat] {
-			t.Errorf("fold writes %q but no board declares it", stat)
+			t.Errorf("fold writes %q but no fixed board declares it", stat)
 		}
 	}
-	if len(declared) != len(produced) {
-		t.Errorf("%d boards declared, %d stat keys produced", len(declared), len(produced))
+	if len(declared) != len(fixed) {
+		t.Errorf("%d fixed boards declared, %d expected", len(declared), len(fixed))
 	}
-	if _, ok := stats.BoardFor("not_a_board"); ok {
-		t.Error("BoardFor accepted an unknown stat")
+
+	// The two families: whatever key the fold builds, Describe must name it.
+	for _, body := range []string{"luna", "zephyria", "kerbin-ii", "mod.newworld"} {
+		stat, ok := stats.FastestToStat(body)
+		if !ok {
+			t.Fatalf("FastestToStat(%q) refused a well-formed name", body)
+		}
+		if b, known := stats.Describe(stat); !known || b.Unit != "s" {
+			t.Errorf("fold writes %q but Describe says %+v (known=%v)", stat, b, known)
+		}
+	}
+	for _, cause := range []string{"ground_impact", "kraken", "orbital_decay"} {
+		stat, ok := stats.RUDStat(cause)
+		if !ok {
+			t.Fatalf("RUDStat(%q) refused a well-formed cause", cause)
+		}
+		if b, known := stats.Describe(stat); !known || b.Unit != "RUDs" {
+			t.Errorf("fold writes %q but Describe says %+v (known=%v)", stat, b, known)
+		}
+	}
+	if _, ok := stats.Describe("not_a_board"); ok {
+		t.Error("Describe accepted an unknown stat")
+	}
+	if _, ok := stats.Known("not_a_board", 99); ok {
+		t.Error("Known accepted an unknown stat")
+	}
+}
+
+// The board index is assembled from the data: a fixed board always, a family
+// board once enough players are on it, in a display order that is a function of
+// the keys alone — so a rebuild that reproduces player_stat reproduces the
+// published board list too.
+func TestCatalogPublishesFamilyBoardsOnceEnoughPlayersAreOnThem(t *testing.T) {
+	counts := map[string]int64{
+		stats.StatKittenTumbles: 4,
+		"rud_ground_impact":     3,
+		"rud_kraken":            1,
+		"fastest_to_luna":       2,
+		"fastest_to_zephyria":   1,
+		"not_a_board_at_all":    9,
+	}
+
+	got := []string{}
+	for _, b := range stats.Catalog(counts, 2) {
+		got = append(got, b.Stat)
+	}
+	has := func(stat string) bool { return slices.Contains(got, stat) }
+
+	for _, stat := range []string{"rud_ground_impact", "fastest_to_luna"} {
+		if !has(stat) {
+			t.Errorf("%q has two players and was not listed: %v", stat, got)
+		}
+	}
+	for _, stat := range []string{"rud_kraken", "fastest_to_zephyria", "not_a_board_at_all"} {
+		if has(stat) {
+			t.Errorf("%q was listed: %v", stat, got)
+		}
+	}
+	if len(stats.FixedBoards()) != len(got)-2 {
+		t.Errorf("catalog = %v; every fixed board is listed whether or not anyone is on it", got)
+	}
+	// Family members sit under the fixed board they belong with.
+	if i, j := slices.Index(got, stats.StatRUDTotal), slices.Index(got, "rud_ground_impact"); j != i+1 {
+		t.Errorf("rud_ground_impact is at %d, want right after rud_total at %d: %v", j, i, got)
+	}
+	if i, j := slices.Index(got, stats.StatFastestToOrbit), slices.Index(got, "fastest_to_luna"); j != i+1 {
+		t.Errorf("fastest_to_luna is at %d, want right after fastest_to_orbit at %d: %v", j, i, got)
+	}
+	// The order is a pure function of the counts map, whose iteration order Go
+	// deliberately randomises — so running it twice is a real test.
+	again := []string{}
+	for _, b := range stats.Catalog(counts, 2) {
+		again = append(again, b.Stat)
+	}
+	if !slices.Equal(got, again) {
+		t.Errorf("catalog is not deterministic:\n %v\n %v", got, again)
+	}
+
+	// Lowering the threshold publishes history that was already recorded; it
+	// never has to go and collect it.
+	all := []string{}
+	for _, b := range stats.Catalog(counts, 1) {
+		all = append(all, b.Stat)
+	}
+	if !slices.Contains(all, "fastest_to_zephyria") || !slices.Contains(all, "rud_kraken") {
+		t.Errorf("min 1 = %v, want the single-entrant boards listed", all)
+	}
+}
+
+// A board page is servable for a stat somebody actually holds, listed or not: a
+// profile row has to link somewhere, and hiding a player's own achievement from
+// them is not what the threshold is for.
+func TestKnownServesABoardTheIndexIsStillHoldingBack(t *testing.T) {
+	if _, ok := stats.Known(stats.StatDockings, 0); !ok {
+		t.Error("an empty fixed board must still be servable")
+	}
+	if _, ok := stats.Known("fastest_to_zephyria", 1); !ok {
+		t.Error("a family board with one player must be servable")
+	}
+	if _, ok := stats.Known("fastest_to_zephyria", 0); ok {
+		t.Error("a family board nobody is on must 404")
 	}
 }
 

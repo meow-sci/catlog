@@ -180,6 +180,12 @@ func googleSubject(ctx context.Context, jwks *JWKSCache, cfg config.Google, idTo
 		return Subject{}, fmt.Errorf("identity: google id_token iss is not %q", cfg.Issuer)
 	case claims.Audience != cfg.ClientID:
 		return Subject{}, errors.New("identity: google id_token aud is not this application")
+	// DELIBERATELY time.Now, not the injected server clock. This token was
+	// minted by somebody else's process, on real wall time, and lives for
+	// minutes. A catlogd running with an offset clock (`[server]
+	// clock_control`, dev only) would otherwise reject every perfectly good
+	// Google login as expired. The offset is catlog's own notion of now; it has
+	// no authority over another issuer's clock. Please do not "fix" this.
 	case claims.Expires == 0 || time.Now().Unix() >= claims.Expires:
 		return Subject{}, errors.New("identity: google id_token has expired")
 	case claims.Subject == "":

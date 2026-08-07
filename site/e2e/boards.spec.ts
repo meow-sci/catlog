@@ -15,6 +15,36 @@ const LITHOBRAKE = "biggest_lithobrake_survived";
 const TOP_HANDLE = "demo_crasher";
 const TOP_VALUE = 214;
 
+/**
+ * The boards whose keys are compile-time constants — one per fold in
+ * `server/internal/stats`. These, and only these, exist regardless of what
+ * anybody has flown, so their disappearance is a regression and can be asserted
+ * by name.
+ *
+ * The rest of the index cannot be: `fastest_to_<body>` and `rud_<cause>` take
+ * their keys from the event stream, because KSA's celestial systems are content
+ * that mods extend and the server treats a body name as opaque. A board appears
+ * the day two players reach somewhere new. That is why the assertion below is a
+ * required *set* plus an agreement check against the JSON, rather than the exact
+ * row count it used to be — a count every new body invalidates is a count that
+ * gets bumped without being read.
+ */
+const FIXED_BOARDS = [
+  "biggest_lithobrake_survived",
+  "peak_g_survived",
+  "fastest_surface_speed",
+  "fastest_orbital_speed",
+  "kitten_tumbles",
+  "rud_total",
+  "orbits_achieved",
+  "soi_bodies",
+  "dockings",
+  "stagings",
+  "kittens_recovered",
+  "distance_travelled",
+  "fastest_to_orbit",
+];
+
 test.describe("boards", () => {
   test("the home page shows featured boards and the feed panel", async ({ page }) => {
     await page.goto("/");
@@ -31,21 +61,76 @@ test.describe("boards", () => {
     await expect(top).toHaveAttribute("data-handle", TOP_HANDLE);
   });
 
-  test("the boards index lists every board and links to it", async ({ page }) => {
+  test("the boards index lists every board the server publishes, and links to it", async ({
+    page,
+  }) => {
     await page.goto("/boards");
     await expect(page.locator("#boards-title")).toBeVisible();
 
-    const rows = page.locator("#boards-index tr.boards-row");
-    // 12 launch boards, the six per-cause RUD boards (§5.6), and the 12 career-time
-    // boards (fastest_to_orbit plus one per stock body). Bump this deliberately when a
-    // board is added — the count is the only thing that catches a board that silently
-    // stopped being published.
-    await expect(rows).toHaveCount(30);
+    // 1. Every board with a compile-time key is here. This is what catches a
+    //    board that silently stopped being published, and it does not go stale
+    //    when somebody flies somewhere new.
+    for (const stat of FIXED_BOARDS) {
+      await expect(page.locator(`#boards-index tr[data-stat="${stat}"]`)).toHaveCount(1);
+    }
+
+    // 2. The page and the JSON agree, board for board. Whatever the dynamic half
+    //    of the index happens to be today, the HTML must be exactly it — no
+    //    board dropped by the template, none invented by it.
+    const api = await page.request.get("/v1/leaderboards");
+    expect(api.ok()).toBeTruthy();
+    const json = (await api.json()) as { boards: Array<{ stat: string }>; min_players: number };
+    const published = json.boards.map((b) => b.stat);
+    const rendered = await page
+      .locator("#boards-index tr.boards-row")
+      .evaluateAll((els) => els.map((el) => el.getAttribute("data-stat")));
+    expect(rendered).toEqual(published);
+    // And the demo dataset does exercise the dynamic half, or the check above
+    // would be comparing two copies of the fixed list.
+    expect(published.length).toBeGreaterThan(FIXED_BOARDS.length);
+    expect(published.some((stat) => stat.startsWith("fastest_to_") && stat !== "fastest_to_orbit"))
+      .toBeTruthy();
+    expect(published.some((stat) => stat.startsWith("rud_") && stat !== "rud_total")).toBeTruthy();
+
+    // 3. The threshold that keeps a one-entrant board out of the index is stated
+    //    on the page, with the server's own number.
+    expect(json.min_players).toBeGreaterThan(1);
+    await expect(page.locator("#boards-note")).toContainText(String(json.min_players));
 
     const lithobrake = page.locator(`#boards-index tr[data-stat="${LITHOBRAKE}"]`);
     await expect(lithobrake).toContainText("Biggest Lithobrake Survived");
     await lithobrake.locator("a.board-link").click();
     await expect(page).toHaveURL(new RegExp(`/boards/${LITHOBRAKE}$`));
+  });
+
+  test("a board for a body nobody hard-coded exists, ranks, and says which way it reads", async ({
+    page,
+  }) => {
+    // `luna` is not a constant anywhere in the server: the board exists because
+    // two seeded players flew there. It is a career-time board, so the *smallest*
+    // value ranks first — the opposite of every record board.
+    await page.goto("/boards/fastest_to_luna");
+    await expect(page.locator("#board-title")).toHaveAttribute("data-stat", "fastest_to_luna");
+    await expect(page.locator("#board-title")).toHaveText("Fastest to Luna");
+    await expect(page.locator("#board-direction")).toHaveAttribute("data-ascending", "true");
+    await expect(page.locator("#board-direction")).toContainText("Lowest wins");
+
+    const values = await page
+      .locator("tr.board-row td.value")
+      .evaluateAll((els) => els.map((el) => Number(el.textContent?.replace(/[^\d.-]/g, ""))));
+    expect(values.length).toBeGreaterThan(1);
+    expect(values).toEqual([...values].sort((a, b) => a - b));
+
+    // The HTML agrees with the JSON, direction included.
+    const json = (await (await page.request.get("/v1/leaderboards/fastest_to_luna")).json()) as {
+      ascending: boolean;
+      rows: Array<{ handle: string }>;
+    };
+    expect(json.ascending).toBe(true);
+    const handles = await page
+      .locator("tr.board-row")
+      .evaluateAll((els) => els.map((el) => el.getAttribute("data-handle")));
+    expect(handles).toEqual(json.rows.map((r) => r.handle));
   });
 
   test("the lithobrake board is ranked, and the top row is the seeded record", async ({ page }) => {
