@@ -68,7 +68,11 @@ public enum ShipOutcome
 /// <summary>The result of one ship attempt.</summary>
 /// <param name="Outcome">What happened.</param>
 /// <param name="StatusCode">The HTTP status, or 0 when the request never completed.</param>
-/// <param name="EventsShipped">How many events the server accepted.</param>
+/// <param name="EventsShipped">
+/// How many events this client removed from its outbox — the <b>local</b> batch size, zero on a
+/// whole-batch replay. It is not what the server said it stored: see <see cref="ServerAccepted"/>
+/// and <see cref="ServerDeduped"/> for that.
+/// </param>
 /// <param name="Seq">The sequence number that was used.</param>
 /// <param name="Sid">The stream id that was used.</param>
 /// <param name="Error">The server's error code, or a local description; empty on success.</param>
@@ -80,7 +84,21 @@ public sealed record ShipAttempt(
     long Seq,
     string Sid,
     string Error,
-    TimeSpan? RetryAfter = null);
+    TimeSpan? RetryAfter = null)
+{
+    /// <summary>
+    /// The server's own <c>accepted</c> count from the <c>200</c> body (§4.4), or <c>null</c> when
+    /// the server did not say (a non-2xx, or a body this client could not parse).
+    /// </summary>
+    /// <remarks>
+    /// Nullable on purpose: "the server stored nothing" and "the server did not tell us" are
+    /// different facts, and the status window must not present the second as the first.
+    /// </remarks>
+    public int? ServerAccepted { get; init; }
+
+    /// <summary>The server's own <c>deduped</c> count from the <c>200</c> body, or <c>null</c> when it did not say.</summary>
+    public int? ServerDeduped { get; init; }
+}
 
 /// <summary>
 /// Drains the outbox to the ingest endpoint: compress, sign, POST, and apply the §4.5.3 mod-side
@@ -176,7 +194,18 @@ public sealed class BatchShipper : IDisposable
     /// <summary>The learned server-clock offset in milliseconds (server time minus local time).</summary>
     public long ClockOffsetMs => _clockOffsetMs;
 
-    /// <summary>Consecutive transport/server failures; drives the backoff ladder.</summary>
+    /// <summary>
+    /// Consecutive retryable failures (429 / 5xx / network), advanced by every
+    /// <see cref="ShipOnceAsync"/> call and reset by any outcome that is not a transport fault.
+    /// Drives the backoff ladder.
+    /// </summary>
+    /// <remarks>
+    /// Maintained inside <see cref="ShipOnceAsync"/>, not in <see cref="RunAsync"/>, so a caller
+    /// that pumps <see cref="ShipOnceAsync"/> itself — the simulator, the integration tests, any
+    /// synchronous drain — sees the counter advance and can use it as a retry ceiling. It used to
+    /// be advanced only by the run loop, which meant such a caller read a permanent zero and, if it
+    /// trusted it, looped forever against a dead server.
+    /// </remarks>
     public int ConsecutiveFailures => _consecutiveFailures;
 
     /// <summary>True when the shipper has latched dead for the session.</summary>
@@ -278,12 +307,14 @@ public sealed class BatchShipper : IDisposable
                 continue;
             }
 
+            // ShipOnceAsync owns _consecutiveFailures (see ConsecutiveFailures): by the time an
+            // attempt is back the ladder has already advanced, so the rung this failure is owed is
+            // one below the new count.
             ShipAttempt attempt = await ShipOnceAsync(ct).ConfigureAwait(false);
             switch (attempt.Outcome)
             {
                 case ShipOutcome.Accepted:
                 case ShipOutcome.Replayed:
-                    _consecutiveFailures = 0;
                     continue; // Drain the rest of the outbox without waiting.
 
                 case ShipOutcome.StreamForked:
@@ -291,7 +322,6 @@ public sealed class BatchShipper : IDisposable
                     continue; // Parameters changed; retry immediately with the new ones.
 
                 case ShipOutcome.NothingToShip:
-                    _consecutiveFailures = 0;
                     await _clock.Delay(TimeSpan.FromSeconds(_options.PollSeconds), ct).ConfigureAwait(false);
                     continue;
 
@@ -300,8 +330,7 @@ public sealed class BatchShipper : IDisposable
 
                 default:
                     TimeSpan delay = attempt.RetryAfter
-                                     ?? BackoffPolicy.Delay(_consecutiveFailures, _jitter());
-                    _consecutiveFailures++;
+                                     ?? BackoffPolicy.Delay(Math.Max(0, _consecutiveFailures - 1), _jitter());
                     await _clock.Delay(delay, ct).ConfigureAwait(false);
                     continue;
             }
@@ -440,7 +469,6 @@ public sealed class BatchShipper : IDisposable
         _lastBh = bh;
         _outbox.SetState(Wire.StateKeys.Seq, _seq.ToString(CultureInfo.InvariantCulture));
         _outbox.SetState(Wire.StateKeys.LastBh, bh);
-        _consecutiveFailures = 0;
 
         return new ShipAttempt(
             replay ? ShipOutcome.Replayed : ShipOutcome.Accepted,
@@ -448,7 +476,15 @@ public sealed class BatchShipper : IDisposable
             accepted,
             usedSeq,
             _sid,
-            string.Empty);
+            string.Empty)
+        {
+            // §4.4: 200 carries {"accepted": n, "deduped": n} (plus "replay": true on the
+            // short-circuit). Report what the server said, not what we sent — a status window that
+            // renders the local batch size as "shipped" cannot tell the player that the server
+            // deduped every row.
+            ServerAccepted = TryReadInt32(payload, "accepted", out int serverAccepted) ? serverAccepted : null,
+            ServerDeduped = TryReadInt32(payload, "deduped", out int serverDeduped) ? serverDeduped : null,
+        };
     }
 
     private ShipAttempt OnStreamFork(int status, string error)
@@ -506,8 +542,31 @@ public sealed class BatchShipper : IDisposable
         return new ShipAttempt(ShipOutcome.Fatal, 0, 0, _seq, _sid, reason);
     }
 
+    // The single choke point every ShipOnceAsync return path passes through, so the retry ladder is
+    // maintained here rather than in RunAsync (see ConsecutiveFailures).
     private ShipAttempt Record(ShipAttempt attempt)
     {
+        switch (attempt.Outcome)
+        {
+            case ShipOutcome.Accepted:
+            case ShipOutcome.Replayed:
+            case ShipOutcome.NothingToShip:
+                _consecutiveFailures = 0;
+                break;
+
+            case ShipOutcome.StreamForked:
+            case ShipOutcome.TooLarge:
+            case ShipOutcome.Fatal:
+                // Not transport faults: the parameters changed, or the shipper is done. Leaving the
+                // ladder where it is means a 413 in the middle of a bad-network patch does not
+                // silently reset the backoff the next failure is owed.
+                break;
+
+            default:
+                _consecutiveFailures++;
+                break;
+        }
+
         LastAttempt = attempt;
         return attempt;
     }
@@ -565,6 +624,26 @@ public sealed class BatchShipper : IDisposable
             return document.RootElement.ValueKind == JsonValueKind.Object
                    && document.RootElement.TryGetProperty(name, out JsonElement value)
                    && value.ValueKind == JsonValueKind.True;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static bool TryReadInt32(string payload, string name, out int parsed)
+    {
+        parsed = 0;
+        if (string.IsNullOrWhiteSpace(payload))
+            return false;
+
+        try
+        {
+            using JsonDocument document = JsonDocument.Parse(payload);
+            return document.RootElement.ValueKind == JsonValueKind.Object
+                   && document.RootElement.TryGetProperty(name, out JsonElement value)
+                   && value.ValueKind == JsonValueKind.Number
+                   && value.TryGetInt32(out parsed);
         }
         catch (JsonException)
         {

@@ -1,0 +1,7 @@
+name = "catlog"
+description = "Flight telemetry and leaderboards for Kitten Space Agency — records what your rockets did and ships it to a catlog server."
+version = "0.1.0"
+author = "meow sci"
+
+[StarMap]
+EntryAssembly = "MeowSci.Catlog"

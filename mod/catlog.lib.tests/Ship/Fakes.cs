@@ -92,6 +92,13 @@ internal sealed class FakeHttpHandler : HttpMessageHandler
             ? "{\"accepted\":0,\"deduped\":" + accepted + ",\"replay\":true}"
             : "{\"accepted\":" + accepted + ",\"deduped\":0}");
 
+    /// <summary>A <c>200</c> with explicit server-side counts.</summary>
+    internal static HttpResponseMessage Counts(int accepted, int deduped)
+        => Json(HttpStatusCode.OK, "{\"accepted\":" + accepted + ",\"deduped\":" + deduped + "}");
+
+    /// <summary>A <c>200</c> whose body carries neither count — "the server did not say".</summary>
+    internal static HttpResponseMessage Empty200() => Json(HttpStatusCode.OK, "{}");
+
     /// <summary>An error response with the standard <c>{"error": code}</c> body.</summary>
     internal static HttpResponseMessage Error(HttpStatusCode status, string code, string? extra = null)
         => Json(status, extra is null ? $"{{\"error\":\"{code}\"}}" : $"{{\"error\":\"{code}\",{extra}}}");

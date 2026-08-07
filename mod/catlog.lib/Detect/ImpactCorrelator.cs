@@ -84,6 +84,32 @@ public sealed class ImpactCorrelator
     }
 
     /// <summary>
+    /// Resolves one vehicle's outstanding impacts immediately, used when its flight ends.
+    /// </summary>
+    /// <remarks>
+    /// The one-frame hold exists so a destruction that lands after the impact's own frame — a
+    /// manual destroy, which the game applies in its input pass — can still flip the verdict. Once
+    /// the flight has ended there is no later destruction to wait for, so the verdict is already
+    /// final; and waiting past this point would resolve the impact after the flight id has been
+    /// retired, attaching it to a flight nothing else references.
+    /// </remarks>
+    /// <param name="vehicleId">The vehicle whose flight is ending.</param>
+    /// <returns>That vehicle's outstanding impacts, resolved, oldest first.</returns>
+    public IReadOnlyList<ResolvedImpact> DrainFor(string vehicleId)
+    {
+        List<Entry>? due = Take(_held, vehicleId);
+        List<Entry>? fresh = Take(_pending, vehicleId);
+        if (due is null && fresh is null)
+            return [];
+
+        if (due is null)
+            return Resolve(fresh!);
+        if (fresh is not null)
+            due.AddRange(fresh);
+        return Resolve(due);
+    }
+
+    /// <summary>
     /// Resolves everything outstanding immediately — used at flight or session end, where there
     /// will be no further frame to wait for.
     /// </summary>
@@ -99,6 +125,25 @@ public sealed class ImpactCorrelator
         _held = [];
         _pending = [];
         return Resolve(all);
+    }
+
+    // Removes and returns one vehicle's entries, preserving the order of both the taken and the
+    // remaining ones.
+    private static List<Entry>? Take(List<Entry> entries, string vehicleId)
+    {
+        List<Entry>? taken = null;
+        int keep = 0;
+        for (int i = 0; i < entries.Count; i++)
+        {
+            if (string.Equals(entries[i].Signal.VehicleId, vehicleId, StringComparison.Ordinal))
+                (taken ??= []).Add(entries[i]);
+            else
+                entries[keep++] = entries[i];
+        }
+
+        if (taken is not null)
+            entries.RemoveRange(keep, entries.Count - keep);
+        return taken;
     }
 
     private static void Mark(List<Entry> entries, string vehicleId)

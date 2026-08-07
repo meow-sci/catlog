@@ -1,12 +1,18 @@
 <Solution>
     <!--
-        The game-free surface: everything here builds and tests on a machine with no
-        KSA install. mod/catlog/ (MeowSci.Catlog, the actual game mod) lands in WP8 and
-        is added to this list then — Directory.Build.props resolves the KSA assemblies
-        from the sibling ksa-game-assemblies checkout, so it is NOT permanently excluded
-        (see docs/DECISIONS.md, deviation A2).
+        catlog.lib / catlog.sim and both test projects are the game-free surface: they build and
+        test on a machine with no KSA install.
+
+        mod/catlog/ (MeowSci.Catlog, the actual game mod) was added in WP8, resolving deviation A2.
+        It compiles against the KSA reference assemblies, which Directory.Build.props locates in
+        this order: the KSA_DLL_DIR env var, then a `ksa-game-assemblies` checkout cloned as a
+        SIBLING of this repo, then the per-OS game install. A machine with none of those cannot
+        build this project — and therefore cannot build the solution — which is the deliberate
+        trade recorded in docs/DECISIONS.md: the alternative (leaving it out) means the one project
+        that couples to the game is the one project CI never compiles.
     -->
     <Project Path="catlog.lib/catlog.lib.csproj" />
+    <Project Path="catlog/catlog.csproj" />
     <Project Path="catlog.sim/catlog.sim.csproj" />
     <Project Path="catlog.lib.tests/catlog.lib.tests.csproj" />
     <Project Path="catlog.integration.tests/catlog.integration.tests.csproj" />

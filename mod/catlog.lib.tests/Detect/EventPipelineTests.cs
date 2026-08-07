@@ -333,5 +333,90 @@ public sealed class EventPipelineTests
         }
     }
 
+    /// <summary>
+    /// A manual destroy produces no <c>vehicle.rud</c> — only a <c>flight.ended</c> with reason
+    /// <c>destroyed</c>, from the game's input-apply pass. It must still flip <c>survived</c>, or
+    /// scuttling after every hard landing banks a free "survived" record.
+    /// </summary>
+    [Fact]
+    public void ManualDestroyAfterAnImpact_StillMarksItNotSurvived()
+    {
+        EventPipeline pipeline = TestData.Pipeline();
+        pipeline.ProcessSignal(TestData.Created(simT: 0));
+
+        string flight = pipeline.Tracker.PeekFlight("v1")!;
+
+        pipeline.ProcessSignal(TestData.Impact(simT: 10, speedMs: 55));
+        // No RudSignal: this is the player hitting Abandon, which lands later in the same frame.
+        IReadOnlyList<EventEnvelope> ended =
+            pipeline.ProcessSignal(new VehicleRemovedSignal(10, TestData.WallMs, "v1", FlightEndReason.Destroyed, 1));
+
+        EventEnvelope impact = Assert.Single(ended, static e => e.Type == EventTypes.VehicleImpact);
+        Assert.False(Assert.IsType<VehicleImpactPayload>(impact.Payload).Survived,
+            "a scuttled vehicle did not survive the impact that preceded the scuttle");
+
+        // Resolved against the flight that is ending, not a re-minted phantom.
+        Assert.Equal(flight, impact.Flight);
+        Assert.Equal(flight, Assert.Single(ended, static e => e.Type == EventTypes.FlightEnded).Flight);
+
+        // And nothing is left for a later boundary to resolve a second time.
+        Assert.Empty(pipeline.ProcessSignal(new FrameBoundarySignal(10.1, TestData.WallMs, 1)));
+    }
+
+    [Fact]
+    public void RecoveryAfterAnImpact_LeavesItSurvived()
+    {
+        EventPipeline pipeline = TestData.Pipeline();
+        pipeline.ProcessSignal(TestData.Created(simT: 0));
+        string flight = pipeline.Tracker.PeekFlight("v1")!;
+
+        pipeline.ProcessSignal(TestData.Impact(simT: 10, speedMs: 55));
+        IReadOnlyList<EventEnvelope> ended =
+            pipeline.ProcessSignal(new VehicleRecoveredSignal(10, TestData.WallMs, "v1", 1));
+
+        EventEnvelope impact = Assert.Single(ended, static e => e.Type == EventTypes.VehicleImpact);
+        Assert.True(Assert.IsType<VehicleImpactPayload>(impact.Payload).Survived);
+        Assert.Equal(flight, impact.Flight);
+    }
+
+    // ----- Flush: peek semantics for the correlator drain (WP8 lib fix) --------------------
+
+    /// <summary>
+    /// An impact still outstanding when the flight has already ended must be dropped, not attached
+    /// to a freshly minted flight ULID that has no <c>flight.started</c> to join against.
+    /// </summary>
+    [Fact]
+    public void Flush_DropsAnImpactWhoseFlightAlreadyEnded()
+    {
+        EventPipeline pipeline = TestData.Pipeline();
+        pipeline.ProcessSignal(TestData.Created(simT: 0));
+
+        // The impact lands in the last frame the game ever runs; the vehicle is removed in the same
+        // frame, so the correlator's one-frame hold never expires before the session flushes.
+        pipeline.ProcessSignal(TestData.Impact(simT: 10, speedMs: 40));
+        pipeline.ProcessSignal(new VehicleRemovedSignal(10, TestData.WallMs, "v1", FlightEndReason.Destroyed, 0));
+
+        IReadOnlyList<EventEnvelope> flushed = pipeline.Flush(TestData.WallMs);
+
+        Assert.DoesNotContain(flushed, static e => e.Type == EventTypes.VehicleImpact);
+        Assert.Empty(pipeline.Tracker.ActiveVehicleIds);
+    }
+
+    /// <summary>The same drain still emits for a vehicle whose flight is open — peeking is not "drop everything".</summary>
+    [Fact]
+    public void Flush_StillEmitsAnImpactForALiveFlight()
+    {
+        EventPipeline pipeline = TestData.Pipeline();
+        pipeline.ProcessSignal(TestData.Created(simT: 0));
+        string flight = pipeline.Tracker.PeekFlight("v1")!;
+
+        pipeline.ProcessSignal(TestData.Impact(simT: 10, speedMs: 40));
+
+        EventEnvelope impact = Assert.Single(
+            pipeline.Flush(TestData.WallMs), static e => e.Type == EventTypes.VehicleImpact);
+        Assert.Equal(flight, impact.Flight);
+        Assert.True(Assert.IsType<VehicleImpactPayload>(impact.Payload).Survived);
+    }
+
     private sealed record UnknownSignal(double SimT, long WallMs) : GameSignal(SimT, WallMs);
 }

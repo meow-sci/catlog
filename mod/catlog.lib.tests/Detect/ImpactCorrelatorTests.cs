@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Linq;
 using MeowSci.Catlog.Lib.Detect;
 using Xunit;
 
@@ -115,6 +116,44 @@ public sealed class ImpactCorrelatorTests
         Assert.Equal(2, drained.Count);
         Assert.Equal(0, correlator.Outstanding);
         Assert.Empty(correlator.Drain());
+    }
+
+    /// <summary>
+    /// A flight that ends takes its own outstanding impacts with it and leaves everyone else's
+    /// alone — the verdict cannot change after the flight is over, and waiting would resolve them
+    /// against a retired flight id.
+    /// </summary>
+    [Fact]
+    public void DrainFor_TakesOneVehiclesImpactsAndLeavesTheRest()
+    {
+        var correlator = new ImpactCorrelator();
+        correlator.Impact(TestData.Impact(vehicleId: "a", speedMs: 10));
+        correlator.Impact(TestData.Impact(vehicleId: "b", speedMs: 20));
+        correlator.EndFrame();
+        correlator.Impact(TestData.Impact(vehicleId: "a", speedMs: 30));
+        correlator.Destroyed("a");
+
+        IReadOnlyList<ResolvedImpact> drained = correlator.DrainFor("a");
+
+        Assert.Equal(2, drained.Count);
+        Assert.Equal([10, 30], drained.Select(static r => r.Signal.SpeedMs).ToArray());
+        Assert.All(drained, static r => Assert.False(r.Survived));
+
+        // b is untouched, both in count and in order.
+        Assert.Equal(1, correlator.Outstanding);
+        ResolvedImpact remaining = Assert.Single(correlator.Drain());
+        Assert.Equal("b", remaining.Signal.VehicleId);
+        Assert.True(remaining.Survived);
+    }
+
+    [Fact]
+    public void DrainFor_AnUnknownVehicle_IsEmptyAndHarmless()
+    {
+        var correlator = new ImpactCorrelator();
+        correlator.Impact(TestData.Impact(vehicleId: "a"));
+
+        Assert.Empty(correlator.DrainFor("nobody"));
+        Assert.Equal(1, correlator.Outstanding);
     }
 
     [Fact]

@@ -131,6 +131,15 @@ public sealed class EventPipeline
     /// Closes everything still open: partial telemetry windows and impacts still awaiting a
     /// verdict. Call at session end, before the last ship.
     /// </summary>
+    /// <remarks>
+    /// <b>Peek semantics, deliberately.</b> Impacts drained here are resolved out of band, after
+    /// the frame loop has stopped — and by then a vehicle's flight may already have ended (the
+    /// impact that killed it produced a <c>flight.ended</c> a moment earlier). Minting a flight for
+    /// it, which is what <see cref="FlightTracker.FlightFor"/> would do, would attach the impact to
+    /// a flight ULID that has no <c>flight.started</c> and never will: a phantom flight on the
+    /// leaderboard's join. So the flight is <i>peeked</i>, and an impact with no live flight is
+    /// dropped with a log rather than invented onto one.
+    /// </remarks>
     /// <param name="wallMs">Client unix milliseconds to stamp on the flushed windows.</param>
     /// <returns>The envelopes produced.</returns>
     public IReadOnlyList<EventEnvelope> Flush(long wallMs)
@@ -138,7 +147,18 @@ public sealed class EventPipeline
         List<EventEnvelope>? envelopes = null;
 
         foreach (ResolvedImpact impact in _correlator.Drain())
-            Add(ref envelopes, EventFactory.FromResolvedImpact(Tracker, impact));
+        {
+            if (Tracker.PeekFlight(impact.Signal.VehicleId) is not { } flight)
+            {
+                ModLog.Log.Debug(
+                    $"catlog: dropping an impact for vehicle '{impact.Signal.VehicleId}' at sim_t "
+                    + $"{impact.Signal.SimT:0.###} — its flight had already ended when the session flushed, "
+                    + "and attributing it would mint a flight with no flight.started.");
+                continue;
+            }
+
+            Add(ref envelopes, EventFactory.FromResolvedImpact(Tracker, impact, flight));
+        }
 
         foreach (ClosedWindow window in _windows.FlushAll())
             Add(ref envelopes, EventFactory.FromWindow(Tracker, window, wallMs));
@@ -340,12 +360,30 @@ public sealed class EventPipeline
         long wallMs,
         ref List<EventEnvelope>? envelopes)
     {
+        // A destroyed vehicle did not survive whatever it just hit. RudSignal tells the correlator
+        // directly, but a *manual* destroy has no RUD — it arrives only as this flight end, from
+        // the game's input-apply pass. Without this the correlator's one-frame hold, which exists
+        // precisely so a scuttled vehicle is not called a survivor, has nothing to learn from and a
+        // player could scuttle after every hard landing to bank a "survived" record.
+        if (reason == FlightEndReason.Destroyed)
+            _correlator.Destroyed(vehicleId);
+
+        string flight = Tracker.FlightFor(vehicleId);
+
+        // Resolve this vehicle's outstanding impacts here, while the flight id is still live. The
+        // verdict cannot change after the flight ends, and leaving them to the next frame boundary
+        // would resolve them against a retired flight — which FlightTracker would silently re-mint
+        // as a brand-new one with no flight.started. That is the same phantom-flight hazard Flush
+        // guards against with peek semantics, on the far more common path: an impact and the
+        // destruction it caused land in the same frame every single time.
+        foreach (ResolvedImpact impact in _correlator.DrainFor(vehicleId))
+            Add(ref envelopes, EventFactory.FromResolvedImpact(Tracker, impact, flight));
+
         // The last partial window is worth keeping: it covers the seconds immediately before a
         // RUD or a recovery, which is exactly the interesting part.
         if (_windows.Flush(vehicleId) is { } window)
             Add(ref envelopes, EventFactory.FromWindow(Tracker, window, wallMs));
 
-        string flight = Tracker.FlightFor(vehicleId);
         Add(ref envelopes, EventEnvelope.Create(
             EventTypes.FlightEnded, Tracker.SessionId, flight, simT, wallMs,
             new FlightEndedPayload(EventTypes.ToWire(reason), crewCount)));

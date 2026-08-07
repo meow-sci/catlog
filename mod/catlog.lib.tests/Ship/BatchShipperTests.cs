@@ -512,6 +512,117 @@ public sealed class BatchShipperTests
         }
     }
 
+    // ----- what the SERVER said, and the retry ladder (WP8 lib fixes) ------------------
+
+    /// <summary>
+    /// The §4.4 <c>200</c> body carries the server's own counts; the status window has to be able
+    /// to say what the server did with the batch, not just how many rows this client sent.
+    /// </summary>
+    [Fact]
+    public async Task AcceptedBatch_ReportsTheServersAcceptedAndDedupedCounts()
+    {
+        using var harness = new Harness(FakeHttpHandler.Always(
+            () => FakeHttpHandler.Counts(accepted: 7, deduped: 3)));
+        harness.Outbox.Append(TestData.Envelopes(10));
+
+        ShipAttempt attempt = await harness.Shipper.ShipOnceAsync();
+
+        Assert.Equal(ShipOutcome.Accepted, attempt.Outcome);
+        Assert.Equal(10, attempt.EventsShipped);
+        Assert.Equal(7, attempt.ServerAccepted);
+        Assert.Equal(3, attempt.ServerDeduped);
+    }
+
+    [Fact]
+    public async Task Replay_ReportsZeroAcceptedAndTheDedupedCount()
+    {
+        using var harness = new Harness(FakeHttpHandler.Always(() => FakeHttpHandler.Ok(4, replay: true)));
+        harness.Outbox.Append(TestData.Envelopes(4));
+
+        ShipAttempt attempt = await harness.Shipper.ShipOnceAsync();
+
+        Assert.Equal(ShipOutcome.Replayed, attempt.Outcome);
+        Assert.Equal(0, attempt.ServerAccepted);
+        Assert.Equal(4, attempt.ServerDeduped);
+    }
+
+    /// <summary>A body without the counts must read as "the server did not say", never as zero.</summary>
+    [Fact]
+    public async Task MissingCounts_AreNullRatherThanZero()
+    {
+        using var harness = new Harness(FakeHttpHandler.Always(() => FakeHttpHandler.Empty200()));
+        harness.Outbox.Append(TestData.Envelopes(2));
+
+        ShipAttempt attempt = await harness.Shipper.ShipOnceAsync();
+
+        Assert.Equal(ShipOutcome.Accepted, attempt.Outcome);
+        Assert.Null(attempt.ServerAccepted);
+        Assert.Null(attempt.ServerDeduped);
+    }
+
+    /// <summary>
+    /// A caller that pumps <see cref="BatchShipper.ShipOnceAsync"/> itself (the simulator, the
+    /// integration tests) must see the retry ladder advance — it used to be advanced only by
+    /// <see cref="BatchShipper.RunAsync"/>, so such a caller read a permanent zero.
+    /// </summary>
+    [Fact]
+    public async Task ShipOnceAsync_AdvancesConsecutiveFailures()
+    {
+        using var harness = new Harness(FakeHttpHandler.Always(
+            () => FakeHttpHandler.Error(HttpStatusCode.ServiceUnavailable, Wire.Errors.Internal)));
+        harness.Outbox.Append(TestData.Envelopes(3));
+
+        Assert.Equal(0, harness.Shipper.ConsecutiveFailures);
+        await harness.Shipper.ShipOnceAsync();
+        Assert.Equal(1, harness.Shipper.ConsecutiveFailures);
+        await harness.Shipper.ShipOnceAsync();
+        await harness.Shipper.ShipOnceAsync();
+        Assert.Equal(3, harness.Shipper.ConsecutiveFailures);
+    }
+
+    [Fact]
+    public async Task ShipOnceAsync_ResetsConsecutiveFailuresOnSuccessAndOnAnEmptyOutbox()
+    {
+        var handler = FakeHttpHandler.Scripted(
+            () => FakeHttpHandler.Error(HttpStatusCode.BadGateway, Wire.Errors.Internal),
+            () => FakeHttpHandler.Error(HttpStatusCode.BadGateway, Wire.Errors.Internal),
+            () => FakeHttpHandler.Ok(2));
+        using var harness = new Harness(handler);
+        harness.Outbox.Append(TestData.Envelopes(2));
+
+        await harness.Shipper.ShipOnceAsync();
+        await harness.Shipper.ShipOnceAsync();
+        Assert.Equal(2, harness.Shipper.ConsecutiveFailures);
+
+        await harness.Shipper.ShipOnceAsync();
+        Assert.Equal(0, harness.Shipper.ConsecutiveFailures);
+
+        // NothingToShip is not a fault either.
+        Assert.Equal(ShipOutcome.NothingToShip, (await harness.Shipper.ShipOnceAsync()).Outcome);
+        Assert.Equal(0, harness.Shipper.ConsecutiveFailures);
+    }
+
+    /// <summary>
+    /// A 413 changes the batch parameters rather than failing transport, so it must neither advance
+    /// nor reset the ladder — otherwise an oversize batch in the middle of a bad-network patch
+    /// silently restarts the backoff the next real failure is owed.
+    /// </summary>
+    [Fact]
+    public async Task TooLarge_LeavesTheRetryLadderWhereItIs()
+    {
+        var handler = FakeHttpHandler.Scripted(
+            () => FakeHttpHandler.Error(HttpStatusCode.ServiceUnavailable, Wire.Errors.Internal),
+            () => FakeHttpHandler.Error(HttpStatusCode.RequestEntityTooLarge, Wire.Errors.TooLarge));
+        using var harness = new Harness(handler, batchEventCap: 400);
+        harness.Outbox.Append(TestData.Envelopes(300));
+
+        await harness.Shipper.ShipOnceAsync();
+        Assert.Equal(1, harness.Shipper.ConsecutiveFailures);
+
+        Assert.Equal(ShipOutcome.TooLarge, (await harness.Shipper.ShipOnceAsync()).Outcome);
+        Assert.Equal(1, harness.Shipper.ConsecutiveFailures);
+    }
+
     private sealed class ThrowingHandler : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(

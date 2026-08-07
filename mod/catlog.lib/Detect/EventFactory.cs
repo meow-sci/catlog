@@ -37,15 +37,30 @@ public static class EventFactory
             wallMs,
             window.Payload);
 
-    /// <summary>Wraps an impact whose survival verdict is now known.</summary>
+    /// <summary>
+    /// Wraps an impact whose survival verdict is now known, minting a flight for the vehicle if it
+    /// does not have one.
+    /// </summary>
     /// <param name="tracker">Supplies the session and flight ULIDs.</param>
     /// <param name="impact">The resolved impact.</param>
     /// <returns>The envelope.</returns>
     public static EventEnvelope FromResolvedImpact(FlightTracker tracker, ResolvedImpact impact)
+        => FromResolvedImpact(tracker, impact, tracker.FlightFor(impact.Signal.VehicleId));
+
+    /// <summary>
+    /// Wraps a resolved impact onto an explicitly supplied flight — the form callers use when they
+    /// must <b>not</b> mint one (<see cref="EventPipeline.Flush"/> resolves impacts after flights
+    /// have ended, and a minted flight there would be a phantom with no <c>flight.started</c>).
+    /// </summary>
+    /// <param name="tracker">Supplies the session ULID.</param>
+    /// <param name="impact">The resolved impact.</param>
+    /// <param name="flight">The flight ULID to attribute the impact to.</param>
+    /// <returns>The envelope.</returns>
+    public static EventEnvelope FromResolvedImpact(FlightTracker tracker, ResolvedImpact impact, string flight)
         => EventEnvelope.Create(
             EventTypes.VehicleImpact,
             tracker.SessionId,
-            tracker.FlightFor(impact.Signal.VehicleId),
+            flight,
             impact.Signal.SimT,
             impact.Signal.WallMs,
             new VehicleImpactPayload(
