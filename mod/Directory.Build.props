@@ -1,0 +1,74 @@
+<Project>
+    <PropertyGroup>
+        <TargetFramework>net10.0</TargetFramework>
+        <LangVersion>13.0</LangVersion>
+        <Nullable>enable</Nullable>
+        <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+        <!-- Zero-warning policy: MSBuild-level warnings (e.g. MSB3277 reference-version
+             conflicts) are errors too, not just compiler (CS) warnings. -->
+        <MSBuildTreatWarningsAsErrors>true</MSBuildTreatWarningsAsErrors>
+        <GenerateDocumentationFile>true</GenerateDocumentationFile>
+        <!-- House style (INITIAL_IMPL_PLAN §7.2): every using is explicit. This is the
+             one place catlog deliberately differs from gatOS, which enables them. -->
+        <ImplicitUsings>disable</ImplicitUsings>
+        <WarningsAsErrors/>
+        <WarningsNotAsErrors>CS1591</WarningsNotAsErrors>
+        <!-- The game mod ships as a folder of DLLs: NuGet dependencies must land next
+             to the assembly, not just in the nuspec. -->
+        <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    </PropertyGroup>
+
+    <PropertyGroup Condition="'$(Configuration)' == 'Debug'">
+        <DefineConstants>DEBUG;TRACE</DefineConstants>
+        <DebugType>full</DebugType>
+        <DebugSymbols>true</DebugSymbols>
+    </PropertyGroup>
+
+    <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+        <DefineConstants>TRACE</DefineConstants>
+        <DebugType>pdbonly</DebugType>
+        <Optimize>true</Optimize>
+    </PropertyGroup>
+
+    <!--
+        ===== KSA game paths =====
+
+        KSAFolder — directory containing the KSA reference assemblies (KSA.dll,
+        Brutal.*.dll, Planet.*.dll) that mod/catlog/ (WP8) compiles against.
+        Resolution order, first match wins; every tier works on any host OS:
+
+          1. KSA_DLL_DIR env var (or -p:KSA_DLL_DIR=...). This is what CI uses.
+          2. A `ksa-game-assemblies` checkout cloned as a SIBLING of this repo
+             (DLLs in its current/dll/ folder) — clone-and-go, no config.
+             MSBuildThisFileDirectory is <repo>/mod/, hence ../../.
+          3. Windows game install default.
+          4. macOS/Linux developer default: the ksa-game-assemblies checkout.
+
+        Only mod/catlog/ (WP8) references these assemblies (§7.1). Its references are
+        condition-guarded, so every game-free project (catlog.lib, catlog.sim and both
+        test projects) builds even when the KSA DLLs are absent — which is what makes
+        `dotnet build mod/catlog.slnx` work on a machine with no game install.
+
+        SelectedDistModDir — where the built mod folder is deployed by the game
+        project (it appends catlog/). Override with CATLOG_DIST_DIR (CI zips that
+        folder); defaults to the per-OS KSA user mods dir.
+    -->
+    <PropertyGroup>
+        <KSAFolder Condition="'$(KSAFolder)' == '' AND '$(KSA_DLL_DIR)' != ''">$([MSBuild]::EnsureTrailingSlash('$(KSA_DLL_DIR)'))</KSAFolder>
+        <KSAFolder Condition="'$(KSAFolder)' == '' AND Exists('$(MSBuildThisFileDirectory)../../ksa-game-assemblies/current/dll/')">$(MSBuildThisFileDirectory)../../ksa-game-assemblies/current/dll/</KSAFolder>
+        <KSAFolder Condition="'$(KSAFolder)' == '' AND '$(OS)' == 'Windows_NT'">C:\Program Files\Kitten Space Agency\</KSAFolder>
+        <KSAFolder Condition="'$(KSAFolder)' == ''">$(HOME)/repos/meow-sci/ksa-game-assemblies/current/dll/</KSAFolder>
+
+        <KSAUserDir Condition="'$(KSAUserDir)' == '' AND '$(OS)' == 'Windows_NT'">$(USERPROFILE)\Documents\My Games\Kitten Space Agency\</KSAUserDir>
+        <KSAUserDir Condition="'$(KSAUserDir)' == ''">$(HOME)/Documents/My Games/Kitten Space Agency/</KSAUserDir>
+
+        <!-- mods -->
+        <KSAUserModDir Condition="'$(OS)' == 'Windows_NT'">$(KSAUserDir)mods\</KSAUserModDir>
+        <KSAUserModDir Condition="'$(KSAUserModDir)' == ''">$(KSAUserDir)mods/</KSAUserModDir>
+        <KSAProgramFilesModDir>$(KSAFolder)Content\</KSAProgramFilesModDir>
+        <SelectedDistModDir Condition="'$(SelectedDistModDir)' == '' AND '$(CATLOG_DIST_DIR)' != ''">$([MSBuild]::EnsureTrailingSlash('$(CATLOG_DIST_DIR)'))</SelectedDistModDir>
+        <!-- StarMap loads from the user mods dir; the Program Files Content dir stays
+             documented but unused. -->
+        <SelectedDistModDir Condition="'$(SelectedDistModDir)' == ''">$(KSAUserModDir)</SelectedDistModDir>
+    </PropertyGroup>
+</Project>

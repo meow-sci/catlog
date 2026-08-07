@@ -1,0 +1,6 @@
+# pnpm 11 reads settings from here, no longer from the "pnpm" field in package.json.
+# esbuild's postinstall only sanity-checks the platform binary that ships in the
+# @esbuild/<platform> package; leaving it blocked makes every install fail with
+# ERR_PNPM_IGNORED_BUILDS, so allow it explicitly.
+allowBuilds:
+  esbuild: true

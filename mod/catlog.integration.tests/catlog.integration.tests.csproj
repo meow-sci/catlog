@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <OutputType>Library</OutputType>
+        <AssemblyName>MeowSci.Catlog.Integration.Tests</AssemblyName>
+        <RootNamespace>MeowSci.Catlog.Integration.Tests</RootNamespace>
+        <Description>Mod-to-server integration tests (INITIAL_IMPL_PLAN §7.5): ship real batches
+            from catlog.lib at a real catlogd. The server fixture and cases land in WP7; nothing
+            here may require a running server before then.</Description>
+        <IsPackable>false</IsPackable>
+        <IsTestProject>true</IsTestProject>
+        <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\catlog.lib\catlog.lib.csproj" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+        <PackageReference Include="xunit" Version="2.9.3" />
+        <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+    </ItemGroup>
+
+</Project>

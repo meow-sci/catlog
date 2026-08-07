@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+        <AssemblyName>MeowSci.Catlog.Sim</AssemblyName>
+        <RootNamespace>MeowSci.Catlog.Sim</RootNamespace>
+        <Description>Console gameplay simulator (INITIAL_IMPL_PLAN §7.3): feeds scripted
+            scenarios through the real catlog.lib detector → outbox → shipper pipeline against a
+            live local server, standing in for the KSA runtime. Scenarios and the read-API
+            assertions land in WP7.</Description>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\catlog.lib\catlog.lib.csproj" />
+    </ItemGroup>
+
+</Project>

@@ -1,0 +1,18 @@
+# --- build output ---
+server/bin/
+site/dist/
+site/node_modules/
+mod/**/bin/
+mod/**/obj/
+
+# --- runtime data (§3: ./data/ holds events.db, projections.db, keys/, archive/) ---
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# --- scratch ---
+contracts/testdata/tmp/
+
+# --- OS ---
+.DS_Store

@@ -1,0 +1,18 @@
+/*
+ * catlog site styles — layered on top of @picocss/pico (vendored to dist/vendor/).
+ * The Go server renders every page (INITIAL_IMPL_PLAN §5.7); this file only carries
+ * the catlog-specific bits. WP5 fills it in.
+ */
+
+:root {
+  --catlog-accent: #ff8c42;
+}
+
+.catlog-board td.rank {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.catlog-feed li {
+  list-style: none;
+}

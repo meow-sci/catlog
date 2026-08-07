@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <OutputType>Library</OutputType>
+        <AssemblyName>MeowSci.Catlog.Lib</AssemblyName>
+        <RootNamespace>MeowSci.Catlog.Lib</RootNamespace>
+        <Description>KSA-free core of the catlog mod (INITIAL_IMPL_PLAN D13 / §7.2): event
+            envelopes and payloads, the detector/window/impact-correlator pipeline, the SQLite
+            outbox, the batch shipper and the ES256 JWS/JWK credential code. Contains ZERO
+            references to KSA, Brutal or Harmony — enforced by the assembly guard test in
+            catlog.lib.tests, which is what makes the whole ingest path testable without the
+            game. Implemented in WP6.</Description>
+    </PropertyGroup>
+
+</Project>

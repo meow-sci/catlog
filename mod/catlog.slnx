@@ -1,0 +1,13 @@
+<Solution>
+    <!--
+        The game-free surface: everything here builds and tests on a machine with no
+        KSA install. mod/catlog/ (MeowSci.Catlog, the actual game mod) lands in WP8 and
+        is added to this list then — Directory.Build.props resolves the KSA assemblies
+        from the sibling ksa-game-assemblies checkout, so it is NOT permanently excluded
+        (see docs/DECISIONS.md, deviation A2).
+    -->
+    <Project Path="catlog.lib/catlog.lib.csproj" />
+    <Project Path="catlog.sim/catlog.sim.csproj" />
+    <Project Path="catlog.lib.tests/catlog.lib.tests.csproj" />
+    <Project Path="catlog.integration.tests/catlog.integration.tests.csproj" />
+</Solution>
