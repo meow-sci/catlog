@@ -50,7 +50,15 @@ Kitten identity: `kid` = lowercase Crockford base32 of the first 10 bytes of `SH
 | `kitten.tumble` | `{"kid": s, "name": s, "speed_ms": f, "body": s}` |
 | `kitten.kia` | `{"kid": s, "name": s, "context": "rud"\|"manual_destroy"\|"unknown"}` |
 | `roster.snapshot` | `{"kittens": [{"kid": s, "name": s, "travelled_m": f, "fastest_ms": f, "missions": i, "mission_time_s": f, "kia": b}]}` — every 10 min of play, and on session end |
-| `flight.flagged` | `{"flag": "teleport"\|"refuel"\|"resource_edit"\|"console", "detail": s}` |
+| `flight.flagged` | `{"flag": "teleport"\|"refuel"\|"resource_edit"\|"console"\|"tuning", "detail": s}` |
 | `telemetry.window` | `{"t0_sim": f, "t1_sim": f, "n": i, "body": s, "alt_m": agg, "surface_speed_ms": agg, "orbital_speed_ms": agg, "accel_ms2": agg, "peak_g": f, "max_q_pa": f, "mass_kg_last": f}` — one per vehicle per 30 s sim-time of active flight |
 
 `BEST-GUESS (D11)` crew-survival semantics used by projections: a lithobrake counts as *survived with crew* iff `vehicle.impact.survived == true && crew_count ≥ 1 && launch_pad == false` and no `kitten.kia` event exists for the same flight with `sim_t` within ±2.0 s of the impact. Revisit after in-game verification of `KillCrew` behavior.
+
+> **Decomp verification (2026-08-06, build 2026.8.5.5168).** The D11 guess is **confirmed at source level**: `Kia = true` is written in exactly one place, reachable only from `Vehicle.KillCrew()`, whose only caller is the player-initiated destroy path (guarded by `if (!Recovered)`). The physics RUD path calls `EndAllCrewMissions` and never touches it. A `kitten.kia` event therefore signals *deliberate scuttling*, not a fatality from an impact. The rule above stays as written — the `kitten.kia` proximity check simply almost never fires. Full evidence, with file:line citations, in [ksa-integration.md](ksa-integration.md) §4. In-game confirmation is still required before the rule is treated as settled (WP8).
+
+**Payload caveats established by the same verification** (see [ksa-integration.md](ksa-integration.md)):
+
+- `telemetry.window.peak_g` / `max_q_pa` come from `Vehicle.StructuralLoad`, which is **only written under full physics** and reset each prepared step. An all-zero reading means *no data this step* (on-rails or freefall), not *zero g* — the mod must omit rather than report zero.
+- `roster.snapshot.fastest_ms` is the game's own `FastestSpeed`, which is **ecliptic-frame** (it includes the parent body's orbital motion, so it reads ~30 km/s on Earth). It is recorded for completeness and must not be surfaced as a vehicle speed record; the speed boards derive from `telemetry.window` instead.
+- `flight.flagged.flag` includes `"tuning"`: the game ships a debug window that live-edits `KittenLocomotionTuning.Current.TumbleSpeedGate` (default `6.5`), which would otherwise make the `kitten_tumbles` board trivially forgeable. The mod emits this flag whenever the active tuning differs from stock, and `detail` carries what changed.
