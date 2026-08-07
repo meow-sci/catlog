@@ -1,0 +1,194 @@
+# catlog — nginx PRODUCTION example (INITIAL_IMPL_PLAN.md §6.2, §11, §13.7).
+#
+# THIS FILE DOCUMENTS, IT DOES NOT AUTOMATE (D1: the DigitalOcean droplet is
+# owner-managed). Nothing in infra/deploy/deploy.sh installs it. Copy it by
+# hand, edit every <PLACEHOLDER>, run `nginx -t`, then `systemctl reload nginx`.
+#
+#   install to:  /etc/nginx/sites-available/catlog   (symlink into sites-enabled)
+#   this is a SERVER-BLOCK fragment for the distro nginx.conf's `http {}` —
+#   unlike infra/nginx/dev.conf, which is a whole nginx.conf.
+#
+# Owner-managed, deliberately NOT in this file and NOT in deploy.sh:
+#   * DNS A/AAAA records for catlog.<domain>
+#   * certbot issuance/renewal  (`certbot --nginx -d catlog.<domain>`)
+#   * ufw / DO cloud firewall (allow 80,443; never expose 8080 or 6060)
+#   * Cloudflare onboarding (see the §13.7 block below before switching it on)
+#
+# ---------------------------------------------------------------------------
+# Rate limiting: zones live in the http{} context
+# ---------------------------------------------------------------------------
+# Put these two lines in /etc/nginx/nginx.conf inside `http {}` (a zone cannot
+# be declared inside a server block), or in /etc/nginx/conf.d/catlog-limits.conf
+# which the distro config includes from http{}:
+#
+#   limit_req_zone $binary_remote_addr zone=catlog_ingest:10m rate=2r/s;
+#   limit_req_zone $binary_remote_addr zone=catlog_web:10m    rate=20r/s;
+#   limit_req_status 429;
+#   limit_conn_zone $binary_remote_addr zone=catlog_conn:10m;
+#
+# Sizing rationale (real traffic, not dev's flat 10r/s):
+#   catlog_ingest 2r/s burst=10 — one player ships at most 1 batch / 2 s with
+#     burst 5 (§4.3), and catlogd enforces that per credential anyway. 2r/s is
+#     ~4x a single player, so a household NAT with several players is unaffected
+#     while a single hostile IP cannot make catlogd verify thousands of ECDSA
+#     signatures per second. This is the OUTER guard; §4.3's per-credential
+#     token bucket is the real one.
+#   catlog_web 20r/s burst=40 — page loads pull several assets and the boards
+#     poll; anything above this is a scraper, and the read API is CDN-cacheable
+#     (§4.8) so real users mostly never reach nginx at all.
+#   catlog_conn 20 concurrent connections per IP — SSE holds one open per tab.
+#
+# ---------------------------------------------------------------------------
+# §13.7 — CLOUDFLARE AND PER-IP RATE LIMITING.  READ BEFORE ENABLING.
+# ---------------------------------------------------------------------------
+# The zones above key on $binary_remote_addr. The moment Cloudflare (or any
+# other proxy) fronts this server, $remote_addr is a CLOUDFLARE edge IP, so
+# every visitor collapses into a handful of buckets: the limits then throttle
+# legitimate traffic in aggregate and stop isolating an abusive client. The fix
+# is real_ip: trust Cloudflare's ranges and take the client from the
+# CF-Connecting-IP header, which rewrites $remote_addr (and therefore
+# $binary_remote_addr) for every zone, log and ACL below.
+#
+#   *** DO NOT UNCOMMENT THIS BLOCK UNTIL CLOUDFLARE IS ACTUALLY IN FRONT AND
+#   *** PORT 443 IS REACHABLE ONLY FROM CLOUDFLARE'S RANGES.
+#   Enabling it early is strictly worse than not rate limiting at all: with a
+#   direct-to-origin path open, ANY client can send `CF-Connecting-IP: 1.2.3.4`
+#   and choose its own rate-limit bucket — a fresh, random value per request
+#   makes the limiter unreachable, and a victim's address makes it a weapon
+#   (nginx also writes the spoofed value to access.log and to any IP ACL).
+#   set_real_ip_from is what makes the header trustworthy: only a peer inside
+#   those CIDRs may set it. So the order is: (1) put Cloudflare in front,
+#   (2) firewall 443 to Cloudflare's ranges only, (3) uncomment, (4) nginx -t
+#   && systemctl reload nginx.
+#
+#   Cloudflare publishes the ranges at https://www.cloudflare.com/ips/ — they
+#   change; automate the refresh or re-check it at each certificate renewal.
+#   The list below is illustrative and WILL be stale.
+#
+# # /etc/nginx/conf.d/cloudflare-realip.conf
+# set_real_ip_from 173.245.48.0/20;
+# set_real_ip_from 103.21.244.0/22;
+# set_real_ip_from 104.16.0.0/13;
+# set_real_ip_from 172.64.0.0/13;
+# set_real_ip_from 131.0.72.0/22;
+# set_real_ip_from 2400:cb00::/32;
+# set_real_ip_from 2606:4700::/32;
+# real_ip_header CF-Connecting-IP;
+# real_ip_recursive off;      # CF-Connecting-IP is a single address, not a list
+#
+# Note the ingest path is unaffected in one important way: catlogd's own rate
+# limit is keyed by credential thumbprint (§4.3), not by IP, so a spoofed or
+# collapsed client address never lets one player exceed their batch budget.
+
+# --- HTTP: ACME + permanent redirect ---------------------------------------
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name catlog.<DOMAIN>;
+
+    # certbot's webroot plugin drops its challenge files here. Kept plaintext
+    # on purpose: the redirect below must not shadow it during renewal.
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+        default_type "text/plain";
+    }
+
+    location / { return 301 https://$host$request_uri; }
+}
+
+# --- HTTPS -----------------------------------------------------------------
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name catlog.<DOMAIN>;
+
+    # HTTP/2. nginx >= 1.25.1 wants a separate directive; older builds want a
+    # `http2` parameter on the listen lines above. Debian 12 ships 1.22 and
+    # Ubuntu 24.04 ships 1.24, so pick ONE of these to match `nginx -v`:
+    #   nginx >= 1.25.1:  http2 on;
+    #   nginx <  1.25.1:  listen 443 ssl http2;   (edit the listen lines)
+    # http2 on;
+
+    # certbot manages these four lines; `certbot --nginx` writes them itself.
+    ssl_certificate     /etc/letsencrypt/live/catlog.<DOMAIN>/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/catlog.<DOMAIN>/privkey.pem;
+    include             /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam         /etc/letsencrypt/ssl-dhparams.pem;
+
+    server_tokens off;
+    client_max_body_size 2m;          # §4.3 caps the batch at 1 MiB compressed
+
+    # HSTS only once the certificate is known good — a mistake here locks
+    # browsers out of the domain for max-age seconds.
+    add_header Strict-Transport-Security "max-age=31536000" always;
+    add_header X-Content-Type-Options nosniff always;
+    add_header Referrer-Policy strict-origin-when-cross-origin always;
+
+    limit_conn catlog_conn 20;
+
+    access_log /var/log/nginx/catlog.access.log;
+    error_log  /var/log/nginx/catlog.error.log;
+
+    # --- ingest (§4.4) -----------------------------------------------------
+    location = /v1/ingest {
+        limit_req zone=catlog_ingest burst=10 nodelay;
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Host $host;
+        # The body is brotli-compressed application/x-ndjson and its SHA-256 is
+        # covered by the proof JWS (§4.5.2 `bh`) — nginx must pass it through
+        # byte for byte. Never add gunzip/brotli filters or sub_filter here.
+        proxy_request_buffering on;
+        proxy_read_timeout 60s;
+    }
+
+    # --- datastar SSE feed (§4.8) ------------------------------------------
+    location = /v1/feed/sse {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Host $host;
+        proxy_buffering off;          # without this the feed arrives in chunks
+        proxy_cache off;
+        proxy_read_timeout 1h;
+        add_header X-Accel-Buffering no;
+        # Cloudflare buffers SSE unless the response is excluded from its cache
+        # and compression; if frames arrive late once CF is in front, check the
+        # zone's "Cache Rules"/"Compression" before suspecting nginx.
+    }
+
+    # --- static assets, built by `pnpm -C site build` and rsynced by deploy.sh
+    location /static/ {
+        alias /var/lib/catlog/site/;
+        expires 1h;
+        access_log off;
+        gzip on; gzip_types text/css application/javascript;
+        gzip_vary on;
+    }
+
+    # --- the admin mux is never proxied (§3, §5.9) -------------------------
+    # catlogd binds it to 127.0.0.1:6060 and refuses non-loopback peers, so
+    # this is belt and suspenders — but it is the belt that survives a typo in
+    # catlogd.toml.
+    location /admin/ { return 403; }
+
+    # --- everything else: site HTML + read API -----------------------------
+    location / {
+        limit_req zone=catlog_web burst=40 nodelay;
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Host $host;
+        gzip on; gzip_types text/html application/json text/css application/javascript;
+        gzip_vary on;
+    }
+}

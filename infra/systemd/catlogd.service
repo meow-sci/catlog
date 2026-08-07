@@ -1,0 +1,100 @@
+# catlog — catlogd unit (INITIAL_IMPL_PLAN.md §11).
+#
+# install to: /etc/systemd/system/catlogd.service
+#   systemctl daemon-reload && systemctl enable --now catlogd
+#
+# Owner-managed prerequisites (deploy.sh never provisions any of these, D1):
+#   useradd --system --home-dir /var/lib/catlog --shell /usr/sbin/nologin catlog
+#   install -d -o catlog -g catlog -m 0750 /var/lib/catlog
+#   install -d -o catlog -g catlog -m 0700 /var/lib/catlog/keys
+#   install -d -o catlog -g catlog -m 0750 /var/backups/catlog
+#   install -d -o root   -g root   -m 0755 /etc/catlog
+#   catlogctl keygen -data /var/lib/catlog     # run once, as the catlog user
+#
+# ---------------------------------------------------------------------------
+# ONE PROCESS PER DATABASE — this unit must never overlap with itself
+# ---------------------------------------------------------------------------
+# Turso takes an exclusive whole-file lock that excludes other processes
+# entirely, readers included (verified in WP1: TestSecondProcessIsLockedOut).
+# So: no rolling restart, no blue/green, no second catlogd "just to warm up",
+# and no sidecar that opens events.db. `systemctl restart` is stop-then-start,
+# which is what we want; infra/deploy/deploy.sh is explicit about it too.
+# catlogctl reaches the running process over the admin API for the same reason.
+
+[Unit]
+Description=catlog telemetry server (catlogd)
+Documentation=https://github.com/meow-sci/catlog
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=catlog
+Group=catlog
+WorkingDirectory=/var/lib/catlog
+ExecStart=/usr/local/bin/catlogd -config /etc/catlog/catlogd.toml
+
+# Secrets (IdP client secrets) live here, not in the TOML: every scalar is
+# overridable as CATLOG_<SECTION>_<KEY> (§5.3). The leading `-` means the file
+# is optional. Mode it 0640 root:catlog.
+EnvironmentFile=-/etc/catlog/catlogd.env
+
+# ---------------------------------------------------------------------------
+# TURSO_GO_CACHE_DIR — required, not a tuning knob
+# ---------------------------------------------------------------------------
+# tursogo is CGO-free but reaches its native engine through purego, and the
+# driver EXTRACTS A NATIVE .so TO DISK AT STARTUP and dlopen()s it. With
+# ProtectSystem=strict + PrivateTmp the process gets a private /tmp that is
+# writable, but nothing else outside ReadWritePaths is — and a hardened host
+# may well mount /tmp noexec, which turns a writable directory into a startup
+# failure at dlopen time. Pointing the driver at a directory we already own and
+# already list in ReadWritePaths removes both failure modes.
+Environment=TURSO_GO_CACHE_DIR=/var/lib/catlog/turso-cache
+ExecStartPre=/usr/bin/install -d -m 0700 -o catlog -g catlog /var/lib/catlog/turso-cache
+
+Restart=on-failure
+RestartSec=2s
+# Shutdown drains the ingest write queue, checkpoints both WALs and closes the
+# databases (WP1: the WAL never auto-checkpoints). Give it room — killing
+# catlogd mid-checkpoint is recoverable but pointless.
+TimeoutStopSec=60
+KillSignal=SIGTERM
+KillMode=mixed
+
+# --- sandbox (§11: ProtectSystem=strict, ReadWritePaths, NoNewPrivileges) ---
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectProc=invisible
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RemoveIPC=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+UMask=0077
+
+# Everything the process may write. /var/backups/catlog is here because
+# `catlogctl backup` is executed BY THIS PROCESS: the admin API quiesces the
+# writer and copies the database from inside catlogd (a live Turso file cannot
+# be copied by another process, and `cp` of a WAL database is not a backup
+# anyway). The nightly unit only makes an HTTP call — it needs no write access.
+ReadWritePaths=/var/lib/catlog /var/backups/catlog
+
+# MemoryDenyWriteExecute=yes   # DO NOT ENABLE.
+# purego/fakecgo and the dlopen'd Turso engine need executable mappings; this
+# setting makes catlogd fail at startup, not at first query.
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,54 @@
+# catlog — optional local nginx (INITIAL_IMPL_PLAN.md §9.3).
+#
+# Nothing in `make test` needs this: the nginx behaviour that matters is
+# asserted by the testcontainers suite (§6.3, server/internal/nginxproxy). This
+# file exists so a human can click through the site the way the VPS serves it —
+# proxy in front, static assets served by nginx rather than by Go.
+#
+#   make dev                        # catlogd on 127.0.0.1:8080 (§3)
+#   make site-build                 # populates site/dist
+#   docker compose -f infra/compose.yaml up -d
+#   curl -fsS http://127.0.0.1:8081/healthz     # smoke check → {"ok":true}
+#   docker compose -f infra/compose.yaml down
+#
+# The container reaches catlogd on the HOST, not in a compose network: catlogd
+# holds an exclusive lock on its database files (§5.4), so there is exactly one
+# of it and it is the one `make dev` started.
+
+# Without this the project would be named after the directory ("infra").
+name: catlog
+
+services:
+  nginx:
+    image: nginx:stable-alpine
+    container_name: catlog-nginx-dev
+    restart: unless-stopped
+
+    # 8081 both sides: infra/nginx/dev.conf listens on 8081 (§3). Bound to
+    # loopback so the dev proxy is never reachable from the LAN.
+    ports:
+      - "127.0.0.1:8081:8081"
+
+    # The nginx image runs envsubst over /etc/nginx/templates/*.template at
+    # startup. NGINX_ENVSUBST_OUTPUT_DIR redirects the result to /etc/nginx so
+    # the template becomes the whole nginx.conf (dev.conf carries its own
+    # events{}/http{} blocks and is not a conf.d snippet).
+    #
+    # NGINX_ENVSUBST_FILTER is load-bearing: without it envsubst would also
+    # expand nginx's own $binary_remote_addr, $proxy_add_x_forwarded_for,
+    # $scheme and $host into empty strings. The $$ is compose escaping for a
+    # literal $.
+    environment:
+      UPSTREAM: "host.docker.internal:8080"
+      STATIC_ROOT: "/srv/catlog/site"
+      NGINX_ENVSUBST_FILTER: "^(UPSTREAM|STATIC_ROOT)$$"
+      NGINX_ENVSUBST_OUTPUT_DIR: "/etc/nginx"
+
+    volumes:
+      - ./nginx/dev.conf:/etc/nginx/templates/nginx.conf.template:ro
+      - ../site/dist:/srv/catlog/site:ro
+
+    # Docker Desktop (macOS/Windows) resolves host.docker.internal on its own;
+    # on Linux it only exists with this mapping.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

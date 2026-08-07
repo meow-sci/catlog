@@ -60,9 +60,19 @@ test-integration:
 	@# dotnet test mod/catlog.integration.tests
 
 ## test-nginx: testcontainers nginx suite (clean-skips without docker)
-test-nginx:
-	@echo "make test-nginx: not yet implemented (WP9)"
-	@# cd server && go test -tags docker ./internal/nginxproxy/
+test-nginx: server-build
+	@# §9.4: the suite self-skips when the daemon is unreachable; say how to fix
+	@# that before the skip scrolls past, rather than after.
+	@if ! command -v docker >/dev/null 2>&1; then \
+	  echo "make test-nginx: no docker CLI on PATH — the suite will skip (§9.4)."; \
+	  echo "                 install Docker Desktop: https://docs.docker.com/desktop/"; \
+	elif ! docker info >/dev/null 2>&1; then \
+	  echo "make test-nginx: the docker daemon is unreachable — the suite will skip (§9.4)."; \
+	  echo "                 macOS: open -a Docker"; \
+	  echo "                 Linux: sudo systemctl start docker"; \
+	  echo "                 then re-run: make test-nginx"; \
+	fi
+	cd server && go test -tags docker -count=1 ./internal/nginxproxy/
 
 ## e2e: playwright suite against a local catlogd + mockidp
 e2e:
@@ -91,9 +101,8 @@ keys: server-build
 	server/bin/catlogctl keygen
 
 ## seed: insert the deterministic demo dataset for UI development
-seed:
-	@echo "make seed: not yet implemented (WP4)"
-	@# server/bin/catlogctl seed
+seed: server-build
+	server/bin/catlogctl seed
 
 ## testvectors: regenerate contracts/testdata (§4.10) — byte-identical every run
 testvectors: server-build
