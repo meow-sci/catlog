@@ -21,6 +21,8 @@ package directory
 
 import (
 	"context"
+	"slices"
+	"strings"
 	"sync"
 
 	"github.com/meow-sci/catlog/server/internal/store"
@@ -118,6 +120,58 @@ func (d *Directory) Lookup(handle string) (Entry, bool) {
 	defer d.mu.RUnlock()
 	e, ok := d.byLC[store.LC(handle)]
 	return e, ok
+}
+
+// Search finds live handles containing q, case-insensitively: the handles whose
+// lowercase form starts with q first, then the rest that merely contain it, each
+// group in lexicographic order. limit caps the result; truncated reports that
+// there were more.
+//
+// # Why it is a scan of the map rather than a query
+//
+// The directory is already the authoritative set of *visible* handles — a
+// banned player is absent from it (see the package comment) — so searching it
+// needs no ban filter and no round trip to SQL, which has no index that could
+// answer a substring query anyway. The cost is one pass over one string per
+// live handle, which is the same pass [Reload] does on every handle claim.
+//
+// # Why the whole match set is collected before truncating
+//
+// This is an unauthenticated, CDN-fronted endpoint, so its answer has to be a
+// pure function of its query: stopping the scan early would hand back whichever
+// matches Go's randomised map iteration reached first, and a CDN would cache one
+// arbitrary subset per query. Sorting the full match set costs more and is the
+// only way the same URL means the same thing twice.
+func (d *Directory) Search(q string, limit int) (handles []string, truncated bool) {
+	q = store.LC(strings.TrimSpace(q))
+	if q == "" || limit <= 0 {
+		return nil, false
+	}
+
+	var prefix, contains []string
+	d.mu.RLock()
+	for lc := range d.byLC {
+		switch {
+		case strings.HasPrefix(lc, q):
+			prefix = append(prefix, lc)
+		case strings.Contains(lc, q):
+			contains = append(contains, lc)
+		}
+	}
+	slices.Sort(prefix)
+	slices.Sort(contains)
+	all := append(prefix, contains...)
+	if len(all) > limit {
+		all, truncated = all[:limit], true
+	}
+	// Resolved to display casing only now, so the ordering key stays the
+	// lowercase form that uniqueness is defined on (§4.7).
+	handles = make([]string, len(all))
+	for i, lc := range all {
+		handles[i] = d.byLC[lc].Handle
+	}
+	d.mu.RUnlock()
+	return handles, truncated
 }
 
 // BannedIDs lists every banned player_id. The read API subtracts these from a

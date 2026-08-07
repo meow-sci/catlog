@@ -18,14 +18,25 @@ import (
 // be a second place for a banned player to leak onto a public surface, so the
 // handlers in readapi.go and the templates in web both call these.
 
-// BoardList assembles `GET /v1/leaderboards` (§4.8).
-func (s *Server) BoardList(ctx context.Context) (BoardsResponse, error) {
+// statCounts is `player_stat` grouped by stat: one row per (player, stat), so
+// the count is the number of players on each board.
+//
+// One query answers "how big is every board", which is what the board index,
+// a profile's `players` denominator and a comparison all need. Asking per board
+// instead would be one indexed count per row rendered.
+func (s *Server) statCounts(ctx context.Context) (map[string]int64, error) {
 	var counts map[string]int64
 	err := s.deps.Projections.With(func(p *store.Projections) error {
 		var err error
 		counts, err = p.StatCounts(ctx)
 		return err
 	})
+	return counts, err
+}
+
+// BoardList assembles `GET /v1/leaderboards` (§4.8).
+func (s *Server) BoardList(ctx context.Context) (BoardsResponse, error) {
+	counts, err := s.statCounts(ctx)
 	if err != nil {
 		return BoardsResponse{}, err
 	}
@@ -101,10 +112,14 @@ func (s *Server) Board(ctx context.Context, stat, period, bucket string, limit, 
 	}
 	for i, row := range rows {
 		out.Rows = append(out.Rows, BoardRow{
-			Rank:    offset + i + 1,
-			Handle:  handles[i],
-			Value:   row.Value,
-			Context: row.Context,
+			Rank:   offset + i + 1,
+			Handle: handles[i],
+			Value:  row.Value,
+			// A career-time row's context carries the §4.1 career key, which is
+			// derived from the mod's install id and would link one person's two
+			// handles. [Redact] relabels it per player; see privacy.go. Every
+			// other context blob passes through as the bytes the fold wrote.
+			Context: Redact(row.PlayerID, row.Context),
 			Updated: times[row.UpdatedSeq],
 			Rewound: rewound[rowKey(row)],
 		})
@@ -201,6 +216,16 @@ func (s *Server) rewound(ctx context.Context, board stats.Board, rows []store.St
 // ok is false for an unknown, retired or banned handle — one answer for all
 // three on purpose, so the surface is not a ban oracle (§4.8).
 func (s *Server) Player(ctx context.Context, handle string) (PlayerResponse, bool, error) {
+	counts, err := s.statCounts(ctx)
+	if err != nil {
+		return PlayerResponse{}, false, err
+	}
+	return s.player(ctx, handle, counts)
+}
+
+// player is [Server.Player] with the board census supplied, so a comparison of
+// several handles pays for it once rather than once per handle.
+func (s *Server) player(ctx context.Context, handle string, counts map[string]int64) (PlayerResponse, bool, error) {
 	entry, ok := s.deps.Directory.Lookup(handle)
 	if !ok {
 		return PlayerResponse{}, false, nil
@@ -264,7 +289,12 @@ func (s *Server) Player(ctx context.Context, handle string) (PlayerResponse, boo
 		}
 		out.Stats = append(out.Stats, PlayerRow{
 			Stat: row.Stat, Title: board.Title, Unit: board.Unit,
-			Value: row.Value, Rank: rank, Context: row.Context,
+			Ascending: board.Ascending,
+			Value:     row.Value, Rank: rank, Players: counts[row.Stat],
+			// Relabelled per player, for the same reason as a board row's; see
+			// privacy.go. The rewind mark above is resolved from the real career
+			// key first, so the qualification survives the redaction.
+			Context: Redact(entry.PlayerID, row.Context),
 			Updated: times[row.UpdatedSeq],
 			Rewound: board.Career && marked[careerOf(row)],
 		})

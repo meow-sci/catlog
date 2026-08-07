@@ -125,7 +125,10 @@ func New(deps Deps) (*Server, error) {
 func (s *Server) Register(mux *http.ServeMux) {
 	s.public(mux, "/v1/leaderboards", s.handleBoards)
 	s.public(mux, "/v1/leaderboards/{stat}", s.handleBoard)
+	s.public(mux, "/v1/players", s.handleSearch)
 	s.public(mux, "/v1/players/{handle}", s.handlePlayer)
+	s.public(mux, "/v1/players/{handle}/events", s.handlePlayerEvents)
+	s.public(mux, "/v1/compare", s.handleCompare)
 	s.public(mux, "/v1/feed", s.handleFeed)
 	if s.deps.Feed != nil {
 		s.public(mux, "/v1/feed/stream", s.handleFeedStream)
@@ -353,8 +356,22 @@ type PlayerRow struct {
 	Title string  `json:"title"`
 	Unit  string  `json:"unit"`
 	Value float64 `json:"value"`
+	// Ascending reports that the smallest value ranks first — the same flag
+	// [BoardSummary] publishes, repeated here because a profile shows a rank
+	// next to a value and "#1 with the lowest number" is unreadable without it.
+	// Without this a client would have to fetch the board index to render a
+	// profile.
+	Ascending bool `json:"ascending"`
 	// Rank is the player's position among visible players on that board.
-	Rank    int             `json:"rank"`
+	Rank int `json:"rank"`
+	// Players is how many players hold a value on the board — the denominator
+	// that turns "#3" into "#3 of 41".
+	//
+	// It counts rows, banned players included, exactly like [BoardSummary.Count]
+	// and for the same reason: an exact figure would need the whole board read
+	// and filtered on every profile view. Rank is filtered, so a rank can be
+	// better than this number implies, never worse.
+	Players int64           `json:"players"`
 	Context json.RawMessage `json:"context,omitempty"`
 	Updated int64           `json:"updated"`
 	// Rewound qualifies a career-time value; see [BoardRow.Rewound].

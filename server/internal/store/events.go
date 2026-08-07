@@ -471,13 +471,45 @@ func (e *Events) EventsSince(ctx context.Context, after int64, limit int) ([]Sto
 		return nil, nil
 	}
 	rows, err := e.Reader().QueryContext(ctx,
-		`SELECT seq, event_id, player_id, flight_id, session_id, career, type, ver, sim_time, wall_time, recv_time, payload
-		 FROM event WHERE seq > ? ORDER BY seq LIMIT ?`, after, limit)
+		eventSelect+` WHERE seq > ? ORDER BY seq LIMIT ?`, after, limit)
 	if err != nil {
 		return nil, fmt.Errorf("store: read events: %w", err)
 	}
-	defer rows.Close()
+	return scanStoredEvents(rows)
+}
 
+// PlayerEvents reads one page of a player's own log, **newest first** — the
+// §4.8 raw-event view.
+//
+// before is the exclusive upper bound on `seq`: zero or less starts at the
+// newest event, and paging on means passing back the seq of the oldest row of
+// the previous page. A cursor rather than an offset because the log is
+// append-only at the head, so an offset would drift under a page whenever the
+// player shipped between two requests.
+//
+// It runs off `ev_player (player_id, seq)`, so the cost is the page, not the
+// player's history.
+func (e *Events) PlayerEvents(ctx context.Context, playerID, before int64, limit int) ([]StoredEvent, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	q := eventSelect + ` WHERE player_id = ? ORDER BY seq DESC LIMIT ?`
+	args := []any{playerID, limit}
+	if before > 0 {
+		q = eventSelect + ` WHERE player_id = ? AND seq < ? ORDER BY seq DESC LIMIT ?`
+		args = []any{playerID, before, limit}
+	}
+	rows, err := e.Reader().QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("store: read player %d events: %w", playerID, err)
+	}
+	return scanStoredEvents(rows)
+}
+
+const eventSelect = `SELECT seq, event_id, player_id, flight_id, session_id, career, type, ver, sim_time, wall_time, recv_time, payload FROM event`
+
+func scanStoredEvents(rows *sql.Rows) ([]StoredEvent, error) {
+	defer rows.Close()
 	var out []StoredEvent
 	for rows.Next() {
 		var (
@@ -491,6 +523,7 @@ func (e *Events) EventsSince(ctx context.Context, after int64, limit int) ([]Sto
 			return nil, fmt.Errorf("store: scan event: %w", err)
 		}
 		se.Career = career.String
+		var err error
 		if se.ID, err = ids.FromBytes(eventID); err != nil {
 			return nil, fmt.Errorf("store: event seq %d: %w", se.Seq, err)
 		}

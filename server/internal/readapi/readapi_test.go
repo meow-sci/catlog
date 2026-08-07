@@ -27,6 +27,8 @@ type fixture struct {
 	mux    *http.ServeMux
 
 	byHandle map[string]int64
+	// eventN keeps hand-written events' derived ids distinct from each other.
+	eventN int
 }
 
 // live is the smallest thing satisfying readapi.Projections. In catlogd this is
@@ -421,6 +423,14 @@ func TestPlayerProfile(t *testing.T) {
 	for _, s := range got.Stats {
 		if s.Rank != 1 || s.Title == "" || s.Unit == "" || s.Updated == 0 {
 			t.Errorf("stat %+v is incomplete", s)
+		}
+		// A profile page shows a rank next to a value, so it needs the board's
+		// direction and its population without fetching the board index too.
+		if s.Players != 1 {
+			t.Errorf("stat %s players = %d, want 1", s.Stat, s.Players)
+		}
+		if board, _ := stats.Describe(s.Stat); s.Ascending != board.Ascending {
+			t.Errorf("stat %s ascending = %v, want %v", s.Stat, s.Ascending, board.Ascending)
 		}
 		if string(s.Context) != `{"body":"duna"}` {
 			t.Errorf("stat %s context = %s", s.Stat, s.Context)

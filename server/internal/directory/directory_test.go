@@ -1,6 +1,7 @@
 package directory_test
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/meow-sci/catlog/server/internal/directory"
@@ -131,5 +132,48 @@ func TestReloadIsSafeOnAnEmptyDatabase(t *testing.T) {
 	}
 	if _, ok := d.Handle(1); ok {
 		t.Error("an unknown player resolved")
+	}
+}
+
+func TestSearchIsDeterministicAndOrderedPrefixFirst(t *testing.T) {
+	events := testutil.MemEvents(t)
+	keys := testutil.Keys(t)
+	ctx := t.Context()
+
+	for _, handle := range []string{"Whiskers_Prime", "whiskers_two", "not_whiskers", "banned_whisker", "mittens"} {
+		id := testutil.Player(t, events, keys, "dev", handle)
+		if err := events.ClaimHandle(ctx, id, handle, 100); err != nil {
+			t.Fatal(err)
+		}
+		if handle == "banned_whisker" {
+			if err := events.SetBan(ctx, nil, id, 12345, "cheating"); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	d := directory.New(events)
+	if err := d.Reload(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	got, truncated := d.Search("WHISK", 10)
+	want := []string{"Whiskers_Prime", "whiskers_two", "not_whiskers"}
+	if !slices.Equal(got, want) || truncated {
+		t.Errorf("Search = %v (truncated %v), want %v — prefix matches first, banned absent", got, truncated, want)
+	}
+
+	// The order has to be stable across calls, because a CDN caches one answer
+	// per query and Go's map iteration is randomised.
+	for range 5 {
+		if again, _ := d.Search("whisk", 10); !slices.Equal(again, got) {
+			t.Fatalf("Search gave %v then %v", got, again)
+		}
+	}
+
+	if got, truncated := d.Search("whisk", 2); len(got) != 2 || !truncated {
+		t.Errorf("Search(limit 2) = %v, truncated %v", got, truncated)
+	}
+	if got, _ := d.Search("  ", 10); got != nil {
+		t.Errorf("Search(blank) = %v, want nothing", got)
 	}
 }

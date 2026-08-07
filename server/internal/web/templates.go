@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/meow-sci/catlog/server/internal/units"
 )
 
 //go:embed templates/*.gohtml
@@ -133,8 +135,18 @@ func (s *Server) signedIn(r *http.Request) bool {
 
 // --- template functions ---------------------------------------------------------
 
+// Number formatting is [units], not a second implementation of it: the SPA
+// renders the same values from the same JSON, and the two frontends showing one
+// record differently is exactly the failure that package exists to prevent.
+// Read its comment before changing what a number looks like here.
 var templateFuncs = template.FuncMap{
-	"value":      formatValue,
+	// value is the bare number — thousands grouped, three significant figures —
+	// for a column whose header already carries the unit.
+	"value": units.Number,
+	// unit is the number with its unit applied: metres scaled to km/Mm, a
+	// career time in milliseconds rendered as a duration, a count labelled. For
+	// a cell that has to stand on its own.
+	"unit":       units.Format,
 	"datetime":   formatDateTime,
 	"date":       formatDate,
 	"ctx":        contextPairs,
@@ -144,42 +156,6 @@ var templateFuncs = template.FuncMap{
 	"playerPath": func(handle string) string { return "/p/" + handle },
 	"dict":       dict,
 	"add":        func(a, b int) int { return a + b },
-}
-
-// formatValue renders a leaderboard value: thousands grouped, one decimal below
-// 100, never scientific notation and never a bare NaN on a public page.
-func formatValue(v float64) string {
-	if math.IsNaN(v) || math.IsInf(v, 0) {
-		return "—"
-	}
-	var s string
-	if math.Abs(v) >= 100 {
-		s = strconv.FormatFloat(math.Round(v), 'f', 0, 64)
-	} else {
-		s = strings.TrimSuffix(strconv.FormatFloat(v, 'f', 1, 64), ".0")
-	}
-	return group(s)
-}
-
-// group inserts thin thousands separators into the integer part of s.
-func group(s string) string {
-	sign := ""
-	if strings.HasPrefix(s, "-") {
-		sign, s = "-", s[1:]
-	}
-	intPart, frac, hasFrac := strings.Cut(s, ".")
-	var b strings.Builder
-	for i, r := range intPart {
-		if i > 0 && (len(intPart)-i)%3 == 0 {
-			b.WriteString(" ") // narrow no-break space
-		}
-		b.WriteRune(r)
-	}
-	out := sign + b.String()
-	if hasFrac {
-		out += "." + frac
-	}
-	return out
 }
 
 // formatDateTime renders a unix-ms timestamp in UTC. Everything catlog stores is
@@ -228,13 +204,16 @@ func contextPairs(raw json.RawMessage) []pair {
 	}
 	out := make([]pair, 0, len(m))
 	for k, v := range m {
-		out = append(out, pair{Key: strings.ReplaceAll(k, "_", " "), Value: scalar(v)})
+		// The key is what says which unit the number is in — `energy_j` is
+		// joules, `speed_ms` is metres per second — so the label is stripped of
+		// its underscores for display and handed to units.ForKey for meaning.
+		out = append(out, pair{Key: strings.ReplaceAll(k, "_", " "), Value: scalar(k, v)})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
 	return out
 }
 
-func scalar(v any) string {
+func scalar(key string, v any) string {
 	switch t := v.(type) {
 	case nil:
 		return "—"
@@ -243,7 +222,7 @@ func scalar(v any) string {
 	case bool:
 		return strconv.FormatBool(t)
 	case float64:
-		return formatValue(t)
+		return units.Format(t, units.ForKey(key))
 	default:
 		b, err := json.Marshal(t)
 		if err != nil {

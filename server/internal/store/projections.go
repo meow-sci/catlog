@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/meow-sci/catlog/server/internal/ids"
 )
 
 // AllProjections is the single checkpoint key every fold shares (§5.6).
@@ -280,6 +282,62 @@ func (p *Projections) RewoundCareers(ctx context.Context, playerID int64, career
 		out[career] = true
 	}
 	return out, rows.Err()
+}
+
+// FlaggedFlights reports which of the given flights carry at least one flag bit
+// (§5.4 `flight_state.flags`).
+//
+// # Why the read API needs this
+//
+// A flagged flight scores nothing, and the privacy page promises players it
+// "never appears publicly". The boards get that for free — the folds skip the
+// flight, so no row is ever written — but the raw-event view reads events.db
+// directly, where nothing records that a flight was flagged. `flight_state` is
+// in projections.db and `event` is in events.db, and §5.4 says the two files
+// cannot be joined, so the public event page asks this question about the
+// flights on the page it is assembling and drops what it must.
+//
+// It is a primary-key lookup per distinct flight, chunked exactly like
+// [Events.RecvTimes] and for the same reason — one indexed probe per flight on
+// one page, never a scan, and no new projector state to keep honest.
+func (p *Projections) FlaggedFlights(ctx context.Context, flights []ids.ID) (map[ids.ID]bool, error) {
+	if len(flights) == 0 {
+		return nil, nil
+	}
+	out := make(map[ids.ID]bool, len(flights))
+	const chunk = 200
+	for start := 0; start < len(flights); start += chunk {
+		part := flights[start:min(start+chunk, len(flights))]
+		args := make([]any, len(part))
+		for i, f := range part {
+			args[i] = ids.Bytes(f)
+		}
+		rows, err := p.Reader().QueryContext(ctx,
+			`SELECT flight_id FROM flight_state WHERE flags <> 0 AND flight_id IN (`+
+				placeholders(len(part))+`)`, args...)
+		if err != nil {
+			return nil, fmt.Errorf("store: read flight flags: %w", err)
+		}
+		for rows.Next() {
+			var raw []byte
+			if err := rows.Scan(&raw); err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("store: scan flight flags: %w", err)
+			}
+			id, err := ids.FromBytes(raw)
+			if err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("store: flight flags: %w", err)
+			}
+			out[id] = true
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return nil, fmt.Errorf("store: read flight flags: %w", err)
+		}
+	}
+	return out, nil
 }
 
 // --- feed --------------------------------------------------------------------

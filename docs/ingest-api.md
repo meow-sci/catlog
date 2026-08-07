@@ -216,7 +216,40 @@ All responses `Cache-Control: public, s-maxage=30, stale-while-revalidate=300` e
 
 - `GET /v1/leaderboards` → `{"min_players": n, "boards": [{"stat": "biggest_lithobrake_survived", "title": s, "unit": "m/s", "ascending": false, "count": n}]}`
 - `GET /v1/leaderboards/{stat}?limit=50&offset=0` (limit ≤ 200) → `{"stat": s, "ascending": b, "rows": [{"rank": 1, "handle": s, "value": f, "context": {…}, "updated": unix_ms, "rewound"?: true}]}`
-- `GET /v1/players/{handle}` → `{"handle": s, "since": unix_ms, "stats": [{"stat": s, "value": f, "rank": n, "context": {…}, "rewound"?: true}]}` (404 if unknown/banned)
+- `GET /v1/players/{handle}` → `{"handle": s, "since": unix_ms, "stats": [{"stat": s, "title": s, "unit": s, "value": f, "ascending": b, "rank": n, "players": n, "context": {…}, "updated": unix_ms, "rewound"?: true}]}` (404 if unknown/banned)
+- `GET /v1/players?q=whis&limit=20` → `{"query": s, "limit": n, "handles": [s], "truncated"?: true}` — handle search
+- `GET /v1/players/{handle}/events?limit=50&before=<cursor>&type=<event type>` → `{"handle": s, "limit": n, "type"?: s, "next"?: <cursor>, "events": [{"id": ulid, "type": s, "ver": n, "session"?: ulid, "flight"?: ulid, "career"?: s, "sim_t"?: f, "recv": unix_ms, "payload": {…}}]}` (404 if unknown/banned)
+- `GET /v1/compare?handles=a,b,c` → `{"handles": [{"handle": s, "found": b, "since"?: unix_ms}], "boards": [{"stat": s, "title": s, "unit": s, "ascending": b, "players": n, "rows": [{"handle": s, "value": f, "rank": n, "context": {…}, "updated": unix_ms, "rewound"?: true}]}]}`
+
+`ascending` and `players` on a profile row are what a profile page needs to render "#3 of 41" without also fetching the board index; `players` is the board's row count, banned players included, exactly like `count` above — the rank is filtered, so a rank is never *worse* than that denominator implies.
+
+### Handle search — `GET /v1/players?q=`
+
+Handles and nothing else: a result is a list of links, and everything behind one is a request away. Prefix matches come first, then substring matches, each group ordered by the lowercase handle, so the same URL is always the same answer and a CDN can hold it. Banned players are absent because the in-memory directory it scans is the same one every board resolves handles through. `q` shorter than **2** characters or longer than **150** (§4.7's handle cap) is `400 bad_request`; `limit` defaults to 20 and clamps to 50; `truncated` says a narrower query is needed, because there is no offset.
+
+### N-handle comparison — `GET /v1/compare?handles=`
+
+Up to **8** handles, deduplicated case-insensitively, in request order — repeating `?handles=` is the same as one comma-separated list, and extras past the cap are dropped rather than rejected, so the echoed `handles` array is the authoritative column order. Each handle is assembled by the same code behind `GET /v1/players/{handle}` and then pivoted board-first, so the two endpoints cannot disagree. `rank` is the position on the whole board, not among the compared handles.
+
+An unknown, retired or banned handle comes back as `{"handle": s, "found": false}` — one answer for all three, exactly as the profile endpoint 404s all three, and no more than asking for that one profile already reveals. A board is included when **at least one** of the compared handles is on it, and carries only the rows that exist: an absent player is absent, not zero. The `min_players` listing rule does not apply here, for the same reason it does not apply to a profile — that threshold governs the public index.
+
+### Raw event browsing — `GET /v1/players/{handle}/events`
+
+What catlog actually recorded, newest first: the §4.1 envelope and the §4.2 payload, including payload keys this build has never heard of. Paging is by cursor (`next` → `?before=`), not offset, because the log grows at the head; treat the cursor as opaque, and page until `next` is **absent** rather than until a page comes back short — a `?type=`-filtered page that hits the server's scan bound looks identical to the last page. `limit` defaults to 50 and clamps to 200.
+
+**What is redacted, and why.** Three §4.2 fields are derived from the mod's install id, which is one value per *machine* and therefore per person rather than per account. catlog is built so one person may hold two accounts with no way to tell from outside — and both accounts ship from the same install, so publishing any of these raw would link them:
+
+| field | where | published as |
+|---|---|---|
+| `install` | `session.started.payload` | **dropped** — there is nothing to group by, so nothing to keep |
+| `kid` | `kitten.*`, `roster.snapshot.kittens[]` | **relabelled per player** |
+| `career` | the §4.1 envelope, and the `context` of every career-time board row | **relabelled per player** |
+
+A relabelling is a 16-character Crockford base32 token, the same shape as the value it replaces, stable for a player and unrelatable between players. It still groups a player's own rows — "these records came from one save", "these EVAs were one kitten" — which is why the two are relabelled rather than dropped. The rules are keyed **by field name at any depth**, so a nested or newly-added occurrence is covered without being enumerated; a new §4.2 field with the same property must be added to that list. The envelope's `wall_t` is not published either: it is the untrusted client clock, and its offset from `recv` is a per-machine constant.
+
+Everything else is published. Flight and session ids are per-occurrence ULIDs with no install in them, and body names, vehicle names, kitten names and every number are gameplay — a raw view that hid them would not be worth building. Two residuals are accepted rather than hidden: a person who names their kittens the same way under both accounts is correlatable by those names (the same exposure as picking a recognisable handle), and receive times correlate anything shipped at the same moment (the activity feed has published per-handle timestamps since §5.6).
+
+`user_key` appears in no read-API response and never has.
 
 `ascending` is `true` on the career-time boards (`fastest_to_orbit`, `fastest_to_<body>`), where the value is seconds since the career began and the **smallest** value ranks first; it is `false` on every record and counter board. The tie rule does not change with it: an equal value keeps the earlier claimant's rank. `rewound` is emitted only when true, and only on a career-time row whose career has had an earlier save loaded — it qualifies the number and has no other effect (see [events.md](events.md)).
 

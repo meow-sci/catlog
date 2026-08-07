@@ -53,7 +53,10 @@ func do(t *testing.T, mux *http.ServeMux, method, path, origin string) *httptest
 var readPaths = []string{
 	"/v1/leaderboards",
 	"/v1/leaderboards/kitten_tumbles",
+	"/v1/players?q=whis",
 	"/v1/players/whiskers",
+	"/v1/players/whiskers/events",
+	"/v1/compare?handles=whiskers,mittens",
 	"/v1/feed",
 }
 

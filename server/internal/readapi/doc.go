@@ -1,9 +1,20 @@
 // Package readapi serves the public, CDN-cacheable /v1/* JSON endpoints and
 // their cache headers (§4.8).
 //
-//	GET /v1/leaderboards            board metadata + row counts
-//	GET /v1/leaderboards/{stat}     one board, ?limit=50&offset=0, limit ≤ 200
-//	GET /v1/players/{handle}        one profile, 404 for unknown or banned
+//	GET /v1/leaderboards               board metadata + row counts
+//	GET /v1/leaderboards/{stat}        one board, ?limit=50&offset=0, limit ≤ 200
+//	GET /v1/players?q=                 handle search, handles only
+//	GET /v1/players/{handle}           one profile, 404 for unknown or banned
+//	GET /v1/players/{handle}/events    that player's raw event log, redacted
+//	GET /v1/compare?handles=a,b,c      the same board rows for up to 8 handles
+//	GET /v1/feed                       the activity feed snapshot (feed.go)
+//
+// # What may never be published
+//
+// `user_key`, and anything derived from the mod's install id — which is one
+// value per machine and therefore per *person*, not per account. privacy.go is
+// the whole of that rule and the reasoning behind it; read it before adding a
+// field to any response here.
 //
 // # Everything here is cacheable
 //

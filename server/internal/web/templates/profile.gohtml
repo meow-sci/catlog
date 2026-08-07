@@ -18,8 +18,12 @@
     {{- range .Data.Stats}}
     <tr class="profile-row" data-stat="{{.Stat}}" data-rank="{{.Rank}}">
       <td><a href="{{statPath .Stat}}">{{.Title}}</a></td>
-      <td class="value">{{value .Value}} {{.Unit}}</td>
-      <td class="rank">#{{.Rank}}</td>
+      {{- /* One cell per board, so each stands on its own: `unit` scales and
+             labels the number (a career time in ms becomes a duration, metres
+             become km). The board *page* keeps a bare number under a unit
+             header, because there a whole column shares one unit. */}}
+      <td class="value">{{unit .Value .Unit}}</td>
+      <td class="rank" data-players="{{.Players}}">#{{.Rank}} of {{.Players}}</td>
       <td class="context">{{range ctx .Context}}<span class="ctx-pair"><span class="ctx-key">{{.Key}}</span> {{.Value}}</span> {{end}}</td>
       <td class="when">{{datetime .Updated}}</td>
     </tr>
