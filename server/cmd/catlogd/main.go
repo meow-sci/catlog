@@ -190,7 +190,13 @@ func run(ctx context.Context, cfg config.Config, log *slog.Logger, ready func(pu
 		Projections: live,
 		Events:      events,
 		Directory:   dir,
-		Log:         log,
+		// The JSON half of the activity feed, for the `spa/` frontend: the
+		// datastar stream in package web is HTML and stays where it is.
+		Feed: broadcaster,
+		// Cross-origin reads, and nothing else — see readapi/cors.go. The
+		// dashboard API, the auth flows and the admin mux never see this list.
+		AllowedOrigins: cfg.CORS.AllowedOrigins,
+		Log:            log,
 	})
 	if err != nil {
 		return fmt.Errorf("build read api: %w", err)

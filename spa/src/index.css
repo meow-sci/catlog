@@ -1,0 +1,48 @@
+@import 'tailwindcss';
+
+/*
+ * The palette. Deliberately not a copy of `site/`'s Pico-based theme: the two
+ * frontends are meant to be told apart at a glance, so this one is its own
+ * darker, denser thing.
+ */
+@theme {
+  --color-ink-950: oklch(17% 0.014 265);
+  --color-ink-900: oklch(21% 0.016 265);
+  --color-ink-850: oklch(25% 0.017 265);
+  --color-ink-800: oklch(30% 0.018 265);
+  --color-ink-700: oklch(40% 0.02 265);
+  --color-ink-400: oklch(66% 0.02 265);
+  --color-ink-200: oklch(85% 0.012 265);
+  --color-ink-50: oklch(97% 0.006 265);
+
+  --color-flare-400: oklch(78% 0.16 66);
+  --color-flare-500: oklch(70% 0.17 54);
+  --color-flare-600: oklch(62% 0.17 44);
+
+  --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace;
+}
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    @apply bg-ink-950 text-ink-200 antialiased;
+    font-feature-settings: 'tnum' 1;
+  }
+
+  /*
+   * One focus ring for everything, keyboard-only. React Aria drives the
+   * `data-focus-visible` attribute on its own components; `:focus-visible`
+   * covers the plain anchors.
+   */
+  :focus-visible,
+  [data-focus-visible] {
+    @apply outline-flare-500 rounded-sm outline-2 outline-offset-2;
+  }
+}

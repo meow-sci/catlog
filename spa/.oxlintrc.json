@@ -1,0 +1,36 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["eslint", "typescript", "unicorn", "oxc", "react", "jsx-a11y"],
+  // JS plugin alias required because "react-hooks" is a reserved native oxlint plugin name.
+  "jsPlugins": [{ "name": "react-hooks-js", "specifier": "eslint-plugin-react-hooks" }],
+  "env": {
+    "browser": true,
+    "es2026": true
+  },
+  "ignorePatterns": ["dist", "node_modules"],
+  "rules": {
+    "react/exhaustive-deps": "error",
+    "react/only-export-components": ["error", { "allowConstantExport": true }],
+
+    // React Compiler rules (eslint-plugin-react-hooks recommended-latest).
+    // rules-of-hooks and exhaustive-deps are omitted here — covered by the
+    // native react plugin above. These are the ones that decide whether the
+    // compiler is allowed to memoize a component at all, so they are errors:
+    // a bailout is silent, and a silent bailout is the bug.
+    "react-hooks-js/static-components": "error",
+    "react-hooks-js/use-memo": "error",
+    "react-hooks-js/void-use-memo": "error",
+    "react-hooks-js/preserve-manual-memoization": "error",
+    "react-hooks-js/incompatible-library": "warn",
+    "react-hooks-js/immutability": "error",
+    "react-hooks-js/globals": "error",
+    "react-hooks-js/refs": "error",
+    "react-hooks-js/set-state-in-effect": "error",
+    "react-hooks-js/error-boundaries": "error",
+    "react-hooks-js/purity": "error",
+    "react-hooks-js/set-state-in-render": "error",
+    "react-hooks-js/unsupported-syntax": "warn",
+    "react-hooks-js/config": "error",
+    "react-hooks-js/gating": "error"
+  }
+}

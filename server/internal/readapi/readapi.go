@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strconv"
 
 	"github.com/meow-sci/catlog/server/internal/authz"
@@ -49,6 +50,15 @@ type Deps struct {
 	Events *store.Events
 	// Directory resolves player_id ↔ handle and hides banned players. Required.
 	Directory *directory.Directory
+	// Feed is the §5.6 broadcaster behind `GET /v1/feed/stream`. Optional: a
+	// Server built without one serves the feed snapshot but not the stream.
+	Feed Feed
+	// AllowedOrigins is [config.CORS.AllowedOrigins] — the browser origins that
+	// may read these endpoints cross-origin. Empty means same-origin only.
+	//
+	// It reaches nothing but the routes [Server.Register] mounts. See cors.go
+	// for why that boundary is the whole of the security argument.
+	AllowedOrigins []string
 	// Log receives one line per failed request.
 	Log *slog.Logger
 }
@@ -56,6 +66,7 @@ type Deps struct {
 // Server serves the §4.8 endpoints.
 type Server struct {
 	deps Deps
+	cors cors
 }
 
 // New builds the read API.
@@ -71,14 +82,31 @@ func New(deps Deps) (*Server, error) {
 	if deps.Log == nil {
 		deps.Log = slog.Default()
 	}
-	return &Server{deps: deps}, nil
+	return &Server{deps: deps, cors: cors{allowed: slices.Clone(deps.AllowedOrigins)}}, nil
 }
 
 // Register mounts the §4.8 routes on a mux.
+//
+// Every route registered here — and only the routes registered here — carries
+// the cross-origin read headers (cors.go). `/v1/ingest`, `/api/*`, `/auth/*` and
+// the admin mux are mounted elsewhere and stay same-origin.
 func (s *Server) Register(mux *http.ServeMux) {
-	mux.HandleFunc("GET /v1/leaderboards", s.handleBoards)
-	mux.HandleFunc("GET /v1/leaderboards/{stat}", s.handleBoard)
-	mux.HandleFunc("GET /v1/players/{handle}", s.handlePlayer)
+	s.public(mux, "/v1/leaderboards", s.handleBoards)
+	s.public(mux, "/v1/leaderboards/{stat}", s.handleBoard)
+	s.public(mux, "/v1/players/{handle}", s.handlePlayer)
+	s.public(mux, "/v1/feed", s.handleFeed)
+	if s.deps.Feed != nil {
+		s.public(mux, "/v1/feed/stream", s.handleFeedStream)
+	}
+}
+
+// public mounts one cross-origin-readable route: the GET, plus the OPTIONS that
+// answers its preflight.
+func (s *Server) public(mux *http.ServeMux, pattern string, h http.HandlerFunc) {
+	// Go's pattern router treats "GET" as also matching HEAD, so a HEAD request
+	// gets the same headers without a second registration.
+	mux.HandleFunc("GET "+pattern, s.cors.wrap(h))
+	mux.HandleFunc("OPTIONS "+pattern, s.cors.preflight)
 }
 
 // --- GET /v1/leaderboards ----------------------------------------------------

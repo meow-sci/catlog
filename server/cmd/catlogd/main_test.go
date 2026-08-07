@@ -131,6 +131,127 @@ func TestStartupCreatesEverythingAndShutsDownCleanly(t *testing.T) {
 	}
 }
 
+// TestCORSCoversTheReadAPIAndNothingElse is the test that has to exist.
+//
+// The `spa/` frontend is served from a different origin, so the §4.8 read
+// endpoints answer cross-origin requests. Every other route on the public
+// listener is either cookie-authenticated (`/api/*`, `/auth/*`, `/dashboard`) or
+// signature-authenticated with a same-origin assumption (`/v1/ingest`), and an
+// `Access-Control-Allow-Origin` on any of them would let a page on the
+// allow-listed origin read a signed-in user's account out of the browser.
+//
+// Only the whole wiring can prove this: the boundary is *which mux entries the
+// middleware is attached to*, and that is decided in run(), not in any one
+// package. Hence a test here rather than in internal/readapi.
+func TestCORSCoversTheReadAPIAndNothingElse(t *testing.T) {
+	const origin = "https://spa.example.invalid"
+
+	cfg := testutil.Config(t)
+	cfg.CORS.AllowedOrigins = []string{origin}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	addrCh := make(chan net.Addr, 1)
+	errCh := make(chan error, 1)
+	go func() { errCh <- run(ctx, cfg, testutil.DiscardLogger(), func(p, _ net.Addr) { addrCh <- p }) }()
+
+	var addr net.Addr
+	select {
+	case addr = <-addrCh:
+	case err := <-errCh:
+		t.Fatalf("catlogd exited during startup: %v", err)
+	case <-time.After(60 * time.Second):
+		t.Fatal("catlogd never became ready")
+	}
+
+	// Redirects are not followed: /auth/{idp}/start answers 302, and following
+	// it would report the headers of the wrong response.
+	client := &http.Client{
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+	// The body is closed, never drained: `/v1/feed/sse` is an endless stream and
+	// reading it to EOF would hang the test. Only the response headers matter
+	// here anyway.
+	acao := func(method, path string) string {
+		t.Helper()
+		reqCtx, done := context.WithTimeout(t.Context(), 30*time.Second)
+		defer done()
+		req, err := http.NewRequestWithContext(reqCtx, method, "http://"+addr.String()+path, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Origin", origin)
+		res, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("%s %s: %v", method, path, err)
+		}
+		res.Body.Close()
+		if got := res.Header.Get("Access-Control-Allow-Credentials"); got != "" {
+			t.Errorf("%s %s sent Access-Control-Allow-Credentials = %q; nothing here may take credentials", method, path, got)
+		}
+		return res.Header.Get("Access-Control-Allow-Origin")
+	}
+
+	// The public read API (§4.8) — the only cross-origin surface there is.
+	for _, path := range []string{
+		"/v1/leaderboards",
+		"/v1/leaderboards/kitten_tumbles",
+		"/v1/players/nobody",
+		"/v1/feed",
+	} {
+		if got := acao(http.MethodGet, path); got != origin {
+			t.Errorf("GET %s Access-Control-Allow-Origin = %q, want %q", path, got, origin)
+		}
+	}
+	// The preflight for the same routes.
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodOptions, "http://"+addr.String()+"/v1/leaderboards", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Origin", origin)
+	req.Header.Set("Access-Control-Request-Method", "GET")
+	res, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("OPTIONS /v1/leaderboards: %v", err)
+	}
+	res.Body.Close()
+	if got := res.Header.Get("Access-Control-Allow-Origin"); got != origin {
+		t.Errorf("preflight Access-Control-Allow-Origin = %q, want %q", got, origin)
+	}
+
+	// Everything else. A regression here is a real vulnerability, not a config
+	// nit, so each case names what it would leak.
+	for _, tc := range []struct{ method, path, leaks string }{
+		{http.MethodGet, "/api/me", "the signed-in account and its handles"},
+		{http.MethodGet, "/api/handles", "the signed-in account's handles"},
+		{http.MethodPost, "/api/handles", "handle claims made as the signed-in user"},
+		{http.MethodPost, "/api/logout", "session termination as the signed-in user"},
+		{http.MethodPost, "/api/me/delete", "account deletion as the signed-in user"},
+		{http.MethodGet, "/auth/discord/start", "the OAuth state cookie"},
+		{http.MethodGet, "/auth/discord/callback", "an authorization code exchange"},
+		{http.MethodGet, "/dashboard", "the dashboard page for the signed-in user"},
+		{http.MethodPost, "/v1/ingest", "the §4.5.3 ingest surface"},
+		{http.MethodGet, "/healthz", "nothing, but it is not a §4.8 read route"},
+		{http.MethodGet, "/", "the server-rendered site"},
+	} {
+		if got := acao(tc.method, tc.path); got != "" {
+			t.Errorf("%s %s carries Access-Control-Allow-Origin = %q — cross-origin JS could read %s",
+				tc.method, tc.path, got, tc.leaks)
+		}
+	}
+	// The SSE feed the server-rendered site depends on is untouched: still
+	// same-origin, still where it was.
+	if got := acao(http.MethodGet, "/v1/feed/sse"); got != "" {
+		t.Errorf("/v1/feed/sse carries Access-Control-Allow-Origin = %q; the datastar route must stay same-origin", got)
+	}
+
+	cancel()
+	if err := <-errCh; err != nil {
+		t.Errorf("shutdown returned an error: %v", err)
+	}
+}
+
 // TestRunRejectsUnusableConfig checks that a bad listen address fails loudly
 // rather than leaving a half-open pair of databases behind.
 func TestRunRejectsUnusableConfig(t *testing.T) {

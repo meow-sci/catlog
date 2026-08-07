@@ -74,3 +74,27 @@ client_secret = "dev"
 [limits]
 ratelimit_per_jkt_per_s = 0.5             # 1 batch / 2 s (§4.3)
 ratelimit_burst         = 5
+
+# --- cross-origin reads (spa/) ----------------------------------------------
+#
+# The `spa/` frontend is a static React bundle hosted somewhere else entirely
+# (GitHub Pages), so it reaches catlog cross-origin. These origins may read the
+# §4.8 public endpoints — /v1/leaderboards, /v1/players/{handle}, /v1/feed — and
+# nothing else. /api/*, /auth/* and the admin mux are cookie-authenticated and
+# stay same-origin no matter what is listed here (server/internal/readapi/cors.go).
+#
+# Exact `scheme://host[:port]` strings, compared byte for byte. No wildcards, no
+# "*", no trailing slash — the server refuses to start on any of those, because
+# a malformed entry silently never matches.
+#
+# `make spa-dev` proxies /v1 through Vite and is therefore same-origin: it needs
+# none of this. The entries below are for `pnpm -C spa preview` and for pointing
+# a dev bundle at a local server directly. Production sets the real origin in the
+# environment (CATLOG_CORS_ALLOWED_ORIGINS=https://…), never in a file (§11).
+[cors]
+allowed_origins = [
+  "http://127.0.0.1:5173",   # vite dev
+  "http://localhost:5173",
+  "http://127.0.0.1:4173",   # vite preview
+  "http://localhost:4173",
+]

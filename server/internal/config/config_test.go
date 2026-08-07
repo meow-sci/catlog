@@ -220,6 +220,17 @@ func TestValidateRejectsBadConfigs(t *testing.T) {
 		"negative age gate": func(c *Config) { c.Auth.MinAccountAgeDays = -1 },
 		"zero rate":         func(c *Config) { c.Limits.RateLimitPerJKTPerS = 0 },
 		"zero burst":        func(c *Config) { c.Limits.RateLimitBurst = 0 },
+
+		// A CORS origin is compared to the browser's Origin header by exact
+		// string equality, so every one of these fails *silently* at request
+		// time — the header just never matches. They have to fail at startup.
+		"cors wildcard":        func(c *Config) { c.CORS.AllowedOrigins = []string{"*"} },
+		"cors empty entry":     func(c *Config) { c.CORS.AllowedOrigins = []string{""} },
+		"cors trailing slash":  func(c *Config) { c.CORS.AllowedOrigins = []string{"https://a.example/"} },
+		"cors with a path":     func(c *Config) { c.CORS.AllowedOrigins = []string{"https://a.example/app"} },
+		"cors no scheme":       func(c *Config) { c.CORS.AllowedOrigins = []string{"a.example"} },
+		"cors odd scheme":      func(c *Config) { c.CORS.AllowedOrigins = []string{"ftp://a.example"} },
+		"cors with a fragment": func(c *Config) { c.CORS.AllowedOrigins = []string{"https://a.example#x"} },
 	}
 	for name, mutate := range tests {
 		t.Run(name, func(t *testing.T) {

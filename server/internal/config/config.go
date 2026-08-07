@@ -45,6 +45,7 @@ type Config struct {
 	Auth   Auth   `toml:"auth"`
 	IdP    IdP    `toml:"idp"`
 	Limits Limits `toml:"limits"`
+	CORS   CORS   `toml:"cors"`
 }
 
 // Server is the [server] section.
@@ -139,6 +140,29 @@ type Limits struct {
 	RateLimitBurst      int     `toml:"ratelimit_burst"`
 }
 
+// CORS is the [cors] section: which foreign origins may read the public §4.8
+// endpoints from a browser.
+//
+// Not in §5.3. It exists because `spa/` is a second, independent frontend that
+// is hosted somewhere else entirely (GitHub Pages) and reaches catlog over
+// XHR — which the same-origin policy blocks unless the server says otherwise.
+//
+// The scope is deliberately narrow. Only the routes [readapi.Server.Register]
+// mounts ever carry these headers; `/api/*`, the `/auth/*` flows and the admin
+// mux are cookie-authenticated and must stay same-origin, and no response here
+// is ever sent with `Access-Control-Allow-Credentials`.
+type CORS struct {
+	// AllowedOrigins is an exact-match allow-list of `scheme://host[:port]`
+	// values — no wildcards, no suffix matching, and never `*`: the browser
+	// compares the echoed origin byte for byte, so an entry that is not exactly
+	// what the browser sends silently does nothing.
+	//
+	// Production sets it in the environment
+	// (CATLOG_CORS_ALLOWED_ORIGINS=https://owner.github.io) rather than here,
+	// so no deployment URL is baked into the repository.
+	AllowedOrigins []string `toml:"allowed_origins"`
+}
+
 // Default returns the §5.3 defaults — the dev values, so catlogd starts with no
 // config file. IdP credentials are deliberately empty: an unconfigured IdP is
 // disabled, never silently pointed somewhere.
@@ -170,6 +194,19 @@ func Default() Config {
 		Limits: Limits{
 			RateLimitPerJKTPerS: 0.5, // 1 batch / 2 s (§4.3)
 			RateLimitBurst:      5,
+		},
+		CORS: CORS{
+			// Vite's dev server (5173) and its `preview` server (4173) on both
+			// spellings of loopback — the four origins `pnpm -C spa dev` and
+			// `pnpm -C spa preview` can actually appear as. Nothing public: a
+			// default that allowed a real deployment would be a default that
+			// shipped one.
+			AllowedOrigins: []string{
+				"http://127.0.0.1:5173",
+				"http://localhost:5173",
+				"http://127.0.0.1:4173",
+				"http://localhost:4173",
+			},
 		},
 	}
 }
@@ -252,8 +289,43 @@ func (c Config) Validate() error {
 	if c.Limits.RateLimitBurst <= 0 {
 		errs = append(errs, errors.New("limits.ratelimit_burst must be positive"))
 	}
+	// A CORS origin is compared to the browser's `Origin` header by exact string
+	// equality, so a typo cannot fail at request time in any visible way — the
+	// header simply never matches and the SPA sees an opaque network error with
+	// nothing in the server log. Reject the malformed shapes at startup instead.
+	for _, origin := range c.CORS.AllowedOrigins {
+		errs = append(errs, validateOrigin(origin))
+	}
 	if err := errors.Join(errs...); err != nil {
 		return fmt.Errorf("config: %w", err)
+	}
+	return nil
+}
+
+// validateOrigin rejects anything a browser would never send as an `Origin`.
+// `*` is rejected too: catlog's public data would survive a wildcard, but the
+// allow-list is also the place a future maintainer would reach for to "just make
+// it work", and a wildcard there is one `Access-Control-Allow-Credentials` away
+// from being a real hole.
+func validateOrigin(origin string) error {
+	switch {
+	case origin == "":
+		return errors.New("cors.allowed_origins contains an empty entry")
+	case origin == "*":
+		return errors.New(`cors.allowed_origins may not contain "*"; list the origins explicitly`)
+	}
+	u, err := url.Parse(origin)
+	switch {
+	case err != nil:
+		return fmt.Errorf("cors.allowed_origins %q: %w", origin, err)
+	case u.Scheme != "http" && u.Scheme != "https":
+		return fmt.Errorf("cors.allowed_origins %q must be http:// or https://", origin)
+	case u.Host == "":
+		return fmt.Errorf("cors.allowed_origins %q has no host", origin)
+	case u.Path != "" || u.RawQuery != "" || u.Fragment != "" || u.User != nil:
+		// An `Origin` header is scheme + host + port and nothing else, so
+		// "https://example.com/" never matches "https://example.com".
+		return fmt.Errorf("cors.allowed_origins %q must be scheme://host[:port] with no path", origin)
 	}
 	return nil
 }

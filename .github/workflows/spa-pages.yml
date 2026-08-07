@@ -1,0 +1,84 @@
+# Build `spa/` and publish it to GitHub Pages.
+#
+# This file is an ASSET, in the same sense as everything under infra/ (D1: we
+# produce deploy artefacts, we never provision). Nothing here runs until the
+# owner enables Pages for the repository (Settings → Pages → Source: GitHub
+# Actions) and sets the two inputs below. Until then it is inert.
+#
+# Inputs the owner controls, both optional:
+#
+#   vars.CATLOG_API_BASE   the origin of the public read API this build points
+#                          at, e.g. https://catlog.example. Left unset, the
+#                          bundle is built against the §5.3 dev address
+#                          (http://127.0.0.1:8080) and will only work for
+#                          someone running catlogd locally.
+#
+# And one thing the *server* needs, which this workflow cannot do for you:
+# catlogd must list the Pages origin in `[cors] allowed_origins`
+# (CATLOG_CORS_ALLOWED_ORIGINS=https://<owner>.github.io), or the browser will
+# refuse every response. See server/internal/readapi/cors.go.
+name: spa
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'spa/**'
+      - '.github/workflows/spa-pages.yml'
+  # So the owner can publish a build without pushing.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One deployment at a time, and never cancel one in flight: a half-uploaded
+# Pages artifact is a broken site.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # pnpm exclusively — never npm/npx/yarn. The version comes from
+      # spa/package.json's packageManager field.
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: spa/pnpm-lock.yaml
+
+      - run: pnpm -C spa install --frozen-lockfile
+
+      # The same three gates the Makefile runs. A bundle that does not lint or
+      # does not pass its tests must not reach Pages.
+      - run: pnpm -C spa lint
+      - run: pnpm -C spa test
+
+      - run: pnpm -C spa build
+        env:
+          # Project pages are served from the repo subpath, and the repo may be
+          # renamed or forked — so it is read, not hardcoded.
+          SPA_BASE: /${{ github.event.repository.name }}/
+          VITE_CATLOG_API_BASE: ${{ vars.CATLOG_API_BASE }}
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: spa/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
