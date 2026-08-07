@@ -7,10 +7,10 @@
 // a live server is safe.
 //
 // WP1 implemented `keygen`, WP2 added `issue` and `testvectors`, WP4 added
-// `rebuild`, `seed` and `stats`, and WP3 added `ban`, `unban`, `purge`,
-// `denylist` and `backup`; `keygen` and `testvectors` touch neither database
-// nor network, and everything else goes through the loopback admin API. Only
-// `archive` is still a stub, and it lands in WP10.
+// `rebuild`, `seed` and `stats`, WP3 added `ban`, `unban`, `purge`, `denylist`
+// and `backup`, and WP10 added `archive` and `archive-restore`. `keygen` and
+// `testvectors` touch neither database nor network; everything else goes through
+// the loopback admin API.
 package main
 
 import (
@@ -45,7 +45,8 @@ var verbs = []verb{
 	{name: "rebuild", wp: "WP4", help: "rebuild projections from seq 0 and swap", run: runRebuild},
 	{name: "seed", wp: "WP4", help: "insert the deterministic demo dataset", run: runSeed},
 	{name: "stats", wp: "WP4", help: "print server counters", run: runStats},
-	{name: "archive", wp: "WP10", help: "run an archive pass"},
+	{name: "archive", wp: "WP10", help: "copy the event log past the cursor into the archive", run: runArchive},
+	{name: "archive-restore", wp: "WP10", help: "replay an archive into a fresh events.db", run: runArchiveRestore},
 }
 
 func main() {
@@ -91,7 +92,7 @@ func usage() {
 		if v.run == nil {
 			status = " (" + v.wp + ", not yet implemented)"
 		}
-		fmt.Fprintf(os.Stderr, "  %-12s %s%s\n", v.name, v.help, status)
+		fmt.Fprintf(os.Stderr, "  %-16s %s%s\n", v.name, v.help, status)
 	}
 	fmt.Fprintf(os.Stderr, "\nflags:\n")
 	flag.PrintDefaults()

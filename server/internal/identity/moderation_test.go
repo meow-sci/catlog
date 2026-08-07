@@ -5,11 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"path/filepath"
 	"testing"
 
+	"github.com/meow-sci/catlog/server/internal/archive"
 	"github.com/meow-sci/catlog/server/internal/authz"
 	"github.com/meow-sci/catlog/server/internal/cjws"
 	"github.com/meow-sci/catlog/server/internal/store"
+	"github.com/meow-sci/catlog/server/internal/testutil"
 )
 
 // claim is the fixture shorthand for "this account holds this handle with a
@@ -210,8 +213,10 @@ func TestPurgeCallsTheArchiveSeam(t *testing.T) {
 	cookie, uk, _ := f.login(IdPDiscord, "100000000000000000")
 	f.claim(cookie, "whiskers")
 
-	archive := &fakeArchive{}
-	f.server.Moderator().SetArchive(archive)
+	// Named `spy` rather than `archive`: the package of that name is imported
+	// below, by the test that wires the real one.
+	spy := &fakeArchive{}
+	f.server.Moderator().SetArchive(spy)
 
 	res, err := f.server.Moderator().Purge(t.Context(), f.player("whiskers"), "gdpr")
 	if err != nil {
@@ -220,8 +225,8 @@ func TestPurgeCallsTheArchiveSeam(t *testing.T) {
 	if !res.Archived {
 		t.Error("the purge did not report deleting the archive prefix")
 	}
-	if len(archive.deleted) != 1 || archive.deleted[0] != uk.B64U() {
-		t.Errorf("archive deletions = %v, want [%s]", archive.deleted, uk.B64U())
+	if len(spy.deleted) != 1 || spy.deleted[0] != uk.B64U() {
+		t.Errorf("archive deletions = %v, want [%s]", spy.deleted, uk.B64U())
 	}
 
 	// A failing archive fails the purge: leaving a deleted account's raw event
@@ -232,6 +237,80 @@ func TestPurgeCallsTheArchiveSeam(t *testing.T) {
 	f2.server.Moderator().SetArchive(&fakeArchive{err: errors.New("r2 is down")})
 	if _, err := f2.server.Moderator().Purge(t.Context(), f2.player("whiskers"), "gdpr"); err == nil {
 		t.Error("a purge succeeded despite the archive deletion failing")
+	}
+}
+
+// TestPurgeDeletesTheRealArchivePrefix is the WP10 half of the seam: the same
+// purge, wired to the actual filesystem archive store rather than a spy, with
+// real chunks on disk and a second player standing next to them.
+//
+// The spy above proves the call happens; this proves the call does the right
+// thing — that `players/<sub>/` is the prefix an archive run actually wrote, so
+// the two halves of the layout cannot drift apart unnoticed.
+func TestPurgeDeletesTheRealArchivePrefix(t *testing.T) {
+	f := newFixture(t)
+	cookie, uk, playerID := f.login(IdPDiscord, "100000000000000000")
+	f.claim(cookie, "whiskers")
+	other, otherKey, otherID := f.login(IdPGitHub, "4242")
+	f.claim(other, "clawdia")
+
+	// Both players ship a few events, then a real archive run writes real
+	// chunks to a real filesystem store.
+	shipEvents(t, f.events, playerID, 4)
+	shipEvents(t, f.events, otherID, 3)
+
+	store, err := archive.NewFSStore(filepath.Join(t.TempDir(), "archive"))
+	if err != nil {
+		t.Fatalf("archive store: %v", err)
+	}
+	archiver, err := archive.New(archive.Options{Events: f.events, Store: store, Log: testutil.DiscardLogger()})
+	if err != nil {
+		t.Fatalf("archiver: %v", err)
+	}
+	if _, err := archiver.Run(t.Context()); err != nil {
+		t.Fatalf("archive run: %v", err)
+	}
+
+	mine := archive.PlayerPrefix(uk.B64U())
+	theirs := archive.PlayerPrefix(otherKey.B64U())
+	if keys, _ := store.List(t.Context(), mine); len(keys) != 2 { // chunk + manifest
+		t.Fatalf("the archive holds %v under %s, want a chunk and a manifest", keys, mine)
+	}
+
+	f.server.Moderator().SetArchive(archiver)
+	res, err := f.server.Moderator().Purge(t.Context(), f.player("whiskers"), "gdpr")
+	if err != nil {
+		t.Fatalf("purge: %v", err)
+	}
+	if !res.Archived {
+		t.Error("the purge did not report deleting the archive prefix")
+	}
+
+	if keys, err := store.List(t.Context(), mine); err != nil || len(keys) != 0 {
+		t.Errorf("the purged player's archive survives: %v (%v)", keys, err)
+	}
+	if keys, err := store.List(t.Context(), theirs); err != nil || len(keys) != 2 {
+		t.Errorf("the purge took the other player's archive too: %v (%v)", keys, err)
+	}
+}
+
+// shipEvents appends n events for a player, straight into the log.
+func shipEvents(t *testing.T, e *store.Events, playerID int64, n int) {
+	t.Helper()
+	session := testutil.ULID(t)
+	evs := make([]store.Event, 0, n)
+	for i := range n {
+		evs = append(evs, store.Event{
+			ID:        testutil.ULID(t),
+			SessionID: session,
+			Type:      "vehicle.staging",
+			Ver:       1,
+			WallTime:  1_700_000_000_000 + int64(i),
+			Payload:   json.RawMessage(`{"stage_index":0}`),
+		})
+	}
+	if _, _, err := e.InsertEvents(t.Context(), nil, playerID, evs); err != nil {
+		t.Fatalf("insert events: %v", err)
 	}
 }
 

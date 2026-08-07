@@ -16,9 +16,10 @@
 //	POST /admin/issue       dev/test credential issuance (§5.9)
 //
 // WP3 (ban, unban, purge, denylist, backup — see identity.go), WP4 (stats,
-// seed, rebuild — see projections.go) and WP10 (archive) add their routes
-// through their own Register… entry point rather than by editing [New];
-// nothing about the shape below has to change to accommodate them. Every route that writes
+// seed, rebuild — see projections.go) and WP10 (archive run and restore — see
+// archive.go) add their routes through their own Register… entry point rather
+// than by editing [New]; nothing about the shape below had to change to
+// accommodate any of them. Every route that writes
 // goes through [Server.WithWriteLock], which is the "admin mutex" §5.4 requires
 // so admin writes never race the ingest writer goroutine.
 package adminapi
@@ -70,6 +71,9 @@ type Server struct {
 	// identity carries the WP3 dependencies, installed by
 	// [Server.RegisterIdentity]. Same contract as projections.
 	identity IdentityDeps
+	// archive carries the WP10 dependencies, installed by
+	// [Server.RegisterArchive]. Same contract again.
+	archive ArchiveDeps
 }
 
 // New builds the admin mux with the WP2 routes: pprof, expvar and
