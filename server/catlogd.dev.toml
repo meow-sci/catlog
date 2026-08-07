@@ -38,6 +38,10 @@ license_ttl_days     = 180                # D16
 handle_quota         = 5                  # live handles per account (§4.7)
 issuance_per_day     = 3                  # license issuances per 24 h (§4.7)
 min_account_age_days = 30                 # Discord snowflake / GitHub created_at gate (§4.7)
+# The "+ configurable extras" of §4.7's reserved-handle list. These are ADDED to
+# the built-in set (admin, catlog, api, root, …), never substituted for it, and
+# are matched case-insensitively.
+reserved_handles     = []
 
 # --- IdPs: all three served by mockidp on 127.0.0.1:9090 (§5.8.1) -----------
 

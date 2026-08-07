@@ -165,6 +165,10 @@ func (s *Server) handleIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A handle claimed against a *running* server has to reach the read side
+	// before anything it ships can be seen (§5.4). See [Server.reloadDirectory].
+	s.reloadDirectory(r.Context())
+
 	// The handle and the thumbprint are public; the private key, when the
 	// server generated it, is in the response body and nowhere else — never in
 	// a log line (§5.11).

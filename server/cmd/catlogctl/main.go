@@ -6,11 +6,11 @@
 // every stateful verb goes through the admin API, and running catlogctl against
 // a live server is safe.
 //
-// WP1 implemented `keygen`, WP2 added `issue` and `testvectors`, and WP4 added
-// `rebuild`, `seed` and `stats`; `keygen` and `testvectors` touch neither
-// database nor network, and everything else goes through the loopback admin
-// API. The rest still report "not yet implemented" and land in WP3
-// (ban/unban/purge/denylist) and WP10 (archive/backup).
+// WP1 implemented `keygen`, WP2 added `issue` and `testvectors`, WP4 added
+// `rebuild`, `seed` and `stats`, and WP3 added `ban`, `unban`, `purge`,
+// `denylist` and `backup`; `keygen` and `testvectors` touch neither database
+// nor network, and everything else goes through the loopback admin API. Only
+// `archive` is still a stub, and it lands in WP10.
 package main
 
 import (
@@ -37,15 +37,15 @@ var verbs = []verb{
 	{name: "keygen", wp: "WP1", help: "create data/keys/{license-signing.pem,session.key,pepper.key} if missing", run: runKeygen},
 	{name: "issue", wp: "WP2", help: "issue a credential for a handle (dev/test path)", run: runIssue},
 	{name: "testvectors", wp: "WP2", help: "generate the cross-language conformance vectors (§4.10)", run: runTestvectors},
-	{name: "ban", wp: "WP3", help: "ban a player, revoke credentials, retire handles"},
-	{name: "unban", wp: "WP3", help: "lift a ban"},
-	{name: "purge", wp: "WP3", help: "delete all data for a player and leave a tombstone"},
-	{name: "denylist", wp: "WP3", help: "regenerate the signed deny-list"},
+	{name: "ban", wp: "WP3", help: "ban a player, revoke credentials, retire handles", run: runBan},
+	{name: "unban", wp: "WP3", help: "lift a ban", run: runUnban},
+	{name: "purge", wp: "WP3", help: "delete all data for a player and leave a tombstone", run: runPurge},
+	{name: "denylist", wp: "WP3", help: "regenerate the signed deny-list", run: runDenylist},
+	{name: "backup", wp: "WP3", help: "quiesce the writer and copy events.db to a destination", run: runBackup},
 	{name: "rebuild", wp: "WP4", help: "rebuild projections from seq 0 and swap", run: runRebuild},
 	{name: "seed", wp: "WP4", help: "insert the deterministic demo dataset", run: runSeed},
 	{name: "stats", wp: "WP4", help: "print server counters", run: runStats},
 	{name: "archive", wp: "WP10", help: "run an archive pass"},
-	{name: "backup", wp: "WP10", help: "quiesce the writer and copy events.db to a destination"},
 }
 
 func main() {

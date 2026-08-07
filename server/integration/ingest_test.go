@@ -87,6 +87,10 @@ func startServer(t *testing.T, extraEnv ...string) *server {
 	if err := s.cmd.Start(); err != nil {
 		t.Fatalf("start catlogd: %v", err)
 	}
+	// Registered before the cleanup, so a process that somehow escapes its
+	// t.Cleanup is still reaped by TestMain (see main_test.go): a catlogd that
+	// outlives its test holds an exclusive database file lock (§5.4).
+	trackChild(s.cmd, "catlogd")
 	t.Cleanup(func() { s.stop() })
 
 	deadline := time.Now().Add(startupTimeout)
@@ -114,6 +118,10 @@ func (s *server) stop() {
 		return
 	}
 	s.stopped = true
+	// Deregistered unconditionally: whichever branch below runs, this function
+	// is the one responsible for the process from here on, and leaving it in
+	// the registry would have TestMain report a leak that is not one.
+	defer untrackChild(s.cmd)
 
 	if err := s.cmd.Process.Signal(os.Interrupt); err != nil {
 		s.t.Logf("signalling catlogd: %v", err)
@@ -125,15 +133,24 @@ func (s *server) stop() {
 		if err != nil {
 			s.t.Errorf("catlogd exited with error: %v\nstdout:\n%s\nstderr:\n%s", err, s.stdout, s.stderr)
 		}
-	case <-time.After(30 * time.Second):
+	case <-time.After(gracefulStop):
+		// Kill *and reap*: an unwaited child stays a zombie, and on some
+		// platforms the file lock is not released until it is reaped (§5.4).
 		_ = s.cmd.Process.Kill()
-		s.t.Error("catlogd did not shut down within 30 s")
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+		}
+		s.t.Errorf("catlogd did not shut down within %s; killed\nstdout:\n%s\nstderr:\n%s",
+			gracefulStop, s.stdout, s.stderr)
 	}
 }
 
 func build(t *testing.T, outDir string) {
 	t.Helper()
-	cmd := exec.Command("go", "build", "-o", outDir+string(os.PathSeparator), "./cmd/catlogd", "./cmd/catlogctl")
+	// All three binaries: the identity suite (WP3) drives the OAuth dance
+	// against a real mockidp process, not a stub.
+	cmd := exec.Command("go", "build", "-o", outDir+string(os.PathSeparator), "./cmd/...")
 	cmd.Dir = ".."
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("go build: %v\n%s", err, out)

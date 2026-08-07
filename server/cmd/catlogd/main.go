@@ -1,15 +1,16 @@
 // Command catlogd is the catlog backend: ingest, projections, read API and the
 // server-rendered website.
 //
-// Wiring as of WP2: it loads config (§5.3), loads or creates the key set
+// Wiring as of WP3: it loads config (§5.3), loads or creates the key set
 // (§4.5.1, §4.7), opens and migrates both Turso databases (§5.4), serves
-// GET /healthz and POST /v1/ingest on the public port (§4.4), serves the
+// GET /healthz and POST /v1/ingest on the public port (§4.4), runs the
+// projector and the §4.8 read API, serves the identity flows, the dashboard
+// JSON API and the two well-known documents (§4.7, §5.8), serves the
 // loopback-only admin mux on its own port (§5.9), and shuts down cleanly —
 // draining both HTTP servers, stopping the ingest writer, checkpointing each
 // WAL and releasing the database file locks.
 //
-// Identity (WP3), the projector and read API (WP4) and the web UI (WP5) mount
-// onto this skeleton.
+// The web UI (WP5) and the archiver (WP10) mount onto this skeleton.
 package main
 
 import (
@@ -30,6 +31,7 @@ import (
 	"github.com/meow-sci/catlog/server/internal/authz"
 	"github.com/meow-sci/catlog/server/internal/config"
 	"github.com/meow-sci/catlog/server/internal/directory"
+	"github.com/meow-sci/catlog/server/internal/identity"
 	"github.com/meow-sci/catlog/server/internal/ingest"
 	"github.com/meow-sci/catlog/server/internal/keys"
 	"github.com/meow-sci/catlog/server/internal/projector"
@@ -208,6 +210,28 @@ func run(ctx context.Context, cfg config.Config, log *slog.Logger, ready func(pu
 		Projector: proj,
 		Directory: dir,
 		Writer:    writer,
+	})
+
+	// Identity (§4.7, §5.8): the three IdP flows, the session cookie, handle
+	// claims and issuance, and the two well-known documents. Its writes share
+	// the admin API's mutex, which is what makes a dashboard claim and an admin
+	// ban serialise against each other (§5.4).
+	ident, err := identity.New(identity.Deps{
+		Config:    cfg,
+		Keys:      keySet,
+		Events:    events,
+		Deny:      deny,
+		Directory: dir,
+		WriteLock: admin.WithWriteLock,
+		Log:       log,
+	})
+	if err != nil {
+		return fmt.Errorf("build identity: %w", err)
+	}
+	ident.Register(mux)
+	admin.RegisterIdentity(adminapi.IdentityDeps{
+		Moderator: ident.Moderator(),
+		DenyList:  ident.DenyListPublisher(),
 	})
 
 	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}

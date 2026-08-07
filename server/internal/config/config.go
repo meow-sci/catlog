@@ -90,6 +90,10 @@ type Auth struct {
 	HandleQuota       int `toml:"handle_quota"`
 	IssuancePerDay    int `toml:"issuance_per_day"`
 	MinAccountAgeDays int `toml:"min_account_age_days"`
+	// ReservedHandles are the "+ configurable extras" of §4.7's reserved list.
+	// They are added to the built-in set (identity.ReservedHandles), never
+	// substituted for it, and are matched case-insensitively.
+	ReservedHandles []string `toml:"reserved_handles"`
 }
 
 // IdP is the [idp.*] sections (§4.7, §5.8). All URLs are configurable so the

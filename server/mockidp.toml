@@ -1,0 +1,65 @@
+# mockidp — the local stand-in for Discord, Google and GitHub (§5.8.1).
+#
+# Committed on purpose: D2 says the entire system runs and is tested locally,
+# and this file is the cast list. `catlogd.dev.toml` points all three IdPs at
+# this process on 127.0.0.1:9090, so **no real Discord/Google/GitHub request is
+# ever made** in development or in any test.
+#
+# Run with:  mockidp -config server/mockidp.toml
+#
+# Each [[user]] becomes one "Login as …" button on that IdP's authorize page,
+# with the stable DOM id `#login-as-<slug(label)>` the playwright suite (WP5)
+# clicks. The slug is the label lowercased with every run of non-alphanumeric
+# characters collapsed to a single '-'.
+#
+# Fields:
+#   label      display name and the source of the DOM id. Must be unique.
+#   idp        "discord" | "google" | "github"
+#   sub        the stable subject catlog hashes into user_key (§4.7):
+#                discord → snowflake (decimal string)
+#                google  → the id_token `sub`
+#                github  → the numeric user id (decimal string)
+#   new        true → the account is minted at mockidp start, so it fails
+#              catlogd's ≥30-day account-age gate with `account_too_new`.
+#              Discord: the snowflake is recomputed from the current time.
+#              GitHub:  created_at is the current time.
+#   created_at GitHub only, RFC 3339. Ignored when new = true.
+#   name       optional display name echoed in the provider's user response.
+#              catlog never reads it — it exists so the response shape is real.
+#
+# There is no email field anywhere and there never will be: catlog never
+# requests an email scope from any IdP (D17), and mockidp actively rejects an
+# authorize request that asks for one.
+
+[[user]]
+label = "Whiskers (Discord, old account)"
+idp   = "discord"
+# (100000000000000000 >> 22) + 1420070400000 = 2015-10-03 — comfortably aged.
+sub   = "100000000000000000"
+name  = "whiskers"
+
+[[user]]
+label = "Sprocket (Discord, new account)"
+idp   = "discord"
+new   = true
+name  = "sprocket"
+
+[[user]]
+label = "Mittens (Google)"
+idp   = "google"
+sub   = "g-user-1"
+name  = "Mittens"
+
+[[user]]
+label = "Clawdia (GitHub)"
+idp   = "github"
+sub   = "4242"
+name  = "clawdia"
+created_at = "2020-01-01T00:00:00Z"
+
+[[user]]
+label = "Pixel (GitHub, new account)"
+idp   = "github"
+sub   = "4243"
+new   = true
+name  = "pixel"
