@@ -12,4 +12,20 @@
             game. Implemented in WP6.</Description>
     </PropertyGroup>
 
+    <ItemGroup>
+        <!-- The mod's private outbox spool (D4). Versions are pinned exactly, never floating. -->
+        <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.10" />
+        <!--
+            Explicit pin, do not remove: Microsoft.Data.Sqlite 10.0.10 resolves
+            SQLitePCLRaw.bundle_e_sqlite3 2.1.11 transitively, whose SQLitePCLRaw.lib.e_sqlite3
+            2.1.11 carries GHSA-2m69-gcr7-jv3q (high). 3.0.5 is the fixed line and restores
+            cleanly against Microsoft.Data.Sqlite 10.x.
+        -->
+        <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.5" />
+        <!-- Client-minted event ids (D19). -->
+        <PackageReference Include="Ulid" Version="1.4.1" />
+        <!-- catlog.toml (§7.2). -->
+        <PackageReference Include="Tomlyn" Version="2.10.1" />
+    </ItemGroup>
+
 </Project>
