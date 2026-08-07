@@ -1,124 +1,152 @@
 import { useStore } from '@nanostores/react';
-import { Cell, Column, Row, Table, TableBody, TableHeader } from 'react-aria-components';
 import type { BoardRow } from '../api/types.ts';
+import { $me, isMe } from '../state/me.ts';
 import { hrefFor } from '../state/router.ts';
-import { $now, exactValue, formatAgo, formatValue } from './format.ts';
+import { describeContext, hasContext } from './context.ts';
+import { $now, formatAgo, isoInstant } from './format.ts';
+import {
+  DataCell,
+  DataRow,
+  DataTable,
+  Details,
+  HeadCell,
+  HeadRow,
+  Json,
+  TableRows,
+  Value,
+} from './kit/index.ts';
 
 /**
- * A leaderboard as a table.
+ * A leaderboard.
  *
- * React Aria's `Table` rather than a bare `<table>`: it is a real grid widget —
- * arrow-key navigation between cells, a proper row header for screen readers,
- * focus management that survives the rows changing under it during pagination.
- * Rendering that by hand is where a hand-rolled leaderboard quietly stops being
- * usable without a mouse.
+ * # The default row, and what is not in it
+ *
+ * Rank, handle, value with its unit, the human-meaningful context, and when.
+ * That is the whole of it. The `flight` ULID is out — a client-minted id that
+ * means nothing to a reader and eats the widest column — and so is `career`,
+ * which the server has already relabelled per player and which is still a
+ * 16-character token nobody wants in a table. Both stay one disclosure away in
+ * **Details**, which shows the blob exactly as the API sent it. That is safe
+ * because what the API sent is already post-redaction: there is nothing further
+ * to strip client-side, and there is no client-side redaction to get wrong.
+ *
+ * # Direction
+ *
+ * `ascending` is published by the server per board and is **never inferred**
+ * here. The career-time boards are seconds since a career began, and a table
+ * that presented the fastest ascent as though it were the worst one would be a
+ * wrong answer rather than a styling gap. It is stated in words as well as
+ * marked, because an arrow is not a sentence.
  */
 export function BoardTable(props: {
   readonly unit: string;
   readonly rows: readonly BoardRow[];
-  /**
-   * The smallest value ranks first.
-   *
-   * Published by the server per board (§4.8) and never inferred here: the
-   * career-time boards are seconds since a career began, and a table that
-   * presented the fastest ascent as though it were the worst one would be a
-   * wrong answer rather than a styling gap.
-   */
   readonly ascending: boolean;
   readonly showContext?: boolean;
+  /** Row rank → the board's own offset, so a compact preview can hide the "when" column. */
+  readonly compact?: boolean;
 }) {
   const now = useStore($now);
-  const anyContext = props.showContext !== false && props.rows.some((r) => r.context !== undefined);
+  const me = useStore($me);
+  const compact = props.compact === true;
+  const anyContext = props.showContext !== false && props.rows.some((r) => hasContext(r.context));
   const direction = props.ascending ? 'lowest first' : 'highest first';
 
   return (
-    <Table aria-label="Leaderboard" className="w-full border-collapse text-sm" selectionMode="none">
-      <TableHeader className="text-ink-400 text-xs tracking-wide uppercase">
-        <Column id="rank" className="w-14 px-4 py-2 text-right font-medium">
+    <DataTable aria-label="Leaderboard">
+      <HeadRow>
+        <HeadCell id="rank" align="end" className="w-14">
           #
-        </Column>
-        <Column id="handle" isRowHeader className="px-4 py-2 text-left font-medium">
+        </HeadCell>
+        <HeadCell id="handle" isRowHeader>
           Player
-        </Column>
-        <Column id="value" className="px-4 py-2 text-right font-medium">
+        </HeadCell>
+        <HeadCell id="value" align="end">
+          {/* The unit labels the column even though every cell carries its own:
+              a length column legitimately mixes `999 m` and `1.82 Mm`, so the
+              header says what the column *is* rather than what each row says. */}
           <span title={`Ranked ${direction}`}>
             {props.unit === '' ? 'Value' : props.unit}{' '}
             <span aria-hidden>{props.ascending ? '↑' : '↓'}</span>
             <span className="sr-only"> — ranked {direction}</span>
           </span>
-        </Column>
+        </HeadCell>
         {anyContext && (
-          <Column id="context" className="hidden px-4 py-2 text-left font-medium sm:table-cell">
+          <HeadCell id="context" className="hidden sm:table-cell">
             Where
-          </Column>
+          </HeadCell>
         )}
-        <Column id="updated" className="hidden px-4 py-2 text-right font-medium md:table-cell">
-          Updated
-        </Column>
-      </TableHeader>
-      <TableBody
-        items={props.rows}
-        dependencies={[now, anyContext]}
-        className="divide-ink-850 divide-y"
-      >
+        {!compact && (
+          <HeadCell id="updated" align="end" className="hidden md:table-cell">
+            Updated
+          </HeadCell>
+        )}
+      </HeadRow>
+      <TableRows items={props.rows} dependencies={[now, anyContext, compact, me]}>
         {(row: BoardRow) => (
-          <Row
+          <DataRow
             id={`${String(row.rank)}:${row.handle}`}
-            className="data-focus-visible:bg-ink-850 data-hovered:bg-ink-900 transition-colors"
+            isMe={isMe(row.handle, me)}
+            className="board-row"
+            data-rank={row.rank}
+            data-handle={row.handle}
           >
-            <Cell className="text-ink-400 px-4 py-2 text-right font-mono tabular-nums">
+            <DataCell align="end" className="text-fg-muted rank">
               {row.rank}
-            </Cell>
-            <Cell className="px-4 py-2">
+            </DataCell>
+            <DataCell>
               <a
                 href={hrefFor({ name: 'player', handle: row.handle })}
-                className="text-ink-50 hover:text-flare-400 font-medium"
+                className="text-fg hover:text-accent-text font-medium"
               >
                 {row.handle}
               </a>
-            </Cell>
-            <Cell className="text-flare-400 px-4 py-2 text-right font-mono tabular-nums">
-              {/* The compacted value is what fits; the exact one is one hover away. */}
-              <span title={exactValue(row.value, props.unit)}>
-                {formatValue(row.value, props.unit)}
-              </span>
-              {/* A career whose save was rewound qualifies the number and does
-                  nothing else: the row is ranked normally (§4.1). */}
-              {row.rewound === true && (
-                <span
-                  className="text-ink-400 ml-1 cursor-help"
-                  title="An earlier save of this career was loaded, so its clock did not only run forwards."
-                >
-                  <span aria-hidden>†</span>
-                  <span className="sr-only"> (career rewound)</span>
-                </span>
-              )}
-            </Cell>
+              {isMe(row.handle, me) && <span className="text-accent-text ml-2 text-xs">you</span>}
+            </DataCell>
+            <DataCell align="end" className="value text-fg font-medium" data-value={row.value}>
+              <Value value={row.value} unit={props.unit} rewound={row.rewound} />
+            </DataCell>
             {anyContext && (
-              <Cell className="text-ink-400 hidden px-4 py-2 font-mono text-xs sm:table-cell">
-                {describeContext(row.context)}
-              </Cell>
+              <DataCell className="context text-fg-muted hidden text-sm sm:table-cell">
+                <ContextCell context={row.context} />
+              </DataCell>
             )}
-            <Cell className="text-ink-400 hidden px-4 py-2 text-right text-xs whitespace-nowrap md:table-cell">
-              {formatAgo(row.updated, now)}
-            </Cell>
-          </Row>
+            {!compact && (
+              <DataCell align="end" className="text-fg-muted hidden text-sm md:table-cell">
+                <time dateTime={isoInstant(row.updated)}>{formatAgo(row.updated, now)}</time>
+              </DataCell>
+            )}
+          </DataRow>
         )}
-      </TableBody>
-    </Table>
+      </TableRows>
+    </DataTable>
   );
 }
 
 /**
- * Renders the interesting part of a row's `context`.
+ * The allow-listed half of a row's `context`, with the rest one click away.
  *
- * `context` is documented as free-form, board-specific JSON, so this reads the
- * one key that means the same thing on every board that has it (`body`) and
- * otherwise says nothing. Guessing at the rest would be inventing a schema the
- * server does not promise.
+ * The disclosure shows the blob as the API sent it — which is already
+ * post-redaction, so nothing here has to know what a hazard looks like.
  */
-function describeContext(context: unknown): string {
-  if (typeof context !== 'object' || context === null) return '';
-  const body = (context as { body?: unknown }).body;
-  return typeof body === 'string' ? body : '';
+function ContextCell(props: { readonly context: unknown }) {
+  const pairs = describeContext(props.context);
+  if (!hasContext(props.context)) return null;
+  return (
+    <div className="flex flex-col items-start gap-1">
+      {pairs.length > 0 && (
+        <span className="context-pairs flex flex-wrap gap-x-3 gap-y-0.5">
+          {pairs.map((pair) => (
+            <span key={pair.key}>
+              <span className="text-fg-subtle">{pair.key} </span>
+              <span className="text-fg-muted tabular-nums">{pair.value}</span>
+            </span>
+          ))}
+        </span>
+      )}
+      <Details summary="Details">
+        <Json value={props.context} />
+      </Details>
+    </div>
+  );
 }

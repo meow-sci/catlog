@@ -35,9 +35,18 @@ export interface FeedState {
    * snapshot could not be read.
    */
   readonly status: 'connecting' | 'live' | 'offline' | 'error';
+  /**
+   * The ids that arrived **over the stream** rather than in a snapshot.
+   *
+   * They are the only rows that get the arrival flash — one of exactly two
+   * things that move on this site. Without the distinction a reconnect would
+   * light up the whole panel, and a first paint would light up thirty rows at
+   * once, which is a disco rather than a signal.
+   */
+  readonly arrived: readonly number[];
 }
 
-const INITIAL: FeedState = { rows: [], status: 'connecting' };
+const INITIAL: FeedState = { rows: [], status: 'connecting', arrived: [] };
 
 /**
  * Merges new rows into the panel: newest first, deduped by id, capped.
@@ -94,13 +103,14 @@ export const $feed: ReadableAtom<FeedState> = (() => {
           store.set({
             rows: mergeFeed(store.get().rows, res.rows),
             status: source === undefined ? 'offline' : store.get().status,
+            arrived: store.get().arrived,
           });
         },
         () => {
           if (!live) return;
           // Only a failure with nothing on screen is worth reporting as an
           // error; otherwise the panel keeps showing what it has.
-          if (store.get().rows.length === 0) store.set({ rows: [], status: 'error' });
+          if (store.get().rows.length === 0) store.set({ rows: [], status: 'error', arrived: [] });
         },
       );
     };
@@ -114,7 +124,7 @@ export const $feed: ReadableAtom<FeedState> = (() => {
       source = new EventSource(feedStreamUrl());
       source.addEventListener('open', () => {
         if (!live) return;
-        store.set({ rows: store.get().rows, status: 'live' });
+        store.set({ rows: store.get().rows, status: 'live', arrived: store.get().arrived });
         // A reconnect means rows were missed; re-read them.
         snapshot();
       });
@@ -126,13 +136,19 @@ export const $feed: ReadableAtom<FeedState> = (() => {
         } catch {
           return; // a truncated frame; the next one will be fine
         }
-        store.set({ rows: mergeFeed(store.get().rows, [row]), status: 'live' });
+        const rows = mergeFeed(store.get().rows, [row]);
+        // Only ids still on screen: the list is capped, and an animation for a
+        // row that scrolled off is a timer with nothing to do.
+        const arrived = [...store.get().arrived, row.id].filter((id) =>
+          rows.some((r) => r.id === id),
+        );
+        store.set({ rows, status: 'live', arrived });
       });
       source.addEventListener('error', () => {
         if (!live) return;
         // EventSource reconnects on its own (the server sends `retry:`), so this
         // is a status change, not a teardown.
-        store.set({ rows: store.get().rows, status: 'offline' });
+        store.set({ rows: store.get().rows, status: 'offline', arrived: store.get().arrived });
       });
     }
 

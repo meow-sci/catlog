@@ -9,11 +9,18 @@ import { ApiError, asApiError } from './client.ts';
  * and it makes every page's render a `switch` the type checker completes.
  */
 export type Resource<T> =
+  /**
+   * There is nothing to ask for yet — a search box with one character in it, a
+   * comparison with nobody selected. Distinct from `loading` because §7.1's rule
+   * is that an absent thing is *absent*, not empty-with-a-spinner.
+   */
+  | { readonly status: 'idle' }
   | { readonly status: 'loading' }
   | { readonly status: 'ready'; readonly data: T }
   | { readonly status: 'error'; readonly error: ApiError };
 
 const LOADING: Resource<never> = { status: 'loading' };
+const IDLE: Resource<never> = { status: 'idle' };
 
 /**
  * Fetches `load()` whenever `key` changes.
@@ -30,12 +37,18 @@ const LOADING: Resource<never> = { status: 'loading' };
  * it, and it obeys the Rules of React the compiler depends on: the ref is only
  * ever touched from effects, never during render.
  *
+ * A `null` key means **there is nothing to ask for** — a search box below the
+ * server's two-character minimum, a comparison with an empty handle list. No
+ * request is made and the resource stays `idle`. That is the mechanism behind
+ * "the UI must not fire a request below two characters": the guard is a key, not
+ * a condition around a hook, so the hooks below stay unconditional.
+ *
  * The returned value is derived during render — `LOADING` until the resolved
  * result's key matches the requested one — so there is no `setState` in an
  * effect and no flash of stale data when `key` changes.
  */
 export function useResource<T>(
-  key: string,
+  key: string | null,
   load: (signal: AbortSignal) => Promise<T>,
 ): Resource<T> {
   const [settled, setSettled] = useState<{ key: string; value: Resource<T> } | null>(null);
@@ -46,6 +59,7 @@ export function useResource<T>(
   });
 
   useEffect(() => {
+    if (key === null) return;
     const controller = new AbortController();
     let live = true;
     latest.current(controller.signal).then(
@@ -65,5 +79,6 @@ export function useResource<T>(
     };
   }, [key]);
 
+  if (key === null) return IDLE;
   return settled?.key === key ? settled.value : LOADING;
 }

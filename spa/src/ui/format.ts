@@ -1,7 +1,12 @@
 import { atom, onMount, type ReadableAtom } from 'nanostores';
 
 /**
- * Display formatting.
+ * Time, displayed.
+ *
+ * **Numbers do not live here.** `ui/units.ts` is the port of
+ * `server/internal/units` and is the only thing allowed to render a value; this
+ * file is instants and durations-since, which are a different problem with a
+ * different rule.
  *
  * Everything here is a pure function of its arguments — no `Date.now()`, no
  * locale sniffing at call time — because these are called from render, and the
@@ -10,37 +15,32 @@ import { atom, onMount, type ReadableAtom } from 'nanostores';
  * below.
  */
 
-const compact = new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 });
-const plain = new Intl.NumberFormat('en', { maximumFractionDigits: 2 });
+/**
+ * Fixed UTC, never the viewer's locale.
+ *
+ * "A leaderboard is a shared artefact, and localising it would make two people
+ * describing the same row disagree." The server-rendered site writes
+ * `2026-08-07 14:32 UTC` and this writes `7 Aug 2026, 14:32 UTC` — two
+ * renderings of the same fixed instant, both locale-independent, and §10
+ * sanctions the difference. What is *not* sanctioned is a friendly local
+ * timestamp on either.
+ */
 const timestamp = new Intl.DateTimeFormat('en-GB', {
   dateStyle: 'medium',
   timeStyle: 'short',
   timeZone: 'UTC',
 });
 
-/**
- * A leaderboard value, with its unit.
- *
- * Counters get no decimals; measurements keep two. Large values compact to
- * `1.2M` so a `distance_travelled` row does not shove the rest of the table off
- * a phone screen — the exact figure stays in the `title` attribute.
- */
-export function formatValue(value: number, unit: string): string {
-  if (!Number.isFinite(value)) return '—';
-  const magnitude = Math.abs(value);
-  const number = magnitude >= 100_000 ? compact.format(value) : plain.format(value);
-  return unit === '' ? number : `${number} ${unit}`;
-}
-
-/** The exact value, for a tooltip. */
-export function exactValue(value: number, unit: string): string {
-  return unit === '' ? String(value) : `${String(value)} ${unit}`;
-}
-
 /** A unix-ms instant as a fixed UTC timestamp. */
 export function formatInstant(ms: number): string {
   if (!Number.isFinite(ms) || ms <= 0) return 'unknown';
   return timestamp.format(new Date(ms)) + ' UTC';
+}
+
+/** A unix-ms instant as an ISO string, for a `<time datetime>` attribute. */
+export function isoInstant(ms: number): string {
+  if (!Number.isFinite(ms) || ms <= 0) return '';
+  return new Date(ms).toISOString();
 }
 
 /**
@@ -69,10 +69,10 @@ const TICK_MS = 30_000;
  * The current time, as a store.
  *
  * A component may not call `Date.now()` during render — the same inputs would
- * produce a different output, which is exactly what React Compiler's memoization
- * assumes cannot happen. Reading the clock from a store moves the impurity to
- * one place with a lifecycle: the interval runs only while something displays a
- * timestamp, and stops when nothing does.
+ * produce a different output, which is exactly what React Compiler's
+ * memoization assumes cannot happen. Reading the clock from a store moves the
+ * impurity to one place with a lifecycle: the interval runs only while something
+ * displays a timestamp, and stops when nothing does.
  */
 export const $now: ReadableAtom<number> = (() => {
   const store = atom(Date.now());

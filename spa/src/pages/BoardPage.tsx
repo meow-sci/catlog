@@ -1,29 +1,55 @@
+import { useStore } from '@nanostores/react';
 import { ArrowLeft, ChevronLeft, ChevronRight } from 'lucide-react';
-import type { ReactNode } from 'react';
-import { getBoard } from '../api/client.ts';
+import { getBoard, getBoards, getPlayer } from '../api/client.ts';
 import { useResource } from '../api/useResource.ts';
-import { hrefFor, PAGE_SIZE } from '../state/router.ts';
+import { $me, isMe } from '../state/me.ts';
+import { ALLTIME, hrefFor, PAGE_SIZE } from '../state/router.ts';
 import { BoardTable } from '../ui/BoardTable.tsx';
-import { cn } from '../ui/cn.ts';
-import { Empty, Failure, Loading, Panel, PanelHeader } from '../ui/kit.tsx';
-
-const pagerButton =
-  'inline-flex items-center gap-1 rounded-md border border-ink-800 bg-ink-850 px-3 py-1.5 ' +
-  'text-xs font-medium text-ink-200 transition-colors';
+import {
+  DisabledLinkButton,
+  Empty,
+  Failure,
+  LinkButton,
+  Loading,
+  Panel,
+  PanelFooter,
+  PanelHeader,
+  PeriodTabs,
+  Pill,
+} from '../ui/kit/index.ts';
+import { formatNumber } from '../ui/units.ts';
 
 /**
- * One leaderboard, paged.
+ * One leaderboard, paged, over a chosen window.
  *
- * The offset lives in the URL, not in component state, so a page of a board is a
- * link somebody can send — and so the back button steps through pages. That is
- * the same property the server-rendered site gets from `?offset=`; here it costs
- * a route parameter and a `navigate` call.
+ * The offset **and the period** live in the URL, not in component state, so a
+ * page of a board is a link somebody can send and the back button steps through
+ * both. The period selector is the cheapest thing on the site that makes a
+ * leaderboard worth revisiting: it turns a static all-time ranking into "what
+ * happened this week".
  */
-export function BoardPage(props: { readonly stat: string; readonly offset: number }) {
-  const { stat, offset } = props;
-  const board = useResource(`board:${stat}:${String(offset)}`, (signal) =>
-    getBoard(stat, PAGE_SIZE, offset, signal),
+export function BoardPage(props: {
+  readonly stat: string;
+  readonly offset: number;
+  readonly period: string;
+}) {
+  const { stat, offset, period } = props;
+  const board = useResource(`board:${stat}:${period}:${String(offset)}`, (signal) =>
+    getBoard(stat, PAGE_SIZE, offset, period, signal),
   );
+  // The windows come from the board index, which publishes `periods` per board,
+  // rather than from a list in this file — the same reason the index itself is
+  // not a constant here. It is the request the header and the front page already
+  // made, and it is `s-maxage=30` at the CDN. A family board too small to be
+  // listed borrows the set from a board that is: the server returns the same
+  // windows for every board, so the fallback states a fact rather than a guess.
+  const index = useResource('boards', getBoards);
+  const periods =
+    index.status === 'ready'
+      ? (index.data.boards.find((b) => b.stat === stat)?.periods ??
+        index.data.boards[0]?.periods ??
+        [])
+      : [];
 
   // A page that came back full is very likely not the last one; §4.8 publishes
   // no total, so "there is probably more" is the honest thing to render.
@@ -32,36 +58,56 @@ export function BoardPage(props: { readonly stat: string; readonly offset: numbe
   const hasPrev = offset > 0;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       <div>
         <a
           href={hrefFor({ name: 'boards' })}
-          className="text-ink-400 hover:text-ink-200 inline-flex items-center gap-1 text-xs"
+          className="text-fg-muted hover:text-fg inline-flex items-center gap-1 text-sm"
         >
           <ArrowLeft aria-hidden className="size-3.5" />
           All boards
         </a>
-        <h1 className="text-ink-50 mt-2 text-2xl font-semibold">
+        <h1 id="board-title" data-stat={stat} className="mt-2">
           {board.status === 'ready' ? board.data.title : stat}
         </h1>
-        <p className="text-ink-400 mt-1 font-mono text-xs">{stat}</p>
         {/* Which way the board reads comes from the server, per board. The
             career-time boards rank the smallest value first, and a reader that
             assumed otherwise would present the fastest ascent as the worst. */}
         {board.status === 'ready' && (
-          <p className="text-ink-400 mt-1 text-xs">
+          <p
+            id="board-direction"
+            data-ascending={board.data.ascending}
+            className="text-fg-muted mt-1 text-sm"
+          >
             Measured in {board.data.unit === '' ? 'plain counts' : board.data.unit}.{' '}
             {board.data.ascending ? 'Lowest wins.' : 'Highest wins.'}
           </p>
         )}
       </div>
 
+      {periods.length > 0 && (
+        <div className="flex flex-wrap items-center gap-3">
+          <PeriodTabs
+            label="Window"
+            selected={period}
+            periods={periods}
+            hrefFor={(p) => hrefFor({ name: 'board', stat, offset: 0, period: p })}
+            labelFor={(p) => (p === ALLTIME ? 'all time' : p)}
+          />
+          {board.status === 'ready' &&
+            board.data.bucket !== undefined &&
+            board.data.bucket !== '' && (
+              <Pill title="The window these rows cover, in UTC">{board.data.bucket}</Pill>
+            )}
+        </div>
+      )}
+
       <Panel>
         <PanelHeader
           title="Standings"
           aside={
             rows.length > 0
-              ? `ranks ${String(offset + 1)}–${String(offset + rows.length)}`
+              ? `ranks ${formatNumber(offset + 1)}–${formatNumber(offset + rows.length)}`
               : undefined
           }
         />
@@ -76,30 +122,55 @@ export function BoardPage(props: { readonly stat: string; readonly offset: numbe
           <Empty>
             {offset > 0
               ? 'There is nothing on this page — try going back.'
-              : 'Nobody is on this board yet.'}
+              : period === ALLTIME
+                ? 'Nobody is on this board yet.'
+                : 'Nobody has scored in this window yet.'}
           </Empty>
         )}
         {board.status === 'ready' && rows.length > 0 && (
           <BoardTable unit={board.data.unit} ascending={board.data.ascending} rows={rows} />
         )}
+        {board.status === 'ready' && (
+          <YouAreHere
+            stat={stat}
+            period={period}
+            offset={offset}
+            rows={rows.map((r) => r.handle)}
+          />
+        )}
       </Panel>
 
       {(hasPrev || hasNext) && (
         <nav aria-label="Pagination" className="flex items-center justify-between">
-          <PagerLink
-            href={hrefFor({ name: 'board', stat, offset: Math.max(0, offset - PAGE_SIZE) })}
-            isEnabled={hasPrev}
-          >
-            <ChevronLeft aria-hidden className="size-3.5" />
-            Previous
-          </PagerLink>
-          <PagerLink
-            href={hrefFor({ name: 'board', stat, offset: offset + PAGE_SIZE })}
-            isEnabled={hasNext}
-          >
-            Next
-            <ChevronRight aria-hidden className="size-3.5" />
-          </PagerLink>
+          {hasPrev ? (
+            <LinkButton
+              href={hrefFor({
+                name: 'board',
+                stat,
+                offset: Math.max(0, offset - PAGE_SIZE),
+                period,
+              })}
+            >
+              <ChevronLeft aria-hidden className="size-3.5" />
+              Previous
+            </LinkButton>
+          ) : (
+            <DisabledLinkButton>
+              <ChevronLeft aria-hidden className="size-3.5" />
+              Previous
+            </DisabledLinkButton>
+          )}
+          {hasNext ? (
+            <LinkButton href={hrefFor({ name: 'board', stat, offset: offset + PAGE_SIZE, period })}>
+              Next
+              <ChevronRight aria-hidden className="size-3.5" />
+            </LinkButton>
+          ) : (
+            <DisabledLinkButton>
+              Next
+              <ChevronRight aria-hidden className="size-3.5" />
+            </DisabledLinkButton>
+          )}
         </nav>
       )}
     </div>
@@ -107,28 +178,49 @@ export function BoardPage(props: { readonly stat: string; readonly offset: numbe
 }
 
 /**
- * One step of the pager.
+ * `You: #147`, at the foot of the table, linking to the page you are actually on.
  *
- * An `<a href>` and not a button: a page of a board is a place, so it must be
- * middle-clickable, cmd-clickable and copyable like every other link here. The
- * unavailable direction renders as a `<span aria-disabled>` rather than a dead
- * link — there is no URL to offer, and a link to nowhere is worse than no link.
+ * The rank comes from the profile endpoint, which already publishes it, and the
+ * page is arithmetic: `offset = floor((rank - 1) / PAGE_SIZE) * PAGE_SIZE`. No
+ * new endpoint, no `?around=` parameter.
+ *
+ * **All-time only, and that is a gap rather than a choice.** `player_stat` is
+ * the only table the profile endpoint reads, so the rank it publishes is the
+ * all-time one. Showing it beside a weekly board would be a *wrong* number
+ * rather than a missing one, so the strip simply does not appear on a windowed
+ * view.
  */
-function PagerLink(props: {
-  readonly href: string;
-  readonly isEnabled: boolean;
-  readonly children: ReactNode;
+function YouAreHere(props: {
+  readonly stat: string;
+  readonly period: string;
+  readonly offset: number;
+  readonly rows: readonly string[];
 }) {
-  if (!props.isEnabled) {
-    return (
-      <span aria-disabled className={cn(pagerButton, 'cursor-not-allowed opacity-40')}>
-        {props.children}
-      </span>
-    );
-  }
+  const me = useStore($me);
+  const onThisPage = props.rows.some((handle) => isMe(handle, me));
+  const player = useResource(
+    me === null || props.period !== ALLTIME || onThisPage ? null : `player:${me}`,
+    (signal) => getPlayer(me ?? '', signal),
+  );
+
+  if (player.status !== 'ready') return null;
+  const mine = player.data.stats.find((s) => s.stat === props.stat);
+  if (mine === undefined) return null;
+  const page = Math.floor((mine.rank - 1) / PAGE_SIZE) * PAGE_SIZE;
+  if (page === props.offset) return null;
+
   return (
-    <a href={props.href} className={cn(pagerButton, 'hover:bg-ink-800')}>
-      {props.children}
-    </a>
+    <PanelFooter>
+      <span>
+        You are <span className="text-accent-text font-semibold tabular-nums">#{mine.rank}</span> of{' '}
+        <span className="tabular-nums">{mine.players}</span> here.
+      </span>
+      <a
+        href={hrefFor({ name: 'board', stat: props.stat, offset: page, period: ALLTIME })}
+        className="text-accent-text hover:underline"
+      >
+        Go to your row
+      </a>
+    </PanelFooter>
   );
 }

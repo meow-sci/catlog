@@ -1,5 +1,6 @@
 import { cleanup } from '@testing-library/react';
 import { afterEach, beforeEach, vi } from 'vitest';
+import { clearMe } from '../state/me.ts';
 
 /**
  * Test setup.
@@ -15,6 +16,16 @@ import { afterEach, beforeEach, vi } from 'vitest';
  *     leaks its interval into the next test.
  */
 beforeEach(() => {
+  // 3. **No test inherits another's "me" handle or theme.** Both are
+  //    localStorage keys read by lazy nanostores that stay mounted for a second
+  //    after the last subscriber goes away, so a leftover value is a
+  //    cross-test dependency that only shows up when the files run in a
+  //    different order.
+  window.localStorage.clear();
+  // The atom itself has to be reset too: a lazy nanostore keeps its value for a
+  // second after the last subscriber unsubscribes, so clearing storage alone
+  // leaves the previous test's handle in memory.
+  clearMe();
   vi.stubGlobal(
     'fetch',
     vi.fn(async (input: RequestInfo | URL) => {
@@ -28,6 +39,8 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  clearMe();
+  window.localStorage.clear();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });

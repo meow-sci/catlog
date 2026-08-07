@@ -7,11 +7,36 @@
          once deep links stopped being fragments, 404ing on every nested page. -->
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
     <meta
       name="description"
       content="catlog leaderboards — a React single-page reader for the catlog public API."
     />
     <title>catlog</title>
+    <!--
+      The theme, resolved before first paint.
+
+      `localStorage['catlog:theme']` ∈ {light, dark, system} → prefers-color-scheme
+      → dark. An explicit choice stamps `data-theme`; `system` leaves the attribute
+      off so the media query in index.css wins.
+
+      Synchronous and inline, and it has to be both: anything async — a module, a
+      deferred script, an effect — runs after the first paint, and a dark-theme
+      reload flashes white in the gap. It is the only inline script on the page.
+      (If a Content-Security-Policy is ever added, this needs a nonce or a hash.)
+    -->
+    <script>
+      (function () {
+        try {
+          var choice = window.localStorage.getItem('catlog:theme');
+          if (choice === 'light' || choice === 'dark') {
+            document.documentElement.setAttribute('data-theme', choice);
+          }
+        } catch (e) {
+          /* storage refused; the media query still decides */
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   $route,
+  ALLTIME,
   BASE_PATH,
   hrefFor,
   interceptedRoute,
@@ -8,6 +9,7 @@ import {
   isUnderBase,
   navigate,
   normalizeBase,
+  parseHandles,
   parseRoute,
   pathFor,
   routeKey,
@@ -21,8 +23,11 @@ describe('parseRoute', () => {
     ['', { name: 'home' }],
     ['/boards', { name: 'boards' }],
     ['/boards/', { name: 'boards' }],
-    ['/boards/rud_total', { name: 'board', stat: 'rud_total', offset: 0 }],
-    ['/boards/rud_total?offset=50', { name: 'board', stat: 'rud_total', offset: 50 }],
+    ['/boards/rud_total', { name: 'board', stat: 'rud_total', offset: 0, period: ALLTIME }],
+    [
+      '/boards/rud_total?offset=50',
+      { name: 'board', stat: 'rud_total', offset: 50, period: ALLTIME },
+    ],
     ['/p/demo_ace', { name: 'player', handle: 'demo_ace' }],
     ['/nope', { name: 'notFound', path: '/nope' }],
   ])('parses %s', (url, want) => {
@@ -36,6 +41,7 @@ describe('parseRoute', () => {
         name: 'board',
         stat: 'rud_total',
         offset: 0,
+        period: ALLTIME,
       });
     }
   });
@@ -46,6 +52,7 @@ describe('parseRoute', () => {
       name: 'board',
       stat: 'rud_total',
       offset: 0,
+      period: ALLTIME,
     });
   });
 
@@ -53,8 +60,8 @@ describe('parseRoute', () => {
     const routes: readonly Route[] = [
       { name: 'home' },
       { name: 'boards' },
-      { name: 'board', stat: 'kitten_tumbles', offset: 0 },
-      { name: 'board', stat: 'kitten_tumbles', offset: 100 },
+      { name: 'board', stat: 'kitten_tumbles', offset: 0, period: ALLTIME },
+      { name: 'board', stat: 'kitten_tumbles', offset: 100, period: ALLTIME },
       { name: 'player', handle: 'demo_crasher' },
     ];
     for (const base of ['/', '/catlog/']) {
@@ -93,9 +100,9 @@ describe('base path', () => {
   it('prepends the base when writing a link', () => {
     expect(hrefFor({ name: 'home' }, '/catlog/')).toBe('/catlog/');
     expect(hrefFor({ name: 'boards' }, '/catlog/')).toBe('/catlog/boards');
-    expect(hrefFor({ name: 'board', stat: 'rud_total', offset: 50 }, '/catlog/')).toBe(
-      '/catlog/boards/rud_total?offset=50',
-    );
+    expect(
+      hrefFor({ name: 'board', stat: 'rud_total', offset: 50, period: ALLTIME }, '/catlog/'),
+    ).toBe('/catlog/boards/rud_total?offset=50');
     expect(hrefFor({ name: 'player', handle: 'demo_ace' }, '/catlog/')).toBe('/catlog/p/demo_ace');
   });
 
@@ -122,8 +129,8 @@ describe('base path', () => {
 
 describe('routeKey', () => {
   it('changes with the offset, so paging refetches', () => {
-    expect(routeKey({ name: 'board', stat: 's', offset: 0 })).not.toBe(
-      routeKey({ name: 'board', stat: 's', offset: 50 }),
+    expect(routeKey({ name: 'board', stat: 's', offset: 0, period: ALLTIME })).not.toBe(
+      routeKey({ name: 'board', stat: 's', offset: 50, period: ALLTIME }),
     );
   });
 });
@@ -178,6 +185,7 @@ describe('interceptedRoute', () => {
       name: 'board',
       stat: 'rud_total',
       offset: 0,
+      period: ALLTIME,
     });
   });
 
@@ -304,10 +312,12 @@ describe('$route and navigate', () => {
 
   it('pushes a history entry and updates the store', () => {
     const seen = watch();
-    navigate({ name: 'board', stat: 'rud_total', offset: 0 });
+    navigate({ name: 'board', stat: 'rud_total', offset: 0, period: ALLTIME });
 
-    expect(window.location.pathname).toBe(hrefFor({ name: 'board', stat: 'rud_total', offset: 0 }));
-    expect(seen.at(-1)).toEqual({ name: 'board', stat: 'rud_total', offset: 0 });
+    expect(window.location.pathname).toBe(
+      hrefFor({ name: 'board', stat: 'rud_total', offset: 0, period: ALLTIME }),
+    );
+    expect(seen.at(-1)).toEqual({ name: 'board', stat: 'rud_total', offset: 0, period: ALLTIME });
   });
 
   it('replaces instead of pushing when asked', () => {
@@ -332,9 +342,9 @@ describe('$route and navigate', () => {
 
   it('carries the query string, so a page of a board is its own history entry', () => {
     watch();
-    navigate({ name: 'board', stat: 'rud_total', offset: 50 });
+    navigate({ name: 'board', stat: 'rud_total', offset: 50, period: ALLTIME });
     expect(window.location.search).toBe('?offset=50');
-    expect($route.get()).toEqual({ name: 'board', stat: 'rud_total', offset: 50 });
+    expect($route.get()).toEqual({ name: 'board', stat: 'rud_total', offset: 50, period: ALLTIME });
   });
 });
 
@@ -405,5 +415,73 @@ describe('interceptLinkClicks', () => {
       pathname: '/',
       route: { name: 'home' },
     });
+  });
+});
+
+describe('the new routes', () => {
+  it('routes the raw event log under the profile it belongs to', () => {
+    expect(parseRoute('/p/demo_ace/events', '/')).toEqual({
+      name: 'playerEvents',
+      handle: 'demo_ace',
+    });
+    expect(hrefFor({ name: 'playerEvents', handle: 'demo_ace' }, '/')).toBe('/p/demo_ace/events');
+  });
+
+  it('makes a search a linkable place rather than only an overlay', () => {
+    expect(parseRoute('/search?q=whisk', '/')).toEqual({ name: 'search', q: 'whisk' });
+    expect(parseRoute('/search', '/')).toEqual({ name: 'search', q: '' });
+    expect(hrefFor({ name: 'search', q: 'whisk ers' }, '/')).toBe('/search?q=whisk%20ers');
+    // An empty query is the bare page, not `?q=`.
+    expect(hrefFor({ name: 'search', q: '' }, '/')).toBe('/search');
+  });
+
+  it('keeps the compared handles in the URL, because that is the shareable part', () => {
+    expect(parseRoute('/compare?handles=a,b,c', '/')).toEqual({
+      name: 'compare',
+      handles: ['a', 'b', 'c'],
+    });
+    expect(hrefFor({ name: 'compare', handles: ['a', 'b'] }, '/')).toBe('/compare?handles=a,b');
+    // Nobody selected yet is a valid, empty comparison — the same request the
+    // server answers with an empty body rather than an error.
+    expect(parseRoute('/compare', '/')).toEqual({ name: 'compare', handles: [] });
+  });
+
+  it('accepts a repeated ?handles= the way the endpoint does', () => {
+    expect(parseRoute('/compare?handles=a,b&handles=c', '/')).toEqual({
+      name: 'compare',
+      handles: ['a', 'b', 'c'],
+    });
+  });
+
+  it('deduplicates case-insensitively and caps at the server cap', () => {
+    expect(parseHandles('a, A ,b,,c')).toEqual(['a', 'b', 'c']);
+    // Eight is MaxCompareHandles. The server drops the extras *silently*, so a
+    // picker that let a ninth through would appear to lose it.
+    expect(parseHandles('a,b,c,d,e,f,g,h,i,j')).toHaveLength(8);
+  });
+
+  it('selects a window with ?period=, and leaves the default out of the URL', () => {
+    expect(parseRoute('/boards/rud_total?period=weekly', '/')).toEqual({
+      name: 'board',
+      stat: 'rud_total',
+      offset: 0,
+      period: 'weekly',
+    });
+    expect(hrefFor({ name: 'board', stat: 'rud_total', offset: 0, period: 'weekly' }, '/')).toBe(
+      '/boards/rud_total?period=weekly',
+    );
+    // `alltime` is the default, so the plain URL stays the one a CDN holds.
+    expect(hrefFor({ name: 'board', stat: 'rud_total', offset: 0, period: ALLTIME }, '/')).toBe(
+      '/boards/rud_total',
+    );
+    expect(hrefFor({ name: 'board', stat: 'rud_total', offset: 50, period: 'weekly' }, '/')).toBe(
+      '/boards/rud_total?offset=50&period=weekly',
+    );
+  });
+
+  it('refetches when the window changes, not only when the page does', () => {
+    expect(routeKey({ name: 'board', stat: 's', offset: 0, period: ALLTIME })).not.toBe(
+      routeKey({ name: 'board', stat: 's', offset: 0, period: 'weekly' }),
+    );
   });
 });

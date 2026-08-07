@@ -37,12 +37,45 @@ import { atom, onMount, type ReadableAtom } from 'nanostores';
 export type Route =
   | { readonly name: 'home' }
   | { readonly name: 'boards' }
-  | { readonly name: 'board'; readonly stat: string; readonly offset: number }
+  | {
+      readonly name: 'board';
+      readonly stat: string;
+      readonly offset: number;
+      /** The rolling window, `alltime` unless `?period=` asked otherwise. */
+      readonly period: string;
+    }
   | { readonly name: 'player'; readonly handle: string }
+  | { readonly name: 'playerEvents'; readonly handle: string }
+  | { readonly name: 'search'; readonly q: string }
+  | { readonly name: 'compare'; readonly handles: readonly string[] }
   | { readonly name: 'notFound'; readonly path: string };
 
 /** How many rows a board page shows. The server clamps anything over 200 (§4.8). */
 export const PAGE_SIZE = 50;
+
+/** The default window. Kept out of the URL so the plain board link stays the cached one. */
+export const ALLTIME = 'alltime';
+
+/**
+ * Splits a `?handles=` value the way `readapi.splitHandles` does: comma
+ * separated, trimmed, deduplicated case-insensitively, in request order, capped.
+ *
+ * The cap is applied here as well as on the server because the server drops the
+ * extras **silently** — the effective list comes back in `handles` — and a
+ * picker that let a ninth handle in would appear to lose it.
+ */
+export function parseHandles(raw: string, cap = 8): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const part of raw.split(',')) {
+    const handle = part.trim();
+    if (handle === '' || seen.has(handle.toLowerCase())) continue;
+    seen.add(handle.toLowerCase());
+    out.push(handle);
+    if (out.length === cap) break;
+  }
+  return out;
+}
 
 /**
  * Normalises anything Vite will accept as `base` into `/…/` form.
@@ -109,18 +142,35 @@ export function parseRoute(url: string, base: string = BASE_PATH): Route {
 
   if (segments.length === 0) return { name: 'home' };
 
+  const params = new URLSearchParams(query);
   const [head, tail] = segments;
   if (head === 'boards' && segments.length === 1) return { name: 'boards' };
   if (head === 'boards' && segments.length === 2 && tail !== undefined) {
-    const offset = Number.parseInt(new URLSearchParams(query).get('offset') ?? '', 10);
+    const offset = Number.parseInt(params.get('offset') ?? '', 10);
     return {
       name: 'board',
       stat: decodeURIComponent(tail),
       offset: Number.isFinite(offset) && offset > 0 ? offset : 0,
+      // Not validated here: the server owns the list of windows it serves, and
+      // an unknown one comes back as a 400 the page can show. Guessing at the
+      // set would be this file inventing half an API contract.
+      period: params.get('period') ?? ALLTIME,
     };
   }
   if (head === 'p' && segments.length === 2 && tail !== undefined) {
     return { name: 'player', handle: decodeURIComponent(tail) };
+  }
+  if (head === 'p' && segments.length === 3 && tail !== undefined && segments[2] === 'events') {
+    return { name: 'playerEvents', handle: decodeURIComponent(tail) };
+  }
+  if (head === 'search' && segments.length === 1) {
+    return { name: 'search', q: params.get('q') ?? '' };
+  }
+  if (head === 'compare' && segments.length === 1) {
+    // Repeated `?handles=` is accepted — `a,b&handles=c` is one comparison —
+    // because a client building a URL from an array will do it either way, and
+    // the endpoint itself is deliberately not strict about which.
+    return { name: 'compare', handles: parseHandles(params.getAll('handles').join(',')) };
   }
   return { name: 'notFound', path };
 }
@@ -132,12 +182,28 @@ export function pathFor(route: Route): string {
       return '/';
     case 'boards':
       return '/boards';
-    case 'board':
-      return route.offset > 0
-        ? `/boards/${encodeURIComponent(route.stat)}?offset=${String(route.offset)}`
-        : `/boards/${encodeURIComponent(route.stat)}`;
+    case 'board': {
+      // Only the non-default parts reach the URL, so `/boards/rud_total` stays
+      // one cacheable address rather than four spellings of the same page.
+      const query = new URLSearchParams();
+      if (route.offset > 0) query.set('offset', String(route.offset));
+      if (route.period !== ALLTIME && route.period !== '') query.set('period', route.period);
+      const suffix = query.size > 0 ? `?${query.toString()}` : '';
+      return `/boards/${encodeURIComponent(route.stat)}${suffix}`;
+    }
     case 'player':
       return `/p/${encodeURIComponent(route.handle)}`;
+    case 'playerEvents':
+      return `/p/${encodeURIComponent(route.handle)}/events`;
+    case 'search':
+      return route.q === '' ? '/search' : `/search?q=${encodeURIComponent(route.q)}`;
+    case 'compare':
+      // Handles in the URL is the point of the feature: a comparison is a link
+      // somebody can paste into a Discord channel, which is the actual social
+      // act being designed for.
+      return route.handles.length === 0
+        ? '/compare'
+        : `/compare?handles=${route.handles.map(encodeURIComponent).join(',')}`;
     case 'notFound':
       return route.path;
   }
@@ -165,9 +231,15 @@ export function hrefFor(route: Route, base: string = BASE_PATH): string {
 export function routeKey(route: Route): string {
   switch (route.name) {
     case 'board':
-      return `board:${route.stat}:${String(route.offset)}`;
+      return `board:${route.stat}:${route.period}:${String(route.offset)}`;
     case 'player':
       return `player:${route.handle}`;
+    case 'playerEvents':
+      return `events:${route.handle}`;
+    case 'search':
+      return `search:${route.q}`;
+    case 'compare':
+      return `compare:${route.handles.join(',')}`;
     default:
       return route.name;
   }

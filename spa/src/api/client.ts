@@ -1,10 +1,18 @@
-import type { BoardResponse, BoardsResponse, FeedResponse, PlayerResponse } from './types.ts';
+import type {
+  BoardResponse,
+  BoardsResponse,
+  CompareResponse,
+  EventsResponse,
+  FeedResponse,
+  PlayerResponse,
+  SearchResponse,
+} from './types.ts';
 
 /**
  * The catlog read API client.
  *
- * Deliberately small: four typed calls over one `fetch` wrapper. There is no
- * caching layer here — caching is the server's job (§4.8 ships
+ * Deliberately small: one typed call per endpoint over one `fetch` wrapper.
+ * There is no caching layer here — caching is the server's job (§4.8 ships
  * `s-maxage=30, stale-while-revalidate=300` on every response) and duplicating
  * it in the browser would only add a second, wronger answer.
  */
@@ -125,28 +133,126 @@ export async function apiGet<T>(path: string, signal?: AbortSignal): Promise<T> 
   }
 }
 
-// --- the four endpoints ------------------------------------------------------
+// --- the endpoints -----------------------------------------------------------
 
 export function getBoards(signal?: AbortSignal): Promise<BoardsResponse> {
   return apiGet<BoardsResponse>('/v1/leaderboards', signal);
 }
 
+/**
+ * One page of one board.
+ *
+ * `period` selects a rolling window (`daily`, `weekly`, `monthly`, `yearly`);
+ * `alltime` is omitted from the query so the default URL stays the one a CDN
+ * already holds.
+ */
 export function getBoard(
   stat: string,
   limit: number,
   offset: number,
+  period: string = ALLTIME,
   signal?: AbortSignal,
 ): Promise<BoardResponse> {
   const query = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  if (period !== ALLTIME && period !== '') query.set('period', period);
   return apiGet<BoardResponse>(
     `/v1/leaderboards/${encodeURIComponent(stat)}?${query.toString()}`,
     signal,
   );
 }
 
+/** The window a board reads over when nothing asked for another one. */
+export const ALLTIME = 'alltime';
+
 export function getPlayer(handle: string, signal?: AbortSignal): Promise<PlayerResponse> {
   return apiGet<PlayerResponse>(`/v1/players/${encodeURIComponent(handle)}`, signal);
 }
+
+/**
+ * The shortest query the search endpoint accepts.
+ *
+ * **Below this the server answers 400, not an empty 200.** A search box that
+ * fires on the first keystroke therefore produces an error on every single
+ * search, so the guard lives at the call sites *and* here: `searchHandles`
+ * refuses rather than sending a request it knows will fail.
+ */
+export const MIN_QUERY_LENGTH = 2;
+
+/** The longest query the server accepts — a handle's own cap. Truncate, do not send. */
+export const MAX_QUERY_LENGTH = 150;
+
+/**
+ * Handle search.
+ *
+ * Returns an empty result for a query that is too short rather than throwing or
+ * requesting: "not enough typed yet" is not an error the user must act on, and
+ * §9.3's rule for the 400s is that the right fix is not to render them, it is
+ * not to send the request.
+ */
+export function searchHandles(
+  q: string,
+  limit: number,
+  signal?: AbortSignal,
+): Promise<SearchResponse> {
+  const query = q.trim().slice(0, MAX_QUERY_LENGTH);
+  if (query.length < MIN_QUERY_LENGTH) {
+    return Promise.resolve({ query, limit, handles: [] });
+  }
+  const params = new URLSearchParams({ q: query, limit: String(limit) });
+  return apiGet<SearchResponse>(`/v1/players?${params.toString()}`, signal);
+}
+
+/**
+ * Up to [MAX_COMPARE_HANDLES] handles, side by side.
+ *
+ * One request rather than N profile reads: N answers can disagree — a projection
+ * commit between the first and the last shows one player's new record next to
+ * another's stale rank — and this reads them all against one view.
+ *
+ * An empty list is a valid, empty comparison, which is exactly what a picker
+ * with nobody in it should ask for.
+ */
+export function getCompare(
+  handles: readonly string[],
+  signal?: AbortSignal,
+): Promise<CompareResponse> {
+  const params = new URLSearchParams({ handles: handles.join(',') });
+  return apiGet<CompareResponse>(`/v1/compare?${params.toString()}`, signal);
+}
+
+/**
+ * The comparison cap, matching `readapi.MaxCompareHandles`.
+ *
+ * Extras are **dropped, not rejected**, and the effective list is echoed back —
+ * so a picker that stops at eight is telling the truth, and one that does not
+ * silently loses columns.
+ */
+export const MAX_COMPARE_HANDLES = 8;
+
+/**
+ * One page of a player's raw event log, newest first.
+ *
+ * `before` is the opaque cursor from the previous page's `next`. **Page until
+ * `next` is absent, never until a page comes back short** — a `?type=`-filtered
+ * page that hit the server's scan bound looks exactly like the end of the log
+ * and is not.
+ */
+export function getPlayerEvents(
+  handle: string,
+  options: { readonly type?: string; readonly before?: string; readonly limit?: number } = {},
+  signal?: AbortSignal,
+): Promise<EventsResponse> {
+  const params = new URLSearchParams({ limit: String(options.limit ?? EVENT_PAGE_SIZE) });
+  if (options.type !== undefined && options.type !== '') params.set('type', options.type);
+  if (options.before !== undefined && options.before !== '') params.set('before', options.before);
+  return apiGet<EventsResponse>(
+    `/v1/players/${encodeURIComponent(handle)}/events?${params.toString()}`,
+    signal,
+  );
+}
+
+/** How many events one page of the raw log asks for. The server clamps above 200. */
+export const EVENT_PAGE_SIZE = 50;
 
 export function getFeed(limit: number, signal?: AbortSignal): Promise<FeedResponse> {
   return apiGet<FeedResponse>(`/v1/feed?limit=${String(limit)}`, signal);

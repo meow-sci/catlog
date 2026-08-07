@@ -1,5 +1,6 @@
 import { copyFile } from 'node:fs/promises';
 import path from 'node:path';
+import optimizeLocales from '@react-aria/optimize-locales-plugin';
 import babel from '@rolldown/plugin-babel';
 import tailwindcss from '@tailwindcss/vite';
 import react, { reactCompilerPreset } from '@vitejs/plugin-react';
@@ -74,6 +75,22 @@ export default defineConfig({
     // Rules of React it depends on are enforced at lint time by
     // eslint-plugin-react-hooks — see .oxlintrc.json.
     babel({ presets: [reactCompilerPreset()] }),
+    // react-aria-components ships its screen-reader strings — "3 results
+    // available", "press Delete to remove" — pre-translated into every locale it
+    // supports, and imports all of them eagerly. catlog is English only and
+    // deliberately so: every timestamp on the site is fixed UTC because "a
+    // leaderboard is a shared artefact, and localising it would make two people
+    // describing the same row disagree". So the other locales are resolved to an
+    // empty module rather than shipped to a browser that will never ask for them.
+    //
+    // `'en'` and not `'en-GB'`: the plugin matches a stripped locale by language
+    // *and* region, so naming a region throws away `en-US` — which is what most
+    // browsers actually report, and React Aria then finds no string table at all
+    // and crashes on the first `Table`. A bare language keeps every English
+    // variant and drops the other thirty-odd.
+    //
+    // `apply: 'build'` because it is a no-op in dev, where nothing is bundled.
+    { ...optimizeLocales.vite({ locales: ['en'] }), apply: 'build' },
     deepLinkFallback(),
   ],
   server: {

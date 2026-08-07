@@ -1,8 +1,50 @@
 # catlog — React reader (`spa/`)
 
 A static, read-only, anonymous React SPA over the catlog public read API: the
-leaderboards, one board at a time, a player's placements, and a live activity
-feed. Four `GET /v1/…` endpoints, no login, no writes.
+leaderboards, one board at a time over any rolling window, a player's placements
+with their ranks, that player's raw event log, handle search, and up to eight
+handles side by side — plus a live activity feed. Seven `GET /v1/…` endpoints, no
+login, no writes.
+
+## What is on it
+
+| Route                    | What a visitor came here for                                                                           |
+| ------------------------ | ------------------------------------------------------------------------------------------------------ |
+| `/`                      | Global figures, their own standing if they have claimed a handle, three featured boards, the live feed |
+| `/boards`                | Which boards exist, how populated, which way each reads                                                |
+| `/boards/{stat}`         | One board, paged, over `all time / daily / weekly / monthly / yearly`                                  |
+| `/p/{handle}`            | Every placement, every rank **and its denominator**, and a way to start comparing                      |
+| `/p/{handle}/events`     | The raw event log — what makes "your record is 214 m/s" checkable rather than asserted                 |
+| `/compare?handles=a,b,c` | Up to eight handles across every board any of them is on                                               |
+| `/search?q=`             | Handle search, as a link rather than only an overlay                                                   |
+
+The design contract both of catlog's frontends implement is
+[`docs/ui-design.md`](../docs/ui-design.md).
+
+## Three things worth knowing before changing anything
+
+**`src/ui/units.ts` is a port of `server/internal/units`, and that file is the
+authority.** The API publishes raw numbers in the unit the event carried, so
+formatting happens once per frontend and the two must agree character for
+character. `src/ui/units.conformance.ts` is `units.Conformance` transcribed;
+`units.test.ts` asserts every row. **A rule change is three edits in one
+commit** — `units.go`, `units_test.go`'s table, and the port.
+
+The trap the renderer exists for: **`_ms` is metres per second in every payload
+key** (`speed_ms`, `fastest_ms`) **while the board unit string `"ms"` is
+milliseconds.** Only `unitForKey` knows the difference.
+
+**Nothing here redacts anything, and it must stay that way.** `install` is
+dropped, `career` and `kid` are relabelled per player, and `wall_t` is omitted —
+all server-side, in `readapi/privacy.go`. The client never sees the raw values,
+which is why the raw-event view cannot leak them. `user_key` has never existed
+on any of these responses.
+
+**The "me" handle is one `localStorage` key and not a session.** Every public
+response is `Cache-Control: s-maxage=30` to a shared cache, so there is no
+server-rendered personalisation available to either frontend even in principle.
+It is never sent to catlog as an identifier, and `credentials: 'omit'` in the
+API client is load-bearing.
 
 **This is a standalone application.** It has its own toolchain, its own
 lockfile, its own build and its own deployment, and it is driven entirely by
@@ -129,3 +171,16 @@ silent). That makes the Rules of React mandatory: no mutation during render, no
 conditional hooks, and **no hand-written `useMemo`/`useCallback`/`memo`** — a
 manual memo makes the compiler bail out of the whole component. `pnpm lint`
 enforces this via `eslint-plugin-react-hooks`; see `.oxlintrc.json`.
+
+**The UI kit is `src/ui/kit/`, built on `react-aria-components`, and it is
+required** (`docs/ui-design.md` §10). A `Table` for every tabular surface, a
+`ComboBox` for search, a `TagGroup` for the comparison chips, `Tabs` for the
+window selector, a `Disclosure` for payloads and context blobs, `Button` /
+`ToggleButton` for actions. New interaction goes into the kit rather than beside
+it — the point of the bake-off is that this side is a proper application, and a
+kit that is really scattered primitives proves nothing.
+
+**Links stay `<a href>`.** React Aria will happily make a whole `Row` or
+`GridListItem` a link, but it does it with press handling rather than an anchor —
+which the router's one delegated `click` listener cannot see, and which cannot be
+middle-clicked, cmd-clicked or copied. Anything that navigates is an anchor.

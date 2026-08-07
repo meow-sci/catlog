@@ -146,6 +146,8 @@ const page = watch(await browser.newPage());
 const index = await apiGet('/v1/leaderboards');
 const anchorBoard = await apiGet(`/v1/leaderboards/${ANCHOR.stat}`);
 const acePlayer = await apiGet('/v1/players/demo_ace');
+const demoSearch = await apiGet('/v1/players?q=demo&limit=50');
+const aceEvents = await apiGet('/v1/players/demo_ace/events?limit=5');
 
 {
   const top = anchorBoard.rows[0];
@@ -176,10 +178,14 @@ const SEEDED = [
     .slice(0, 4)
     .map((b) => ({ path: `/boards/${b.stat}`, expect: [b.title] })),
   {
+    // A profile: every placement, and every rank *with its denominator*. `#3`
+    // on its own says nothing — third of four is not third of four thousand —
+    // so the `players` field the read API added is what is asserted here.
     path: '/p/demo_ace',
     expect: [
       ...acePlayer.stats.slice(0, 5).map((s) => s.title),
-      `rank #${String(acePlayer.stats[0]?.rank ?? 1)}`,
+      `#${String(acePlayer.stats[0]?.rank ?? 1)}`,
+      `of ${String(acePlayer.stats[0]?.players ?? 1)}`,
     ],
   },
   { path: '/p/demo_crasher', expect: [ANCHOR.title, ANCHOR.rendered] },
@@ -188,10 +194,37 @@ const SEEDED = [
   { path: '/boards', expect: index.boards.map((b) => b.title) },
   { path: '/', expect: [ANCHOR.handle, 'Live activity'] },
   // §4.8 answers 404 identically for unknown, retired and banned handles.
-  { path: '/p/definitely_not_a_player', expect: ['No such player'] },
+  { path: '/p/definitely_not_a_player', expect: ['catlog has no public profile for'] },
   // A path no route matches renders the app's own not-found state — not the
   // host's 404 page, and not a blank screen.
-  { path: '/not-a-real-page', expect: ['Page not found', '/not-a-real-page'] },
+  { path: '/not-a-real-page', expect: ['Nothing here', '/not-a-real-page'] },
+  // Search, as a real linkable page. The expectation is the API's own answer,
+  // so a seed change moves both sides together.
+  { path: '/search?q=demo', expect: demoSearch.handles.slice(0, 5) },
+  // A three-handle comparison, straight from a URL somebody could have pasted
+  // into a chat window — which is the whole point of keeping the handles there.
+  {
+    path: '/compare?handles=demo_ace,demo_crasher,ghost_of_a_handle',
+    expect: [
+      'demo_ace',
+      'demo_crasher',
+      // `found: false` is a column, not an omission: a typo must not look like
+      // a defeat.
+      'ghost_of_a_handle',
+      'no such player',
+      'in the world',
+    ],
+  },
+  // The raw event log: the history every other endpoint has an opinion about.
+  {
+    path: '/p/demo_ace/events',
+    expect: [
+      'Everything',
+      'demo_ace',
+      'reported',
+      ...aceEvents.events.slice(0, 3).map((e) => e.type),
+    ],
+  },
 ];
 
 for (const { path, expect } of SEEDED) {
@@ -338,6 +371,204 @@ for (const board of index.boards.filter((b) => b.count > 0).slice(0, 2)) {
   }
   page.context().off('page', onPopup);
   for (const p of opened) await p.close();
+}
+
+// ---------------------------------------------------------------------------
+// The unit renderer, against the numbers the server actually sent.
+//
+// `data-value` on every value cell carries the exact float as the API sent it,
+// and that is what this reads. Reconstructing a number by stripping non-digits
+// out of the rendered text is the thing that breaks the moment a career-time
+// board renders "5m 13s" — which is precisely what the renderer now does.
+// ---------------------------------------------------------------------------
+{
+  await page.goto(urlFor(`/boards/${ANCHOR.stat}`), { waitUntil: 'domcontentloaded' });
+  await textWith(page, ANCHOR.handle);
+  const rendered = await page.$$eval('tr.board-row td.value', (cells) =>
+    cells.map((c) => ({ value: c.getAttribute('data-value'), text: c.innerText.trim() })),
+  );
+  const wantValues = anchorBoard.rows.map((r) => String(r.value));
+  const gotValues = rendered.map((r) => r.value);
+  const ok = JSON.stringify(gotValues) === JSON.stringify(wantValues);
+  console.log(
+    `${ok ? 'ok  ' : 'FAIL'} every value cell carries the exact float the API sent ` +
+      `(${gotValues.length} rows)`,
+  );
+  if (!ok)
+    failures.push(
+      `data-value mismatch: page ${JSON.stringify(gotValues)}, API ${JSON.stringify(wantValues)}`,
+    );
+
+  // Speed never scales and is grouped with U+202F; a career time becomes a
+  // duration. Both are §4 rules the two frontends must agree on character for
+  // character, and both are invisible in a screenshot until they are wrong.
+  check('the anchor renders through the unit renderer', rendered[0]?.text ?? '', [ANCHOR.rendered]);
+
+  // The career-time boards publish **milliseconds** — `"ms"` as a board unit is
+  // the exact string that means metres-per-second as a payload *key* suffix.
+  // Only `units.ForKey` knows the difference, and this is the board side of it.
+  const careerBoard = index.boards.find((b) => (b.unit === 'ms' || b.unit === 's') && b.count > 0);
+  if (careerBoard !== undefined) {
+    const rows = await apiGet(`/v1/leaderboards/${careerBoard.stat}`);
+    await page.goto(urlFor(`/boards/${careerBoard.stat}`), { waitUntil: 'domcontentloaded' });
+    await textWith(page, rows.rows[0]?.handle ?? '');
+    const cells = await page.$$eval('tr.board-row td.value', (cs) =>
+      cs.map((c) => ({ value: Number(c.getAttribute('data-value')), text: c.innerText.trim() })),
+    );
+    for (const cell of cells.slice(0, 5)) {
+      const seconds = careerBoard.unit === 'ms' ? cell.value / 1000 : cell.value;
+      // Under a minute it is "37.5 s"; from a minute up it is two components.
+      const wantsDuration = seconds >= 60;
+      const looksLikeDuration = /\d+(y|d|h|m)\s\d+(d|h|m|s)/.test(cell.text);
+      const good = wantsDuration ? looksLikeDuration : /\d\s(s|ms)$/.test(cell.text);
+      console.log(
+        `${good ? 'ok  ' : 'FAIL'} ${careerBoard.stat}: ${String(cell.value)} ${careerBoard.unit}` +
+          ` renders ${JSON.stringify(cell.text)}`,
+      );
+      if (!good) {
+        failures.push(
+          `${careerBoard.stat}: ${String(cell.value)} rendered ${JSON.stringify(cell.text)}`,
+        );
+      }
+    }
+  }
+
+  // The period selector: a window is a place, so each tab is a real link.
+  const weekly = page.getByRole('tab', { name: 'weekly' });
+  const href = await weekly.getAttribute('href');
+  const periodOk = href !== null && href.includes('period=weekly');
+  console.log(`${periodOk ? 'ok  ' : 'FAIL'} the window selector is a link (${String(href)})`);
+  if (!periodOk) failures.push(`the weekly tab is not a link: ${String(href)}`);
+  await weekly.click();
+  await page.waitForTimeout(500);
+  if (!page.url().includes('period=weekly')) {
+    failures.push(`clicking the weekly tab did not reach it: ${page.url()}`);
+  } else {
+    console.log(`ok   clicking it navigates to ${new URL(page.url()).search}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Handle search, in the header, on every page.
+//
+// The one rule that is invisible until it is wrong: **no request below two
+// characters**, because the server answers 400 rather than an empty 200. The
+// network log is what proves it.
+// ---------------------------------------------------------------------------
+{
+  const searches = [];
+  const onSearch = (r) => {
+    const url = new URL(r.url());
+    if (url.pathname === '/v1/players' && url.searchParams.has('q'))
+      searches.push(url.searchParams.get('q'));
+  };
+  page.on('request', onSearch);
+
+  await page.goto(BASE, { waitUntil: 'domcontentloaded' });
+  await textWith(page, ANCHOR.handle);
+
+  const box = page.getByPlaceholder('Find a handle').first();
+  await box.click();
+  await box.type('d', { delay: 60 });
+  await page.waitForTimeout(600);
+  const belowFloor = searches.length === 0;
+  console.log(
+    `${belowFloor ? 'ok  ' : 'FAIL'} one character asked the server nothing ` +
+      `(${JSON.stringify(searches)})`,
+  );
+  if (!belowFloor) {
+    failures.push(
+      `a one-character query reached the origin, which answers 400: ${JSON.stringify(searches)}`,
+    );
+  }
+
+  await box.type('emo', { delay: 60 });
+  const suggestion = page.getByRole('option', { name: ANCHOR.handle });
+  try {
+    await suggestion.waitFor({ timeout: 10_000 });
+    console.log(`ok   typing "demo" suggested ${ANCHOR.handle}`);
+  } catch {
+    failures.push(`the search box never suggested ${ANCHOR.handle} for "demo"`);
+  }
+  await suggestion.click().catch(() => {});
+  const landed = await textWith(page, 'Handle claimed');
+  const wentToProfile = new URL(page.url()).pathname.endsWith(`/p/${ANCHOR.handle}`);
+  console.log(`${wentToProfile ? 'ok  ' : 'FAIL'} picking a suggestion opened ${page.url()}`);
+  if (!wentToProfile) failures.push(`picking a suggestion did not open the profile: ${page.url()}`);
+  check('the profile the search reached', landed, [ANCHOR.handle, ANCHOR.title]);
+  page.off('request', onSearch);
+}
+
+// ---------------------------------------------------------------------------
+// The "me" handle, and the only property that matters about it: it survives a
+// reload. It is one localStorage key, no account and no session — every public
+// response is `s-maxage=30` to a shared cache, so there is no server-rendered
+// personalisation available to either frontend even in principle.
+// ---------------------------------------------------------------------------
+{
+  await page.goto(urlFor(`/p/${ANCHOR.handle}`), { waitUntil: 'domcontentloaded' });
+  await textWith(page, 'Handle claimed');
+  await page.getByRole('button', { name: 'This is me' }).click();
+  await page.waitForTimeout(300);
+
+  const stored = await page.evaluate(() => window.localStorage.getItem('catlog:me'));
+  console.log(
+    `${stored === ANCHOR.handle ? 'ok  ' : 'FAIL'} catlog:me = ${JSON.stringify(stored)}`,
+  );
+  if (stored !== ANCHOR.handle) failures.push(`catlog:me was ${JSON.stringify(stored)}`);
+
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  const after = await textWith(page, 'This is you');
+  // The header chip and the profile toggle both come back, from one storage key
+  // and no session. `You:` and the handle are separate elements, so they are
+  // separate needles.
+  check('after a reload', after, ['You:', ANCHOR.handle, 'This is you']);
+
+  // And the row on the board it applies to is marked as the viewer's own.
+  await page.goto(urlFor(`/boards/${ANCHOR.stat}`), { waitUntil: 'domcontentloaded' });
+  await textWith(page, ANCHOR.handle);
+  const marked = await page
+    .$eval(`tr.board-row[data-handle="${ANCHOR.handle}"]`, (row) =>
+      row.className.includes('bg-wash-selected'),
+    )
+    .catch(() => false);
+  console.log(`${marked ? 'ok  ' : 'FAIL'} the viewer's own row is highlighted on the board`);
+  if (!marked) failures.push('the "me" row was not highlighted on the board page');
+
+  // Forget it again so the rest of the script runs as an anonymous visitor.
+  await page.evaluate(() => {
+    window.localStorage.removeItem('catlog:me');
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Privacy, on the one page that shows raw stored data.
+//
+// Redaction is the server's job and cannot be implemented in a frontend — this
+// is a tripwire on the side that renders, not a substitute for it.
+// ---------------------------------------------------------------------------
+{
+  await page.goto(urlFor(`/p/demo_ace/events`), { waitUntil: 'domcontentloaded' });
+  await textWith(page, 'reported');
+  // Open every payload disclosure, so the assertion covers what a reader can
+  // actually reach rather than only what is visible on first paint.
+  for (const trigger of await page.getByRole('button', { name: 'Payload' }).all()) {
+    await trigger.click().catch(() => {});
+  }
+  const html = await page.content();
+  for (const forbidden of ['user_key', '"install"', 'install_id', 'wall_t']) {
+    const clean = !html.includes(forbidden);
+    console.log(
+      `${clean ? 'ok  ' : 'FAIL'} the raw event view never says ${JSON.stringify(forbidden)}`,
+    );
+    if (!clean) failures.push(`the raw event view rendered ${forbidden}`);
+  }
+  // What it *does* show: the events themselves, with raw payload numbers.
+  check(
+    'the raw event view',
+    await page.locator('#root').innerText(),
+    aceEvents.events.slice(0, 2).map((e) => e.type),
+  );
 }
 
 // The live feed, end to end: push one event through the loopback admin API and
