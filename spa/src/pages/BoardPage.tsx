@@ -1,15 +1,15 @@
 import { ArrowLeft, ChevronLeft, ChevronRight } from 'lucide-react';
-import { Button } from 'react-aria-components';
+import type { ReactNode } from 'react';
 import { getBoard } from '../api/client.ts';
 import { useResource } from '../api/useResource.ts';
-import { hrefFor, navigate, PAGE_SIZE } from '../state/router.ts';
+import { hrefFor, PAGE_SIZE } from '../state/router.ts';
 import { BoardTable } from '../ui/BoardTable.tsx';
+import { cn } from '../ui/cn.ts';
 import { Empty, Failure, Loading, Panel, PanelHeader } from '../ui/kit.tsx';
 
 const pagerButton =
   'inline-flex items-center gap-1 rounded-md border border-ink-800 bg-ink-850 px-3 py-1.5 ' +
-  'text-xs font-medium text-ink-200 transition-colors data-hovered:bg-ink-800 ' +
-  'data-disabled:cursor-not-allowed data-disabled:opacity-40';
+  'text-xs font-medium text-ink-200 transition-colors';
 
 /**
  * One leaderboard, paged.
@@ -77,28 +77,49 @@ export function BoardPage(props: { readonly stat: string; readonly offset: numbe
 
       {(hasPrev || hasNext) && (
         <nav aria-label="Pagination" className="flex items-center justify-between">
-          <Button
-            className={pagerButton}
-            isDisabled={!hasPrev}
-            onPress={() => {
-              navigate({ name: 'board', stat, offset: Math.max(0, offset - PAGE_SIZE) });
-            }}
+          <PagerLink
+            href={hrefFor({ name: 'board', stat, offset: Math.max(0, offset - PAGE_SIZE) })}
+            isEnabled={hasPrev}
           >
             <ChevronLeft aria-hidden className="size-3.5" />
             Previous
-          </Button>
-          <Button
-            className={pagerButton}
-            isDisabled={!hasNext}
-            onPress={() => {
-              navigate({ name: 'board', stat, offset: offset + PAGE_SIZE });
-            }}
+          </PagerLink>
+          <PagerLink
+            href={hrefFor({ name: 'board', stat, offset: offset + PAGE_SIZE })}
+            isEnabled={hasNext}
           >
             Next
             <ChevronRight aria-hidden className="size-3.5" />
-          </Button>
+          </PagerLink>
         </nav>
       )}
     </div>
+  );
+}
+
+/**
+ * One step of the pager.
+ *
+ * An `<a href>` and not a button: a page of a board is a place, so it must be
+ * middle-clickable, cmd-clickable and copyable like every other link here. The
+ * unavailable direction renders as a `<span aria-disabled>` rather than a dead
+ * link — there is no URL to offer, and a link to nowhere is worse than no link.
+ */
+function PagerLink(props: {
+  readonly href: string;
+  readonly isEnabled: boolean;
+  readonly children: ReactNode;
+}) {
+  if (!props.isEnabled) {
+    return (
+      <span aria-disabled className={cn(pagerButton, 'cursor-not-allowed opacity-40')}>
+        {props.children}
+      </span>
+    );
+  }
+  return (
+    <a href={props.href} className={cn(pagerButton, 'hover:bg-ink-800')}>
+      {props.children}
+    </a>
   );
 }

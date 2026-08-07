@@ -59,9 +59,10 @@ describe('BoardsPage', () => {
     expect(screen.getByText('Dockings')).toBeTruthy();
     expect(screen.getByText('empty')).toBeTruthy();
 
-    // Each one links to its own board route.
+    // Each one links to its own board route — a real path, so it survives being
+    // copied out of the address bar and pasted somewhere else.
     const link = screen.getByRole('link', { name: /Biggest Lithobrake Survived/ });
-    expect(link.getAttribute('href')).toBe('#/boards/biggest_lithobrake_survived');
+    expect(link.getAttribute('href')).toBe('/boards/biggest_lithobrake_survived');
   });
 
   it('shows the server error rather than an empty list when the read fails', async () => {
@@ -94,7 +95,31 @@ describe('BoardPage', () => {
 
     // The handle links to the profile route.
     expect(screen.getByRole('link', { name: 'demo_crasher' }).getAttribute('href')).toBe(
-      '#/p/demo_crasher',
+      '/p/demo_crasher',
+    );
+  });
+
+  it('pages with links, not click handlers, so a page of a board can be opened in a tab', async () => {
+    stubFetch([
+      {
+        path: '/v1/leaderboards/biggest_lithobrake_survived',
+        // A full page (limit rows returned) is what makes "next" available.
+        body: {
+          ...LITHOBRAKE,
+          limit: 2,
+          offset: 50,
+          rows: LITHOBRAKE.rows,
+        },
+      },
+    ]);
+    render(<BoardPage stat="biggest_lithobrake_survived" offset={50} />);
+    await screen.findByRole('link', { name: 'demo_crasher' });
+
+    expect(screen.getByRole('link', { name: /Previous/ }).getAttribute('href')).toBe(
+      '/boards/biggest_lithobrake_survived',
+    );
+    expect(screen.getByRole('link', { name: /Next/ }).getAttribute('href')).toBe(
+      '/boards/biggest_lithobrake_survived?offset=100',
     );
   });
 

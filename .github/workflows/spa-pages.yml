@@ -1,17 +1,33 @@
 # Build `spa/` and publish it to GitHub Pages.
 #
+# `spa/` is a standalone application: pnpm from inside its own directory is the
+# whole build, and this workflow never invokes `make` or touches server/, mod/
+# or site/. Nothing here is coupled to the Go or .NET halves of the repo — they
+# have their own pipeline, and the only thing the two share is an HTTP contract.
+#
 # This file is an ASSET, in the same sense as everything under infra/ (D1: we
 # produce deploy artefacts, we never provision). Nothing here runs until the
 # owner enables Pages for the repository (Settings → Pages → Source: GitHub
-# Actions) and sets the two inputs below. Until then it is inert.
+# Actions) and sets the inputs below. Until then it is inert.
 #
-# Inputs the owner controls, both optional:
+# Inputs the owner controls, all optional:
 #
 #   vars.CATLOG_API_BASE   the origin of the public read API this build points
 #                          at, e.g. https://catlog.example. Left unset, the
 #                          bundle is built against the §5.3 dev address
 #                          (http://127.0.0.1:8080) and will only work for
 #                          someone running catlogd locally.
+#
+#   vars.SPA_BASE          the path the site is served from, with both slashes.
+#                          Unset means a *project* page — `https://<owner>.
+#                          github.io/<repo>/` — so the default is `/<repo>/`.
+#                          Set it to `/` for a user/org page or a custom domain,
+#                          which is the deployment the app is written for.
+#
+# Deep links need the host to answer an unmatched path with the app. Pages has
+# no rewrite rules; its one hook is a `404.html` at the site root, and the build
+# emits one as a byte copy of `index.html` (spa/vite.config.ts). Nothing here
+# has to do anything for that beyond uploading the directory.
 #
 # And one thing the *server* needs, which this workflow cannot do for you:
 # catlogd must list the Pages origin in `[cors] allowed_origins`
@@ -54,17 +70,25 @@ jobs:
 
       - run: pnpm -C spa install --frozen-lockfile
 
-      # The same three gates the Makefile runs. A bundle that does not lint or
-      # does not pass its tests must not reach Pages.
+      # The four gates `pnpm check` runs locally, spelled out so a failure names
+      # the tool that failed. A bundle that does not typecheck, lint, match the
+      # formatter or pass its tests must not reach Pages.
+      - run: pnpm -C spa typecheck
       - run: pnpm -C spa lint
+      - run: pnpm -C spa fmt:check
       - run: pnpm -C spa test
 
       - run: pnpm -C spa build
         env:
-          # Project pages are served from the repo subpath, and the repo may be
-          # renamed or forked — so it is read, not hardcoded.
-          SPA_BASE: /${{ github.event.repository.name }}/
+          # A project page is served from the repo subpath, and the repo may be
+          # renamed or forked — so the default is read, not hardcoded. A custom
+          # domain sets vars.SPA_BASE to `/`.
+          SPA_BASE: ${{ vars.SPA_BASE || format('/{0}/', github.event.repository.name) }}
           VITE_CATLOG_API_BASE: ${{ vars.CATLOG_API_BASE }}
+
+      # Fails the build rather than shipping a site whose deep links 404.
+      - name: check the deep-link fallback was emitted
+        run: test -f spa/dist/404.html
 
       - uses: actions/upload-pages-artifact@v3
         with:

@@ -2,7 +2,10 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+    <!-- Root-absolute, never `./` — Vite rewrites this to `<base>favicon.svg`, and
+         a relative URL would resolve against the *route* (`/boards/rud_total/`)
+         once deep links stopped being fragments, 404ing on every nested page. -->
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta
       name="description"

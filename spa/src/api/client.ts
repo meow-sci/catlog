@@ -14,8 +14,8 @@ import type { BoardResponse, BoardsResponse, FeedResponse, PlayerResponse } from
  *
  * Empty string means same-origin, which is what `pnpm dev` uses so the Vite
  * proxy can stand in for the server. `undefined` (no `.env` at all) falls back
- * to the §5.3 dev address, so a bare `vite build` produces something that works
- * against `make dev`.
+ * to the §5.3 dev address, so a bare `pnpm build` produces something that works
+ * against a locally running catlogd.
  */
 export const API_BASE = (import.meta.env.VITE_CATLOG_API_BASE ?? 'http://127.0.0.1:8080').replace(
   /\/+$/,

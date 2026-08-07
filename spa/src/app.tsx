@@ -1,20 +1,54 @@
 import { useStore } from '@nanostores/react';
 import { Cat } from 'lucide-react';
+import { useEffect, useRef } from 'react';
 import { API_BASE } from './api/client.ts';
 import { BoardPage } from './pages/BoardPage.tsx';
 import { BoardsPage } from './pages/BoardsPage.tsx';
 import { HomePage } from './pages/HomePage.tsx';
 import { PlayerPage } from './pages/PlayerPage.tsx';
-import { $route, hrefFor, type Route } from './state/router.ts';
+import { $route, hrefFor, interceptLinkClicks, routeKey, type Route } from './state/router.ts';
 import { cn } from './ui/cn.ts';
 import { Panel } from './ui/kit.tsx';
 
 export function App() {
   const route = useStore($route);
+  const key = routeKey(route);
+  const main = useRef<HTMLElement>(null);
+
+  // Every in-app `<a href>` is intercepted here, by one delegated listener, so
+  // the links themselves stay plain anchors. See `interceptLinkClicks`.
+  useEffect(() => interceptLinkClicks(), []);
+
+  // What a full page load does for free, and a client-side navigation does not:
+  // start at the top of the document, with focus at the top of the new content
+  // rather than wherever the link that was just clicked used to be. Without the
+  // focus move a screen-reader user stays parked in the old page's DOM and hears
+  // nothing about the new one.
+  //
+  // The ref holds the key this already ran for. It is the one mutable cell in
+  // the app and it exists because "did the route change?" has no other honest
+  // answer in an effect: a plain first-render flag would fire spuriously under
+  // StrictMode's double-invoked mount, and would then steal focus on first load.
+  // Touched only from inside the effect, never during render.
+  const settled = useRef(key);
+  useEffect(() => {
+    if (settled.current === key) return;
+    settled.current = key;
+    window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+    main.current?.focus();
+  }, [key]);
+
   return (
     <div className="flex min-h-dvh flex-col">
       <SiteHeader route={route} />
-      <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-8">
+      {/* `tabIndex={-1}` makes this focusable by script but not by tabbing, which
+          is what lets the navigation above move focus here without adding a stop
+          to everybody else's tab order. */}
+      <main
+        ref={main}
+        tabIndex={-1}
+        className="mx-auto w-full max-w-5xl flex-1 px-4 py-8 outline-none"
+      >
         <Screen route={route} />
       </main>
       <SiteFooter />

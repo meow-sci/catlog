@@ -3,6 +3,12 @@
 #
 # Targets whose work package has not landed yet print "not yet implemented (WPn)"
 # and exit 0, so `make` never breaks while the plan is being executed in order.
+#
+# SCOPE: the Go server, the .NET mod and the server-rendered datastar site.
+# The React reader is a separate, independently built and independently deployed
+# application with its own toolchain; it is driven only by pnpm from inside its
+# own directory and is deliberately absent from every target here. Its README
+# says how to run it. The two share an HTTP contract and nothing else.
 
 SHELL := /bin/bash
 .DEFAULT_GOAL := help
@@ -19,7 +25,6 @@ SPEED      ?=
 E2E_DATA_DIR ?= data-e2e
 
 .PHONY: help bootstrap build server-build mod-build site-build \
-        spa-build spa-dev spa-test spa-lint \
         test server-test mod-test test-integration test-nginx \
         e2e e2e-browser e2e-full server-run-test-env \
         sim dev mockidp-run keys seed testvectors clean
@@ -35,10 +40,9 @@ bootstrap:
 	cd server && go mod download
 	dotnet restore mod/catlog.slnx
 	pnpm -C site install
-	pnpm -C spa install
 
-## build: server-build + mod-build + site-build + spa-build
-build: server-build mod-build site-build spa-build
+## build: server-build + mod-build + site-build
+build: server-build mod-build site-build
 
 ## server-build: compile catlogd, catlogctl and mockidp into server/bin/
 server-build:
@@ -52,29 +56,8 @@ mod-build:
 site-build:
 	pnpm -C site build
 
-## spa-build: bundle the React reader into spa/dist/ (SPA_BASE=/catlog/ VITE_CATLOG_API_BASE=…)
-# The second frontend: a static React SPA over the §4.8 read API, deployed to
-# GitHub Pages by .github/workflows/spa-pages.yml. Nothing serves spa/dist/
-# locally — `make spa-dev` or `pnpm -C spa preview` is how you look at it.
-spa-build:
-	pnpm -C spa build
-
-## spa-dev: vite dev server for the SPA, proxying /v1 to a local catlogd
-# Same-origin through the proxy, so this needs no CORS configuration at all.
-# Run `make dev` in another terminal first.
-spa-dev:
-	pnpm -C spa dev
-
-## spa-test: vitest unit tests for the SPA (no browser, no network)
-spa-test:
-	pnpm -C spa test
-
-## spa-lint: tsc + oxlint + oxfmt --check
-spa-lint:
-	pnpm -C spa lint
-
-## test: server-test + mod-test + spa-test (no docker, no network)
-test: server-test mod-test spa-test
+## test: server-test + mod-test (no docker, no network)
+test: server-test mod-test
 
 ## server-test: go unit tests
 server-test:
@@ -85,7 +68,7 @@ mod-test:
 	dotnet test mod/catlog.lib.tests
 
 ## test-integration: server integration tests + mod-vs-server tests
-# The mod leg spawns server/bin/catlogd on random loopback ports with throwaway
+# The mod leg launches server/bin/catlogd on random loopback ports with throwaway
 # data directories (§7.5), so the binaries have to exist before it runs.
 test-integration: server-build
 	cd server && go test -tags integration -count=1 ./integration/
@@ -181,5 +164,5 @@ testvectors: server-build
 
 ## clean: remove build output (keeps data/ and node_modules/)
 clean:
-	rm -rf server/bin site/dist spa/dist site/e2e/.report site/e2e/.results $(E2E_DATA_DIR) data-e2e-full
+	rm -rf server/bin site/dist site/e2e/.report site/e2e/.results $(E2E_DATA_DIR) data-e2e-full
 	dotnet clean mod/catlog.slnx -c Release --verbosity quiet
