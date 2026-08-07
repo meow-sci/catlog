@@ -20,13 +20,17 @@ game** — the mod's core is a KSA-free library exercised by a console gameplay 
 | `server/` | Go module `github.com/meow-sci/catlog/server` — `catlogd`, `catlogctl`, `mockidp` |
 | `mod/` | .NET 10 solution — `catlog.lib` (KSA-free core), `catlog.sim`, tests; the game mod joins in WP8 |
 | `site/` | Static assets (CSS/JS) + the Playwright e2e suite. HTML is rendered by the Go server. |
-| `docs/` | The normative contracts, extracted from the plan: [events](docs/events.md), [ingest & read API](docs/ingest-api.md), [credential](docs/credential.md), [identity](docs/identity.md), [decisions](docs/DECISIONS.md) |
+| `docs/` | The [constitution](docs/CONSTITUTION.md) plus the normative contracts, extracted from the plan: [events](docs/events.md), [ingest & read API](docs/ingest-api.md), [credential](docs/credential.md), [identity](docs/identity.md), [decisions](docs/DECISIONS.md) |
 | `contracts/` | Cross-language conformance vectors consumed by both the Go and C# test suites |
 | `infra/` | nginx configs, systemd units, deploy script |
 | `plans/` | Background: the outline plan and the proposal document |
 
 [INITIAL_IMPL_PLAN.md](INITIAL_IMPL_PLAN.md) is the authoritative spec and the work-package
 breakdown; `docs/DECISIONS.md` is the running log of everything that deviated from it.
+[docs/CONSTITUTION.md](docs/CONSTITUTION.md) sits above both: the standing principles catlog
+optimises for — privacy, cost, the player's frame budget, local-first development, an immutable
+log, and anti-cheat kept deliberately proportionate to a hobby project. Read it before making a
+design decision; record the decision itself in `docs/DECISIONS.md`.
 
 ## Requirements
 
