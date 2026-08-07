@@ -21,6 +21,8 @@ Origin: [INITIAL_IMPL_PLAN.md](../INITIAL_IMPL_PLAN.md) §4.3–§4.5 and §4.8�
 | Clock skew (proof `iat`) | ±300 s | `401 clock_skew` |
 | Per-credential rate | token bucket: 1 batch / 2 s, burst 5 | `429` + `Retry-After` |
 
+**Client-side rate floor (mod, not server).** The token bucket above is the server's backstop against a *hostile* client, and it stays exactly as specified. Complementing it, the mod enforces its own hard minimum of **one request per 30 s** (`Wire.MinShipIntervalSeconds`) at its point of transmission, so a stock install never approaches the bucket in the first place — a client at its own floor spends 6.7% of the sustained allowance. It is a compile-time constant with no corresponding key in `catlog.toml`: `ship_interval_s` is clamped up to it, and the shipper independently refuses to transmit inside the window whatever the config says, so editing the TOML cannot turn one install into a firehose. Every retry in the recovery table below is subject to it too, including `409` and `413`, which used to resend immediately. The single exemption is the mod's once-per-session courtesy flush at game unload. Servers must not rely on this — it is a promise about the shipped client, not a wire rule — but it is why a well-behaved client should never produce a `429`.
+
 ## Ingest HTTP API
 
 ```
@@ -169,6 +171,8 @@ Claims:
 13. Decompress (cap 8 MiB), parse NDJSON, validate envelopes, txn: insert events (`INSERT OR IGNORE` on `(player_id,event_id)`), upsert `stream_state`, insert `ingest_batch`, commit.
 
 Mod-side failure handling: `401 clock_skew` → recompute offset from `Date` header, re-sign, retry once; `409` → mint new `sid`, reset `seq=1`, continue (old chain abandoned); `413` → halve batch event cap (floor 50), retry; `429`/`5xx`/network → exponential backoff 1 s·2ⁿ + full jitter, cap 5 min, batches coalesce.
+
+Every one of those retries also waits out the mod's client-side 30 s floor (see the limits table): "retry" means "on the next attempt", never "immediately", and each backoff is `max(ladder, 30 s)` — so the published 1 s·2ⁿ ladder only starts to bind at its sixth rung. `Retry-After` is honoured when it asks for *longer* and floored when it asks for shorter. This costs recovery latency and nothing else: a `413` converging 500 → 50 takes four windows rather than four round trips, which for a loss-tolerant bulk telemetry pump is free.
 
 ### What the stream chain actually buys (`sid` / `seq` / `ph`)
 

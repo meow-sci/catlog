@@ -215,6 +215,12 @@ public sealed class StatusWindow
                 ImGui.TextColored(Bad, $"stopped: {attempt.Error}");
                 break;
 
+            case ShipOutcome.ClockResynced:
+                // Not a failure and not a retry count: the offset was relearned and the same batch
+                // goes again when the 30 s floor next opens.
+                ImGui.TextColored(Warn, $"clock resynced by {shipper.ClockOffsetMs} ms · {Ago(agoSeconds)}");
+                break;
+
             default:
                 ImGui.TextColored(Warn,
                     $"HTTP {attempt.StatusCode} {attempt.Error} · retrying (attempt {shipper.ConsecutiveFailures}) · {Ago(agoSeconds)}");

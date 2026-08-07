@@ -49,7 +49,10 @@ public sealed class CatlogRuntime : IDisposable
     private const string SamplerSubsystem = "sampler";
 
     private static readonly TimeSpan WorkerDrainBudget = TimeSpan.FromSeconds(5);
-    private static readonly TimeSpan FinalShipBudget = TimeSpan.FromSeconds(5);
+
+    // Tight on purpose: this is the longest the game can sit still because of catlog while it is
+    // closing. A batch that has not left in two seconds is not worth holding the process for.
+    private static readonly TimeSpan FinalShipBudget = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan PruneInterval = TimeSpan.FromSeconds(30);
 
     private readonly GameBridge _bridge = new();
@@ -193,11 +196,20 @@ public sealed class CatlogRuntime : IDisposable
         {
             try
             {
+                // THE ONLY PLACE THE SHIPPED MOD CONSTRUCTS A SHIPPER, and it passes no clock.
+                // That is load-bearing, not incidental: BatchShipper measures the hard 30 s
+                // Wire.MinShipIntervalSeconds floor against its IShipperClock, and omitting the
+                // argument pins it to SystemShipperClock — the real wall clock. There is
+                // deliberately no config key, no environment variable and no debug flag anywhere
+                // in mod/catlog that can reach that parameter, so nothing a player can edit can
+                // virtualise time and shrink the floor. ShipperOptions carries cadence numbers
+                // only; the floor is not one of them and cannot be expressed there.
                 shipper = new BatchShipper(
                     new ShipperOptions(
                         IngestUrl: config.IngestUrl,
                         // The player's cadence knobs: ship_interval_s is the normal trigger
-                        // (~60 s), ship_max_pending only the safety valve.
+                        // (~60 s, never below the 30 s floor), ship_max_pending only the safety
+                        // valve — and the valve cannot open the floor early either.
                         PendingTrigger: config.ShipMaxPending,
                         AgeTriggerSeconds: config.ShipIntervalS,
                         // Pruning is the worker's job — exactly one pruner, whether or not a
@@ -402,11 +414,25 @@ public sealed class CatlogRuntime : IDisposable
 
         FinalShip();
 
-        _shipper?.Dispose();
-        _shipperOutbox?.Dispose();
-        _workerOutbox?.Dispose();
-        _credential?.Dispose();
-        _cts.Dispose();
+        // Defensive: FinalShip may have abandoned a request that is still unwinding on a pool
+        // thread, and a disposal racing it must not throw out of the host's unload path.
+        Close(_shipper);
+        Close(_shipperOutbox);
+        Close(_workerOutbox);
+        Close(_credential);
+        Close(_cts);
+    }
+
+    private static void Close(IDisposable? disposable)
+    {
+        try
+        {
+            disposable?.Dispose();
+        }
+        catch (Exception ex)
+        {
+            ModLog.Log.Debug($"catlog: disposing {disposable?.GetType().Name} at unload failed: {ex.Message}");
+        }
     }
 
     private void Start()
@@ -560,27 +586,31 @@ public sealed class CatlogRuntime : IDisposable
         }
     }
 
-    // A bounded best-effort drain at unload: the game is closing, but a player who just finished a
-    // flight should not have to relaunch to see it on the board. ConsecutiveFailures is the ceiling
-    // — which only works because it is now advanced by ShipOnceAsync itself.
+    // ONE ship attempt at unload, hard-bounded, and then the game closes whatever happened.
+    //
+    // It is a courtesy, not a guarantee: outbox.db is on disk and its rows are deleted only on a
+    // 200, so anything that does not go out here is picked up by the next run with nothing lost.
+    // That is what makes "one attempt, any outcome, move on" the right trade — a drain loop or a
+    // retry ladder here would risk the game appearing to hang on quit in exchange for an
+    // optimisation we do not need. BatchShipper.FinalShip owns the timeout and never throws; this
+    // logs one line and proceeds to disposal regardless.
     private void FinalShip()
     {
-        if (_shipper is null || _shipper.IsDead)
+        if (_shipper is null)
             return;
 
-        long deadline = Stopwatch.GetTimestamp() + (long)(Stopwatch.Frequency * FinalShipBudget.TotalSeconds);
-        try
+        ShipAttempt attempt = _shipper.FinalShip(FinalShipBudget);
+        if (attempt.Outcome is ShipOutcome.Accepted or ShipOutcome.Replayed)
         {
-            while (Stopwatch.GetTimestamp() < deadline && _shipper.ConsecutiveFailures < 3)
-            {
-                ShipAttempt attempt = _shipper.ShipOnceAsync(CancellationToken.None).GetAwaiter().GetResult();
-                if (attempt.Outcome is ShipOutcome.NothingToShip or ShipOutcome.Fatal)
-                    return;
-            }
+            ModLog.Log.Info($"catlog: shipped {attempt.EventsShipped} event(s) on the way out.");
+            return;
         }
-        catch (Exception ex)
+
+        if (attempt.Outcome is not ShipOutcome.NothingToShip)
         {
-            ModLog.Log.Debug($"catlog: the final ship attempt failed: {ex.Message}");
+            ModLog.Log.Debug(
+                $"catlog: the final ship attempt did not deliver ({attempt.Outcome}: {attempt.Error}); "
+                + "the events stay in the outbox for the next run.");
         }
     }
 

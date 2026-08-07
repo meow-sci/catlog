@@ -45,6 +45,12 @@ public sealed class ModConfig
         # This file is rewritten by the mod when settings change in-game. Comments you add
         # outside this header will not survive a rewrite; unknown keys are ignored.
         # Out-of-range values are clamped with a warning rather than rejected.
+        #
+        # ship_interval_s has a HARD MINIMUM of 30 seconds that lives in the mod code, not
+        # here. Setting it lower is clamped up to 30, and even if it were not, the shipper
+        # refuses to send two batches to the server less than 30 seconds apart no matter
+        # what this file says. There is no key that raises or lowers that. Events are never
+        # lost by waiting: they queue in outbox.db and go out in the next batch.
 
         """;
 
@@ -74,6 +80,12 @@ public sealed class ModConfig
     /// normal ship cadence — the mod is a bulk telemetry pump, not a live feed. Clamped to
     /// [<see cref="Wire.MinShipAgeTriggerSeconds"/>, <see cref="Wire.MaxShipAgeTriggerSeconds"/>].
     /// </summary>
+    /// <remarks>
+    /// The lower clamp is <see cref="Wire.MinShipIntervalSeconds"/>, the hard-coded floor, and the
+    /// clamp is the courtesy rather than the enforcement: <c>BatchShipper</c> refuses to transmit
+    /// inside the window whatever this says, so editing the file below 30 changes nothing except
+    /// that the player would otherwise be reading a number the mod does not honour.
+    /// </remarks>
     public double ShipIntervalS { get; set; } = Wire.ShipAgeTriggerSeconds;
 
     /// <summary>
@@ -82,6 +94,11 @@ public sealed class ModConfig
     /// <see cref="Wire.ShipPendingTrigger"/>). Clamped to
     /// [<see cref="Wire.MinBatchEventCap"/>, <see cref="Wire.MaxEventsPerBatch"/>].
     /// </summary>
+    /// <remarks>
+    /// "Whatever <see cref="ShipIntervalS"/> says" does <b>not</b> extend to
+    /// <see cref="Wire.MinShipIntervalSeconds"/>. Lowering this key makes batches smaller and more
+    /// frequent only up to the floor; past it the events queue in the outbox instead.
+    /// </remarks>
     public int ShipMaxPending { get; set; } = Wire.ShipPendingTrigger;
 
     /// <summary>Log verbosity: one of <c>debug</c>, <c>info</c>, <c>warn</c>, <c>error</c>.</summary>

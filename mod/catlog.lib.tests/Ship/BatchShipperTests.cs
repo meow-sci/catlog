@@ -23,6 +23,9 @@ public sealed class BatchShipperTests
 {
     private const string IngestUrl = "http://127.0.0.1:8080/v1/ingest";
 
+    /// <summary>The hard, non-configurable minimum between two requests to the ingest endpoint.</summary>
+    private static readonly TimeSpan ShipFloor = TimeSpan.FromSeconds(Wire.MinShipIntervalSeconds);
+
     // ----- request shape --------------------------------------------------------------
 
     [Fact]
@@ -78,8 +81,10 @@ public sealed class BatchShipperTests
 
         harness.Outbox.Append(TestData.Envelopes(2));
         await harness.Shipper.ShipOnceAsync();
+        harness.OpenShipWindow();
         harness.Outbox.Append(TestData.Envelopes(2));
         await harness.Shipper.ShipOnceAsync();
+        harness.OpenShipWindow();
         harness.Outbox.Append(TestData.Envelopes(2));
         await harness.Shipper.ShipOnceAsync();
 
@@ -135,9 +140,19 @@ public sealed class BatchShipperTests
 
     // ----- §4.5.3 recovery table ------------------------------------------------------
 
-    /// <summary>401 clock_skew → recompute the offset from the <c>Date</c> header, re-sign, retry once.</summary>
+    /// <summary>
+    /// 401 clock_skew → recompute the offset from the <c>Date</c> header and re-sign the same
+    /// batch on the next attempt.
+    /// </summary>
+    /// <remarks>
+    /// The re-signed request used to go out immediately, inside the same
+    /// <see cref="Wire.MinShipIntervalSeconds"/> window. It no longer does: a retry is a request
+    /// to the ingest endpoint like any other, so it waits for the window like any other. Nothing
+    /// about the recovery changes except when it lands — the offset is learned and persisted
+    /// straight away, and the batch id, the seq and the bytes are all still the originals.
+    /// </remarks>
     [Fact]
-    public async Task ClockSkew_ResyncsFromTheDateHeaderAndRetriesOnce()
+    public async Task ClockSkew_ResyncsFromTheDateHeaderAndResendsInTheNextWindow()
     {
         DateTimeOffset localNow = DateTimeOffset.UnixEpoch.AddSeconds(1_770_000_000);
         DateTimeOffset serverNow = localNow.AddHours(3); // the player's clock is three hours slow
@@ -147,16 +162,27 @@ public sealed class BatchShipperTests
         using var harness = new Harness(handler, clock: new FakeShipperClock(localNow));
         harness.Outbox.Append(TestData.Envelopes(1));
 
-        ShipAttempt attempt = await harness.Shipper.ShipOnceAsync();
+        ShipAttempt resync = await harness.Shipper.ShipOnceAsync();
 
-        Assert.Equal(ShipOutcome.Accepted, attempt.Outcome);
-        Assert.Equal(2, handler.Requests.Count);
+        Assert.Equal(ShipOutcome.ClockResynced, resync.Outcome);
+        Assert.Single(handler.Requests);
         Assert.Equal((long)TimeSpan.FromHours(3).TotalMilliseconds, harness.Shipper.ClockOffsetMs);
+        Assert.Equal(1, harness.Outbox.PendingCount);
+
+        // Not even a resync buys a request inside the window.
+        Assert.Equal(ShipOutcome.Throttled, (await harness.Shipper.ShipOnceAsync()).Outcome);
+        Assert.Single(handler.Requests);
+
+        harness.OpenShipWindow();
+        ShipAttempt accepted = await harness.Shipper.ShipOnceAsync();
+
+        Assert.Equal(ShipOutcome.Accepted, accepted.Outcome);
+        Assert.Equal(2, handler.Requests.Count);
 
         long firstIat = handler.Requests[0].ProofClaims.GetProperty("iat").GetInt64();
         long secondIat = handler.Requests[1].ProofClaims.GetProperty("iat").GetInt64();
         Assert.Equal(localNow.ToUnixTimeSeconds(), firstIat);
-        Assert.Equal(serverNow.ToUnixTimeSeconds(), secondIat);
+        Assert.Equal(serverNow.Add(ShipFloor).ToUnixTimeSeconds(), secondIat);
 
         // Only `iat` moved. The body, the seq and — because this is a retry of the same bytes —
         // the batch id are all unchanged, so the resend is idempotent even if the "skewed" request
@@ -170,19 +196,28 @@ public sealed class BatchShipperTests
         Assert.Equal(handler.Requests[0].Body, handler.Requests[1].Body);
     }
 
+    /// <summary>
+    /// A skew that never resolves is retryable rather than fatal, and costs one request per
+    /// window — never a hot loop, because the floor is what paces it.
+    /// </summary>
     [Fact]
-    public async Task ClockSkew_RetriesOnlyOnce()
+    public async Task ClockSkew_ThatNeverResolves_CostsOneRequestPerWindow()
     {
         DateTimeOffset serverNow = DateTimeOffset.UnixEpoch.AddSeconds(1_780_000_000);
         var handler = FakeHttpHandler.Always(() => FakeHttpHandler.ClockSkew(serverNow));
         using var harness = new Harness(handler);
         harness.Outbox.Append(TestData.Envelopes(1));
 
-        ShipAttempt attempt = await harness.Shipper.ShipOnceAsync();
+        for (int window = 0; window < 3; window++)
+        {
+            Assert.Equal(ShipOutcome.ClockResynced, (await harness.Shipper.ShipOnceAsync()).Outcome);
+            Assert.Equal(ShipOutcome.Throttled, (await harness.Shipper.ShipOnceAsync()).Outcome);
+            harness.OpenShipWindow();
+        }
 
-        Assert.Equal(2, handler.Requests.Count);
-        Assert.Equal(ShipOutcome.ServerError, attempt.Outcome);
+        Assert.Equal(3, handler.Requests.Count);
         Assert.False(harness.Shipper.IsDead, "a persistent skew is retryable, not fatal");
+        Assert.Equal(1, harness.Outbox.PendingCount);
     }
 
     [Fact]
@@ -241,6 +276,7 @@ public sealed class BatchShipperTests
         await harness.Shipper.ShipOnceAsync();
         string originalSid = harness.Shipper.StreamId;
 
+        harness.OpenShipWindow();
         harness.Outbox.Append(TestData.Envelopes(1));
         ShipAttempt forked = await harness.Shipper.ShipOnceAsync();
 
@@ -249,7 +285,11 @@ public sealed class BatchShipperTests
         Assert.Equal(1, harness.Shipper.Sequence);
         Assert.Equal(1, harness.Outbox.PendingCount);
 
+        // A fork is a parameter change, not a licence to send again inside the window.
+        Assert.Equal(ShipOutcome.Throttled, (await harness.Shipper.ShipOnceAsync()).Outcome);
+
         // The retry starts a fresh chain: seq 1, no ph.
+        harness.OpenShipWindow();
         ShipAttempt retry = await harness.Shipper.ShipOnceAsync();
         Assert.Equal(ShipOutcome.Accepted, retry.Outcome);
         JsonElement claims = handler.Requests[^1].ProofClaims;
@@ -274,6 +314,12 @@ public sealed class BatchShipperTests
         Assert.Equal(200, harness.Shipper.BatchEventCap);
         Assert.Equal(300, harness.Outbox.PendingCount);
 
+        // The smaller batch still waits for the window: a 413 does not buy a faster retry, it just
+        // makes the next one smaller. Converging 500 → 50 therefore costs four windows, not four
+        // round trips back to back, and that is the intended trade.
+        Assert.Equal(ShipOutcome.Throttled, (await harness.Shipper.ShipOnceAsync()).Outcome);
+
+        harness.OpenShipWindow();
         ShipAttempt retry = await harness.Shipper.ShipOnceAsync();
         Assert.Equal(ShipOutcome.Accepted, retry.Outcome);
         Assert.Equal(200, retry.EventsShipped);
@@ -371,7 +417,9 @@ public sealed class BatchShipperTests
         harness.Outbox.Append(TestData.Envelopes(3));
 
         Assert.Equal(ShipOutcome.ServerError, (await harness.Shipper.ShipOnceAsync()).Outcome);
+        harness.OpenShipWindow();
         Assert.Equal(ShipOutcome.ServerError, (await harness.Shipper.ShipOnceAsync()).Outcome);
+        harness.OpenShipWindow();
         Assert.Equal(ShipOutcome.Accepted, (await harness.Shipper.ShipOnceAsync()).Outcome);
 
         string[] batchIds = [.. handler.Requests.Select(r => r.ProofClaims.GetProperty("jti").GetString()!)];
@@ -397,6 +445,7 @@ public sealed class BatchShipperTests
         harness.Outbox.Append(TestData.Envelopes(100));
 
         Assert.Equal(ShipOutcome.TooLarge, (await harness.Shipper.ShipOnceAsync()).Outcome);
+        harness.OpenShipWindow();
         Assert.Equal(ShipOutcome.Accepted, (await harness.Shipper.ShipOnceAsync()).Outcome);
 
         Assert.Equal(2, handler.Requests.Count);
@@ -437,9 +486,13 @@ public sealed class BatchShipperTests
             {
                 // Whether the pre-crash request actually committed is unknowable, so the resend is
                 // sent under the same id and the server decides: replay if it landed, insert if not.
+                // The restart clock is wound past the floor because the floor survives a restart
+                // too — see ShipFloorTests.TheFloorSurvivesAProcessRestart.
+                var restartClock = new FakeShipperClock();
+                restartClock.Advance(ShipFloor);
                 var handler = FakeHttpHandler.Always(() => FakeHttpHandler.Ok(0, replay: true));
                 using var restarted = new BatchShipper(
-                    new ShipperOptions(IngestUrl), reopened, credential, handler, new FakeShipperClock());
+                    new ShipperOptions(IngestUrl), reopened, credential, handler, restartClock);
 
                 Assert.Equal(ShipOutcome.Replayed, (await restarted.ShipOnceAsync()).Outcome);
                 Assert.Equal(firstBatchId, handler.Requests[0].ProofClaims.GetProperty("jti").GetString());
@@ -462,6 +515,7 @@ public sealed class BatchShipperTests
         await harness.Shipper.ShipOnceAsync();
         Assert.Null(harness.Outbox.GetState(Wire.StateKeys.PendingBatchId));
 
+        harness.OpenShipWindow();
         harness.Outbox.Append(TestData.Envelopes(2));
         await harness.Shipper.ShipOnceAsync();
 
@@ -546,8 +600,16 @@ public sealed class BatchShipperTests
 
     /// <summary>
     /// Offline accumulation: the outbox grows while shipping fails and nothing is lost, and each
-    /// failure waits a full-jitter backoff drawn from the doubling ladder.
+    /// failure waits a full-jitter backoff drawn from the doubling ladder — floored, like every
+    /// other wait, at <see cref="Wire.MinShipIntervalSeconds"/>.
     /// </summary>
+    /// <remarks>
+    /// The ladder itself is unchanged and <c>BackoffPolicyTests</c> still pins it to 1, 2, 4, 8 s:
+    /// <see cref="BackoffPolicy"/> is the §4.5.3 schedule the contract publishes, and baking a
+    /// floor into it would make that published schedule a fiction. The shipper takes the maximum
+    /// of the two at the point of waiting, which is why the first rungs all read 30 s here — the
+    /// ladder only starts to matter once it climbs past the floor.
+    /// </remarks>
     [Fact]
     public async Task RunAsync_BacksOffOnRepeatedFailuresAndLosesNothing()
     {
@@ -573,14 +635,20 @@ public sealed class BatchShipperTests
             // Expected: the loop is cancelled from inside the handler.
         }
 
-        Assert.Equal(
-            [TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(4), TimeSpan.FromSeconds(8)],
-            clock.Delays.Take(4).ToArray());
+        // 1, 2, 4 and 8 s are all under the floor, so all four rungs are served as 30 s. The ladder
+        // is still climbing underneath: the fifth rung it would draw is 16 s, still floored, and
+        // only at the sixth (32 s) does the backoff itself become the binding constraint.
+        Assert.Equal([ShipFloor, ShipFloor, ShipFloor, ShipFloor], clock.Delays.Take(4).ToArray());
         Assert.Equal(100, harness.Outbox.PendingCount);
     }
 
+    /// <summary>
+    /// The loop used to drain the outbox flat out, batch after batch, with no wait at all between
+    /// accepted batches. It cannot any more: a big backlog is shipped one batch per floor window,
+    /// and the events that are waiting stay in the outbox rather than being dropped.
+    /// </summary>
     [Fact]
-    public async Task RunAsync_DrainsTheOutboxWithoutWaitingBetweenAcceptedBatches()
+    public async Task RunAsync_WaitsAFloorWindowBetweenAcceptedBatches()
     {
         var clock = new FakeShipperClock();
         using var cts = new CancellationTokenSource();
@@ -594,6 +662,7 @@ public sealed class BatchShipperTests
             handler, clock: clock, batchEventCap: Wire.MinBatchEventCap, pendingTrigger: 1);
         harness.Outbox.Append(TestData.Envelopes(200));
 
+        DateTimeOffset started = clock.UtcNow;
         try
         {
             await harness.Shipper.RunAsync(cts.Token);
@@ -602,8 +671,14 @@ public sealed class BatchShipperTests
         {
         }
 
-        Assert.Empty(clock.Delays);
         Assert.True(harness.Handler.Requests.Count >= 2);
+
+        // Whatever mix of poll ticks and throttle waits the loop chose, the outcome is the one
+        // that matters: n requests took at least (n − 1) full windows of virtual time.
+        TimeSpan elapsed = clock.UtcNow - started;
+        Assert.True(
+            elapsed >= ShipFloor * (harness.Handler.Requests.Count - 1),
+            $"{harness.Handler.Requests.Count} requests in {elapsed.TotalSeconds:0.0} s breaches the floor");
     }
 
     /// <summary>
@@ -633,9 +708,11 @@ public sealed class BatchShipperTests
 
             using (OutboxDb reopened = OutboxDb.Open(path))
             {
+                var restartClock = new FakeShipperClock();
+                restartClock.Advance(ShipFloor); // the floor survives the restart; the chain is what is under test here
                 var handler = FakeHttpHandler.Always(() => FakeHttpHandler.Ok());
                 using var restarted = new BatchShipper(
-                    new ShipperOptions(IngestUrl), reopened, credential, handler, new FakeShipperClock());
+                    new ShipperOptions(IngestUrl), reopened, credential, handler, restartClock);
 
                 Assert.Equal(sid, restarted.StreamId);
                 Assert.Equal(2, restarted.Sequence);
@@ -745,9 +822,34 @@ public sealed class BatchShipperTests
         Assert.Equal(0, harness.Shipper.ConsecutiveFailures);
         await harness.Shipper.ShipOnceAsync();
         Assert.Equal(1, harness.Shipper.ConsecutiveFailures);
+        harness.OpenShipWindow();
         await harness.Shipper.ShipOnceAsync();
+        harness.OpenShipWindow();
         await harness.Shipper.ShipOnceAsync();
         Assert.Equal(3, harness.Shipper.ConsecutiveFailures);
+    }
+
+    /// <summary>
+    /// A throttled call is not a failure and must not climb the ladder — otherwise a shipper that
+    /// merely had nothing it was allowed to send yet would come back with a five-minute backoff
+    /// waiting for it.
+    /// </summary>
+    [Fact]
+    public async Task Throttled_LeavesTheRetryLadderAndTheLastAttemptAlone()
+    {
+        using var harness = new Harness(FakeHttpHandler.Always(() => FakeHttpHandler.Ok(2)));
+        harness.Outbox.Append(TestData.Envelopes(4));
+
+        Assert.Equal(ShipOutcome.Accepted, (await harness.Shipper.ShipOnceAsync()).Outcome);
+        ShipAttempt? accepted = harness.Shipper.LastAttempt;
+
+        for (int i = 0; i < 5; i++)
+            Assert.Equal(ShipOutcome.Throttled, (await harness.Shipper.ShipOnceAsync()).Outcome);
+
+        Assert.Equal(0, harness.Shipper.ConsecutiveFailures);
+
+        // The status window still reads the last real attempt, not a wall of refusals.
+        Assert.Same(accepted, harness.Shipper.LastAttempt);
     }
 
     [Fact]
@@ -761,13 +863,16 @@ public sealed class BatchShipperTests
         harness.Outbox.Append(TestData.Envelopes(2));
 
         await harness.Shipper.ShipOnceAsync();
+        harness.OpenShipWindow();
         await harness.Shipper.ShipOnceAsync();
         Assert.Equal(2, harness.Shipper.ConsecutiveFailures);
 
+        harness.OpenShipWindow();
         await harness.Shipper.ShipOnceAsync();
         Assert.Equal(0, harness.Shipper.ConsecutiveFailures);
 
         // NothingToShip is not a fault either.
+        harness.OpenShipWindow();
         Assert.Equal(ShipOutcome.NothingToShip, (await harness.Shipper.ShipOnceAsync()).Outcome);
         Assert.Equal(0, harness.Shipper.ConsecutiveFailures);
     }
@@ -789,6 +894,7 @@ public sealed class BatchShipperTests
         await harness.Shipper.ShipOnceAsync();
         Assert.Equal(1, harness.Shipper.ConsecutiveFailures);
 
+        harness.OpenShipWindow();
         Assert.Equal(ShipOutcome.TooLarge, (await harness.Shipper.ShipOnceAsync()).Outcome);
         Assert.Equal(1, harness.Shipper.ConsecutiveFailures);
     }
@@ -842,6 +948,18 @@ public sealed class BatchShipperTests
         internal FakeHttpHandler Handler { get; }
 
         internal FakeShipperClock Clock { get; }
+
+        /// <summary>
+        /// Winds the virtual clock past the hard <see cref="Wire.MinShipIntervalSeconds"/> floor,
+        /// so the shipper is allowed to issue another request.
+        /// </summary>
+        /// <remarks>
+        /// Every test below that ships more than once has to call this, and that is the floor
+        /// doing its job rather than the tests routing around it: without it the second request
+        /// comes back <see cref="ShipOutcome.Throttled"/> and nothing goes on the wire.
+        /// <c>ShipFloorTests</c> is where that refusal is asserted directly.
+        /// </remarks>
+        internal void OpenShipWindow() => Clock.Advance(ShipFloor);
 
         public void Dispose()
         {

@@ -1,3 +1,4 @@
+using System;
 using System.IO;
 using MeowSci.Catlog.Lib.Config;
 using MeowSci.Catlog.Lib.Ship;
@@ -42,7 +43,9 @@ public sealed class ModConfigTests
         Assert.Contains("sample_hz", text);
         Assert.Contains("window_s", text);
         Assert.Contains("outbox_cap_mb", text);
-        Assert.Contains("ship_interval_s", text);
+        // "ship_interval_s" also appears in the header comment that warns about the 30 s floor, so
+        // this looks for the assignment rather than the word.
+        Assert.Contains("ship_interval_s = ", text, StringComparison.Ordinal);
         Assert.Contains("ship_max_pending", text);
         Assert.Contains("log_level", text);
 
@@ -171,7 +174,10 @@ public sealed class ModConfigTests
     [InlineData(-30.0, Wire.MinShipAgeTriggerSeconds)]
     [InlineData(86_400.0, Wire.MaxShipAgeTriggerSeconds)]
     [InlineData(double.NaN, Wire.MinShipAgeTriggerSeconds)]
-    [InlineData(5.0, 5.0)]
+    [InlineData(1.0, Wire.MinShipAgeTriggerSeconds)]
+    [InlineData(5.0, Wire.MinShipAgeTriggerSeconds)]
+    [InlineData(29.999, Wire.MinShipAgeTriggerSeconds)]
+    [InlineData(30.0, 30.0)]
     [InlineData(60.0, 60.0)]
     public void ShipIntervalIsClamped(double input, double expected)
     {
@@ -180,6 +186,22 @@ public sealed class ModConfigTests
         config.Normalize();
 
         Assert.Equal(expected, config.ShipIntervalS);
+    }
+
+    /// <summary>
+    /// The clamp's lower bound <b>is</b> the hard floor, and the floor is 30 s. Pinned as a
+    /// separate assertion because the whole point of the exercise is that no edit to
+    /// <c>catlog.toml</c> can produce a faster reporting cadence than this — a clamp that quietly
+    /// drifted back down to 1 s would reopen the hole the floor was added to close.
+    /// </summary>
+    [Fact]
+    public void TheShipIntervalClampIsTheHardFloor()
+    {
+        Assert.Equal(30.0, Wire.MinShipIntervalSeconds);
+        Assert.Equal(Wire.MinShipIntervalSeconds, Wire.MinShipAgeTriggerSeconds);
+
+        // The shipped default still sits above it, so the floor is not the normal cadence.
+        Assert.True(new ModConfig().ShipIntervalS >= Wire.MinShipIntervalSeconds);
     }
 
     [Theory]
@@ -197,13 +219,13 @@ public sealed class ModConfigTests
     }
 
     /// <summary>
-    /// A tightened cadence must actually reach the shipper: a test (or an impatient player) sets
-    /// <c>ship_interval_s</c> and the trigger moves with it.
+    /// A cadence change must actually reach the shipper: a player sets <c>ship_interval_s</c> and
+    /// the trigger moves with it — down to the floor and no further.
     /// </summary>
     [Fact]
     public void CadenceKnobsFlowIntoShipperOptions()
     {
-        var config = new ModConfig { ShipIntervalS = 2.0, ShipMaxPending = 75 };
+        var config = new ModConfig { ShipIntervalS = 120.0, ShipMaxPending = 75 };
         config.Normalize();
 
         var options = new ShipperOptions(
@@ -211,8 +233,15 @@ public sealed class ModConfigTests
             PendingTrigger: config.ShipMaxPending,
             AgeTriggerSeconds: config.ShipIntervalS);
 
-        Assert.Equal(2.0, options.AgeTriggerSeconds);
+        Assert.Equal(120.0, options.AgeTriggerSeconds);
         Assert.Equal(75, options.PendingTrigger);
+
+        // …and the impatient version of the same edit reaches the shipper as 30, not as 2.
+        var impatient = new ModConfig { ShipIntervalS = 2.0 };
+        impatient.Normalize();
+        Assert.Equal(
+            Wire.MinShipIntervalSeconds,
+            new ShipperOptions(impatient.IngestUrl, AgeTriggerSeconds: impatient.ShipIntervalS).AgeTriggerSeconds);
     }
 
     [Theory]

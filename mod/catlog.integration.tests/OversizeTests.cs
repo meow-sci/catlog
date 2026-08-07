@@ -61,10 +61,17 @@ public sealed class OversizeTests : IClassFixture<ConstrainedServerFixture>, IDi
         using OutboxDb outbox = OutboxDb.Open(Path.Combine(_outboxDir, "outbox.db"));
         outbox.Append(TestBatch.Build(Events));
 
+        // The halving ladder is four rejections and then several accepted batches — nine requests
+        // in all, and the hard 30 s reporting floor stands between each pair of them. The clock is
+        // injected so those nine windows cost microseconds instead of four minutes; the floor is
+        // still enforced, on the timeline the shipper actually reads.
+        var clock = new AdvanceableClock();
         using var shipper = new BatchShipper(
             new ShipperOptions(_server.IngestUrl, BatchEventCap: 500, OutboxCapBytes: 0),
             outbox,
-            credential.Credential);
+            credential.Credential,
+            handler: null,
+            clock: clock);
 
         Assert.Equal(500, shipper.BatchEventCap);
 
@@ -74,6 +81,7 @@ public sealed class OversizeTests : IClassFixture<ConstrainedServerFixture>, IDi
 
         for (int attempts = 0; outbox.PendingCount > 0 && attempts < 40; attempts++)
         {
+            clock.OpenShipWindow(shipper);
             ShipAttempt attempt = await shipper.ShipOnceAsync(CancellationToken.None);
             Assert.False(
                 shipper.IsDead,

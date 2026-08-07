@@ -95,6 +95,11 @@ public sealed class IngestTests : IClassFixture<ServerFixture>, IDisposable
         Assert.Equal(before, _server.TotalEvents());
     }
 
+    /// <summary>
+    /// §4.5.3's clock-skew recovery against a real server: the first attempt is refused, the
+    /// offset is learned from the <c>Date</c> header, and the same batch succeeds on the next
+    /// attempt — which waits for the hard 30 s reporting floor like every other retry does.
+    /// </summary>
     [Fact]
     public async Task AClockSkewedShipperResyncsAndSucceeds()
     {
@@ -103,8 +108,8 @@ public sealed class IngestTests : IClassFixture<ServerFixture>, IDisposable
         outbox.Append(TestBatch.Build(BatchSize));
 
         // Ten minutes fast: well outside §4.3's ±300 s window, so the first attempt must come back
-        // 401 clock_skew and the shipper must learn the offset from Date and retry exactly once.
-        var clock = new OffsetClock(TimeSpan.FromMinutes(10));
+        // 401 clock_skew and the shipper must learn the offset from Date.
+        var clock = new AdvanceableClock(TimeSpan.FromMinutes(10));
         using var shipper = new BatchShipper(
             new ShipperOptions(_server.IngestUrl, BatchEventCap: 500, OutboxCapBytes: 0),
             outbox,
@@ -113,17 +118,31 @@ public sealed class IngestTests : IClassFixture<ServerFixture>, IDisposable
             clock: clock);
 
         long before = _server.TotalEvents();
-        ShipAttempt attempt = await shipper.ShipOnceAsync(CancellationToken.None);
+        ShipAttempt resync = await shipper.ShipOnceAsync(CancellationToken.None);
 
         Assert.True(
-            attempt.Outcome == ShipOutcome.Accepted,
-            $"expected the skew retry to succeed, got {attempt.Outcome} ({attempt.StatusCode} {attempt.Error})");
-        Assert.Equal(BatchSize, attempt.EventsShipped);
-        Assert.Equal(before + BatchSize, _server.TotalEvents());
+            resync.Outcome == ShipOutcome.ClockResynced,
+            $"expected the skew to be learned, got {resync.Outcome} ({resync.StatusCode} {resync.Error})");
+        Assert.Equal(401, resync.StatusCode);
 
         // The learned offset is roughly minus the skew: the shipper now signs in server time.
         Assert.InRange(shipper.ClockOffsetMs, -615_000, -585_000);
         Assert.False(shipper.IsDead, "a recoverable clock skew must not latch the shipper dead");
+        Assert.Equal(BatchSize, outbox.PendingCount);
+        Assert.Equal(before, _server.TotalEvents());
+
+        // Nothing goes out inside the window, resync or no resync.
+        Assert.Equal(ShipOutcome.Throttled, (await shipper.ShipOnceAsync(CancellationToken.None)).Outcome);
+        Assert.Equal(before, _server.TotalEvents());
+
+        clock.OpenShipWindow(shipper);
+        ShipAttempt attempt = await shipper.ShipOnceAsync(CancellationToken.None);
+
+        Assert.True(
+            attempt.Outcome == ShipOutcome.Accepted,
+            $"expected the resigned batch to be accepted, got {attempt.Outcome} ({attempt.StatusCode} {attempt.Error})");
+        Assert.Equal(BatchSize, attempt.EventsShipped);
+        Assert.Equal(before + BatchSize, _server.TotalEvents());
         Assert.Equal(0, outbox.PendingCount);
     }
 
@@ -133,14 +152,6 @@ public sealed class IngestTests : IClassFixture<ServerFixture>, IDisposable
         OutboxDb outbox = OutboxDb.Open(Path.Combine(dir, "outbox.db"));
         _disposables.Add(new DirectoryCleanup(dir));
         return outbox;
-    }
-
-    /// <summary>A clock that is deliberately wrong, so the §4.5.3 skew path is a real round trip.</summary>
-    private sealed class OffsetClock(TimeSpan offset) : IShipperClock
-    {
-        public DateTimeOffset UtcNow => DateTimeOffset.UtcNow + offset;
-
-        public Task Delay(TimeSpan delay, CancellationToken ct) => Task.CompletedTask;
     }
 
     private sealed class DirectoryCleanup(string path) : IDisposable

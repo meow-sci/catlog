@@ -174,8 +174,74 @@ public static class Wire
     /// </summary>
     public const double ShipAgeTriggerSeconds = 60.0;
 
-    /// <summary>Lower clamp for a configured ship interval, in seconds.</summary>
-    public const double MinShipAgeTriggerSeconds = 1.0;
+    /// <summary>
+    /// <b>The hard rate floor: the mod never issues two requests to the ingest endpoint less than
+    /// this many seconds apart. Not configurable, by design.</b>
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Threat model.</b> <c>catlog.toml</c> is a plain text file in the player's mod directory,
+    /// so every knob in it is attacker-controlled by definition. Before this constant existed,
+    /// <c>ship_interval_s = 1</c> turned a stock install into a firehose — one line, no tools, no
+    /// rebuild. Someone who recompiles the assembly can of course do anything; that is out of scope
+    /// and always will be. What is in scope is that the <i>easy</i> path is closed, so this floor
+    /// lives in code, is a compile-time constant, and is reachable from no TOML key. Adding one
+    /// would mean deliberately editing this line.
+    /// </para>
+    /// <para>
+    /// <b>Where it is enforced.</b> Three places, on purpose, because clamping the config alone
+    /// only closes the path someone thought of:
+    /// </para>
+    /// <list type="number">
+    ///   <item><description>
+    ///     <c>ModConfig.Normalize</c> clamps <c>ship_interval_s</c> up to this value, so the
+    ///     configured cadence and the enforced cadence agree and the player sees one warning
+    ///     rather than mysterious behaviour.
+    ///   </description></item>
+    ///   <item><description>
+    ///     <c>BatchShipper.ShouldShip</c> reports "not due" inside the window, so neither the age
+    ///     trigger nor the <see cref="ShipPendingTrigger"/> count trigger can open it early — a
+    ///     10 000-event burst still ships one batch per window and buffers the rest.
+    ///   </description></item>
+    ///   <item><description>
+    ///     <c>BatchShipper</c> refuses at the point of transmission, immediately before the POST.
+    ///     That is the one that actually holds: it covers a directly-constructed
+    ///     <c>ShipperOptions</c>, every <c>401</c>/<c>409</c>/<c>413</c>/<c>429</c>/<c>5xx</c>
+    ///     recovery retry, and any caller written after this comment.
+    ///   </description></item>
+    /// </list>
+    /// <para>
+    /// <b>One exemption, by name:</b> <c>BatchShipper.FinalShip</c>, the single-attempt courtesy
+    /// flush at game unload. It fires at most once per session, so abusing it costs a full quit
+    /// and relaunch of KSA — far more than the 30 s it saves — and it is self-limiting in a way the
+    /// in-session triggers are not. It is threaded through a private enum that no caller can reach,
+    /// and it still stamps the window, so the next session's first ordinary batch waits out a full
+    /// one. Nothing else is exempt, ever.
+    /// </para>
+    /// <para>
+    /// <b>It is measured against <c>IShipperClock</c></b>, the seam that already existed so the
+    /// retry ladder could be unit-tested without real waiting. The shipped mod never passes a
+    /// clock, so it gets <c>SystemShipperClock</c> and a real 30 s floor; the unit tests and
+    /// <c>catlog.sim</c> pass a virtual one. Nothing a player can edit reaches that parameter.
+    /// </para>
+    /// <para>
+    /// <b>Thirty seconds</b> is one half of <see cref="ShipAgeTriggerSeconds"/>, so it never binds
+    /// during ordinary play — the shipped cadence is already one batch a minute — and it is the
+    /// same length as <see cref="TelemetryWindowSeconds"/>, so a floored batch is still at most one
+    /// telemetry window behind. Against §4.3's per-credential token bucket (1 batch / 2 s, burst 5)
+    /// a client at the floor spends 6.7% of its sustained allowance: the server-side bucket is the
+    /// backstop for a hostile client, and this is the client-side promise that a stock install
+    /// never approaches it.
+    /// </para>
+    /// </remarks>
+    public const double MinShipIntervalSeconds = 30.0;
+
+    /// <summary>
+    /// Lower clamp for a configured ship interval, in seconds. It <b>is</b>
+    /// <see cref="MinShipIntervalSeconds"/>: a configured cadence faster than the hard floor would
+    /// be a lie the player could read in their own config file.
+    /// </summary>
+    public const double MinShipAgeTriggerSeconds = MinShipIntervalSeconds;
 
     /// <summary>Upper clamp for a configured ship interval, in seconds (one hour).</summary>
     public const double MaxShipAgeTriggerSeconds = 3600.0;
@@ -222,5 +288,17 @@ public static class Wire
 
         /// <summary>Server-clock offset in milliseconds, learned from the <c>Date</c> header.</summary>
         public const string ClockOffsetMs = "clock_offset_ms";
+
+        /// <summary>
+        /// Client unix milliseconds at which the last request to the ingest endpoint was issued —
+        /// the <see cref="MinShipIntervalSeconds"/> floor's anchor.
+        /// </summary>
+        /// <remarks>
+        /// Persisted rather than held in memory so that quitting and reloading the game is not a
+        /// way around the floor: a fresh session reads the stamp its predecessor left and waits out
+        /// the remainder of the window before its first request. Deleting the outbox resets it, but
+        /// deleting the outbox also deletes the events, so there is nothing left to flood with.
+        /// </remarks>
+        public const string LastRequestMs = "last_request_ms";
     }
 }

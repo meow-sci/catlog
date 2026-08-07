@@ -76,6 +76,7 @@ public sealed class ScenarioRunner : IDisposable
     private readonly Credential _credential;
     private readonly string _outboxDir;
     private readonly OutboxDb _outbox;
+    private readonly SimShipperClock _shipperClock = new();
     private readonly BatchShipper _shipper;
     private readonly EventPipeline _pipeline;
     private readonly GameBridge _bridge = new();
@@ -122,7 +123,9 @@ public sealed class ScenarioRunner : IDisposable
                 AgeTriggerSeconds: double.MaxValue,
                 OutboxCapBytes: 0),
             _outbox,
-            credential);
+            credential,
+            handler: null,
+            clock: _shipperClock);
     }
 
     /// <summary>The outbox directory, deleted on <see cref="Dispose"/>.</summary>
@@ -239,7 +242,18 @@ public sealed class ScenarioRunner : IDisposable
 
             case ShipOutcome.StreamForked:
             case ShipOutcome.TooLarge:
+            case ShipOutcome.ClockResynced:
                 // Parameters changed; the next attempt uses the new ones.
+                return;
+
+            case ShipOutcome.Throttled:
+                // The hard 30 s reporting floor. A scenario has no wall-clock time to spend on it,
+                // so the injected clock is wound past the window rather than slept through — the
+                // floor is still enforced, on the timeline the shipper is actually reading.
+                // The extra millisecond is not cosmetic: unix-millisecond truncation can leave the
+                // window a tick short of open, and a loop that advances by exactly the remainder
+                // would then need a second pass every time.
+                _shipperClock.Advance(_shipper.ThrottleRemaining + TimeSpan.FromMilliseconds(1));
                 return;
 
             case ShipOutcome.Fatal:
