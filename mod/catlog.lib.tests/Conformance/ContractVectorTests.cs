@@ -253,7 +253,13 @@ public sealed class ContractVectorTests
         string root = RequireVectors();
         using JsonDocument expectations = JsonDocument.Parse(ReadText(root, "expected", "verify-results.json"));
 
-        foreach (JsonProperty entry in expectations.RootElement.EnumerateObject())
+        // The per-file verdicts live under "files"; the sibling members are metadata
+        // (reference_time, issuer, htu, jkt, ...) that the fixtures above consume. Enumerating
+        // the root instead would try to read `ok` off a number.
+        JsonElement files = expectations.RootElement.GetProperty("files");
+        Assert.True(files.EnumerateObject().Any(), "verify-results.json declared no file verdicts");
+
+        foreach (JsonProperty entry in files.EnumerateObject())
         {
             string file = entry.Name;
             bool expectedOk = entry.Value.GetProperty("ok").GetBoolean();

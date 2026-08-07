@@ -49,7 +49,7 @@ func TestStartupCreatesEverythingAndShutsDownCleanly(t *testing.T) {
 
 	addrCh := make(chan net.Addr, 1)
 	errCh := make(chan error, 1)
-	go func() { errCh <- run(ctx, cfg, testutil.DiscardLogger(), func(a net.Addr) { addrCh <- a }) }()
+	go func() { errCh <- run(ctx, cfg, testutil.DiscardLogger(), func(pub, _ net.Addr) { addrCh <- pub }) }()
 
 	var addr net.Addr
 	select {
@@ -117,7 +117,7 @@ func TestStartupCreatesEverythingAndShutsDownCleanly(t *testing.T) {
 	defer cancel2()
 	addrCh2 := make(chan net.Addr, 1)
 	errCh2 := make(chan error, 1)
-	go func() { errCh2 <- run(ctx2, cfg, testutil.DiscardLogger(), func(a net.Addr) { addrCh2 <- a }) }()
+	go func() { errCh2 <- run(ctx2, cfg, testutil.DiscardLogger(), func(pub, _ net.Addr) { addrCh2 <- pub }) }()
 	select {
 	case <-addrCh2:
 	case err := <-errCh2:
@@ -146,5 +146,75 @@ func TestRunRejectsUnusableConfig(t *testing.T) {
 	// second attempt can still bind them.
 	if err := run(t.Context(), cfg, testutil.DiscardLogger(), nil); err == nil {
 		t.Error("second run succeeded; expected the same listen failure")
+	}
+}
+
+// TestIngestAndAdminAreWired is a wiring smoke test, not a behaviour test: the
+// §4.4 ingest route and the §5.9 admin mux both answer on the ports run() bound.
+// Everything they do is covered in internal/ingest and internal/adminapi; what
+// is only testable here is that main actually mounted them.
+func TestIngestAndAdminAreWired(t *testing.T) {
+	cfg := testutil.Config(t)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	type addrs struct{ public, admin net.Addr }
+	addrCh := make(chan addrs, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- run(ctx, cfg, testutil.DiscardLogger(), func(p, a net.Addr) { addrCh <- addrs{p, a} })
+	}()
+
+	var got addrs
+	select {
+	case got = <-addrCh:
+	case err := <-errCh:
+		t.Fatalf("catlogd exited during startup: %v", err)
+	case <-time.After(60 * time.Second):
+		t.Fatal("catlogd never became ready")
+	}
+
+	// The ingest route is mounted: no Content-Encoding is a 415 (§4.4), which
+	// only the real handler produces.
+	res, err := http.Post("http://"+got.public.String()+"/v1/ingest", "application/x-ndjson", nil)
+	if err != nil {
+		t.Fatalf("POST /v1/ingest: %v", err)
+	}
+	body, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+	if res.StatusCode != http.StatusUnsupportedMediaType {
+		t.Errorf("POST /v1/ingest without Content-Encoding = %d (%s), want 415", res.StatusCode, body)
+	}
+	if res.Header.Get("Date") == "" {
+		t.Error("the ingest handler must always set Date (§4.4)")
+	}
+
+	// The admin mux is up on its own port, and it is not the public one.
+	if got.admin.String() == got.public.String() {
+		t.Fatal("the admin mux shares the public listener")
+	}
+	adminRes, err := http.Get("http://" + got.admin.String() + "/admin/healthz")
+	if err != nil {
+		t.Fatalf("GET /admin/healthz: %v", err)
+	}
+	adminRes.Body.Close()
+	if adminRes.StatusCode != http.StatusOK {
+		t.Errorf("GET /admin/healthz = %d, want 200", adminRes.StatusCode)
+	}
+
+	// /admin/issue must not be reachable on the public port.
+	pubAdmin, err := http.Get("http://" + got.public.String() + "/admin/healthz")
+	if err != nil {
+		t.Fatalf("GET public /admin/healthz: %v", err)
+	}
+	pubAdmin.Body.Close()
+	if pubAdmin.StatusCode != http.StatusNotFound {
+		t.Errorf("the admin API answered on the public port with %d", pubAdmin.StatusCode)
+	}
+
+	cancel()
+	if err := <-errCh; err != nil {
+		t.Errorf("shutdown returned an error: %v", err)
 	}
 }

@@ -115,6 +115,31 @@ func (e *Events) SetBan(ctx context.Context, q Querier, playerID int64, at int64
 	return nil
 }
 
+// BannedUserKeys lists the user_key of every banned player — the ban half of
+// the in-memory deny-list loaded at start (§5.8, §4.5.3 step 4).
+func (e *Events) BannedUserKeys(ctx context.Context) ([]keys.UserKey, error) {
+	rows, err := e.Reader().QueryContext(ctx,
+		`SELECT user_key FROM player WHERE banned_at IS NOT NULL ORDER BY player_id`)
+	if err != nil {
+		return nil, fmt.Errorf("store: list banned players: %w", err)
+	}
+	defer rows.Close()
+
+	var out []keys.UserKey
+	for rows.Next() {
+		var raw []byte
+		if err := rows.Scan(&raw); err != nil {
+			return nil, fmt.Errorf("store: scan banned player: %w", err)
+		}
+		uk, err := keys.UserKeyFromBytes(raw)
+		if err != nil {
+			return nil, fmt.Errorf("store: banned player: %w", err)
+		}
+		out = append(out, uk)
+	}
+	return out, rows.Err()
+}
+
 // --- handles ---------------------------------------------------------------
 
 // Handle is a row of `handle` (§5.4).

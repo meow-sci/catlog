@@ -1,0 +1,36 @@
+{
+  "reference_time": 1770000000,
+  "issuer": "http://127.0.0.1:8080",
+  "htu": "http://127.0.0.1:8080/v1/ingest",
+  "handle": "whiskers_prime",
+  "jkt": "rrPIdGzE1vrTYrgfmiRdPesym9Mi5xZ0yQZrRmduM5c",
+  "steps": "1-10",
+  "note": "Evaluate every file at reference_time. `ok` is the result of the §4.5.3 credential checks (steps 1-10) only; steps 11-13 depend on server state, so proof-002 is `ok` here even though a server with no stream_state row answers 409.",
+  "files": {
+    "license/license-expired.jws": {
+      "ok": false,
+      "error": "license_expired"
+    },
+    "license/license-valid.jws": {
+      "ok": true
+    },
+    "proofs/proof-001.jws": {
+      "ok": true
+    },
+    "proofs/proof-002.jws": {
+      "ok": true
+    },
+    "proofs/proof-bad-bh.jws": {
+      "ok": false,
+      "error": "proof_invalid"
+    },
+    "proofs/proof-stale-iat.jws": {
+      "ok": false,
+      "error": "clock_skew"
+    },
+    "proofs/proof-wrong-key.jws": {
+      "ok": false,
+      "error": "proof_invalid"
+    }
+  }
+}

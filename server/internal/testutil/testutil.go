@@ -140,6 +140,10 @@ func Config(t *testing.T) config.Config {
 	cfg := config.Default()
 	cfg.Data.Dir = DataDir(t)
 	cfg.Data.CheckpointIntervalS = 0
+	// Never a fixed port: §3's 8080/6060 belong to the developer's own catlogd,
+	// and a test that bound them would fail whenever one was running.
+	cfg.Server.Listen = "127.0.0.1:0"
+	cfg.Server.AdminListen = "127.0.0.1:0"
 	return cfg
 }
 

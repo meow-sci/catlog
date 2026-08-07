@@ -6,9 +6,11 @@
 // every stateful verb goes through the admin API, and running catlogctl against
 // a live server is safe.
 //
-// WP1 implements `keygen`, which touches no database and no network. The rest
-// still report "not yet implemented" and land in WP2 (issue, testvectors), WP3
-// (ban/unban/purge/denylist), WP4 (rebuild/seed/stats) and WP10 (archive).
+// WP1 implemented `keygen` and WP2 adds `issue` and `testvectors`; `keygen` and
+// `testvectors` touch neither database nor network, and `issue` goes through
+// the loopback admin API. The rest still report "not yet implemented" and land
+// in WP3 (ban/unban/purge/denylist), WP4 (rebuild/seed/stats) and WP10
+// (archive/backup).
 package main
 
 import (
@@ -33,8 +35,8 @@ type verb struct {
 
 var verbs = []verb{
 	{name: "keygen", wp: "WP1", help: "create data/keys/{license-signing.pem,session.key,pepper.key} if missing", run: runKeygen},
-	{name: "issue", wp: "WP2", help: "issue a credential for a handle (dev/test path)"},
-	{name: "testvectors", wp: "WP2", help: "generate the cross-language conformance vectors (§4.10)"},
+	{name: "issue", wp: "WP2", help: "issue a credential for a handle (dev/test path)", run: runIssue},
+	{name: "testvectors", wp: "WP2", help: "generate the cross-language conformance vectors (§4.10)", run: runTestvectors},
 	{name: "ban", wp: "WP3", help: "ban a player, revoke credentials, retire handles"},
 	{name: "unban", wp: "WP3", help: "lift a ban"},
 	{name: "purge", wp: "WP3", help: "delete all data for a player and leave a tombstone"},

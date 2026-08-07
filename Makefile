@@ -55,8 +55,8 @@ mod-test:
 
 ## test-integration: server integration tests + mod-vs-server tests
 test-integration:
-	@echo "make test-integration: not yet implemented (WP2 server side, WP7 mod side)"
-	@# cd server && go test -tags integration ./...
+	cd server && go test -tags integration -count=1 ./integration/
+	@echo "make test-integration: mod leg not yet implemented (WP7)"
 	@# dotnet test mod/catlog.integration.tests
 
 ## test-nginx: testcontainers nginx suite (clean-skips without docker)
@@ -95,10 +95,9 @@ seed:
 	@echo "make seed: not yet implemented (WP4)"
 	@# server/bin/catlogctl seed
 
-## testvectors: regenerate contracts/testdata (§4.10)
-testvectors:
-	@echo "make testvectors: not yet implemented (WP2)"
-	@# server/bin/catlogctl testvectors generate contracts/testdata
+## testvectors: regenerate contracts/testdata (§4.10) — byte-identical every run
+testvectors: server-build
+	server/bin/catlogctl testvectors generate contracts/testdata
 
 ## clean: remove build output (keeps data/ and node_modules/)
 clean:
