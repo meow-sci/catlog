@@ -1,0 +1,68 @@
+# catlogd — local development configuration (INITIAL_IMPL_PLAN.md §5.3).
+#
+# Committed on purpose: D2 says the entire system runs locally, and this is the
+# file that makes that true. Every IdP points at `mockidp` on 127.0.0.1:9090
+# (§5.8.1), so no real Discord/Google/GitHub call is ever made in dev or in
+# tests. The client id/secret are the literal strings "dev"/"dev" — mockidp
+# checks them, so the OAuth form-post path is genuinely exercised, but there is
+# nothing here worth protecting.
+#
+# Run with:  catlogd -config server/catlogd.dev.toml
+#
+# Any value can be overridden by the environment as CATLOG_<SECTION>_<KEY>,
+# e.g. CATLOG_SERVER_LISTEN=127.0.0.1:9999 or CATLOG_DATA_DIR=/tmp/catlog.
+# Production keeps its secrets there rather than in a file (§11).
+
+[server]
+listen       = "127.0.0.1:8080"
+admin_listen = "127.0.0.1:6060"          # loopback only, never proxied (§5.9)
+base_url     = "http://127.0.0.1:8080"   # license `iss` AND the htu base (§4.5.1)
+static_dir   = "../site/dist"            # served at /static/ in dev; nginx serves it in prod
+
+[data]
+dir = "./data"                            # events.db, projections.db, keys/, archive/ (§3)
+# The Turso WAL never auto-checkpoints — nothing folds pages back into the main
+# database file unless we ask (see docs/DECISIONS.md, WP1). Every open database
+# runs PRAGMA wal_checkpoint(TRUNCATE) on this interval and again at shutdown.
+checkpoint_interval_s = 60
+
+[ingest]
+# Compared to the proof's `htu` by exact string equality — no normalization
+# (§4.5.2). Prod lists the public URL instead.
+accepted_htu   = ["http://127.0.0.1:8080/v1/ingest"]
+max_body_bytes = 1048576                  # 1 MiB compressed → 413 too_large (§4.3)
+max_events     = 2000                     # per batch → 413 too_large (§4.3)
+
+[auth]
+license_ttl_days     = 180                # D16
+handle_quota         = 5                  # live handles per account (§4.7)
+issuance_per_day     = 3                  # license issuances per 24 h (§4.7)
+min_account_age_days = 30                 # Discord snowflake / GitHub created_at gate (§4.7)
+
+# --- IdPs: all three served by mockidp on 127.0.0.1:9090 (§5.8.1) -----------
+
+[idp.discord]
+auth_url      = "http://127.0.0.1:9090/discord/oauth/authorize"
+token_url     = "http://127.0.0.1:9090/discord/oauth/token"
+api_base      = "http://127.0.0.1:9090/discord/api"
+client_id     = "dev"
+client_secret = "dev"
+
+[idp.google]
+issuer        = "http://127.0.0.1:9090/google"
+auth_url      = "http://127.0.0.1:9090/google/authorize"
+token_url     = "http://127.0.0.1:9090/google/token"
+jwks_url      = "http://127.0.0.1:9090/google/jwks"
+client_id     = "dev"
+client_secret = "dev"
+
+[idp.github]
+auth_url      = "http://127.0.0.1:9090/github/login/oauth/authorize"
+token_url     = "http://127.0.0.1:9090/github/login/oauth/access_token"
+api_base      = "http://127.0.0.1:9090/github"
+client_id     = "dev"
+client_secret = "dev"
+
+[limits]
+ratelimit_per_jkt_per_s = 0.5             # 1 batch / 2 s (§4.3)
+ratelimit_burst         = 5

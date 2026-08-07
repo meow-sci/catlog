@@ -87,9 +87,8 @@ dev: server-build
 	 wait
 
 ## keys: create data/keys/{license-signing.pem,session.key,pepper.key}
-keys:
-	@echo "make keys: not yet implemented (WP1)"
-	@# server/bin/catlogctl keygen
+keys: server-build
+	server/bin/catlogctl keygen
 
 ## seed: insert the deterministic demo dataset for UI development
 seed:
