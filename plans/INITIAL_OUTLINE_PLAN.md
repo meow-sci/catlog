@@ -30,7 +30,6 @@ these are some stories of how the mod and APIs and website will be used
   - we do not store these so they must save them locally once generated.
   - if they have none, a simple button/wizard is available to create a handle
   - if they have handles already, show a list with controls to generate new public JWS/JWT or X.509's easily for the same handle
-- 
 
 
 # data to collect
@@ -39,6 +38,9 @@ these are some stories of how the mod and APIs and website will be used
 
 - vehicle state change (landed, in atmosphere, orbit, soi change)
 - RUDs (rapid unscheduled disassembly, e.g. vehicle destroyed) - if we can differentiate the reasons why, that's better.  the current build supports vehicle destruction by contact with the ground, water or excessive aerodynamic forces
+- community suggestions - TBD how we would have the data to detect these kinds of high level events but ideally if we have the underlying data that is best
+     - May I suggest the biggest lithobrake record (fastest impact where science/kitten survived, if possible) lol
+     - Ah cool, I have one, since cats always land on their feet, do the opposite, a stat of most amount of times a kitten did in fact NOT land on their feet (while doing EVA on a planet or something)
 
 ## passive
 
