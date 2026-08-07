@@ -22,7 +22,19 @@ namespace MeowSci.Catlog.LoadGen;
 /// gets its own instance seeded from <see cref="ForPlayer"/>, a pure function of the run seed and
 /// the player index, and draws from it in a fixed order on one thread. Nothing about the order in
 /// which players are scheduled, how many run at once, or how long the server takes to answer can
-/// reach a draw — so the events a player produces are a function of <c>(seed, index)</c> alone.
+/// reach a draw — so the <i>stream</i> a player draws from is a function of <c>(seed, index)</c>
+/// alone.
+/// </para>
+/// <para>
+/// <b>The one thing that is not.</b> Two coverage rotations — the career-ladder rung and the
+/// covering <c>vehicle.rud</c> cause — are keyed on the player's dense position among the players
+/// that actually ran, not on the account index, because identities refused by the ≥30-day age gate
+/// leave holes in the indices and a rotation with holes drops whole rungs. That population is
+/// itself a deterministic function of the run's flags (<c>--players</c> and <c>--too-new</c> decide
+/// exactly which subjects mockidp mints too young), so a re-run of the same seed <i>with the same
+/// flags</i> reproduces the same careers and the same digest — which is the promise <c>--seed</c>
+/// actually makes. A run in which provisioning fails for some other reason has a different
+/// population and is a different run; the digest says so, which is the point of printing it.
 /// </para>
 /// </remarks>
 internal sealed class Prng

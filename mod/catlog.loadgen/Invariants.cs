@@ -24,6 +24,17 @@ namespace MeowSci.Catlog.LoadGen;
 /// </remarks>
 internal static class Invariants
 {
+    /// <summary>
+    /// The shortest simulated window in which the career model can produce its whole taxonomy.
+    /// </summary>
+    /// <remarks>
+    /// A transfer to the Moon is the longest mission the harness ever forces and floors at 700 sim
+    /// seconds; an EVA needs a few minutes of window after the flight that delivered the kitten.
+    /// Below this the extended coverage check would be asserting something the generator was never
+    /// given room to do.
+    /// </remarks>
+    private const double MinutesForFullTaxonomy = 20 * 60;
+
     /// <summary>Runs every check and records it on the report.</summary>
     /// <param name="options">The run's options.</param>
     /// <param name="report">The report to append to.</param>
@@ -40,6 +51,8 @@ internal static class Invariants
         Visibility(report);
         PlayersFinished(report);
         Taxonomy(report);
+        RudCauses(report);
+        CareerProgression(report);
         ReadSide(report);
         Moderated(api, report, accounts);
     }
@@ -232,8 +245,21 @@ internal static class Invariants
         [
             "session.started", "flight.started", "flight.ended", "telemetry.window",
             "vehicle.situation", "vehicle.atmosphere", "vehicle.orbit", "vehicle.impact",
-            "vehicle.staging", "engine.ignition", "roster.snapshot",
+            "vehicle.staging", "engine.ignition", "engine.shutdown", "vehicle.rud",
+            "roster.snapshot",
         ];
+
+        // The career ladder guarantees at least one player at every stage once the run is at least
+        // one full rotation of it, and the stages are what unlock rendezvous, transfers and EVAs.
+        // Below that a run is a sample of the ladder rather than a cover of it, so the extended set
+        // is required only where it is deterministic — a weaker check, never a flaky one.
+        //
+        // The window has to be long enough to hold the flights too: an EVA needs a few minutes of
+        // room after whatever carried the kitten there, and a transfer needs more, so a run of a
+        // couple of simulated minutes legitimately produces neither.
+        bool full = report.Players.Count >= Careers.Ladder.Length
+                    && report.Options.DurationSeconds >= MinutesForFullTaxonomy;
+        string[] extended = ["vehicle.soi", "vehicle.docked", "kitten.eva_start", "kitten.tumble"];
 
         IReadOnlyDictionary<string, long> byType = report.EventsByType();
         var missing = new List<string>();
@@ -243,12 +269,93 @@ internal static class Invariants
                 missing.Add(type);
         }
 
+        if (full)
+        {
+            foreach (string type in extended)
+            {
+                if (!byType.ContainsKey(type))
+                    missing.Add(type);
+            }
+        }
+
+        int expected = required.Length + (full ? extended.Length : 0);
         report.Checks.Add(new Check(
             Ok: missing.Count == 0,
             Label: "taxonomy coverage",
-            Expected: $"{required.Length} core event types present",
+            Expected: $"{expected} event types present"
+                      + (full
+                          ? " (career ladder covered)"
+                          : $" (needs ≥{Careers.Ladder.Length} players and ≥{MinutesForFullTaxonomy / 60:0} "
+                            + "simulated minutes for the extended set; core set only)"),
             Actual: missing.Count == 0 ? "all present" : "missing " + string.Join(", ", missing),
             Note: "a run that only produced telemetry windows would pass every other check here"));
+    }
+
+    /// <summary>
+    /// All six <c>vehicle.rud</c> causes were produced, and produced by careers that could have
+    /// produced them.
+    /// </summary>
+    /// <remarks>
+    /// The per-cause boards are a sixth of the leaderboard surface, and left to the failure model
+    /// alone the rarest cause is absent from most runs. <c>PlayerScript</c> assigns cause
+    /// <c>cohort % 6</c> to each player and pins it to a loss whose phase can physically carry it,
+    /// so any run with six or more players covers the enum — which is exactly what this asserts.
+    /// </remarks>
+    private static void RudCauses(RunReport report)
+    {
+        if (report.Players.Count < Careers.Causes.Length)
+            return;
+
+        CareerRollup roll = report.Rollup();
+        var missing = new List<string>();
+        for (int i = 0; i < Careers.Causes.Length; i++)
+        {
+            if (roll.ByCause[i] == 0)
+                missing.Add(Careers.Label(Careers.Causes[i]));
+        }
+
+        report.Checks.Add(new Check(
+            Ok: missing.Count == 0,
+            Label: "rud cause coverage",
+            Expected: "all 6 causes produced",
+            Actual: missing.Count == 0 ? "all 6" : "missing " + string.Join(", ", missing),
+            Note: "the per-cause boards are a sixth of the leaderboard surface; the coverage "
+                  + "rotation exists so the rarest cause is not a coin flip"));
+    }
+
+    /// <summary>
+    /// The population looked like a career ladder rather than a bag of identical players.
+    /// </summary>
+    /// <remarks>
+    /// Two things would silently break the career model without breaking anything else: a gate that
+    /// stopped opening (every player stuck at the same stage) and a plan that never got anyone off
+    /// the home world (no SOI change, so <c>soi_bodies</c> is a board with nothing on it). Both are
+    /// deterministic once the ladder is covered, so both are asserted rather than assumed.
+    /// </remarks>
+    private static void CareerProgression(RunReport report)
+    {
+        if (report.Players.Count < Careers.Ladder.Length
+            || report.Options.DurationSeconds < MinutesForFullTaxonomy)
+        {
+            return;
+        }
+
+        CareerRollup roll = report.Rollup();
+        int stagesSeen = 0;
+        foreach (int count in roll.StartStage)
+        {
+            if (count > 0)
+                stagesSeen++;
+        }
+
+        report.Checks.Add(new Check(
+            Ok: stagesSeen == Careers.Stages.Length && roll.PlayersOffWorld > 0 && roll.Bodies.Count > 0,
+            Label: "career spread",
+            Expected: $"{Careers.Stages.Length} stages populated, someone off the home world",
+            Actual: $"{stagesSeen} stages, {roll.PlayersOffWorld} players reached "
+                    + $"{roll.Bodies.Count} other bodies",
+            Note: "capability is gated on career age; a run where nobody ever left the home SOI "
+                  + "exercises neither vehicle.soi nor the soi_bodies board"));
     }
 
     /// <summary>The read API stayed healthy while ingest was happening.</summary>

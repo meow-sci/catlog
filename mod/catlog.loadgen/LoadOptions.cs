@@ -171,6 +171,10 @@ internal sealed class LoadOptions
     internal static LoadOptions Parse(string[] args)
     {
         var o = new LoadOptions();
+        // Tracked rather than inferred from the value: `--seed 0` is a seed an operator can
+        // legitimately pin, and testing `Seed == 0` would silently replace it with a random one
+        // and then print "(chosen; pass --seed to replay)" for a run they thought was pinned.
+        bool seeded = false;
 
         for (int i = 0; i < args.Length; i++)
         {
@@ -180,7 +184,7 @@ internal sealed class LoadOptions
                 case "": break;
                 case "--players" or "-n": o.Players = Int(Value(args, ref i), arg, 1, 100_000); break;
                 case "--duration" or "-d": o.DurationSeconds = Duration(Value(args, ref i), arg); break;
-                case "--seed": o.Seed = Long(Value(args, ref i), arg); break;
+                case "--seed": o.Seed = Long(Value(args, ref i), arg); seeded = true; break;
                 case "--namespace": o.Namespace = Value(args, ref i).Trim(); break;
                 case "--server": o.Server = Url(Value(args, ref i), DefaultServer); break;
                 case "--admin": o.Admin = Url(Value(args, ref i), DefaultAdmin); break;
@@ -208,7 +212,7 @@ internal sealed class LoadOptions
             }
         }
 
-        if (o.Seed == 0)
+        if (!seeded)
         {
             // A run with no seed still has to be re-runnable, so one is chosen and printed rather
             // than left implicit.
@@ -251,11 +255,18 @@ internal sealed class LoadOptions
         Console.WriteLine();
         Console.WriteLine("usage: catlog.loadgen [options]");
         Console.WriteLine();
-        Console.WriteLine("Provisions N players through the real mockidp OAuth flow, invents plausible");
-        Console.WriteLine("gameplay for each of them over a simulated time span, and drives every one");
-        Console.WriteLine("through the real catlog.lib pipeline (detector -> outbox -> ES256 proof ->");
-        Console.WriteLine("brotli batch -> POST /v1/ingest) at a live catlogd. Nothing is hand-authored:");
-        Console.WriteLine("no envelope is ever built by this program.");
+        Console.WriteLine("Provisions N players through the real mockidp OAuth flow, invents a plausible");
+        Console.WriteLine("CAREER for each of them, and drives every one through the real catlog.lib");
+        Console.WriteLine("pipeline (detector -> outbox -> ES256 proof -> brotli batch -> POST /v1/ingest)");
+        Console.WriteLine("at a live catlogd. Nothing is hand-authored: no envelope is ever built here.");
+        Console.WriteLine();
+        Console.WriteLine("Each player arrives with in-game time already on the clock and can only attempt");
+        Console.WriteLine("what it has earned: pad tests and hops, then suborbital lobs, orbit and orbital");
+        Console.WriteLine("manoeuvres, rendezvous and docking, transfers to other bodies, landings, and");
+        Console.WriteLine("probes to the outer system. Fleet size and craft in flight at once grow with it,");
+        Console.WriteLine("and so does competence: beginners lose vehicles on the pad and at max-Q,");
+        Console.WriteLine("veterans lose them on approach and while docking. --duration is the window this");
+        Console.WriteLine("run watches, not the length of the career.");
         Console.WriteLine();
         Console.WriteLine("scale");
         Console.WriteLine("  -n, --players <n>       players to provision and run (default 25)");

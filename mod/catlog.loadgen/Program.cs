@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
+using System.IO;
 using System.Net.Http;
 using System.Text.Json;
 using System.Threading;
@@ -195,6 +196,13 @@ internal static class Program
                 await DedupProbeAsync(options, provisioner, api, report, captures, ct).ConfigureAwait(false);
 
             // --- boards and visibility, before anything is moderated away -------------
+            //
+            // Re-discovered rather than reused. `fastest_to_<body>` and `rud_<cause>` are
+            // data-driven: a board is only published once enough distinct players are on it, so
+            // the list learned before ingest is the list an *empty* database publishes. Asking
+            // again is the difference between a report that says a run put players on ten other
+            // worlds and a report that never mentions those boards exist.
+            await readLoad.DiscoverBoardsAsync(ct).ConfigureAwait(false);
             await CollectBoardsAsync(options, transport, readLoad, report, ct).ConfigureAwait(false);
             CheckVisibility(api, accounts, report);
 
@@ -330,18 +338,22 @@ internal static class Program
         int skippedRoles = 0;
 
         var tasks = new List<Task>(accounts.Count);
-        foreach (PlayerAccount account in accounts)
+        for (int position = 0; position < accounts.Count; position++)
         {
-            PlayerAccount player = account;
+            PlayerAccount player = accounts[position];
+            // The random stream is keyed on the account index so a player's career is a function of
+            // (seed, index) alone; the coverage rotations are keyed on this dense position, because
+            // the age gate leaves holes in the indices and a rotation with holes drops rungs.
+            int cohort = position;
             tasks.Add(Task.Run(async () =>
             {
                 await gate.WaitAsync(ct).ConfigureAwait(false);
+                var script = new PlayerScript(
+                    player.Index, cohort, options.DurationSeconds, clock,
+                    Prng.ForPlayer(options.Seed, player.Index), options.ModerationPercent,
+                    dashboard: player.Session is not null);
                 try
                 {
-                    var script = new PlayerScript(
-                        player.Index, options.DurationSeconds, clock,
-                        Prng.ForPlayer(options.Seed, player.Index), options.ModerationPercent,
-                        dashboard: player.Session is not null);
                     if (script.RoleSkipped)
                         Interlocked.Increment(ref skippedRoles);
 
@@ -386,6 +398,18 @@ internal static class Program
                         Console.Error.WriteLine($"  {n}/{accounts.Count} players done");
                     }
                 }
+                catch (Exception ex) when (ex is HttpRequestException or IOException
+                                               or TaskCanceledException or SimException)
+                {
+                    // One player must not take the run with it. PlayerRunner already converts a
+                    // dead shipper into a PlayerResult with an Error, but a transport fault in the
+                    // reissue round trip or a failure opening the outbox escapes it entirely — and
+                    // an escaped exception means Task.WhenAll throws, report.Players is never
+                    // populated, and the whole run exits with no report at all. Recorded as a
+                    // failed player instead, which is what `players completed` is there to catch.
+                    finished.Add(Failed(player, script, ex));
+                    Interlocked.Increment(ref done);
+                }
                 finally
                 {
                     gate.Release();
@@ -406,6 +430,15 @@ internal static class Program
                 + "delete-my-data) and did not take it: --auth admin has no website session");
         }
     }
+
+    /// <summary>A result for a player whose task threw before it could produce one of its own.</summary>
+    private static PlayerResult Failed(PlayerAccount player, PlayerScript script, Exception ex) => new(
+        player.Index, player.Handle, player.IdP, script.Summary, script.Role,
+        Frames: 0, Events: 0, Batches: 0, ServerAccepted: 0, ServerDeduped: 0,
+        ClockResyncs: 0, StreamForks: 0, Oversize: 0, RateLimited: 0, Busy: 0,
+        EventsByType: new Dictionary<string, int>(StringComparer.Ordinal),
+        Digest: string.Empty, Elapsed: TimeSpan.Zero, Reissued: false,
+        Error: ex.GetType().Name + ": " + Text.Clip(ex.Message, 100));
 
     private static async Task DedupProbeAsync(
         LoadOptions options,

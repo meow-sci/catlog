@@ -58,7 +58,14 @@ internal sealed class ReadLoad
     /// <summary>True when the feed subscription was established at all.</summary>
     internal bool FeedConnected { get; private set; }
 
-    /// <summary>Learns the board list from the server, so the readers ask for boards that exist.</summary>
+    /// <summary>
+    /// Learns the board list from the server, so the readers ask for boards that exist.
+    /// </summary>
+    /// <remarks>
+    /// Safe to call more than once, and worth calling twice: the per-cause and per-body boards are
+    /// data-driven and only published once enough distinct players are on them, so the list an
+    /// empty database serves before a run is not the list it serves after one.
+    /// </remarks>
     /// <param name="ct">Cancellation.</param>
     /// <returns>A task that completes when the list is loaded.</returns>
     internal async Task DiscoverBoardsAsync(CancellationToken ct)
@@ -72,13 +79,22 @@ internal sealed class ReadLoad
 
             string body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
             using System.Text.Json.JsonDocument document = System.Text.Json.JsonDocument.Parse(body);
+            var found = new List<string>();
             foreach (System.Text.Json.JsonElement board in document.RootElement.GetProperty("boards").EnumerateArray())
             {
                 if (board.TryGetProperty("stat", out System.Text.Json.JsonElement stat)
                     && stat.GetString() is { Length: > 0 } key)
                 {
-                    Boards.Add(key);
+                    found.Add(key);
                 }
+            }
+
+            // Replaced, not appended: a second call must not double every board the readers pick
+            // from, and must not leave a board behind that the server has stopped publishing.
+            if (found.Count > 0)
+            {
+                Boards.Clear();
+                Boards.AddRange(found);
             }
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or System.Text.Json.JsonException)
@@ -167,7 +183,14 @@ internal sealed class ReadLoad
             }
             catch (OperationCanceledException)
             {
-                return;
+                // HttpClient raises this for its own 30 s timeout as well as for cancellation, and
+                // the two mean opposite things: one is the run ending, the other is a read the
+                // server never answered. Treating a timeout as the former would silently retire
+                // the reader for the rest of the run and leave `read API under load` passing on
+                // the handful of requests it managed before the server got busy.
+                if (ct.IsCancellationRequested)
+                    return;
+                Stats.RecordTransportError();
             }
             catch (HttpRequestException)
             {

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using MeowSci.Catlog.Lib.Events;
 
 namespace MeowSci.Catlog.LoadGen;
 
@@ -13,6 +14,79 @@ namespace MeowSci.Catlog.LoadGen;
 /// <param name="Actual">The value observed.</param>
 /// <param name="Note">Why this check exists.</param>
 internal sealed record Check(bool Ok, string Label, string Expected, string Actual, string Note);
+
+/// <summary>
+/// The run's careers, summed across every player.
+/// </summary>
+/// <remarks>
+/// Counters are plain arrays indexed by the enums rather than dictionaries, so the aggregate is
+/// order-stable without a comparer and a re-run of a seed prints the same section in the same
+/// order.
+/// </remarks>
+internal sealed class CareerRollup
+{
+    /// <summary>Players by the stage they were at when the window opened.</summary>
+    internal int[] StartStage { get; } = new int[Careers.Stages.Length];
+
+    /// <summary>Players by the stage they were at when it closed.</summary>
+    internal int[] EndStage { get; } = new int[Careers.Stages.Length];
+
+    /// <summary>Resident craft, by the owner's opening stage.</summary>
+    internal int[] FleetAtStage { get; } = new int[Careers.Stages.Length];
+
+    /// <summary>Players, by opening stage — the denominator for <see cref="FleetAtStage"/>.</summary>
+    internal int[] PlayersAtStage { get; } = new int[Careers.Stages.Length];
+
+    /// <summary>Players by temperament.</summary>
+    internal int[] Temperaments { get; } = new int[Enum.GetValues<Temperament>().Length];
+
+    /// <summary>Missions launched, by kind.</summary>
+    internal int[] ByKind { get; } = new int[Careers.Kinds.Length];
+
+    /// <summary>Missions lost, by the phase they were lost in.</summary>
+    internal int[] ByPhase { get; } = new int[Careers.Phases.Length];
+
+    /// <summary>Losses by phase for careers below <see cref="Careers.Seasoned"/>.</summary>
+    internal int[] GreenPhase { get; } = new int[Careers.Phases.Length];
+
+    /// <summary>Losses by phase for careers at or past <see cref="Careers.Seasoned"/>.</summary>
+    internal int[] SeasonedPhase { get; } = new int[Careers.Phases.Length];
+
+    /// <summary>Missions lost, by <c>vehicle.rud</c> cause.</summary>
+    internal int[] ByCause { get; } = new int[Careers.Causes.Length];
+
+    /// <summary>Distinct bodies arrived at, and how many players got to each.</summary>
+    internal SortedDictionary<string, int> Bodies { get; } = new(StringComparer.Ordinal);
+
+    /// <summary>Career ages in in-game hours, sorted, for the percentiles.</summary>
+    internal List<double> Hours { get; } = [];
+
+    /// <summary>Players that crossed a stage boundary during the run.</summary>
+    internal int Advanced { get; set; }
+
+    /// <summary>Resident craft across every save.</summary>
+    internal long Fleet { get; set; }
+
+    /// <summary>Missions launched.</summary>
+    internal long Attempted { get; set; }
+
+    /// <summary>Missions that reached their objective.</summary>
+    internal long Completed { get; set; }
+
+    /// <summary>Players that reached at least one body other than home.</summary>
+    internal int PlayersOffWorld { get; set; }
+
+    /// <summary>A percentile of the career-age distribution, in in-game hours.</summary>
+    /// <param name="percent">The percentile, 0–100.</param>
+    /// <returns>The value, or 0 when nothing ran.</returns>
+    internal double HoursAt(double percent)
+    {
+        if (Hours.Count == 0)
+            return 0;
+        int index = (int)Math.Round((percent / 100.0) * (Hours.Count - 1));
+        return Hours[Math.Clamp(index, 0, Hours.Count - 1)];
+    }
+}
 
 /// <summary>A board and what the run put on it.</summary>
 /// <param name="Stat">The board's stat key.</param>
@@ -237,6 +311,53 @@ internal sealed class RunReport
         return totals;
     }
 
+    /// <summary>
+    /// The run's careers, added up.
+    /// </summary>
+    /// <remarks>
+    /// The point of this section is that a reader can decide, from the numbers alone, whether the
+    /// population looked like a player base: bottom-heavy in stage, growing in fleet size and
+    /// concurrency with career age, and failing early when it is green and on landing when it is
+    /// not. A run whose losses were spread evenly across phases would be visible here immediately.
+    /// </remarks>
+    /// <returns>The rollup.</returns>
+    internal CareerRollup Rollup()
+    {
+        var roll = new CareerRollup();
+        foreach (PlayerResult player in Players)
+        {
+            CareerSummary c = player.Career;
+            roll.StartStage[(int)c.StartStage]++;
+            roll.EndStage[(int)c.EndStage]++;
+            roll.FleetAtStage[(int)c.StartStage] += c.Fleet;
+            roll.PlayersAtStage[(int)c.StartStage]++;
+            roll.Temperaments[(int)c.Temperament]++;
+            if (c.EndStage != c.StartStage)
+                roll.Advanced++;
+
+            roll.Fleet += c.Fleet;
+            roll.Attempted += c.Attempted;
+            roll.Completed += c.Completed;
+            roll.Hours.Add(c.CareerHours);
+
+            Accumulate(roll.ByKind, c.ByKind);
+            Accumulate(roll.ByPhase, c.FailuresByPhase);
+            Accumulate(roll.ByCause, c.CausesByKind);
+            Accumulate(
+                c.StartStage < Careers.Seasoned ? roll.GreenPhase : roll.SeasonedPhase,
+                c.FailuresByPhase);
+
+            foreach (string body in c.BodiesReached)
+                roll.Bodies[body] = roll.Bodies.TryGetValue(body, out int n) ? n + 1 : 1;
+
+            if (c.BodiesReached.Count > 0)
+                roll.PlayersOffWorld++;
+        }
+
+        roll.Hours.Sort();
+        return roll;
+    }
+
     /// <summary>A <c>/debug/vars</c> counter's movement across the run.</summary>
     /// <param name="name">The expvar name.</param>
     /// <returns>The delta.</returns>
@@ -353,6 +474,8 @@ internal sealed class RunReport
             }
         }
 
+        WriteCareers();
+
         Console.WriteLine();
         Console.WriteLine("═══ events by type ══════════════════════════════════════════════");
         foreach ((string type, long count) in EventsByType())
@@ -443,6 +566,73 @@ internal sealed class RunReport
         Console.Error.WriteLine($"FAILED — {failed} of {Checks.Count} invariants broke");
     }
 
+    /// <summary>
+    /// Writes the careers section: what the population looked like and how it failed.
+    /// </summary>
+    private void WriteCareers()
+    {
+        if (Players.Count == 0)
+            return;
+
+        CareerRollup roll = Rollup();
+
+        Console.WriteLine();
+        Console.WriteLine("═══ careers ═════════════════════════════════════════════════════");
+        Row("stage at start", Counts(Careers.Stages, roll.StartStage, static s => s.ToString().ToLowerInvariant()));
+        Row("stage at end", Counts(Careers.Stages, roll.EndStage, static s => s.ToString().ToLowerInvariant())
+                            + (roll.Advanced > 0 ? $"   ({roll.Advanced} advanced during the run)" : string.Empty));
+        Row("career age", $"median {Fmt(roll.HoursAt(50))} h   p90 {Fmt(roll.HoursAt(90))} h   "
+                          + $"oldest {Fmt(roll.HoursAt(100))} h   (in-game, prior + simulated)");
+        Row("temperament", Counts(
+            Enum.GetValues<Temperament>(), roll.Temperaments, static t => t.ToString().ToLowerInvariant()));
+
+        var fleet = new List<string>(Careers.Stages.Length);
+        foreach (CareerStage stage in Careers.Stages)
+        {
+            int players = roll.PlayersAtStage[(int)stage];
+            if (players == 0)
+                continue;
+            fleet.Add(string.Create(CultureInfo.InvariantCulture,
+                $"{stage.ToString().ToLowerInvariant()} {roll.FleetAtStage[(int)stage] / (double)players:0.#}"));
+        }
+
+        Row("fleet", $"{roll.Fleet} resident craft — per player by stage: " + string.Join("  ", fleet));
+
+        long lost = roll.Attempted - roll.Completed;
+        Row("missions", $"{roll.Attempted} attempted, {roll.Completed} completed "
+                        + $"({(roll.Attempted == 0 ? 0 : 100.0 * roll.Completed / roll.Attempted):0}%), "
+                        + $"{lost} lost");
+        Row("by kind", Counts(Careers.Kinds, roll.ByKind, Careers.Label));
+        // Split, because the aggregate hides the whole point: a population that is mostly beginners
+        // fails mostly on the pad whatever the veterans are doing.
+        Row("lost — green", Counts(Careers.Phases, roll.GreenPhase, Careers.Label));
+        Row("lost — veteran", Counts(Careers.Phases, roll.SeasonedPhase, Careers.Label));
+        Row("rud cause", Counts(Careers.Causes, roll.ByCause, Careers.Label));
+
+        var bodies = new List<string>(roll.Bodies.Count);
+        foreach (LoadBody body in LoadBodies.All)
+        {
+            if (roll.Bodies.TryGetValue(body.Name, out int players))
+                bodies.Add($"{body.Name} {players}");
+        }
+
+        Row("bodies reached", bodies.Count == 0
+            ? "(nobody left the home SOI)"
+            : string.Join("  ", bodies) + $"   — {roll.PlayersOffWorld}/{Players.Count} players got somewhere else");
+    }
+
+    private static string Counts<T>(IReadOnlyList<T> values, IReadOnlyList<int> counts, Func<T, string> label)
+    {
+        var parts = new List<string>(values.Count);
+        for (int i = 0; i < values.Count && i < counts.Count; i++)
+        {
+            if (counts[i] > 0)
+                parts.Add(label(values[i]) + " " + counts[i].ToString(CultureInfo.InvariantCulture));
+        }
+
+        return parts.Count == 0 ? "(none)" : string.Join("  ", parts);
+    }
+
     /// <summary>Writes the machine-readable report to stdout.</summary>
     internal void WriteJson()
     {
@@ -521,6 +711,7 @@ internal sealed class RunReport
             ["projector_checkpoint_seq"] = CheckpointSeq,
             ["events_max_seq"] = MaxSeq,
             ["events_by_type"] = byType,
+            ["careers"] = CareersJson(),
             ["boards"] = boards,
             ["players_visible"] = PlayersVisible,
             ["players_checked"] = PlayersChecked,
@@ -531,6 +722,58 @@ internal sealed class RunReport
         };
 
         Console.WriteLine(JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }));
+    }
+
+    private Dictionary<string, object> CareersJson()
+    {
+        CareerRollup roll = Rollup();
+        var bodies = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach ((string body, int players) in roll.Bodies)
+            bodies[body] = players;
+
+        return new Dictionary<string, object>(StringComparer.Ordinal)
+        {
+            ["stage_at_start"] = Map(Careers.Stages, roll.StartStage, static s => s.ToString().ToLowerInvariant()),
+            ["stage_at_end"] = Map(Careers.Stages, roll.EndStage, static s => s.ToString().ToLowerInvariant()),
+            ["advanced_a_stage"] = roll.Advanced,
+            ["temperament"] = Map(
+                Enum.GetValues<Temperament>(), roll.Temperaments, static t => t.ToString().ToLowerInvariant()),
+            ["career_hours"] = new Dictionary<string, double>(StringComparer.Ordinal)
+            {
+                ["p50"] = Math.Round(roll.HoursAt(50), 2),
+                ["p90"] = Math.Round(roll.HoursAt(90), 2),
+                ["max"] = Math.Round(roll.HoursAt(100), 2),
+            },
+            ["resident_craft"] = roll.Fleet,
+            ["missions_attempted"] = roll.Attempted,
+            ["missions_completed"] = roll.Completed,
+            ["missions_by_kind"] = Map(Careers.Kinds, roll.ByKind, Careers.Label),
+            ["losses_by_phase"] = Map(Careers.Phases, roll.ByPhase, Careers.Label),
+            ["losses_by_phase_green"] = Map(Careers.Phases, roll.GreenPhase, Careers.Label),
+            ["losses_by_phase_veteran"] = Map(Careers.Phases, roll.SeasonedPhase, Careers.Label),
+            ["losses_by_cause"] = Map(Careers.Causes, roll.ByCause, Careers.Label),
+            ["bodies_reached"] = bodies,
+            ["players_off_world"] = roll.PlayersOffWorld,
+        };
+    }
+
+    private static Dictionary<string, int> Map<T>(
+        IReadOnlyList<T> values, IReadOnlyList<int> counts, Func<T, string> label)
+    {
+        var map = new Dictionary<string, int>(StringComparer.Ordinal);
+        for (int i = 0; i < values.Count && i < counts.Count; i++)
+        {
+            if (counts[i] > 0)
+                map[label(values[i])] = counts[i];
+        }
+
+        return map;
+    }
+
+    private static void Accumulate(int[] into, IReadOnlyList<int> from)
+    {
+        for (int i = 0; i < into.Length && i < from.Count; i++)
+            into[i] += from[i];
     }
 
     private long Sum(Func<PlayerResult, long> selector)

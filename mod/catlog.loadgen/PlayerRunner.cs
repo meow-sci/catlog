@@ -22,7 +22,7 @@ namespace MeowSci.Catlog.LoadGen;
 /// <param name="Index">The player's index.</param>
 /// <param name="Handle">The claimed handle.</param>
 /// <param name="IdP">Which identity provider signed them in.</param>
-/// <param name="Style">How they play.</param>
+/// <param name="Career">What their career looked like across the run's window.</param>
 /// <param name="Role">The moderation path they exercise, if any.</param>
 /// <param name="Frames">Telemetry frames published.</param>
 /// <param name="Events">Envelopes the pipeline produced and the outbox accepted.</param>
@@ -47,7 +47,7 @@ internal sealed record PlayerResult(
     int Index,
     string Handle,
     string IdP,
-    PlayStyle Style,
+    CareerSummary Career,
     ModerationRole Role,
     int Frames,
     int Events,
@@ -191,14 +191,19 @@ internal sealed class PlayerRunner : IDisposable
         PlayerScript script, Func<CancellationToken, Task<Credential?>>? reissue, CancellationToken ct)
     {
         long started = Environment.TickCount64;
-        double lastSimT = 0;
+        // sim_t is career time, so a player who arrives with three hundred in-game hours behind
+        // them opens their session at 1.08e6 rather than at zero. Anchoring the frame loop, the
+        // ship cadence and the session event anywhere else would emit a career that appears to
+        // restart every run.
+        double lastSimT = script.Epoch;
+        _lastShipSimT = script.Epoch;
         int frames = 0;
         string error = string.Empty;
         bool reissuePending = reissue is not null && script.Role == ModerationRole.Reissue;
 
         try
         {
-            Append([_pipeline.SessionStarted(0, ScriptWall(script, 0))]);
+            Append([_pipeline.SessionStarted(script.Epoch, ScriptWall(script, script.Epoch))]);
 
             foreach (SimStep step in script.Steps())
             {
@@ -267,7 +272,7 @@ internal sealed class PlayerRunner : IDisposable
             error = $"{_outbox.PendingCount} events never left the outbox";
 
         return new PlayerResult(
-            _account.Index, _account.Handle, _account.IdP, script.Style, script.Role,
+            _account.Index, _account.Handle, _account.IdP, script.Summary, script.Role,
             frames, _events, _batches, _serverAccepted, _serverDeduped,
             _clockResyncs, _streamForks, _oversize, _rateLimited, _busy,
             _byType, _digest.Value(),
