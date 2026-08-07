@@ -62,6 +62,10 @@ type Server struct {
 	// mu is the §5.4 admin write mutex: one admin write at a time, and never
 	// concurrent with another admin write transaction.
 	mu sync.Mutex
+	// projections carries the WP4 dependencies, installed by
+	// [Server.RegisterProjections]. Zero until then; every route that reads it
+	// tolerates nil members.
+	projections ProjectionDeps
 }
 
 // New builds the admin mux with the WP2 routes: pprof, expvar and

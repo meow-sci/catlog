@@ -29,8 +29,11 @@ import (
 	"github.com/meow-sci/catlog/server/internal/adminapi"
 	"github.com/meow-sci/catlog/server/internal/authz"
 	"github.com/meow-sci/catlog/server/internal/config"
+	"github.com/meow-sci/catlog/server/internal/directory"
 	"github.com/meow-sci/catlog/server/internal/ingest"
 	"github.com/meow-sci/catlog/server/internal/keys"
+	"github.com/meow-sci/catlog/server/internal/projector"
+	"github.com/meow-sci/catlog/server/internal/readapi"
 	"github.com/meow-sci/catlog/server/internal/store"
 )
 
@@ -137,11 +140,62 @@ func run(ctx context.Context, cfg config.Config, log *slog.Logger, ready func(pu
 		MaxEvents:    cfg.Ingest.MaxEvents,
 	}, log)
 
+	// The in-memory player_id ↔ handle map (§5.4): projections.db cannot be
+	// joined to events.db, so the read API and the feed resolve handles here.
+	// Identity mutations (claim, revoke, ban) call Reload.
+	dir := directory.New(events)
+	if err := dir.Reload(ctx); err != nil {
+		return fmt.Errorf("load handle directory: %w", err)
+	}
+
+	// The projector owns projections.db from here on: the read API queries it
+	// through Live, which holds the RWMutex a rebuild's swap needs (§5.6).
+	// Shutdown must close the *live* handle rather than the one opened above —
+	// a rebuild replaces it with a different object on the same path.
+	live := projector.NewLive(projections)
+	defer func() {
+		if err := live.Close(); err != nil {
+			log.Error("closing database failed", "db", "projections", "err", err)
+		}
+	}()
+	broadcaster := projector.NewBroadcaster()
+	proj, err := projector.New(projector.Options{
+		Events:       events,
+		Live:         live,
+		Directory:    dir,
+		Broadcaster:  broadcaster,
+		Notify:       writer.Notify(),
+		StoreOptions: storeOpts,
+		Log:          log,
+	})
+	if err != nil {
+		return fmt.Errorf("build projector: %w", err)
+	}
+	projectorCtx, stopProjector := context.WithCancel(context.Background())
+	go proj.Run(projectorCtx)
+	// Registered after the live-handle close above, so LIFO stops the fold loop
+	// before the database it writes to goes away.
+	defer func() {
+		stopProjector()
+		proj.Wait()
+	}()
+
+	reader, err := readapi.New(readapi.Deps{
+		Projections: live,
+		Events:      events,
+		Directory:   dir,
+		Log:         log,
+	})
+	if err != nil {
+		return fmt.Errorf("build read api: %w", err)
+	}
+
 	mux := http.NewServeMux()
 	// /healthz answers from memory on purpose: it must stay up while the
 	// databases are busy or being checkpointed, so it never touches them (§4.4).
 	mux.HandleFunc("GET /healthz", healthz)
 	ingestHandler.Register(mux)
+	reader.Register(mux)
 
 	admin := adminapi.New(adminapi.Deps{
 		Config:   cfg,
@@ -149,6 +203,11 @@ func run(ctx context.Context, cfg config.Config, log *slog.Logger, ready func(pu
 		Events:   events,
 		Verifier: verifier,
 		Log:      log,
+	})
+	admin.RegisterProjections(adminapi.ProjectionDeps{
+		Projector: proj,
+		Directory: dir,
+		Writer:    writer,
 	})
 
 	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
@@ -206,6 +265,10 @@ func run(ctx context.Context, cfg config.Config, log *slog.Logger, ready func(pu
 	// for the in-flight transaction to commit before the databases close.
 	stopWriter()
 	writer.Wait()
+	// Then the projector, so the last batch is folded rather than replayed on
+	// the next start.
+	stopProjector()
+	proj.Wait()
 
 	// The deferred closes run next: each checkpoints its WAL and releases the
 	// file lock. Releasing the lock matters as much as the checkpoint — the

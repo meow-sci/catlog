@@ -1,0 +1,330 @@
+// Package seed builds and installs the deterministic demo dataset behind
+// `POST /admin/seed` and `catlogctl seed` (§5.9).
+//
+// # What it is for
+//
+// WP5's pages and WP7's assertions both need a server that already has
+// something on its boards. Rather than script gameplay, seed writes a fixed
+// history of real §4.2 events for three synthetic dev players — `demo_ace`,
+// `demo_tumbler`, `demo_crasher` — chosen so that between them they set a record
+// on every launch board, including the ones nobody hits by accident (a survived
+// lithobrake, all six RUD causes, a flagged flight that must score nothing).
+//
+// # Why it is deterministic
+//
+// Every event id is derived from SHA-256 of a fixed string, and every timestamp
+// counts up from a fixed epoch, so seeding twice inserts the same rows twice and
+// the `(player_id, event_id)` dedup index (D19) turns the second run into a
+// no-op. That makes `make seed` safe to run repeatedly, and it makes the board
+// values something a test can assert against by literal value.
+//
+// It is not a fixture for the fold tests: those build their own events, because
+// a golden test that shares its input with the demo data stops being a test of
+// the rule and becomes a test of the demo data.
+package seed
+
+import (
+	"context"
+	"crypto/sha256"
+	"database/sql"
+	"encoding/json"
+	"fmt"
+	"strconv"
+
+	"github.com/meow-sci/catlog/server/internal/ids"
+	"github.com/meow-sci/catlog/server/internal/keys"
+	"github.com/meow-sci/catlog/server/internal/stats"
+	"github.com/meow-sci/catlog/server/internal/store"
+)
+
+// IdP is the `idp` the demo players are recorded under — the same synthetic
+// namespace `POST /admin/issue` uses (§5.9), so demo accounts can never collide
+// with a real one and are trivial to find and delete.
+const IdP = "dev"
+
+// The three demo handles (§5.9).
+const (
+	HandleAce     = "demo_ace"
+	HandleTumbler = "demo_tumbler"
+	HandleCrasher = "demo_crasher"
+)
+
+// Handles lists the demo handles in the order they are created.
+func Handles() []string { return []string{HandleAce, HandleTumbler, HandleCrasher} }
+
+// EpochMS is the fixed wall-clock the dataset counts from: 2026-01-01T00:00:00Z.
+// A fixed epoch means the events sort the same way on every machine and the
+// derived ULIDs are byte-identical run to run.
+const EpochMS int64 = 1767225600000
+
+// Result reports what a seed run did.
+type Result struct {
+	Players  []string `json:"players"`
+	Events   int      `json:"events"`
+	Accepted int      `json:"accepted"`
+	Deduped  int      `json:"deduped"`
+}
+
+// PlayerData is one demo player's fixed history.
+type PlayerData struct {
+	Handle string
+	Events []store.Event
+}
+
+// Dataset returns the demo history. Pure: no clock, no randomness, no I/O.
+func Dataset() []PlayerData {
+	return []PlayerData{ace(), tumbler(), crasher()}
+}
+
+// Apply installs the dataset into events.db: it creates the three dev players,
+// claims their handles if free, and inserts their events.
+//
+// It is idempotent. Re-running reports every event as deduped, because the ids
+// are derived rather than minted (D19).
+//
+// The caller must hold the admin write mutex (§5.4): this writes to events.db
+// outside the ingest writer goroutine, which is exactly what that mutex exists
+// to serialize.
+func Apply(ctx context.Context, events *store.Events, keySet *keys.Set, now int64) (Result, error) {
+	if keySet == nil {
+		return Result{}, fmt.Errorf("seed: a key set is required to derive demo user_keys")
+	}
+	var res Result
+	for _, p := range Dataset() {
+		userKey := keySet.UserKey(IdP, p.Handle)
+		playerID, err := events.EnsurePlayer(ctx, nil, userKey, IdP, now)
+		if err != nil {
+			return Result{}, fmt.Errorf("seed: create %s: %w", p.Handle, err)
+		}
+		switch existing, err := events.HandleByLC(ctx, p.Handle); {
+		case err == nil && existing.PlayerID != playerID:
+			return Result{}, fmt.Errorf("seed: handle %q belongs to another player", p.Handle)
+		case err == nil:
+			// already claimed by this demo player
+		default:
+			if err := events.ClaimHandle(ctx, playerID, p.Handle, now); err != nil {
+				return Result{}, fmt.Errorf("seed: claim %q: %w", p.Handle, err)
+			}
+		}
+
+		accepted, deduped, err := events.InsertEvents(ctx, nil, playerID, p.Events)
+		if err != nil {
+			return Result{}, fmt.Errorf("seed: insert %s events: %w", p.Handle, err)
+		}
+		res.Players = append(res.Players, p.Handle)
+		res.Events += len(p.Events)
+		res.Accepted += accepted
+		res.Deduped += deduped
+	}
+	return res, nil
+}
+
+// --- the dataset -------------------------------------------------------------
+
+// ace flies competently: two orbits, a docking, a clean recovery. It owns the
+// speed and g boards.
+func ace() PlayerData {
+	b := newBuilder(HandleAce)
+	b.session()
+	b.startFlight(1, stats.FlightStarted{
+		VehicleName: "Whisker IX", Body: "kerbin", MassKg: 42000, PartCount: 34, CrewCount: 3,
+	})
+	b.add("vehicle.staging", stats.VehicleStaging{StageIndex: 0})
+	b.add("vehicle.staging", stats.VehicleStaging{StageIndex: 1})
+	b.add("vehicle.staging", stats.VehicleStaging{StageIndex: 2})
+	b.add("telemetry.window", window("kerbin", 2410, 7820, 4.2))
+	b.add("vehicle.orbit", stats.VehicleOrbit{
+		Phase: "achieved", Body: "kerbin", ApM: 320000, PeM: 295000, Ecc: 0.002, IncDeg: 28.5,
+	})
+	b.add("vehicle.soi", stats.VehicleSOI{FromBody: "kerbin", ToBody: "mun"})
+	b.add("vehicle.orbit", stats.VehicleOrbit{
+		Phase: "achieved", Body: "mun", ApM: 42000, PeM: 39000, Ecc: 0.018, IncDeg: 4.1,
+	})
+	b.add("vehicle.docked", stats.VehicleDock{OtherFlight: ids.String(seedULID("docking-target", 1))})
+	b.add("telemetry.window", window("mun", 640, 9450, 6.8))
+	b.endFlight(stats.FlightEnded{Reason: "recovered", CrewCount: 3})
+	b.roster(
+		stats.RosterKitten{Kid: "ace0000000000001", Name: "Comet", TravelledM: 1_820_000, FastestMs: 29_812, Missions: 4, MissionTimeS: 41200, KIA: false},
+		stats.RosterKitten{Kid: "ace0000000000002", Name: "Nimbus", TravelledM: 1_410_000, FastestMs: 29_804, Missions: 3, MissionTimeS: 33100, KIA: false},
+		stats.RosterKitten{Kid: "ace0000000000003", Name: "Pilot", TravelledM: 980_000, FastestMs: 29_798, Missions: 2, MissionTimeS: 21050, KIA: false},
+	)
+	return b.done()
+}
+
+// tumbler goes EVA and falls over a lot. It owns `kitten_tumbles` and
+// `soi_bodies`.
+func tumbler() PlayerData {
+	b := newBuilder(HandleTumbler)
+	b.session()
+	b.startFlight(1, stats.FlightStarted{
+		VehicleName: "Tumbleweed", Body: "mun", MassKg: 3100, PartCount: 12, CrewCount: 2,
+	})
+	b.add("telemetry.window", window("mun", 18, 1620, 1.1))
+	b.add("vehicle.soi", stats.VehicleSOI{FromBody: "kerbin", ToBody: "mun"})
+	b.add("vehicle.soi", stats.VehicleSOI{FromBody: "mun", ToBody: "minmus"})
+	b.add("kitten.eva_start", map[string]any{"kid": "tum0000000000001", "name": "Bramble"})
+	for i, speed := range []float64{7.2, 8.9, 6.6, 11.4} {
+		b.add("kitten.tumble", stats.KittenTumble{
+			Kid: "tum0000000000001", Name: "Bramble", SpeedMs: speed, Body: []string{"mun", "mun", "minmus", "minmus"}[i],
+		})
+	}
+	b.add("kitten.eva_end", map[string]any{"kid": "tum0000000000001", "name": "Bramble", "duration_s": 640.5})
+	b.endFlight(stats.FlightEnded{Reason: "recovered", CrewCount: 2})
+	b.roster(
+		stats.RosterKitten{Kid: "tum0000000000001", Name: "Bramble", TravelledM: 620_000, FastestMs: 29_790, Missions: 6, MissionTimeS: 51000, KIA: false},
+		stats.RosterKitten{Kid: "tum0000000000002", Name: "Sorrel", TravelledM: 310_000, FastestMs: 29_781, Missions: 2, MissionTimeS: 14400, KIA: false},
+	)
+	return b.done()
+}
+
+// crasher takes vehicles apart in every documented way, survives one
+// spectacular lithobrake, and cheats once — the flagged flight scores nothing,
+// which is what makes it worth seeding.
+func crasher() PlayerData {
+	b := newBuilder(HandleCrasher)
+	b.session()
+
+	// The record everyone comes to see (§5.6's own example: 214 m/s on duna).
+	b.startFlight(1, stats.FlightStarted{
+		VehicleName: "Lawn Dart", Body: "duna", MassKg: 8200, PartCount: 19, CrewCount: 1,
+	})
+	b.add("telemetry.window", window("duna", 782, 3120, 9.6))
+	b.add("vehicle.impact", stats.VehicleImpact{
+		SpeedMs: 214, EnergyJ: 4.8e7, Survived: true, LaunchPad: false, Body: "duna", CrewCount: 1,
+	})
+	b.endFlight(stats.FlightEnded{Reason: "recovered", CrewCount: 1})
+
+	// One flight per §4.2 RUD cause, so every `rud_<cause>` board has an entry.
+	for i, cause := range stats.RUDCauses {
+		b.startFlight(2+i, stats.FlightStarted{
+			VehicleName: "Test Article " + strconv.Itoa(i+1), Body: "kerbin", MassKg: 5400, PartCount: 15, CrewCount: 0,
+		})
+		b.add("vehicle.rud", stats.VehicleRUD{
+			Cause: cause, PeakG: 12 + float64(i), PeakQPa: 48000 + float64(i)*1000,
+			SpeedMs: 300 + float64(i)*40, AltitudeM: 2400 - float64(i)*200, Body: "kerbin", CrewCount: 0,
+		})
+		b.endFlight(stats.FlightEnded{Reason: "destroyed", CrewCount: 0})
+	}
+
+	// The cheated flight. The flag is emitted *before* the impact so the
+	// incremental fold already excludes it — the seeded database is meant to be
+	// the canonical answer, not a demonstration of the incremental path's known
+	// blind spot. That blind spot, and the rebuild that heals it, is covered by
+	// the projector tests instead.
+	b.startFlight(2+len(stats.RUDCauses), stats.FlightStarted{
+		VehicleName: "Definitely Legitimate", Body: "kerbin", MassKg: 1200, PartCount: 4, CrewCount: 1,
+	})
+	b.add("flight.flagged", stats.FlightFlagged{
+		Flag: "teleport", Detail: "position moved 4.2e6 m in one frame",
+	})
+	b.add("vehicle.impact", stats.VehicleImpact{
+		SpeedMs: 999, EnergyJ: 9.9e9, Survived: true, LaunchPad: false, Body: "kerbin", CrewCount: 1,
+	})
+	b.add("telemetry.window", window("kerbin", 9999, 99999, 99.9))
+	b.endFlight(stats.FlightEnded{Reason: "recovered", CrewCount: 1})
+
+	b.roster(
+		stats.RosterKitten{Kid: "cra0000000000001", Name: "Ferro", TravelledM: 205_000, FastestMs: 29_772, Missions: 8, MissionTimeS: 9200, KIA: false},
+	)
+	return b.done()
+}
+
+// window builds a telemetry.window payload with the aggregates a board reads.
+func window(body string, surfaceMax, orbitalMax, peakG float64) stats.TelemetryWindow {
+	g := peakG
+	q := peakG * 5200
+	return stats.TelemetryWindow{
+		T0Sim: 0, T1Sim: 30, N: 60, Body: body,
+		AltM:           stats.Agg{Min: 0, Max: 120000, Mean: 41000, Last: 118000},
+		SurfaceSpeedMs: stats.Agg{Min: 0, Max: surfaceMax, Mean: surfaceMax / 2, Last: surfaceMax * 0.8},
+		OrbitalSpeedMs: stats.Agg{Min: 0, Max: orbitalMax, Mean: orbitalMax / 2, Last: orbitalMax * 0.9},
+		AccelMs2:       stats.Agg{Min: 0, Max: peakG * 9.81, Mean: peakG * 3, Last: peakG * 2},
+		PeakG:          &g,
+		MaxQPa:         &q,
+		MassKgLast:     18400,
+	}
+}
+
+// --- builder -----------------------------------------------------------------
+
+// builder assembles one player's history, assigning derived ids and a
+// monotonically advancing clock as it goes.
+type builder struct {
+	handle    string
+	sessionID ids.ID
+	flight    ids.ID
+	n         int
+	simT      float64
+	evs       []store.Event
+}
+
+func newBuilder(handle string) *builder {
+	return &builder{handle: handle, sessionID: seedULID(handle+":session", 1)}
+}
+
+func (b *builder) session() {
+	b.flight = ids.Zero
+	b.add("session.started", stats.SessionStarted{
+		ModVer: "0.1.0", GameBuild: "2026.8.5.5168", Install: ids.String(seedULID(b.handle+":install", 1)),
+	})
+}
+
+func (b *builder) startFlight(n int, p stats.FlightStarted) {
+	b.flight = seedULID(b.handle+":flight", n)
+	b.add("flight.started", p)
+}
+
+func (b *builder) endFlight(p stats.FlightEnded) {
+	b.add("flight.ended", p)
+	b.flight = ids.Zero
+}
+
+// roster is emitted with no flight, exactly as §4.1 requires.
+func (b *builder) roster(kittens ...stats.RosterKitten) {
+	b.flight = ids.Zero
+	b.add("roster.snapshot", stats.RosterSnapshot{Kittens: kittens})
+}
+
+func (b *builder) add(typ string, payload any) {
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		// Only reachable by a programming error in this file: every payload is
+		// a struct or a literal map of JSON-safe values.
+		panic("seed: " + typ + ": " + err.Error())
+	}
+	b.n++
+	b.simT += 12.5
+	b.evs = append(b.evs, store.Event{
+		ID:        seedULID(b.handle, b.n),
+		FlightID:  b.flight,
+		SessionID: b.sessionID,
+		Type:      typ,
+		Ver:       1,
+		SimTime:   nullFloat(b.simT),
+		WallTime:  EpochMS + int64(b.n)*1000,
+		Payload:   raw,
+	})
+}
+
+func (b *builder) done() PlayerData {
+	return PlayerData{Handle: b.handle, Events: b.evs}
+}
+
+// seedULID derives a ULID from a fixed string. The timestamp half is the fixed
+// epoch and the entropy half is SHA-256 of the label, so the value is stable
+// across machines and runs — which is what makes seeding idempotent against the
+// (player_id, event_id) dedup index (D19).
+func seedULID(label string, n int) ids.ID {
+	sum := sha256.Sum256([]byte("catlog-seed:" + label + ":" + strconv.Itoa(n)))
+	var id ids.ID
+	ms := uint64(EpochMS)
+	for i := range 6 {
+		id[i] = byte(ms >> (40 - 8*i))
+	}
+	copy(id[6:], sum[:10])
+	return id
+}
+
+func nullFloat(v float64) sql.NullFloat64 {
+	return sql.NullFloat64{Float64: v, Valid: true}
+}

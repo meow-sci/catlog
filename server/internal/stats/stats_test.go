@@ -1,0 +1,754 @@
+package stats_test
+
+import (
+	"database/sql"
+	"encoding/json"
+	"fmt"
+	"maps"
+	"slices"
+	"testing"
+
+	"github.com/meow-sci/catlog/server/internal/ids"
+	"github.com/meow-sci/catlog/server/internal/stats"
+	"github.com/meow-sci/catlog/server/internal/store"
+	"github.com/meow-sci/catlog/server/internal/testutil"
+)
+
+// The golden tests below all have the same shape: a sequence of §4.2 events in,
+// the exact `player_stat` rows out. They go through [stats.Decode] rather than
+// building a stats.Event literal, so the payload structs and their JSON tags are
+// covered too — a renamed tag would otherwise silently stop a board scoring.
+
+const (
+	alice int64 = 1
+	bob   int64 = 2
+)
+
+// input is one event in a golden sequence.
+type input struct {
+	player  int64
+	flight  ids.ID // ids.Zero for session/roster events
+	typ     string
+	payload any
+	simT    float64
+	noSimT  bool
+}
+
+// row is a `player_stat` row as a golden test cares about it.
+type row struct {
+	Value   float64
+	Seq     int64
+	Context string
+}
+
+func (r row) String() string {
+	return fmt.Sprintf("{value:%v seq:%d context:%s}", r.Value, r.Seq, r.Context)
+}
+
+// flightN returns a stable flight ULID for a golden test.
+func flightN(n byte) ids.ID {
+	var id ids.ID
+	id[0], id[15] = 0x01, n
+	return id
+}
+
+// fold applies every registered fold to the sequence, one event per seq starting
+// at 1, and returns the resulting player_stat rows keyed "player/stat".
+func fold(t *testing.T, in []input) map[string]row {
+	t.Helper()
+	proj := testutil.MemProjections(t)
+	apply(t, proj, in, 0, false)
+	return readStats(t, proj)
+}
+
+// apply folds a sequence into an open projections database.
+//
+// refined mirrors what a rebuild does (§5.6): a first pass that applies only the
+// flight-state fold and indexes every kitten.kia, then a second that scores the
+// boards against a flight_state already complete for the whole history. That
+// two-pass shape is the whole reason a rebuild can answer questions the
+// incremental path cannot, so a test of the refinements has to reproduce it.
+func apply(t *testing.T, proj *store.Projections, in []input, base int64, refined bool) {
+	t.Helper()
+	ctx := t.Context()
+
+	run := func(folds []stats.Fold, reader func(*sql.Tx) stats.FlightStateReader) {
+		t.Helper()
+		err := proj.WithWriteTx(ctx, func(tx *sql.Tx) error {
+			fs := reader(tx)
+			for i, e := range in {
+				ev := decode(t, e, base+int64(i)+1)
+				for _, f := range folds {
+					if err := f.Apply(ctx, tx, ev, fs); err != nil {
+						return fmt.Errorf("fold %s on %s: %w", f.Name(), e.typ, err)
+					}
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("apply folds: %v", err)
+		}
+	}
+
+	if !refined {
+		run(stats.Folds(), func(tx *sql.Tx) stats.FlightStateReader { return stats.NewFlights(tx) })
+		return
+	}
+
+	kia := map[ids.ID][]float64{}
+	for _, e := range in {
+		if e.typ == "kitten.kia" && e.flight != ids.Zero && !e.noSimT {
+			kia[e.flight] = append(kia[e.flight], e.simT)
+		}
+	}
+	run([]stats.Fold{stats.FlightFold()}, func(tx *sql.Tx) stats.FlightStateReader { return stats.NewFlights(tx) })
+	run(stats.BoardFolds(), func(tx *sql.Tx) stats.FlightStateReader { return stats.NewRefinedFlights(tx, kia) })
+}
+
+func decode(t *testing.T, e input, seq int64) stats.Event {
+	t.Helper()
+	raw, err := json.Marshal(e.payload)
+	if err != nil {
+		t.Fatalf("marshal %s payload: %v", e.typ, err)
+	}
+	if e.payload == nil {
+		raw = json.RawMessage("{}")
+	}
+	player := e.player
+	if player == 0 {
+		player = alice
+	}
+	se := store.StoredEvent{
+		Seq:      seq,
+		PlayerID: player,
+		RecvTime: 1_700_000_000_000 + seq,
+		Event: store.Event{
+			ID:        flightN(byte(seq)),
+			FlightID:  e.flight,
+			SessionID: flightN(0xff),
+			Type:      e.typ,
+			Ver:       1,
+			SimTime:   sql.NullFloat64{Float64: e.simT, Valid: !e.noSimT},
+			WallTime:  1_700_000_000_000,
+			Payload:   raw,
+		},
+	}
+	ev, err := stats.Decode(se, nil)
+	if err != nil {
+		t.Fatalf("decode %s: %v", e.typ, err)
+	}
+	return ev
+}
+
+func readStats(t *testing.T, proj *store.Projections) map[string]row {
+	t.Helper()
+	rows, err := proj.Reader().QueryContext(t.Context(),
+		`SELECT player_id, stat, value, context, updated_seq FROM player_stat ORDER BY player_id, stat`)
+	if err != nil {
+		t.Fatalf("read player_stat: %v", err)
+	}
+	defer rows.Close()
+
+	out := map[string]row{}
+	for rows.Next() {
+		var (
+			player int64
+			stat   string
+			r      row
+			cx     sql.NullString
+		)
+		if err := rows.Scan(&player, &stat, &r.Value, &cx, &r.Seq); err != nil {
+			t.Fatalf("scan player_stat: %v", err)
+		}
+		r.Context = cx.String
+		out[fmt.Sprintf("%d/%s", player, stat)] = r
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read player_stat: %v", err)
+	}
+	return out
+}
+
+// want asserts the exact set of stat keys and their values, ignoring context and
+// seq unless the test asks for them with wantRow.
+func want(t *testing.T, got map[string]row, expect map[string]float64) {
+	t.Helper()
+	gotKeys := slices.Sorted(maps.Keys(got))
+	wantKeys := slices.Sorted(maps.Keys(expect))
+	if !slices.Equal(gotKeys, wantKeys) {
+		t.Fatalf("stat keys:\n got %v\nwant %v", gotKeys, wantKeys)
+	}
+	for k, v := range expect {
+		if got[k].Value != v {
+			t.Errorf("%s = %v, want %v", k, got[k].Value, v)
+		}
+	}
+}
+
+// --- biggest_lithobrake_survived ---------------------------------------------
+
+func TestLithobrakeRecordAndItsExclusions(t *testing.T) {
+	f1, f2, f3, f4 := flightN(1), flightN(2), flightN(3), flightN(4)
+	got := fold(t, []input{
+		{flight: f1, typ: "flight.started", payload: stats.FlightStarted{Body: "duna", CrewCount: 1}},
+		// Qualifies.
+		{flight: f1, typ: "vehicle.impact", payload: stats.VehicleImpact{
+			SpeedMs: 214, EnergyJ: 4.8e7, Survived: true, Body: "duna", CrewCount: 1,
+		}},
+		// Does not: the vehicle was destroyed.
+		{flight: f2, typ: "vehicle.impact", payload: stats.VehicleImpact{
+			SpeedMs: 900, Survived: false, Body: "duna", CrewCount: 1,
+		}},
+		// Does not: nobody aboard.
+		{flight: f3, typ: "vehicle.impact", payload: stats.VehicleImpact{
+			SpeedMs: 900, Survived: true, Body: "duna", CrewCount: 0,
+		}},
+		// Does not: falling over on the pad is not a lithobrake.
+		{flight: f4, typ: "vehicle.impact", payload: stats.VehicleImpact{
+			SpeedMs: 900, Survived: true, LaunchPad: true, Body: "kerbin", CrewCount: 2,
+		}},
+	})
+	want(t, got, map[string]float64{"1/biggest_lithobrake_survived": 214})
+
+	if cx := got["1/biggest_lithobrake_survived"].Context; cx != `{"body":"duna","energy_j":48000000,"flight":"`+ids.String(flightN(1))+`"}` {
+		t.Errorf("context = %s", cx)
+	}
+}
+
+func TestRecordTieKeepsTheEarliestSeq(t *testing.T) {
+	f1, f2 := flightN(1), flightN(2)
+	impact := stats.VehicleImpact{SpeedMs: 214, Survived: true, Body: "duna", CrewCount: 1}
+	got := fold(t, []input{
+		{flight: f1, typ: "vehicle.impact", payload: impact},
+		{flight: f2, typ: "vehicle.impact", payload: impact}, // identical value, later seq
+	})
+	r := got["1/biggest_lithobrake_survived"]
+	if r.Value != 214 {
+		t.Fatalf("value = %v, want 214", r.Value)
+	}
+	if r.Seq != 1 {
+		t.Errorf("updated_seq = %d, want 1: an equal value must not displace the earlier claim", r.Seq)
+	}
+	if wantCx := `"flight":"` + ids.String(f1) + `"`; !contains(r.Context, wantCx) {
+		t.Errorf("context = %s, want it to still name the first flight", r.Context)
+	}
+}
+
+func TestRecordIsReplacedOnlyByAStrictlyLargerValue(t *testing.T) {
+	f1, f2, f3 := flightN(1), flightN(2), flightN(3)
+	got := fold(t, []input{
+		{flight: f1, typ: "vehicle.impact", payload: stats.VehicleImpact{SpeedMs: 214, Survived: true, Body: "duna", CrewCount: 1}},
+		{flight: f2, typ: "vehicle.impact", payload: stats.VehicleImpact{SpeedMs: 100, Survived: true, Body: "duna", CrewCount: 1}},
+		{flight: f3, typ: "vehicle.impact", payload: stats.VehicleImpact{SpeedMs: 301, Survived: true, Body: "eve", CrewCount: 1}},
+	})
+	r := got["1/biggest_lithobrake_survived"]
+	if r.Value != 301 || r.Seq != 3 {
+		t.Fatalf("got %s, want value 301 at seq 3", r)
+	}
+}
+
+// --- flag exclusion ----------------------------------------------------------
+
+func TestFlaggedFlightScoresNothing(t *testing.T) {
+	clean, dirty := flightN(1), flightN(2)
+	got := fold(t, []input{
+		{flight: clean, typ: "vehicle.impact", payload: stats.VehicleImpact{SpeedMs: 214, Survived: true, Body: "duna", CrewCount: 1}},
+		// The flag lands before the flight's scoring events, which is the case
+		// the incremental fold can get right on its own.
+		{flight: dirty, typ: "flight.flagged", payload: stats.FlightFlagged{Flag: "teleport", Detail: "moved 4.2e6 m"}},
+		{flight: dirty, typ: "vehicle.impact", payload: stats.VehicleImpact{SpeedMs: 9000, Survived: true, Body: "duna", CrewCount: 1}},
+		{flight: dirty, typ: "vehicle.rud", payload: stats.VehicleRUD{Cause: "collision", SpeedMs: 20}},
+		{flight: dirty, typ: "vehicle.staging", payload: stats.VehicleStaging{StageIndex: 1}},
+		{flight: dirty, typ: "vehicle.orbit", payload: stats.VehicleOrbit{Phase: "achieved", Body: "duna"}},
+		{flight: dirty, typ: "vehicle.soi", payload: stats.VehicleSOI{ToBody: "ike"}},
+		{flight: dirty, typ: "vehicle.docked", payload: stats.VehicleDock{}},
+		{flight: dirty, typ: "kitten.tumble", payload: stats.KittenTumble{Kid: "k1", SpeedMs: 9}},
+		{flight: dirty, typ: "flight.ended", payload: stats.FlightEnded{Reason: "recovered", CrewCount: 4}},
+		{flight: dirty, typ: "telemetry.window", payload: window(500, 900, ptr(88.0))},
+	})
+	want(t, got, map[string]float64{"1/biggest_lithobrake_survived": 214})
+}
+
+func TestTuningFlagExcludesTheTumbleCounter(t *testing.T) {
+	// docs/events.md: the game's debug window live-edits the tumble speed gate,
+	// which is the sole classifier for kitten.tumble. The flag only protects the
+	// board if a *counter* honours it, which is why catlog applies the exclusion
+	// to counters and not only to records.
+	dirty := flightN(1)
+	got := fold(t, []input{
+		{flight: dirty, typ: "flight.flagged", payload: stats.FlightFlagged{Flag: "tuning", Detail: "TumbleSpeedGate 6.5 → 0.1"}},
+		{flight: dirty, typ: "kitten.tumble", payload: stats.KittenTumble{Kid: "k1", SpeedMs: 0.2}},
+		{flight: dirty, typ: "kitten.tumble", payload: stats.KittenTumble{Kid: "k1", SpeedMs: 0.2}},
+	})
+	want(t, got, map[string]float64{})
+}
+
+func TestFlagBits(t *testing.T) {
+	for flag, bit := range map[string]int64{
+		"teleport":      stats.FlagTeleport,
+		"refuel":        stats.FlagRefuel,
+		"resource_edit": stats.FlagResourceEdit,
+		"console":       stats.FlagConsole,
+		"tuning":        stats.FlagTuning,
+	} {
+		if got := stats.FlagBit(flag); got != bit {
+			t.Errorf("FlagBit(%q) = %d, want %d", flag, got, bit)
+		}
+	}
+	// An unrecognised flag from a newer mod must still taint the flight: failing
+	// open would make every future flag a scoring loophole.
+	if got := stats.FlagBit("warp_drive"); got != stats.FlagOther {
+		t.Errorf("FlagBit(unknown) = %d, want FlagOther (%d)", got, stats.FlagOther)
+	}
+	unflagged := stats.FlightState{}
+	if unflagged.Flagged() {
+		t.Error("a flight with no bits set reports flagged")
+	}
+}
+
+func TestUnknownFlagStillExcludes(t *testing.T) {
+	f := flightN(1)
+	got := fold(t, []input{
+		{flight: f, typ: "flight.flagged", payload: stats.FlightFlagged{Flag: "orbital_mind_control"}},
+		{flight: f, typ: "vehicle.impact", payload: stats.VehicleImpact{SpeedMs: 500, Survived: true, CrewCount: 1}},
+	})
+	want(t, got, map[string]float64{})
+}
+
+// --- peak_g and the speed boards ---------------------------------------------
+
+func TestPeakGIgnoresAnAbsentReading(t *testing.T) {
+	// docs/ksa-integration.md: StructuralLoad is only written under full
+	// physics, so the mod omits peak_g rather than reporting zero. A fold that
+	// treated the omission as a real 0 would put a fake minimum on the board.
+	f := flightN(1)
+	got := fold(t, []input{
+		{flight: f, typ: "telemetry.window", payload: window(100, 200, nil)},
+		{flight: f, typ: "telemetry.window", payload: window(150, 250, ptr(0.0))},
+	})
+	want(t, got, map[string]float64{
+		"1/fastest_surface_speed": 150,
+		"1/fastest_orbital_speed": 250,
+	})
+}
+
+func TestSpeedBoardsComeFromTelemetryWindows(t *testing.T) {
+	f := flightN(1)
+	got := fold(t, []input{
+		{flight: f, typ: "telemetry.window", payload: window(2410, 7820, ptr(4.2))},
+		{flight: f, typ: "telemetry.window", payload: window(640, 9450, ptr(6.8))},
+		// roster.snapshot.fastest_ms is ecliptic-frame (~30 km/s standing still
+		// on Earth) and must never reach a speed board.
+		{typ: "roster.snapshot", payload: stats.RosterSnapshot{Kittens: []stats.RosterKitten{
+			{Kid: "k1", Name: "Comet", TravelledM: 1000, FastestMs: 29812},
+		}}},
+	})
+	want(t, got, map[string]float64{
+		"1/fastest_surface_speed": 2410,
+		"1/fastest_orbital_speed": 9450,
+		"1/peak_g_survived":       6.8,
+		"1/distance_travelled":    1000,
+	})
+}
+
+// --- counters ----------------------------------------------------------------
+
+func TestRUDCountersTotalAndPerCause(t *testing.T) {
+	f := flightN(1)
+	in := []input{}
+	for _, cause := range stats.RUDCauses {
+		in = append(in, input{flight: f, typ: "vehicle.rud", payload: stats.VehicleRUD{Cause: cause, SpeedMs: 100}})
+	}
+	// A cause outside the §4.2 enum counts towards the total only: the per-cause
+	// boards must not be a namespace the wire can extend.
+	in = append(in, input{flight: f, typ: "vehicle.rud", payload: stats.VehicleRUD{Cause: "kraken", SpeedMs: 100}})
+
+	expect := map[string]float64{"1/rud_total": 7}
+	for _, cause := range stats.RUDCauses {
+		expect["1/"+stats.RUDStat(cause)] = 1
+	}
+	want(t, fold(t, in), expect)
+}
+
+func TestCounterTieBreakIsWhoReachedTheNumberFirst(t *testing.T) {
+	f1, f2 := flightN(1), flightN(2)
+	got := fold(t, []input{
+		{player: alice, flight: f1, typ: "vehicle.staging", payload: stats.VehicleStaging{}},
+		{player: bob, flight: f2, typ: "vehicle.staging", payload: stats.VehicleStaging{}},
+		{player: alice, flight: f1, typ: "vehicle.staging", payload: stats.VehicleStaging{}},
+		{player: bob, flight: f2, typ: "vehicle.staging", payload: stats.VehicleStaging{}},
+	})
+	a, b := got["1/stagings"], got["2/stagings"]
+	if a.Value != 2 || b.Value != 2 {
+		t.Fatalf("stagings: alice %v, bob %v — want 2 each", a.Value, b.Value)
+	}
+	if a.Seq >= b.Seq {
+		t.Errorf("alice reached 2 at seq %d, bob at seq %d: alice must sort first", a.Seq, b.Seq)
+	}
+}
+
+func TestOrbitsCountOnlyAchieved(t *testing.T) {
+	f := flightN(1)
+	want(t, fold(t, []input{
+		{flight: f, typ: "vehicle.orbit", payload: stats.VehicleOrbit{Phase: "achieved", Body: "kerbin", ApM: 320000, PeM: 295000}},
+		{flight: f, typ: "vehicle.orbit", payload: stats.VehicleOrbit{Phase: "escaped", Body: "kerbin"}},
+		{flight: f, typ: "vehicle.orbit", payload: stats.VehicleOrbit{Phase: "achieved", Body: "mun"}},
+	}), map[string]float64{"1/orbits_achieved": 2})
+}
+
+func TestSOIBodiesCountsDistinctDestinations(t *testing.T) {
+	f := flightN(1)
+	proj := testutil.MemProjections(t)
+	apply(t, proj, []input{
+		{flight: f, typ: "vehicle.soi", payload: stats.VehicleSOI{FromBody: "kerbin", ToBody: "mun"}},
+		{flight: f, typ: "vehicle.soi", payload: stats.VehicleSOI{FromBody: "mun", ToBody: "kerbin"}},
+		{flight: f, typ: "vehicle.soi", payload: stats.VehicleSOI{FromBody: "kerbin", ToBody: "mun"}}, // repeat
+		{flight: f, typ: "vehicle.soi", payload: stats.VehicleSOI{FromBody: "kerbin", ToBody: "duna"}},
+	}, 0, false)
+	want(t, readStats(t, proj), map[string]float64{"1/soi_bodies": 3})
+
+	var bodies int
+	if err := proj.Reader().QueryRowContext(t.Context(),
+		`SELECT count(*) FROM player_body WHERE player_id = 1 AND kind = 'soi'`).Scan(&bodies); err != nil {
+		t.Fatal(err)
+	}
+	if bodies != 3 {
+		t.Errorf("player_body rows = %d, want 3", bodies)
+	}
+}
+
+func TestKittensRecoveredSumsOnlyRecoveredFlights(t *testing.T) {
+	f1, f2, f3 := flightN(1), flightN(2), flightN(3)
+	want(t, fold(t, []input{
+		{flight: f1, typ: "flight.ended", payload: stats.FlightEnded{Reason: "recovered", CrewCount: 3}},
+		{flight: f2, typ: "flight.ended", payload: stats.FlightEnded{Reason: "destroyed", CrewCount: 2}},
+		{flight: f3, typ: "flight.ended", payload: stats.FlightEnded{Reason: "recovered", CrewCount: 1}},
+	}), map[string]float64{"1/kittens_recovered": 4})
+}
+
+func TestDistanceTravelledSumsPerKittenMaxima(t *testing.T) {
+	proj := testutil.MemProjections(t)
+	apply(t, proj, []input{
+		{typ: "roster.snapshot", payload: stats.RosterSnapshot{Kittens: []stats.RosterKitten{
+			{Kid: "k1", Name: "Comet", TravelledM: 1000, Missions: 1},
+			{Kid: "k2", Name: "Nimbus", TravelledM: 500, Missions: 1},
+		}}},
+		// A later snapshot advances one kitten and — as happens after a save
+		// reload — regresses the other. Totals may never rewind.
+		{typ: "roster.snapshot", payload: stats.RosterSnapshot{Kittens: []stats.RosterKitten{
+			{Kid: "k1", Name: "Comet", TravelledM: 2500, Missions: 2},
+			{Kid: "k2", Name: "Nimbus", TravelledM: 100, Missions: 1},
+		}}},
+	}, 0, false)
+	want(t, readStats(t, proj), map[string]float64{"1/distance_travelled": 3000})
+
+	var travelled float64
+	if err := proj.Reader().QueryRowContext(t.Context(),
+		`SELECT travelled_m FROM kitten WHERE player_id = 1 AND kid = 'k2'`).Scan(&travelled); err != nil {
+		t.Fatal(err)
+	}
+	if travelled != 500 {
+		t.Errorf("kitten k2 travelled_m = %v, want 500 (max, never rewound)", travelled)
+	}
+}
+
+// --- flight_state ------------------------------------------------------------
+
+func TestFlightStateIsBuiltForEveryFlightBearingEvent(t *testing.T) {
+	f := flightN(7)
+	proj := testutil.MemProjections(t)
+	apply(t, proj, []input{
+		{flight: f, typ: "flight.started", payload: stats.FlightStarted{Body: "duna", CrewCount: 2}},
+		{flight: f, typ: "flight.flagged", payload: stats.FlightFlagged{Flag: "refuel"}},
+		{flight: f, typ: "flight.flagged", payload: stats.FlightFlagged{Flag: "console"}},
+		{flight: f, typ: "flight.ended", payload: stats.FlightEnded{Reason: "recovered", CrewCount: 2}},
+	}, 0, false)
+
+	var (
+		flags  int64
+		reason string
+		crew   int64
+		body   string
+	)
+	if err := proj.Reader().QueryRowContext(t.Context(),
+		`SELECT flags, ended_reason, crew, body FROM flight_state WHERE flight_id = ?`,
+		ids.Bytes(f)).Scan(&flags, &reason, &crew, &body); err != nil {
+		t.Fatalf("read flight_state: %v", err)
+	}
+	if wantFlags := stats.FlagRefuel | stats.FlagConsole; flags != wantFlags {
+		t.Errorf("flags = %d (%v), want %d", flags, stats.FlagNames(flags), wantFlags)
+	}
+	if reason != "recovered" || crew != 2 || body != "duna" {
+		t.Errorf("flight_state = {%q, crew %d, body %q}", reason, crew, body)
+	}
+}
+
+func TestFlagArrivingBeforeFlightStartedIsNotLost(t *testing.T) {
+	// A batch can be split so a flight.flagged is folded before the
+	// flight.started it belongs to. The flag must survive that.
+	f := flightN(9)
+	got := fold(t, []input{
+		{flight: f, typ: "flight.flagged", payload: stats.FlightFlagged{Flag: "teleport"}},
+		{flight: f, typ: "flight.started", payload: stats.FlightStarted{Body: "duna", CrewCount: 1}},
+		{flight: f, typ: "vehicle.impact", payload: stats.VehicleImpact{SpeedMs: 500, Survived: true, CrewCount: 1}},
+	})
+	want(t, got, map[string]float64{})
+}
+
+// --- rebuild refinements -----------------------------------------------------
+
+func TestRefinedPassAppliesTheKIAWindow(t *testing.T) {
+	f := flightN(1)
+	in := []input{
+		{flight: f, typ: "flight.started", payload: stats.FlightStarted{Body: "duna", CrewCount: 1}, simT: 100},
+		{flight: f, typ: "vehicle.impact", payload: stats.VehicleImpact{SpeedMs: 214, Survived: true, Body: "duna", CrewCount: 1}, simT: 200},
+		{flight: f, typ: "kitten.kia", payload: stats.KittenKIA{Kid: "k1", Name: "Comet", Context: "manual_destroy"}, simT: 201},
+		{flight: f, typ: "flight.ended", payload: stats.FlightEnded{Reason: "recovered", CrewCount: 0}, simT: 210},
+	}
+
+	incremental := testutil.MemProjections(t)
+	apply(t, incremental, in, 0, false)
+	if got := readStats(t, incremental)["1/biggest_lithobrake_survived"].Value; got != 214 {
+		t.Fatalf("incremental lithobrake = %v, want 214 (it cannot see the kia yet)", got)
+	}
+
+	refined := testutil.MemProjections(t)
+	apply(t, refined, in, 0, true)
+	if _, ok := readStats(t, refined)["1/biggest_lithobrake_survived"]; ok {
+		t.Error("the refined pass scored a lithobrake with a kitten.kia 1 s away (§4.2 ±2 s window)")
+	}
+}
+
+func TestKIAWindowOnlyReachesTwoSeconds(t *testing.T) {
+	f := flightN(1)
+	in := []input{
+		{flight: f, typ: "vehicle.impact", payload: stats.VehicleImpact{SpeedMs: 214, Survived: true, Body: "duna", CrewCount: 1}, simT: 200},
+		{flight: f, typ: "kitten.kia", payload: stats.KittenKIA{Kid: "k1", Context: "manual_destroy"}, simT: 202.5},
+		{flight: f, typ: "flight.ended", payload: stats.FlightEnded{Reason: "recovered", CrewCount: 1}, simT: 210},
+	}
+	refined := testutil.MemProjections(t)
+	apply(t, refined, in, 0, true)
+	if got := readStats(t, refined)["1/biggest_lithobrake_survived"].Value; got != 214 {
+		t.Errorf("lithobrake = %v, want 214: a kia 2.5 s away is outside the window", got)
+	}
+}
+
+func TestRefinedPeakGRequiresARecoveredFlight(t *testing.T) {
+	survived, lost := flightN(1), flightN(2)
+	in := []input{
+		{flight: survived, typ: "flight.started", payload: stats.FlightStarted{Body: "duna", CrewCount: 1}},
+		{flight: survived, typ: "telemetry.window", payload: window(100, 200, ptr(6.0))},
+		{flight: survived, typ: "flight.ended", payload: stats.FlightEnded{Reason: "recovered", CrewCount: 1}},
+		{flight: lost, typ: "flight.started", payload: stats.FlightStarted{Body: "duna", CrewCount: 1}},
+		{flight: lost, typ: "telemetry.window", payload: window(100, 200, ptr(19.0))},
+		{flight: lost, typ: "flight.ended", payload: stats.FlightEnded{Reason: "destroyed", CrewCount: 0}},
+	}
+
+	incremental := testutil.MemProjections(t)
+	apply(t, incremental, in, 0, false)
+	if got := readStats(t, incremental)["1/peak_g_survived"].Value; got != 19 {
+		t.Fatalf("incremental peak_g = %v, want 19 (the simpler §5.6 rule)", got)
+	}
+
+	refined := testutil.MemProjections(t)
+	apply(t, refined, in, 0, true)
+	if got := readStats(t, refined)["1/peak_g_survived"].Value; got != 6 {
+		t.Errorf("refined peak_g = %v, want 6: only recovered flights count", got)
+	}
+}
+
+// --- feed --------------------------------------------------------------------
+
+func TestFeedSummaries(t *testing.T) {
+	f := flightN(1)
+	cases := []struct {
+		in   input
+		want string
+	}{
+		{input{flight: f, typ: "vehicle.impact", payload: stats.VehicleImpact{SpeedMs: 214, Survived: true, Body: "duna", CrewCount: 1}},
+			"whiskers lithobraked at 214 m/s on duna — and survived"},
+		{input{flight: f, typ: "vehicle.rud", payload: stats.VehicleRUD{Cause: "excessive_g_force", SpeedMs: 1204, Body: "eve"}},
+			"whiskers lost a vehicle to excessive g-force on eve at 1204 m/s"},
+		{input{flight: f, typ: "vehicle.orbit", payload: stats.VehicleOrbit{Phase: "achieved", Body: "kerbin", ApM: 320000, PeM: 295000}},
+			"whiskers made orbit around kerbin (320 km × 295 km)"},
+		{input{flight: f, typ: "vehicle.soi", payload: stats.VehicleSOI{FromBody: "kerbin", ToBody: "mun"}},
+			"whiskers entered mun's sphere of influence"},
+		{input{flight: f, typ: "kitten.tumble", payload: stats.KittenTumble{Kid: "k1", Name: "Bramble", SpeedMs: 8.9, Body: "mun"}},
+			"whiskers's kitten Bramble took a tumble at 8.9 m/s on mun"},
+		{input{flight: f, typ: "kitten.kia", payload: stats.KittenKIA{Kid: "k1", Name: "Bramble", Context: "manual_destroy"}},
+			"whiskers said goodbye to kitten Bramble"},
+		{input{flight: f, typ: "flight.ended", payload: stats.FlightEnded{Reason: "recovered", CrewCount: 3}},
+			"whiskers brought 3 kittens home safely"},
+	}
+
+	proj := testutil.MemProjections(t)
+	err := proj.WithWriteTx(t.Context(), func(tx *sql.Tx) error {
+		fs := stats.NewFlights(tx)
+		for i, c := range cases {
+			got, ok, err := stats.Summarize(t.Context(), decode(t, c.in, int64(i)+1), "whiskers", fs)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				t.Errorf("%s produced no feed line", c.in.typ)
+				continue
+			}
+			if got != c.want {
+				t.Errorf("%s:\n got %q\nwant %q", c.in.typ, got, c.want)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestFeedSkipsNonEventsAndFlaggedFlights(t *testing.T) {
+	dirty := flightN(2)
+	proj := testutil.MemProjections(t)
+	err := proj.WithWriteTx(t.Context(), func(tx *sql.Tx) error {
+		fs := stats.NewFlights(tx)
+		ctx := t.Context()
+
+		// A flight.ended that was not a recovery is not news.
+		if _, ok, err := stats.Summarize(ctx, decode(t, input{flight: flightN(1), typ: "flight.ended",
+			payload: stats.FlightEnded{Reason: "despawned"}}, 1), "whiskers", fs); err != nil || ok {
+			t.Errorf("despawned flight produced a feed line (err %v)", err)
+		}
+		// A player with no handle produces nothing — the feed is public.
+		if _, ok, err := stats.Summarize(ctx, decode(t, input{flight: flightN(1), typ: "vehicle.soi",
+			payload: stats.VehicleSOI{ToBody: "mun"}}, 2), "", fs); err != nil || ok {
+			t.Errorf("a handle-less player produced a feed line (err %v)", err)
+		}
+
+		flagFold := stats.FlightFold()
+		if err := flagFold.Apply(ctx, tx, decode(t, input{flight: dirty, typ: "flight.flagged",
+			payload: stats.FlightFlagged{Flag: "teleport"}}, 3), fs); err != nil {
+			return err
+		}
+		if _, ok, err := stats.Summarize(ctx, decode(t, input{flight: dirty, typ: "vehicle.soi",
+			payload: stats.VehicleSOI{ToBody: "mun"}}, 4), "whiskers", fs); err != nil || ok {
+			t.Errorf("a flagged flight reached the feed (err %v)", err)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// --- board metadata ----------------------------------------------------------
+
+func TestBoardMetadataCoversEveryStatAFoldWrites(t *testing.T) {
+	// Every board key a fold can produce must have metadata, or /v1/leaderboards
+	// would publish a board the read API then 404s.
+	declared := map[string]bool{}
+	for _, b := range stats.Boards() {
+		if declared[b.Stat] {
+			t.Errorf("duplicate board %q", b.Stat)
+		}
+		if b.Title == "" || b.Unit == "" {
+			t.Errorf("board %q has no title or unit", b.Stat)
+		}
+		declared[b.Stat] = true
+	}
+
+	produced := []string{
+		stats.StatBiggestLithobrakeSurvived, stats.StatPeakGSurvived,
+		stats.StatFastestSurfaceSpeed, stats.StatFastestOrbitalSpeed,
+		stats.StatKittenTumbles, stats.StatRUDTotal, stats.StatOrbitsAchieved,
+		stats.StatSOIBodies, stats.StatDockings, stats.StatStagings,
+		stats.StatKittensRecovered, stats.StatDistanceTravelled,
+	}
+	for _, cause := range stats.RUDCauses {
+		produced = append(produced, stats.RUDStat(cause))
+	}
+	for _, stat := range produced {
+		if !declared[stat] {
+			t.Errorf("fold writes %q but no board declares it", stat)
+		}
+	}
+	if len(declared) != len(produced) {
+		t.Errorf("%d boards declared, %d stat keys produced", len(declared), len(produced))
+	}
+	if _, ok := stats.BoardFor("not_a_board"); ok {
+		t.Error("BoardFor accepted an unknown stat")
+	}
+}
+
+func TestFoldOrderPutsFlightStateFirst(t *testing.T) {
+	all := stats.Folds()
+	if len(all) != len(stats.BoardFolds())+1 {
+		t.Fatalf("Folds() has %d entries, BoardFolds() %d", len(all), len(stats.BoardFolds()))
+	}
+	if all[0].Name() != stats.FlightFold().Name() {
+		t.Errorf("first fold is %q, want the flight-state fold: every other fold reads it", all[0].Name())
+	}
+}
+
+// --- payload decoding --------------------------------------------------------
+
+func TestUnknownPayloadKeysSurviveDecoding(t *testing.T) {
+	// §4.1 preserves unknown payload keys, and the row stores the payload
+	// verbatim, so a newer mod's extra field must decode rather than fail.
+	se := store.StoredEvent{
+		Seq: 1, PlayerID: alice, RecvTime: 1,
+		Event: store.Event{
+			ID: flightN(1), FlightID: flightN(2), SessionID: flightN(3),
+			Type: "vehicle.impact", Ver: 1, WallTime: 1,
+			Payload: json.RawMessage(`{"speed_ms":214,"survived":true,"crew_count":1,"tail_number":"KX-9"}`),
+		},
+	}
+	ev, err := stats.Decode(se, nil)
+	if err != nil {
+		t.Fatalf("decode with an unknown key: %v", err)
+	}
+	if !contains(string(ev.Raw), "tail_number") {
+		t.Error("Raw lost the unknown key")
+	}
+	p, ok := ev.Payload.(stats.VehicleImpact)
+	if !ok || p.SpeedMs != 214 {
+		t.Errorf("payload = %#v", ev.Payload)
+	}
+}
+
+func TestDecodeRejectsAMalformedPayload(t *testing.T) {
+	se := store.StoredEvent{
+		Seq: 1, PlayerID: alice, RecvTime: 1,
+		Event: store.Event{
+			ID: flightN(1), SessionID: flightN(3), Type: "vehicle.impact", Ver: 1, WallTime: 1,
+			Payload: json.RawMessage(`{"speed_ms":"fast"}`),
+		},
+	}
+	if _, err := stats.Decode(se, nil); err == nil {
+		t.Error("a payload with the wrong field type decoded cleanly")
+	}
+}
+
+// --- helpers -----------------------------------------------------------------
+
+func window(surfaceMax, orbitalMax float64, peakG *float64) stats.TelemetryWindow {
+	return stats.TelemetryWindow{
+		T0Sim: 0, T1Sim: 30, N: 60, Body: "duna",
+		SurfaceSpeedMs: stats.Agg{Max: surfaceMax},
+		OrbitalSpeedMs: stats.Agg{Max: orbitalMax},
+		PeakG:          peakG,
+	}
+}
+
+func ptr[T any](v T) *T { return &v }
+
+func contains(haystack, needle string) bool {
+	return len(needle) == 0 || len(haystack) >= len(needle) && indexOf(haystack, needle) >= 0
+}
+
+func indexOf(haystack, needle string) int {
+	for i := 0; i+len(needle) <= len(haystack); i++ {
+		if haystack[i:i+len(needle)] == needle {
+			return i
+		}
+	}
+	return -1
+}

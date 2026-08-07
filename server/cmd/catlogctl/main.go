@@ -6,11 +6,11 @@
 // every stateful verb goes through the admin API, and running catlogctl against
 // a live server is safe.
 //
-// WP1 implemented `keygen` and WP2 adds `issue` and `testvectors`; `keygen` and
-// `testvectors` touch neither database nor network, and `issue` goes through
-// the loopback admin API. The rest still report "not yet implemented" and land
-// in WP3 (ban/unban/purge/denylist), WP4 (rebuild/seed/stats) and WP10
-// (archive/backup).
+// WP1 implemented `keygen`, WP2 added `issue` and `testvectors`, and WP4 added
+// `rebuild`, `seed` and `stats`; `keygen` and `testvectors` touch neither
+// database nor network, and everything else goes through the loopback admin
+// API. The rest still report "not yet implemented" and land in WP3
+// (ban/unban/purge/denylist) and WP10 (archive/backup).
 package main
 
 import (
@@ -41,9 +41,9 @@ var verbs = []verb{
 	{name: "unban", wp: "WP3", help: "lift a ban"},
 	{name: "purge", wp: "WP3", help: "delete all data for a player and leave a tombstone"},
 	{name: "denylist", wp: "WP3", help: "regenerate the signed deny-list"},
-	{name: "rebuild", wp: "WP4", help: "rebuild projections from seq 0 and swap"},
-	{name: "seed", wp: "WP4", help: "insert the deterministic demo dataset"},
-	{name: "stats", wp: "WP4", help: "print server counters"},
+	{name: "rebuild", wp: "WP4", help: "rebuild projections from seq 0 and swap", run: runRebuild},
+	{name: "seed", wp: "WP4", help: "insert the deterministic demo dataset", run: runSeed},
+	{name: "stats", wp: "WP4", help: "print server counters", run: runStats},
 	{name: "archive", wp: "WP10", help: "run an archive pass"},
 	{name: "backup", wp: "WP10", help: "quiesce the writer and copy events.db to a destination"},
 }
