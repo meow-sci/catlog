@@ -141,21 +141,22 @@ func (p *Projector) rebuildPass1(ctx context.Context, proj *store.Projections, h
 	folds := p.stateFolds
 
 	err := p.scan(ctx, head, func(evs []store.StoredEvent) error {
+		decoded := p.decodeAll(ctx, evs)
 		return proj.WithWriteTx(ctx, func(tx *sql.Tx) error {
-			fs := stats.NewFlights(tx)
-			for _, se := range evs {
-				ev, ok := p.decode(se)
-				if !ok {
+			b := stats.NewBatch(tx, stats.BatchOptions{FlushRows: p.flushRows})
+			for i, d := range decoded {
+				if !d.ok {
+					p.logSkipOnce(evs[i], d.err)
 					continue
 				}
-				if err := p.applyFolds(ctx, tx, folds, ev, fs); err != nil {
+				if err := p.applyFolds(ctx, b, folds, d.ev); err != nil {
 					return err
 				}
-				if ev.Type == "kitten.kia" && ev.HasFlight() && ev.HasSimTime {
-					kia[ev.FlightID] = append(kia[ev.FlightID], ev.SimTime)
+				if d.ev.Type == "kitten.kia" && d.ev.HasFlight() && d.ev.HasSimTime {
+					kia[d.ev.FlightID] = append(kia[d.ev.FlightID], d.ev.SimTime)
 				}
 			}
-			return nil
+			return b.Flush(ctx)
 		})
 	})
 	if err != nil {
@@ -168,23 +169,24 @@ func (p *Projector) rebuildPass1(ctx context.Context, proj *store.Projections, h
 // §5.6 refinements on.
 func (p *Projector) rebuildPass2(ctx context.Context, proj *store.Projections, head int64, kia map[ids.ID][]float64, res *RebuildResult) error {
 	return p.scan(ctx, head, func(evs []store.StoredEvent) error {
+		decoded := p.decodeAll(ctx, evs)
 		var feed []store.FeedRow
-		if err := proj.WithWriteTx(ctx, func(tx *sql.Tx) error {
+		return proj.WithWriteTx(ctx, func(tx *sql.Tx) error {
 			feed = feed[:0]
-			fs := stats.NewRefinedFlights(tx, kia)
+			b := stats.NewRefinedBatch(tx, kia, stats.BatchOptions{FlushRows: p.flushRows})
 			last := int64(0)
-			for _, se := range evs {
-				last = se.Seq
+			for i, d := range decoded {
+				last = d.seq
 				res.Events++
-				ev, ok := p.decode(se)
-				if !ok {
+				if !d.ok {
 					res.Skipped++
+					p.logSkipOnce(evs[i], d.err)
 					continue
 				}
-				if err := p.applyFolds(ctx, tx, p.boardFolds, ev, fs); err != nil {
+				if err := p.applyFolds(ctx, b, p.boardFolds, d.ev); err != nil {
 					return err
 				}
-				row, ok, err := p.feedRow(ctx, proj, tx, ev, fs)
+				row, ok, err := p.feedRow(ctx, b, d.ev)
 				if err != nil {
 					return err
 				}
@@ -192,16 +194,20 @@ func (p *Projector) rebuildPass2(ctx context.Context, proj *store.Projections, h
 					feed = append(feed, row)
 				}
 			}
+			if err := b.Flush(ctx); err != nil {
+				return err
+			}
 			if len(feed) > 0 {
+				var err error
+				if feed, err = proj.InsertFeedRows(ctx, tx, feed); err != nil {
+					return err
+				}
 				if err := proj.CapFeed(ctx, tx, store.FeedCap); err != nil {
 					return err
 				}
 			}
 			return proj.SetCheckpoint(ctx, tx, store.AllProjections, last)
-		}); err != nil {
-			return err
-		}
-		return nil
+		})
 	})
 }
 

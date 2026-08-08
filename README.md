@@ -86,6 +86,8 @@ make loadgen LOADGEN_ARGS=--help                 # every flag, with what it meas
 ```
 
 It needs `make dev` running in another terminal, and it touches nothing outside 127.0.0.1.
+**A default `make dev` throttles each player to one batch every two seconds** — see [Going
+fast](#going-fast) before drawing any conclusion from a big run.
 
 Each player is provisioned the way a real one is — `mockidp` mints a subject, catlogd runs the
 OAuth code exchange, sets a session cookie and issues a license against a key pair generated in
@@ -134,9 +136,78 @@ player by stage, missions attempted against completed, and losses broken down by
 
 The client's hard 30-second ship floor is measured against an injected clock, exactly as
 `catlog.sim` does, so a run compresses hours of play into seconds. **Every server-side limit stays
-real** — the per-credential token bucket, the bounded write channel, the ±300 s proof-skew window —
-and the report says which of them was actually binding. See `docs/DECISIONS.md` for what a run on
-one laptop measured.
+real by default** — the per-credential token bucket, the bounded write channel, the ±300 s
+proof-skew window — and the report's "where the time went" table says which of them was actually
+binding.
+
+### Going fast
+
+A default server is tuned for the internet, not for a load harness, and it will happily spend an
+entire run measuring its own rate limiter. Two settings decide whether the numbers mean anything.
+
+**1. Turn off the per-credential token bucket.** §4.3 allows one batch per two seconds per
+credential — 250 events/s per player at `--batch 500` — so without this a run measures the token
+bucket and nothing else. On the standard 25-player run it was **99.6%** of all player time: 1,770
+player-seconds of waiting against 6.2 s of actual shipping.
+
+```sh
+CATLOG_LIMITS_RATELIMIT_DISABLED=1 make dev      # or [limits] ratelimit_disabled = true
+```
+
+It removes §4.5.3's rate-limit step from the chain entirely rather than configuring a huge rate,
+on the same principle that leaves `POST /admin/clock` unmounted rather than mounted-but-refusing:
+a control that is absent cannot be half-on. catlogd logs a WARN for as long as it runs with it,
+and `Config.Validate` **refuses to start** if it is combined with an `https://` base URL, so it
+cannot escape a laptop. Raising `[limits] ratelimit_per_jkt_per_s` is the ungated alternative and
+the right answer for a real deployment, because that still leaves a limit in the chain.
+
+**2. Set `--concurrency` to your core count, not the default.** The 4×-cores default is correct
+while the token bucket is on — players are network-bound waiting it out — and wrong the moment it
+is off, when they become CPU-bound and oversubscription costs throughput. Same 300-player workload,
+limiter off: `-c 14` → 28,277 events/s, `-c 56` → 23,971, `-c 112` → 17,951, `-c 224` → 14,178.
+
+**Then fatten the batches.** `--batch 2000` is §4.3's `[ingest] max_events` ceiling, and
+`--ship-age 1h` lets the client ship what it has accumulated instead of holding it.
+
+The recipe for a million events, on a 14-core laptop:
+
+```sh
+# terminal 1
+CATLOG_LIMITS_RATELIMIT_DISABLED=1 make dev
+
+# terminal 2
+make loadgen PLAYERS=550 DURATION=2.6h BATCH=2000 SHIP_AGE=1h CONCURRENCY=14 SEED=4242 ASSERT=1
+```
+
+**1,058,811 events in 31.9 s**, all 14 invariants green, `deduped 0`:
+
+| phase | wall clock | what happened |
+| --- | --- | --- |
+| provision | 0.4 s | 550 players through the real `mockidp` OAuth flow |
+| ingest | 29.2 s | 36,303 events/s over 1,677 batches, p99 319 ms |
+| projector | 0.3 s | the fold kept pace with ingest; this is only the tail |
+| other | 2.0 s | setup, the read-side probes, the invariant checks |
+
+catlogd peaked at **111 MB** RSS doing it, and the read API served 576 requests at a p99 of 7.8 ms
+*while* the writer was saturated.
+
+**The projector is no longer the thing to fix.** It used to fold at ~3,300 events/s, so the same
+run took 336 s — 36 s to store the events and **298 s to fold them**, with `--assert` unable to
+start until it caught up. It now folds at ~29,000 events/s and keeps up with ingest in real time
+(`docs/DECISIONS.md`, WP-PROJ-FAST). Ingest is the ceiling now, and the report's verdict line says
+so. If you do manage to get the fold behind again, `[projector] batch_size` is the dial: raising it
+from 1000 to 10000 buys about 20% and costs ten times the transient memory, which is the trade the
+default declines to make on your behalf.
+
+`server/internal/projector/bench_test.go` measures the fold on its own, without a server, a
+network or a harness in the way:
+
+```sh
+cd server && go test ./internal/projector/ -run '^$' -bench 'BenchmarkDrain' -benchtime 1x
+```
+
+`BenchmarkDrainMemory` reports bytes and allocations per event and the peak live heap;
+`BenchmarkDrainTuning` sweeps `batch_size` and the decoder count.
 
 ## End-to-end
 

@@ -45,6 +45,12 @@ type Options struct {
 	StoreOptions store.Options
 	// BatchSize overrides [DefaultBatchSize].
 	BatchSize int
+	// FlushRows overrides [stats.DefaultFlushRows]: how many rows one flushed
+	// statement carries when a batch's buffered projection writes go out.
+	FlushRows int
+	// Decoders overrides [DefaultDecoders]: how many goroutines decode a
+	// batch's payloads before the serial fold.
+	Decoders int
 	// Tick overrides [DefaultTick].
 	Tick time.Duration
 	// Log receives one line per batch at debug and per rebuild at info.
@@ -65,6 +71,8 @@ type Projector struct {
 	upcasters *Upcasters
 	storeOpts store.Options
 	batchSize int
+	flushRows int
+	decoders  int
 	tick      time.Duration
 	log       *slog.Logger
 
@@ -121,6 +129,12 @@ func New(opts Options) (*Projector, error) {
 	if opts.BatchSize <= 0 {
 		opts.BatchSize = DefaultBatchSize
 	}
+	if opts.FlushRows <= 0 {
+		opts.FlushRows = stats.DefaultFlushRows
+	}
+	if opts.Decoders <= 0 {
+		opts.Decoders = DefaultDecoders()
+	}
 	if opts.Tick <= 0 {
 		opts.Tick = DefaultTick
 	}
@@ -133,6 +147,8 @@ func New(opts Options) (*Projector, error) {
 		upcasters:  opts.Upcasters,
 		storeOpts:  opts.StoreOptions,
 		batchSize:  opts.BatchSize,
+		flushRows:  opts.FlushRows,
+		decoders:   opts.Decoders,
 		tick:       opts.Tick,
 		log:        opts.Log.With("component", "projector"),
 		folds:      stats.Folds(),
@@ -239,21 +255,27 @@ func (p *Projector) Step(ctx context.Context) (Progress, error) {
 		prog.Read = len(evs)
 		prog.More = len(evs) == p.batchSize
 
+		// Decoding is pure CPU and touches no database, so it happens across
+		// every core before the transaction opens. The fold itself stays on one
+		// goroutine: Turso has a single writer, and a batch's folds read each
+		// other's writes.
+		decoded := p.decodeAll(ctx, evs)
+
 		return proj.WithWriteTx(ctx, func(tx *sql.Tx) error {
 			feed = feed[:0]
-			fs := stats.NewFlights(tx)
+			b := stats.NewBatch(tx, stats.BatchOptions{FlushRows: p.flushRows})
 			last := after
-			for _, se := range evs {
-				last = se.Seq
-				ev, ok := p.decode(se)
-				if !ok {
+			for i, d := range decoded {
+				last = d.seq
+				if !d.ok {
 					prog.Skipped++
+					p.logSkipOnce(evs[i], d.err)
 					continue
 				}
-				if err := p.applyFolds(ctx, tx, p.folds, ev, fs); err != nil {
+				if err := p.applyFolds(ctx, b, p.folds, d.ev); err != nil {
 					return err
 				}
-				row, ok, err := p.feedRow(ctx, proj, tx, ev, fs)
+				row, ok, err := p.feedRow(ctx, b, d.ev)
 				if err != nil {
 					return err
 				}
@@ -261,7 +283,13 @@ func (p *Projector) Step(ctx context.Context) (Progress, error) {
 					feed = append(feed, row)
 				}
 			}
+			if err := b.Flush(ctx); err != nil {
+				return err
+			}
 			if len(feed) > 0 {
+				if feed, err = proj.InsertFeedRows(ctx, tx, feed); err != nil {
+					return err
+				}
 				if err := proj.CapFeed(ctx, tx, store.FeedCap); err != nil {
 					return err
 				}
@@ -287,58 +315,44 @@ func (p *Projector) Step(ctx context.Context) (Progress, error) {
 
 // applyFolds runs a fold list over one event, naming the fold that failed:
 // "which board broke" is the only useful thing in the log line.
-func (p *Projector) applyFolds(ctx context.Context, tx *sql.Tx, folds []stats.Fold, ev stats.Event, fs stats.FlightStateReader) error {
+func (p *Projector) applyFolds(ctx context.Context, b *stats.Batch, folds []stats.Fold, ev stats.Event) error {
 	for _, f := range folds {
-		if err := f.Apply(ctx, tx, ev, fs); err != nil {
+		if err := f.Apply(ctx, b, ev); err != nil {
 			return fmt.Errorf("projector: fold %s at seq %d (%s): %w", f.Name(), ev.Seq, ev.Type, err)
 		}
 	}
 	return nil
 }
 
-// feedRow renders and inserts the §5.6 feed line for an event, if it has one.
-// The handle comes from the in-memory directory because projections.db cannot
-// join to events.db (§5.4); a player with no handle — or a banned one, who is
-// absent from the directory — produces no feed row.
-func (p *Projector) feedRow(ctx context.Context, proj *store.Projections, tx *sql.Tx, ev stats.Event, fs stats.FlightStateReader) (store.FeedRow, bool, error) {
+// feedRow renders the §5.6 feed line for an event, if it has one. The handle
+// comes from the in-memory directory because projections.db cannot join to
+// events.db (§5.4); a player with no handle — or a banned one, who is absent
+// from the directory — produces no feed row.
+//
+// It only renders: the whole batch's rows are inserted together at the end, and
+// pick up their ids there.
+func (p *Projector) feedRow(ctx context.Context, b *stats.Batch, ev stats.Event) (store.FeedRow, bool, error) {
 	handle, ok := p.dir.Handle(ev.PlayerID)
 	if !ok {
 		return store.FeedRow{}, false, nil
 	}
-	summary, ok, err := stats.Summarize(ctx, ev, handle, fs)
+	summary, ok, err := stats.Summarize(ctx, ev, handle, b)
 	if err != nil || !ok {
 		return store.FeedRow{}, false, err
 	}
-	row, err := proj.InsertFeed(ctx, tx, store.FeedRow{
-		At: ev.RecvTime, Handle: handle, Type: ev.Type, Summary: summary,
-	})
-	if err != nil {
-		return store.FeedRow{}, false, err
-	}
-	return row, true, nil
+	return store.FeedRow{At: ev.RecvTime, Handle: handle, Type: ev.Type, Summary: summary}, true, nil
 }
 
-// decode resolves an event's payload version and decodes it.
+// logSkipOnce reports an event this build cannot decode.
 //
-// Anything it cannot handle is skipped and logged once (§4.1) rather than
+// A payload it cannot handle is skipped and logged once (§4.1) rather than
 // returned as an error: the row is valid, the batch that carried it was
 // accepted, and failing here would wedge the checkpoint forever behind one event
 // this build happens not to understand. The next build — or the next rebuild —
 // folds it.
-func (p *Projector) decode(se store.StoredEvent) (stats.Event, bool) {
-	raw, err := p.upcasters.Apply(se.Type, se.Ver, se.Payload)
-	if err != nil {
-		p.logSkipOnce(se, err)
-		return stats.Event{}, false
-	}
-	ev, err := stats.Decode(se, raw)
-	if err != nil {
-		p.logSkipOnce(se, err)
-		return stats.Event{}, false
-	}
-	return ev, true
-}
-
+//
+// It is called from the serial fold loop rather than from the decode fan-out,
+// so "once" still names the first such event by seq.
 func (p *Projector) logSkipOnce(se store.StoredEvent, err error) {
 	key := fmt.Sprintf("%s@%d", se.Type, se.Ver)
 	if _, seen := p.skipped[key]; seen {

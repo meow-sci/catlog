@@ -1,10 +1,6 @@
 package stats
 
-import (
-	"context"
-	"database/sql"
-	"fmt"
-)
+import "context"
 
 // A **career** is one KSA save played over time (§4.1). It is the unit every
 // time-to-milestone board is measured in, and it exists because `sim_t` is only
@@ -65,43 +61,22 @@ type careerFold struct{}
 
 func (careerFold) Name() string { return "career" }
 
-func (careerFold) Apply(ctx context.Context, tx *sql.Tx, ev Event, _ FlightStateReader) error {
+func (careerFold) Apply(ctx context.Context, b *Batch, ev Event) error {
 	if !ev.HasCareer() {
 		return nil
 	}
 	if !ev.HasSimTime {
 		// No clock reading: the career exists, but it contributes nothing to the
 		// high-water mark and cannot be evidence of a rewind either way.
-		return ensureCareer(ctx, tx, ev)
+		return b.EnsureCareer(ctx, ev.PlayerID, ev.Career, ev.Seq)
 	}
 
 	// The rewind test is `session.started` only, and it has to run *before* the
 	// high-water mark is advanced by this same event.
 	if ev.Type == "session.started" {
-		if _, err := tx.ExecContext(ctx,
-			`UPDATE career SET rewound = 1 WHERE player_id = ? AND career = ? AND max_sim_t > ?`,
-			ev.PlayerID, ev.Career, ev.SimTime); err != nil {
-			return fmt.Errorf("stats: mark career %q rewound: %w", ev.Career, err)
+		if err := b.MarkRewound(ctx, ev.PlayerID, ev.Career, ev.SimTime); err != nil {
+			return err
 		}
 	}
-
-	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO career (player_id, career, max_sim_t, rewound, first_seq) VALUES (?, ?, ?, 0, ?)
-		 ON CONFLICT (player_id, career) DO UPDATE SET max_sim_t = excluded.max_sim_t
-		 WHERE excluded.max_sim_t > career.max_sim_t`,
-		ev.PlayerID, ev.Career, ev.SimTime, ev.Seq); err != nil {
-		return fmt.Errorf("stats: advance career %q: %w", ev.Career, err)
-	}
-	return nil
-}
-
-func ensureCareer(ctx context.Context, tx *sql.Tx, ev Event) error {
-	// OR IGNORE, never error inspection: tursogo collapses every constraint
-	// violation onto one sentinel (docs/DECISIONS.md, WP1).
-	if _, err := tx.ExecContext(ctx,
-		`INSERT OR IGNORE INTO career (player_id, career, max_sim_t, rewound, first_seq) VALUES (?, ?, 0, 0, ?)`,
-		ev.PlayerID, ev.Career, ev.Seq); err != nil {
-		return fmt.Errorf("stats: ensure career %q: %w", ev.Career, err)
-	}
-	return nil
+	return b.AdvanceCareer(ctx, ev.PlayerID, ev.Career, ev.SimTime, ev.Seq)
 }

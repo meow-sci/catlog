@@ -3,11 +3,8 @@ package stats
 import (
 	"context"
 	"database/sql"
-	"errors"
-	"fmt"
 
 	"github.com/meow-sci/catlog/server/internal/ids"
-	"github.com/meow-sci/catlog/server/internal/store"
 )
 
 // The flight_state.flags bitfield (§5.4, extended by the docs/events.md
@@ -96,14 +93,14 @@ type flightFold struct{}
 
 func (flightFold) Name() string { return "flight_state" }
 
-func (flightFold) Apply(ctx context.Context, tx *sql.Tx, ev Event, _ FlightStateReader) error {
+func (flightFold) Apply(ctx context.Context, b *Batch, ev Event) error {
 	if !ev.HasFlight() {
 		return nil
 	}
 	// Every flight-bearing event creates the row, not just flight.started: a
 	// batch can be split so that a flight.flagged is folded before the
 	// flight.started it belongs to has arrived, and the flag must not be lost.
-	if err := ensureFlight(ctx, tx, ev.FlightID, ev.PlayerID, ev.Seq); err != nil {
+	if err := b.EnsureFlight(ctx, ev.FlightID, ev.PlayerID, ev.Seq); err != nil {
 		return err
 	}
 
@@ -113,100 +110,19 @@ func (flightFold) Apply(ctx context.Context, tx *sql.Tx, ev Event, _ FlightState
 		if !ok {
 			return nil
 		}
-		if _, err := tx.ExecContext(ctx,
-			`UPDATE flight_state SET crew = ?, body = ?, started_seq = ? WHERE flight_id = ?`,
-			p.CrewCount, p.Body, ev.Seq, ids.Bytes(ev.FlightID)); err != nil {
-			return fmt.Errorf("stats: flight started %s: %w", ids.String(ev.FlightID), err)
-		}
+		return b.StartFlight(ctx, ev.FlightID, p.CrewCount, p.Body, ev.Seq)
 	case "flight.ended":
 		p, ok := payloadOf[FlightEnded](ev)
 		if !ok {
 			return nil
 		}
-		if _, err := tx.ExecContext(ctx,
-			`UPDATE flight_state SET ended_reason = ? WHERE flight_id = ?`,
-			p.Reason, ids.Bytes(ev.FlightID)); err != nil {
-			return fmt.Errorf("stats: flight ended %s: %w", ids.String(ev.FlightID), err)
-		}
+		return b.EndFlight(ctx, ev.FlightID, p.Reason)
 	case "flight.flagged":
 		p, ok := payloadOf[FlightFlagged](ev)
 		if !ok {
 			return nil
 		}
-		if _, err := tx.ExecContext(ctx,
-			`UPDATE flight_state SET flags = flags | ? WHERE flight_id = ?`,
-			FlagBit(p.Flag), ids.Bytes(ev.FlightID)); err != nil {
-			return fmt.Errorf("stats: flight flagged %s: %w", ids.String(ev.FlightID), err)
-		}
+		return b.FlagFlight(ctx, ev.FlightID, FlagBit(p.Flag))
 	}
 	return nil
-}
-
-func ensureFlight(ctx context.Context, tx *sql.Tx, flight ids.ID, playerID, seq int64) error {
-	// OR IGNORE, never error inspection: tursogo collapses every constraint
-	// violation onto one sentinel (docs/DECISIONS.md, WP1).
-	if _, err := tx.ExecContext(ctx,
-		`INSERT OR IGNORE INTO flight_state (flight_id, player_id, flags, started_seq) VALUES (?, ?, 0, ?)`,
-		ids.Bytes(flight), playerID, seq); err != nil {
-		return fmt.Errorf("stats: ensure flight %s: %w", ids.String(flight), err)
-	}
-	return nil
-}
-
-// --- the reader the projector hands to the folds -----------------------------
-
-// Flights reads flight_state out of the transaction the folds are writing to, so
-// a fold sees the flag that [flightFold] set for the very same event.
-//
-// It carries the rebuild refinements too (§5.6): `refined` turns on the exact
-// rules, and `kia` is the per-flight index of kitten.kia sim times the rebuild's
-// first pass collected.
-type Flights struct {
-	q       store.Querier
-	refined bool
-	kia     map[ids.ID][]float64
-}
-
-// NewFlights builds an incremental reader over q.
-func NewFlights(q store.Querier) *Flights { return &Flights{q: q} }
-
-// NewRefinedFlights builds the rebuild reader: flight_state is already complete
-// for the whole history, and kia indexes every kitten.kia by flight and sim time.
-func NewRefinedFlights(q store.Querier, kia map[ids.ID][]float64) *Flights {
-	return &Flights{q: q, refined: true, kia: kia}
-}
-
-// Refined implements [FlightStateReader].
-func (f *Flights) Refined() bool { return f.refined }
-
-// KIANear implements [FlightStateReader]: §4.2's ±2 s crew-survival window.
-func (f *Flights) KIANear(flight ids.ID, simT float64) bool {
-	for _, t := range f.kia[flight] {
-		d := t - simT
-		if d < 0 {
-			d = -d
-		}
-		if d <= KIAWindowSeconds {
-			return true
-		}
-	}
-	return false
-}
-
-// Flight implements [FlightStateReader].
-func (f *Flights) Flight(ctx context.Context, id ids.ID) (FlightState, bool, error) {
-	st := FlightState{FlightID: id}
-	var reason, body sql.NullString
-	err := f.q.QueryRowContext(ctx,
-		`SELECT player_id, flags, ended_reason, crew, body, started_seq FROM flight_state WHERE flight_id = ?`,
-		ids.Bytes(id)).Scan(&st.PlayerID, &st.Flags, &reason, &st.Crew, &body, &st.StartedSeq)
-	if errors.Is(err, sql.ErrNoRows) {
-		return FlightState{}, false, nil
-	}
-	if err != nil {
-		return FlightState{}, false, fmt.Errorf("stats: read flight %s: %w", ids.String(id), err)
-	}
-	st.EndedReason = reason.String
-	st.Body = body.String
-	return st, true, nil
 }

@@ -113,6 +113,34 @@ ratelimit_disabled      = false
 # it (docs/DECISIONS.md).
 min_players = 2
 
+[projector]
+# How much of the event log the fold loop takes on at a time — the projector's
+# speed-versus-memory dial.
+#
+# Folding is dominated by the cost of a Turso statement (~15 µs each, whatever
+# it says), so the projector buffers a batch's projection writes in memory,
+# merges repeated writes to the same board, and flushes the survivors as
+# multi-row statements. A bigger batch has more to merge: on a telemetry-heavy
+# synthetic log, 10,000 events per batch folds about 20% faster than 1,000 —
+# and holds ten times as many decoded payloads while it does.
+#
+# 1000 is §5.6's number and is sized for a small VM: a batch's peak footprint is
+# a few megabytes. Raise it on a machine with memory to spare.
+batch_size = 1000
+
+# Rows per flushed statement. Beyond a few hundred the per-row cost is flat, so
+# this bounds the bound-parameter count rather than being a tuning knob.
+flush_rows = 500
+
+# Goroutines that decode a batch's payloads before the serial fold. 0 means one
+# per core, less one for the ingest that produced the backlog.
+#
+# Decoding is the only part of folding that the single writer does not
+# serialise. It is also, on payloads as small as §4.2's, not where the time
+# goes: measured, the whole decode pass is about 1% of a drain. This is a knob
+# for a future with fatter payloads, not a lever on today's numbers.
+decoders = 0
+
 # --- cross-origin reads (spa/) ----------------------------------------------
 #
 # The `spa/` frontend is a static React bundle hosted somewhere else entirely

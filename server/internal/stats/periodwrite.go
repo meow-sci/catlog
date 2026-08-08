@@ -2,11 +2,15 @@ package stats
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 )
 
 // The window half of the four write helpers in fold.go.
+//
+// These are where the projector's statement count used to live: every board
+// value fans out into four rolling windows, so a single record write was five
+// statements and a telemetry window was fifteen. They record into the batch now
+// and leave as one statement per rule per flush.
 //
 // Every board value catlog computes passes through putBest, putRecord,
 // addCount or setValue, so hanging the rolling windows off those four is what
@@ -32,31 +36,17 @@ import (
 const periodTrimEvery = 512
 
 // periodRecord keeps the largest value seen inside each window.
-func periodRecord(ctx context.Context, tx *sql.Tx, ev Event, stat string, value float64, cx any) error {
-	return eachPeriod(ctx, tx, ev, func(period, bucket string) error {
-		_, err := tx.ExecContext(ctx,
-			`INSERT INTO player_stat_period (player_id, stat, period, bucket, value, context, updated_seq)
-			 VALUES (?, ?, ?, ?, ?, ?, ?)
-			 ON CONFLICT (player_id, stat, period, bucket) DO UPDATE SET
-			   value = excluded.value, context = excluded.context, updated_seq = excluded.updated_seq
-			 WHERE excluded.value > player_stat_period.value`,
-			ev.PlayerID, stat, period, bucket, value, cx, ev.Seq)
-		return err
+func periodRecord(ctx context.Context, b *Batch, ev Event, stat string, value float64, cx any) error {
+	return eachPeriod(ctx, b, ev, func(period, bucket string) {
+		b.putPeriod(kindRecord, ev.PlayerID, stat, period, bucket, value, cx, ev.Seq)
 	})
 }
 
 // periodBest keeps the smallest value seen inside each window — the mirror of
 // periodRecord, for the ascending career-time boards.
-func periodBest(ctx context.Context, tx *sql.Tx, ev Event, stat string, value float64, cx any) error {
-	return eachPeriod(ctx, tx, ev, func(period, bucket string) error {
-		_, err := tx.ExecContext(ctx,
-			`INSERT INTO player_stat_period (player_id, stat, period, bucket, value, context, updated_seq)
-			 VALUES (?, ?, ?, ?, ?, ?, ?)
-			 ON CONFLICT (player_id, stat, period, bucket) DO UPDATE SET
-			   value = excluded.value, context = excluded.context, updated_seq = excluded.updated_seq
-			 WHERE excluded.value < player_stat_period.value`,
-			ev.PlayerID, stat, period, bucket, value, cx, ev.Seq)
-		return err
+func periodBest(ctx context.Context, b *Batch, ev Event, stat string, value float64, cx any) error {
+	return eachPeriod(ctx, b, ev, func(period, bucket string) {
+		b.putPeriod(kindBest, ev.PlayerID, stat, period, bucket, value, cx, ev.Seq)
 	})
 }
 
@@ -65,15 +55,9 @@ func periodBest(ctx context.Context, tx *sql.Tx, ev Event, stat string, value fl
 // This is the case that makes the table necessary rather than convenient: you
 // cannot recover "how many RUDs in week 32" from a running lifetime total, so
 // the deltas have to land in their window as they arrive.
-func periodAdd(ctx context.Context, tx *sql.Tx, ev Event, stat string, delta float64) error {
-	return eachPeriod(ctx, tx, ev, func(period, bucket string) error {
-		_, err := tx.ExecContext(ctx,
-			`INSERT INTO player_stat_period (player_id, stat, period, bucket, value, context, updated_seq)
-			 VALUES (?, ?, ?, ?, ?, NULL, ?)
-			 ON CONFLICT (player_id, stat, period, bucket) DO UPDATE SET
-			   value = player_stat_period.value + excluded.value, updated_seq = excluded.updated_seq`,
-			ev.PlayerID, stat, period, bucket, delta, ev.Seq)
-		return err
+func periodAdd(ctx context.Context, b *Batch, ev Event, stat string, delta float64) error {
+	return eachPeriod(ctx, b, ev, func(period, bucket string) {
+		b.putPeriod(kindCount, ev.PlayerID, stat, period, bucket, delta, nil, ev.Seq)
 	})
 }
 
@@ -83,21 +67,18 @@ func periodAdd(ctx context.Context, tx *sql.Tx, ev Event, stat string, delta flo
 // An event with no receive stamp writes no windows at all. That is the honest
 // answer rather than a fallback to "now": a row whose window nobody can
 // determine belongs in no window, and the all-time board still has it.
-func eachPeriod(ctx context.Context, tx *sql.Tx, ev Event, write func(period, bucket string) error) error {
+func eachPeriod(ctx context.Context, b *Batch, ev Event, write func(period, bucket string)) error {
 	if ev.RecvTime <= 0 {
 		return nil
 	}
-	for _, period := range rollingPeriods {
-		bucket, ok := Bucket(period, ev.RecvTime)
-		if !ok {
+	for i, bucket := range b.bucketsFor(ev.RecvTime) {
+		if bucket == "" {
 			continue
 		}
-		if err := write(period, bucket); err != nil {
-			return fmt.Errorf("stats: %s window %s of %s: %w", period, bucket, fmt.Sprintf("player %d", ev.PlayerID), err)
-		}
+		write(rollingPeriods[i], bucket)
 	}
 	if ev.Seq%periodTrimEvery == 0 {
-		return trimPeriods(ctx, tx, ev.RecvTime)
+		return b.trimPeriods(ctx, ev.Seq, ev.RecvTime)
 	}
 	return nil
 }
@@ -109,13 +90,32 @@ func eachPeriod(ctx context.Context, tx *sql.Tx, ev Event, write func(period, bu
 // SQL, which tursogo would not thank us for. It runs inside the projector's
 // transaction, like the feed cap, because there is no VACUUM to tidy up after a
 // deletion that happened somewhere else.
-func trimPeriods(ctx context.Context, tx *sql.Tx, recvMS int64) error {
+// It is called once per trim seq, not once per board write at that seq. The
+// deletes were always idempotent — an event that wrote three boards ran the
+// same four DELETEs three times — so collapsing them changes nothing except
+// how much the projector pays for its own housekeeping.
+func (b *Batch) trimPeriods(ctx context.Context, seq, recvMS int64) error {
+	if b.trimmedSeq == seq {
+		return nil
+	}
+	b.trimmedSeq = seq
+
+	// The buffered window writes go out first. One that this batch is still
+	// holding is a row the one-statement-at-a-time path would already have
+	// written, and therefore a row this delete would already have been able to
+	// reach. It takes a batch spanning more than the retention horizon for that
+	// to be more than theoretical — which is to say a rebuild, replaying a
+	// history with quiet stretches in it, which is exactly the pass whose
+	// answer has to match the incremental one.
+	if err := b.flushPeriods(ctx); err != nil {
+		return err
+	}
 	for _, period := range rollingPeriods {
 		cutoff, ok := retentionCutoff(period, recvMS)
 		if !ok {
 			continue
 		}
-		if _, err := tx.ExecContext(ctx,
+		if _, err := b.tx.ExecContext(ctx,
 			`DELETE FROM player_stat_period WHERE period = ? AND bucket < ?`, period, cutoff); err != nil {
 			return fmt.Errorf("stats: trim %s windows before %s: %w", period, cutoff, err)
 		}

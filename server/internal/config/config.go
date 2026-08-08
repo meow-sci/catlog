@@ -46,7 +46,9 @@ type Config struct {
 	IdP    IdP    `toml:"idp"`
 	Limits Limits `toml:"limits"`
 	Boards Boards `toml:"boards"`
-	CORS   CORS   `toml:"cors"`
+	// Projector is the [projector] section.
+	Projector Projector `toml:"projector"`
+	CORS      CORS      `toml:"cors"`
 }
 
 // Server is the [server] section.
@@ -209,6 +211,38 @@ type Boards struct {
 	MinPlayers int `toml:"min_players"`
 }
 
+// Projector is the [projector] section: how much of the event log the fold
+// loop takes on at a time.
+//
+// Not in §5.3. It exists because these are the two numbers that trade the
+// projector's speed against its memory, and the right answer depends on the
+// box. Folding is dominated by the cost of a Turso statement, so the projector
+// buffers a batch's projection writes in memory and flushes the survivors
+// together (internal/stats.Batch); a bigger batch coalesces more repeated
+// writes to the same board and issues fewer statements. Measured on a
+// telemetry-heavy synthetic log, going from 1,000 to 10,000 events per batch is
+// worth about 20% — and multiplies the transient memory a batch holds by ten.
+//
+// The defaults are sized for a small VM. Raise batch_size on a machine with
+// memory to spare.
+type Projector struct {
+	// BatchSize is how many events one fold transaction reads and folds. §5.6's
+	// "batches of 1000". This is the projector's memory knob: peak footprint is
+	// roughly this many events' decoded payloads.
+	BatchSize int `toml:"batch_size"`
+	// FlushRows is how many rows one flushed statement carries. Beyond a few
+	// hundred the per-row cost is flat, so this exists to bound the bound
+	// parameter count rather than to be tuned.
+	FlushRows int `toml:"flush_rows"`
+	// Decoders is how many goroutines decode a batch's payloads before the
+	// serial fold. Zero means one per core, less one for the ingest that
+	// produced the backlog. Decoding is the only part of folding that is not
+	// serialised by the single writer; on a payload as small as §4.2's it is
+	// also not where the time goes, so this is a knob for a future with fatter
+	// payloads rather than a lever on today's numbers.
+	Decoders int `toml:"decoders"`
+}
+
 // CORS is the [cors] section: which foreign origins may read the public §4.8
 // endpoints from a browser.
 //
@@ -276,6 +310,17 @@ func Default() Config {
 			// a dependency on the projection layer (same rule as the checkpoint
 			// interval above). The default is the protection, not an opt-in.
 			MinPlayers: 2,
+		},
+		Projector: Projector{
+			// 1000 == projector.DefaultBatchSize and 500 ==
+			// stats.DefaultFlushRows; not imported, to keep config free of a
+			// dependency on the projection layer (same rule as the checkpoint
+			// interval and min_players above).
+			BatchSize: 1000,
+			FlushRows: 500,
+			// Zero means projector.DefaultDecoders, which needs to know how many
+			// cores the machine has and so cannot be a constant here.
+			Decoders: 0,
 		},
 		CORS: CORS{
 			// Vite's dev server (5173) and its `preview` server (4173) on both
@@ -392,6 +437,15 @@ func (c Config) Validate() error {
 	}
 	if c.Boards.MinPlayers < 1 {
 		errs = append(errs, errors.New("boards.min_players must be at least 1"))
+	}
+	if c.Projector.BatchSize < 1 {
+		errs = append(errs, errors.New("projector.batch_size must be at least 1"))
+	}
+	if c.Projector.FlushRows < 1 {
+		errs = append(errs, errors.New("projector.flush_rows must be at least 1"))
+	}
+	if c.Projector.Decoders < 0 {
+		errs = append(errs, errors.New("projector.decoders must not be negative"))
 	}
 	// A CORS origin is compared to the browser's `Origin` header by exact string
 	// equality, so a typo cannot fail at request time in any visible way — the

@@ -84,27 +84,28 @@ func apply(t *testing.T, proj *store.Projections, in []input, base int64, refine
 	t.Helper()
 	ctx := t.Context()
 
-	run := func(folds []stats.Fold, reader func(*sql.Tx) stats.FlightStateReader) {
+	run := func(folds []stats.Fold, batch func(*sql.Tx) *stats.Batch) {
 		t.Helper()
 		err := proj.WithWriteTx(ctx, func(tx *sql.Tx) error {
-			fs := reader(tx)
+			b := batch(tx)
 			for i, e := range in {
 				ev := decode(t, e, base+int64(i)+1)
 				for _, f := range folds {
-					if err := f.Apply(ctx, tx, ev, fs); err != nil {
+					if err := f.Apply(ctx, b, ev); err != nil {
 						return fmt.Errorf("fold %s on %s: %w", f.Name(), e.typ, err)
 					}
 				}
 			}
-			return nil
+			return b.Flush(ctx)
 		})
 		if err != nil {
 			t.Fatalf("apply folds: %v", err)
 		}
 	}
 
+	newBatch := func(tx *sql.Tx) *stats.Batch { return stats.NewBatch(tx, stats.BatchOptions{}) }
 	if !refined {
-		run(stats.Folds(), func(tx *sql.Tx) stats.FlightStateReader { return stats.NewFlights(tx) })
+		run(stats.Folds(), newBatch)
 		return
 	}
 
@@ -114,8 +115,10 @@ func apply(t *testing.T, proj *store.Projections, in []input, base int64, refine
 			kia[e.flight] = append(kia[e.flight], e.simT)
 		}
 	}
-	run(stats.StateFolds(), func(tx *sql.Tx) stats.FlightStateReader { return stats.NewFlights(tx) })
-	run(stats.BoardFolds(), func(tx *sql.Tx) stats.FlightStateReader { return stats.NewRefinedFlights(tx, kia) })
+	run(stats.StateFolds(), newBatch)
+	run(stats.BoardFolds(), func(tx *sql.Tx) *stats.Batch {
+		return stats.NewRefinedBatch(tx, kia, stats.BatchOptions{})
+	})
 }
 
 func decode(t *testing.T, e input, seq int64) stats.Event {
@@ -622,9 +625,9 @@ func TestFeedSummaries(t *testing.T) {
 
 	proj := testutil.MemProjections(t)
 	err := proj.WithWriteTx(t.Context(), func(tx *sql.Tx) error {
-		fs := stats.NewFlights(tx)
+		b := stats.NewBatch(tx, stats.BatchOptions{})
 		for i, c := range cases {
-			got, ok, err := stats.Summarize(t.Context(), decode(t, c.in, int64(i)+1), "whiskers", fs)
+			got, ok, err := stats.Summarize(t.Context(), decode(t, c.in, int64(i)+1), "whiskers", b)
 			if err != nil {
 				return err
 			}
@@ -647,27 +650,27 @@ func TestFeedSkipsNonEventsAndFlaggedFlights(t *testing.T) {
 	dirty := flightN(2)
 	proj := testutil.MemProjections(t)
 	err := proj.WithWriteTx(t.Context(), func(tx *sql.Tx) error {
-		fs := stats.NewFlights(tx)
+		b := stats.NewBatch(tx, stats.BatchOptions{})
 		ctx := t.Context()
 
 		// A flight.ended that was not a recovery is not news.
 		if _, ok, err := stats.Summarize(ctx, decode(t, input{flight: flightN(1), typ: "flight.ended",
-			payload: stats.FlightEnded{Reason: "despawned"}}, 1), "whiskers", fs); err != nil || ok {
+			payload: stats.FlightEnded{Reason: "despawned"}}, 1), "whiskers", b); err != nil || ok {
 			t.Errorf("despawned flight produced a feed line (err %v)", err)
 		}
 		// A player with no handle produces nothing — the feed is public.
 		if _, ok, err := stats.Summarize(ctx, decode(t, input{flight: flightN(1), typ: "vehicle.soi",
-			payload: stats.VehicleSOI{ToBody: "mun"}}, 2), "", fs); err != nil || ok {
+			payload: stats.VehicleSOI{ToBody: "mun"}}, 2), "", b); err != nil || ok {
 			t.Errorf("a handle-less player produced a feed line (err %v)", err)
 		}
 
 		flagFold := stats.FlightFold()
-		if err := flagFold.Apply(ctx, tx, decode(t, input{flight: dirty, typ: "flight.flagged",
-			payload: stats.FlightFlagged{Flag: "teleport"}}, 3), fs); err != nil {
+		if err := flagFold.Apply(ctx, b, decode(t, input{flight: dirty, typ: "flight.flagged",
+			payload: stats.FlightFlagged{Flag: "teleport"}}, 3)); err != nil {
 			return err
 		}
 		if _, ok, err := stats.Summarize(ctx, decode(t, input{flight: dirty, typ: "vehicle.soi",
-			payload: stats.VehicleSOI{ToBody: "mun"}}, 4), "whiskers", fs); err != nil || ok {
+			payload: stats.VehicleSOI{ToBody: "mun"}}, 4), "whiskers", b); err != nil || ok {
 			t.Errorf("a flagged flight reached the feed (err %v)", err)
 		}
 		return nil

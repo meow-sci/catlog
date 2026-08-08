@@ -40,11 +40,27 @@ type rig struct {
 	players map[string]int64
 }
 
+// rigNow is the clock every rig stamps `recv_time` with.
+//
+// Fixed, because recv_time is an input to the projection — it is what the
+// rolling windows bucket by and what the feed timestamps with — so a wall clock
+// would make two rigs folding the same history produce two different tables,
+// and any test that compares one fold to another would be comparing when it
+// ran. 2026-08-07T12:00:00Z is a Friday in ISO week 32.
+var rigNow = time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
+
+// rigStoreOptions is testutil.Options with that clock.
+func rigStoreOptions() store.Options {
+	o := testutil.Options()
+	o.Now = func() time.Time { return rigNow }
+	return o
+}
+
 func newRig(t *testing.T, opts ...func(*projector.Options)) *rig {
 	t.Helper()
 	dir := t.TempDir()
-	events := testutil.EventsAt(t, filepath.Join(dir, "events.db"))
-	projections := testutil.ProjectionsAt(t, filepath.Join(dir, "projections.db"))
+	events := openStore(t, store.OpenEvents, filepath.Join(dir, "events.db"))
+	projections := openStore(t, store.OpenProjections, filepath.Join(dir, "projections.db"))
 
 	d := directory.New(events)
 	if err := d.Reload(t.Context()); err != nil {
@@ -57,7 +73,7 @@ func newRig(t *testing.T, opts ...func(*projector.Options)) *rig {
 		Live:         projector.NewLive(projections),
 		Directory:    d,
 		Broadcaster:  bcast,
-		StoreOptions: testutil.Options(),
+		StoreOptions: rigStoreOptions(),
 		Log:          testutil.DiscardLogger(),
 	}
 	for _, fn := range opts {
@@ -71,6 +87,24 @@ func newRig(t *testing.T, opts ...func(*projector.Options)) *rig {
 		t: t, dir: dir, events: events, live: o.Live, proj: p, dirs: d,
 		bcast: bcast, log: o.Log, players: map[string]int64{},
 	}
+}
+
+// openStore opens one of the two databases on the rig's fixed clock, closed at
+// test end.
+func openStore[T any](t *testing.T, open func(context.Context, string, store.Options) (T, error), path string) T {
+	t.Helper()
+	db, err := open(t.Context(), path, rigStoreOptions())
+	if err != nil {
+		t.Fatalf("open %s: %v", path, err)
+	}
+	t.Cleanup(func() {
+		if c, ok := any(db).(interface{ Close() error }); ok {
+			if err := c.Close(); err != nil {
+				t.Errorf("close %s: %v", path, err)
+			}
+		}
+	})
+	return db
 }
 
 // player creates a player with a handle so the feed can name them.
@@ -200,6 +234,7 @@ type snapshot struct {
 	Flights []string
 	Bodies  []string
 	Kittens []string
+	Periods []string
 	Feed    []string
 	Cursor  int64
 }
@@ -220,6 +255,9 @@ func (r *rig) snapshot() snapshot {
 			return err
 		}
 		if s.Kittens, err = dump(ctx, p, `SELECT player_id, kid, name, travelled_m, fastest_ms, missions, mission_time_s, kia, updated_seq FROM kitten ORDER BY player_id, kid`); err != nil {
+			return err
+		}
+		if s.Periods, err = dump(ctx, p, `SELECT player_id, stat, period, bucket, value, coalesce(context,''), updated_seq FROM player_stat_period ORDER BY player_id, stat, period, bucket`); err != nil {
 			return err
 		}
 		if s.Feed, err = dump(ctx, p, `SELECT at, handle, type, summary FROM feed ORDER BY id`); err != nil {
@@ -383,12 +421,65 @@ func TestRebuildEqualsIncrementalForAnUnflaggedHistory(t *testing.T) {
 	diff(t, "flight_state", rebuilt.Flights, incremental.Flights)
 	diff(t, "player_body", rebuilt.Bodies, incremental.Bodies)
 	diff(t, "kitten", rebuilt.Kittens, incremental.Kittens)
+	diff(t, "player_stat_period", rebuilt.Periods, incremental.Periods)
 	diff(t, "feed", rebuilt.Feed, incremental.Feed)
 	if rebuilt.Cursor != incremental.Cursor {
 		t.Errorf("checkpoint after rebuild = %d, want %d", rebuilt.Cursor, incremental.Cursor)
 	}
 	if len(incremental.Stats) == 0 {
 		t.Fatal("the fixture produced no stats, so the comparison proved nothing")
+	}
+}
+
+func TestBatchSizeDoesNotChangeTheProjection(t *testing.T) {
+	// The fold buffers a batch's projection writes and merges repeated writes
+	// to one key before they reach SQL (internal/stats.Batch). Every merge rule
+	// is supposed to be the in-memory spelling of the `ON CONFLICT` guard it
+	// replaces — including the tie-breaks, which is the part that can go wrong
+	// silently: a record board that replaced on `>=` instead of `>` would still
+	// hold the right *value* and quietly hand the rank to the later claimant.
+	//
+	// Batch size is the lever that exposes it. At one event per batch nothing
+	// merges and every write settles in SQL exactly as it did before this
+	// existed; at a thousand, a player's whole history collapses in memory
+	// first. Those two have to produce byte-identical tables, and so does every
+	// boundary in between — which is also what makes a restart mid-backlog, or
+	// a differently-configured server, fold to the same numbers.
+	fold := func(t *testing.T, batchSize int) snapshot {
+		t.Helper()
+		r := newRig(t, func(o *projector.Options) { o.BatchSize = batchSize })
+		for i, handle := range []string{"whiskers", "mittens", "clawdia"} {
+			p := r.player(handle)
+			// Twice each, so a player's second run has to merge against the
+			// first — records, counters and career times all take a second
+			// write to the same key.
+			r.ship(p, cleanHistory(1+i*10)...)
+			r.ship(p, cleanHistory(101+i*10)...)
+		}
+		r.drain()
+		return r.snapshot()
+	}
+
+	// One event per batch: no coalescing at all, so this is the behaviour of
+	// the unbatched fold, produced by the batched code.
+	want := fold(t, 1)
+	if len(want.Stats) == 0 {
+		t.Fatal("the fixture produced no stats, so the comparison proved nothing")
+	}
+
+	for _, batchSize := range []int{2, 3, 17, 1000} {
+		t.Run(fmt.Sprintf("batch=%d", batchSize), func(t *testing.T) {
+			got := fold(t, batchSize)
+			diff(t, "player_stat", got.Stats, want.Stats)
+			diff(t, "flight_state", got.Flights, want.Flights)
+			diff(t, "player_body", got.Bodies, want.Bodies)
+			diff(t, "kitten", got.Kittens, want.Kittens)
+			diff(t, "player_stat_period", got.Periods, want.Periods)
+			diff(t, "feed", got.Feed, want.Feed)
+			if got.Cursor != want.Cursor {
+				t.Errorf("checkpoint = %d, want %d", got.Cursor, want.Cursor)
+			}
+		})
 	}
 }
 

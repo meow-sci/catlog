@@ -2,9 +2,7 @@ package stats
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
-	"errors"
 	"fmt"
 
 	"github.com/meow-sci/catlog/server/internal/ids"
@@ -14,27 +12,39 @@ import (
 // fold to every event of a batch inside one projections.db transaction.
 //
 // §5.6 writes the signature as `Apply(tx *sql.Tx, ev DecodedEvent, fs
-// FlightStateReader) error`. Two additions, both recorded in docs/DECISIONS.md:
-// a context, because every database call underneath takes one and a rebuild must
-// be cancellable; and Name, because "which fold failed" is the only useful thing
-// to put in the log line when one does.
+// FlightStateReader) error`. Three departures, all recorded in
+// docs/DECISIONS.md: a context, because every database call underneath takes one
+// and a rebuild must be cancellable; Name, because "which fold failed" is the
+// only useful thing to put in the log line when one does; and a [Batch] in place
+// of the raw transaction and the separate reader.
+//
+// The Batch is where the performance is. A fold that writes straight to the
+// transaction issues one tursogo statement per write and one per read, and at
+// ~15 µs each that was the entire cost of a projection. A Batch answers reads
+// from cache, merges repeated writes to one key, and flushes the survivors as
+// multi-row statements — while being the same rules, spelled in Go. It is also
+// the FlightStateReader, so a fold has one thing to talk to rather than two
+// that have to agree.
 type Fold interface {
 	// Name identifies the fold in logs and in /admin/stats.
 	Name() string
-	// Apply writes this fold's contribution for one event. Returning an error
+	// Apply records this fold's contribution for one event. Returning an error
 	// aborts the whole batch: a fold that cannot write must not be allowed to
 	// advance the checkpoint past the event it dropped.
-	Apply(ctx context.Context, tx *sql.Tx, ev Event, fs FlightStateReader) error
+	Apply(ctx context.Context, b *Batch, ev Event) error
 }
 
 // FlightStateReader is what a fold may ask about the flight an event belongs to.
+// [Batch] implements it, and is the only thing that does; it stays an interface
+// because [Summarize] takes one and reads nothing else, which keeps the feed
+// renderer honest about how little it is allowed to touch.
 //
 // The first method is §5.6's; the other two carry the rebuild-only refinements.
-// They live on the same interface because a fold has exactly three parameters
-// and the refinement is a property of the pass, not of the event: during
-// incremental folding Refined is false and KIANear always answers false, so the
-// same fold code produces the optimistic incremental answer and the exact
-// rebuild answer without branching anywhere else.
+// They live on the same interface because the refinement is a property of the
+// pass, not of the event: during incremental folding Refined is false and
+// KIANear always answers false, so the same fold code produces the optimistic
+// incremental answer and the exact rebuild answer without branching anywhere
+// else.
 type FlightStateReader interface {
 	// Flight reads flight_state for a flight, reporting false when no row
 	// exists yet.
@@ -90,100 +100,68 @@ func BoardFolds() []Fold {
 
 // --- shared write helpers ----------------------------------------------------
 //
-// These are the shapes every board write takes. They are here rather than in
-// package store because the SQL *is* the rule: the WHERE guard on the upsert is
-// how "ties keep the earliest updated_seq" is spelled.
+// These are the shapes every board write takes. Each records the write in the
+// batch under its merge rule; the SQL that settles it against whatever is
+// already in the table lives in batch.go, one statement per rule per flush.
+//
+// The rules are still the rules. A record board is replaced only by a strictly
+// *larger* value, in memory and again in the flushed `ON CONFLICT` guard, so an
+// equal value leaves the earlier `updated_seq` — and therefore the earlier
+// claimant's rank — untouched (§5.6).
 
 // putBest writes a min-record board: the row is replaced only by a strictly
 // *smaller* value. It is the exact mirror of [putRecord], including the tie
-// rule — an equal time leaves the earlier updated_seq, so whoever got there
-// first keeps the rank (§5.6).
+// rule.
 //
 // This is what every "fastest career time to X" board is: the value is seconds
 // since the career began, and lower is better.
-func putBest(ctx context.Context, tx *sql.Tx, ev Event, stat string, value float64, context map[string]any) error {
+func putBest(ctx context.Context, b *Batch, ev Event, stat string, value float64, context map[string]any) error {
 	cx, err := encodeContext(context)
 	if err != nil {
 		return err
 	}
-	_, err = tx.ExecContext(ctx,
-		`INSERT INTO player_stat (player_id, stat, value, context, updated_seq) VALUES (?, ?, ?, ?, ?)
-		 ON CONFLICT (player_id, stat) DO UPDATE SET
-		   value = excluded.value, context = excluded.context, updated_seq = excluded.updated_seq
-		 WHERE excluded.value < player_stat.value`,
-		ev.PlayerID, stat, value, cx, ev.Seq)
-	if err != nil {
-		return fmt.Errorf("stats: best %s for player %d: %w", stat, ev.PlayerID, err)
-	}
-	return periodBest(ctx, tx, ev, stat, value, cx)
+	b.putStat(kindBest, ev.PlayerID, stat, value, cx, ev.Seq)
+	return periodBest(ctx, b, ev, stat, value, cx)
 }
 
-// putRecord writes a record (max) board. The row is replaced only by a strictly
-// larger value, so an equal value leaves the earlier updated_seq — and therefore
-// the earlier claimant's rank — untouched (§5.6).
-func putRecord(ctx context.Context, tx *sql.Tx, ev Event, stat string, value float64, context map[string]any) error {
+// putRecord writes a record (max) board.
+func putRecord(ctx context.Context, b *Batch, ev Event, stat string, value float64, context map[string]any) error {
 	cx, err := encodeContext(context)
 	if err != nil {
 		return err
 	}
-	_, err = tx.ExecContext(ctx,
-		`INSERT INTO player_stat (player_id, stat, value, context, updated_seq) VALUES (?, ?, ?, ?, ?)
-		 ON CONFLICT (player_id, stat) DO UPDATE SET
-		   value = excluded.value, context = excluded.context, updated_seq = excluded.updated_seq
-		 WHERE excluded.value > player_stat.value`,
-		ev.PlayerID, stat, value, cx, ev.Seq)
-	if err != nil {
-		return fmt.Errorf("stats: record %s for player %d: %w", stat, ev.PlayerID, err)
-	}
-	return periodRecord(ctx, tx, ev, stat, value, cx)
+	b.putStat(kindRecord, ev.PlayerID, stat, value, cx, ev.Seq)
+	return periodRecord(ctx, b, ev, stat, value, cx)
 }
 
 // addCount advances a counter board. updated_seq becomes the seq at which the
 // counter reached its new value, which is what makes the tie-break "whoever got
-// to N first" rather than "whoever was written last".
-func addCount(ctx context.Context, tx *sql.Tx, ev Event, stat string, delta float64) error {
-	_, err := tx.ExecContext(ctx,
-		`INSERT INTO player_stat (player_id, stat, value, context, updated_seq) VALUES (?, ?, ?, NULL, ?)
-		 ON CONFLICT (player_id, stat) DO UPDATE SET
-		   value = player_stat.value + excluded.value, updated_seq = excluded.updated_seq`,
-		ev.PlayerID, stat, delta, ev.Seq)
-	if err != nil {
-		return fmt.Errorf("stats: count %s for player %d: %w", stat, ev.PlayerID, err)
-	}
-	return periodAdd(ctx, tx, ev, stat, delta)
+// to N first" rather than "whoever was written last" — and is why the batch
+// carries the last contributing seq alongside the summed delta.
+func addCount(ctx context.Context, b *Batch, ev Event, stat string, delta float64) error {
+	b.putStat(kindCount, ev.PlayerID, stat, delta, nil, ev.Seq)
+	return periodAdd(ctx, b, ev, stat, delta)
 }
 
 // setValue writes a derived total, replacing whatever was there. Used by the two
 // boards whose value is a function of another table (`soi_bodies` counts
 // player_body, `distance_travelled` sums kitten) rather than an accumulation.
-func setValue(ctx context.Context, tx *sql.Tx, ev Event, stat string, value float64) error {
+func setValue(ctx context.Context, b *Batch, ev Event, stat string, value float64) error {
 	// A derived total's *window* value is what it grew by inside that window —
 	// "distance travelled this month", not "lifetime distance as of this
 	// month", which would be a cumulative number wearing a monthly label. That
-	// needs the previous total, so it is read before the write. A rebuild
+	// needs the previous total, so it is read before the write; the batch
+	// answers from its own pending writes, so two snapshots in one batch see
+	// each other exactly as they did when each was its own statement. A rebuild
 	// replays the same events in the same seq order and therefore reads the
 	// same previous value, which is what keeps rebuild == incremental.
-	var prev float64
-	switch err := tx.QueryRowContext(ctx,
-		`SELECT value FROM player_stat WHERE player_id = ? AND stat = ?`,
-		ev.PlayerID, stat).Scan(&prev); {
-	case errors.Is(err, sql.ErrNoRows):
-		prev = 0
-	case err != nil:
-		return fmt.Errorf("stats: read %s for player %d: %w", stat, ev.PlayerID, err)
-	}
-
-	_, err := tx.ExecContext(ctx,
-		`INSERT INTO player_stat (player_id, stat, value, context, updated_seq) VALUES (?, ?, ?, NULL, ?)
-		 ON CONFLICT (player_id, stat) DO UPDATE SET
-		   value = excluded.value, updated_seq = excluded.updated_seq
-		 WHERE excluded.value <> player_stat.value`,
-		ev.PlayerID, stat, value, ev.Seq)
+	prev, err := b.StatValue(ctx, ev.PlayerID, stat)
 	if err != nil {
-		return fmt.Errorf("stats: set %s for player %d: %w", stat, ev.PlayerID, err)
+		return err
 	}
+	b.putStat(kindSet, ev.PlayerID, stat, value, nil, ev.Seq)
 	if delta := value - prev; delta > 0 {
-		return periodAdd(ctx, tx, ev, stat, delta)
+		return periodAdd(ctx, b, ev, stat, delta)
 	}
 	return nil
 }

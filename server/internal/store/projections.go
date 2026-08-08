@@ -374,6 +374,62 @@ func (p *Projections) InsertFeed(ctx context.Context, q Querier, row FeedRow) (F
 	return row, nil
 }
 
+// FeedInsertChunk is how many feed rows one insert statement carries.
+const FeedInsertChunk = 500
+
+// InsertFeedRows appends a whole batch's feed rows in one statement per
+// [FeedInsertChunk] and returns them with their assigned ids.
+//
+// The ids come from `LastInsertId` and the fact that **one** INSERT assigns
+// consecutive rowids: the last row's id minus the row count is the row before
+// the first. That is worth the paragraph because it is the only place in catlog
+// that infers an id it did not read back, and it is safe here for reasons that
+// are all structural rather than incidental — `feed.id` is an INTEGER PRIMARY
+// KEY (a rowid alias), nothing ever supplies one explicitly, the writer handle
+// is capped at a single connection so no other statement can interleave, and
+// the whole thing is inside the projector's transaction.
+//
+// The alternative — a statement per row, for its own LastInsertId — is what
+// this replaces, and at ~15 µs per tursogo statement a busy batch was paying
+// more for the feed than for the leaderboards it fed from.
+func (p *Projections) InsertFeedRows(ctx context.Context, q Querier, rows []FeedRow) ([]FeedRow, error) {
+	if len(rows) == 0 {
+		return rows, nil
+	}
+	if q == nil {
+		q = p.Writer()
+	}
+	var sb strings.Builder
+	for start := 0; start < len(rows); start += FeedInsertChunk {
+		end := min(start+FeedInsertChunk, len(rows))
+
+		sb.Reset()
+		sb.WriteString(`INSERT INTO feed (at, handle, type, summary) VALUES `)
+		args := make([]any, 0, (end-start)*4)
+		for i := start; i < end; i++ {
+			if i > start {
+				sb.WriteByte(',')
+			}
+			sb.WriteString("(?, ?, ?, ?)")
+			args = append(args, rows[i].At, rows[i].Handle, rows[i].Type, rows[i].Summary)
+		}
+
+		res, err := q.ExecContext(ctx, sb.String(), args...)
+		if err != nil {
+			return nil, fmt.Errorf("store: insert feed rows: %w", err)
+		}
+		last, err := res.LastInsertId()
+		if err != nil {
+			return nil, fmt.Errorf("store: insert feed rows: %w", err)
+		}
+		first := last - int64(end-start) + 1
+		for i := start; i < end; i++ {
+			rows[i].ID = first + int64(i-start)
+		}
+	}
+	return rows, nil
+}
+
 // CapFeed trims the feed to its newest keep rows (§5.4).
 func (p *Projections) CapFeed(ctx context.Context, q Querier, keep int) error {
 	if q == nil {

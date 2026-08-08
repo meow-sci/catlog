@@ -2,8 +2,6 @@ package stats
 
 import (
 	"context"
-	"database/sql"
-	"fmt"
 	"slices"
 	"strings"
 	"unicode"
@@ -334,21 +332,21 @@ type lithobrakeFold struct{}
 
 func (lithobrakeFold) Name() string { return StatBiggestLithobrakeSurvived }
 
-func (lithobrakeFold) Apply(ctx context.Context, tx *sql.Tx, ev Event, fs FlightStateReader) error {
+func (lithobrakeFold) Apply(ctx context.Context, b *Batch, ev Event) error {
 	p, ok := payloadOf[VehicleImpact](ev)
 	if !ok || !p.Survived || p.LaunchPad || p.CrewCount < 1 || p.SpeedMs <= 0 {
 		return nil
 	}
-	ok, err := scoreable(ctx, ev, fs)
+	ok, err := scoreable(ctx, ev, b)
 	if err != nil || !ok {
 		return err
 	}
-	if fs.Refined() && ev.HasSimTime && fs.KIANear(ev.FlightID, ev.SimTime) {
+	if b.Refined() && ev.HasSimTime && b.KIANear(ev.FlightID, ev.SimTime) {
 		// A kitten died within the window: whatever this was, it was not
 		// "survived with crew" (§4.2).
 		return nil
 	}
-	return putRecord(ctx, tx, ev, StatBiggestLithobrakeSurvived, p.SpeedMs, map[string]any{
+	return putRecord(ctx, b, ev, StatBiggestLithobrakeSurvived, p.SpeedMs, map[string]any{
 		"body":     p.Body,
 		"flight":   ids.String(ev.FlightID),
 		"energy_j": p.EnergyJ,
@@ -367,7 +365,7 @@ type peakGFold struct{}
 
 func (peakGFold) Name() string { return StatPeakGSurvived }
 
-func (peakGFold) Apply(ctx context.Context, tx *sql.Tx, ev Event, fs FlightStateReader) error {
+func (peakGFold) Apply(ctx context.Context, b *Batch, ev Event) error {
 	p, ok := payloadOf[TelemetryWindow](ev)
 	if !ok {
 		return nil
@@ -378,17 +376,17 @@ func (peakGFold) Apply(ctx context.Context, tx *sql.Tx, ev Event, fs FlightState
 	if p.PeakG == nil || *p.PeakG <= 0 {
 		return nil
 	}
-	st, found, err := fs.Flight(ctx, ev.FlightID)
+	st, found, err := b.Flight(ctx, ev.FlightID)
 	if err != nil {
 		return err
 	}
 	if found && st.Flagged() {
 		return nil
 	}
-	if fs.Refined() && !(found && st.Recovered()) {
+	if b.Refined() && !(found && st.Recovered()) {
 		return nil
 	}
-	return putRecord(ctx, tx, ev, StatPeakGSurvived, *p.PeakG, map[string]any{
+	return putRecord(ctx, b, ev, StatPeakGSurvived, *p.PeakG, map[string]any{
 		"body":   p.Body,
 		"flight": ids.String(ev.FlightID),
 		"t1_sim": p.T1Sim,
@@ -408,7 +406,7 @@ type speedFold struct {
 
 func (f speedFold) Name() string { return f.stat }
 
-func (f speedFold) Apply(ctx context.Context, tx *sql.Tx, ev Event, fs FlightStateReader) error {
+func (f speedFold) Apply(ctx context.Context, b *Batch, ev Event) error {
 	p, ok := payloadOf[TelemetryWindow](ev)
 	if !ok {
 		return nil
@@ -420,11 +418,11 @@ func (f speedFold) Apply(ctx context.Context, tx *sql.Tx, ev Event, fs FlightSta
 	if value <= 0 {
 		return nil
 	}
-	ok, err := scoreable(ctx, ev, fs)
+	ok, err := scoreable(ctx, ev, b)
 	if err != nil || !ok {
 		return err
 	}
-	return putRecord(ctx, tx, ev, f.stat, value, map[string]any{
+	return putRecord(ctx, b, ev, f.stat, value, map[string]any{
 		"body":   p.Body,
 		"flight": ids.String(ev.FlightID),
 		"t1_sim": p.T1Sim,
@@ -442,15 +440,15 @@ type countFold struct {
 
 func (f countFold) Name() string { return f.stat }
 
-func (f countFold) Apply(ctx context.Context, tx *sql.Tx, ev Event, fs FlightStateReader) error {
+func (f countFold) Apply(ctx context.Context, b *Batch, ev Event) error {
 	if ev.Type != f.eventType {
 		return nil
 	}
-	ok, err := scoreable(ctx, ev, fs)
+	ok, err := scoreable(ctx, ev, b)
 	if err != nil || !ok {
 		return err
 	}
-	return addCount(ctx, tx, ev, f.stat, 1)
+	return addCount(ctx, b, ev, f.stat, 1)
 }
 
 // rudFold implements `rud_total` and the `rud_<cause>` family (§5.6).
@@ -458,16 +456,16 @@ type rudFold struct{}
 
 func (rudFold) Name() string { return StatRUDTotal }
 
-func (rudFold) Apply(ctx context.Context, tx *sql.Tx, ev Event, fs FlightStateReader) error {
+func (rudFold) Apply(ctx context.Context, b *Batch, ev Event) error {
 	p, ok := payloadOf[VehicleRUD](ev)
 	if !ok {
 		return nil
 	}
-	ok, err := scoreable(ctx, ev, fs)
+	ok, err := scoreable(ctx, ev, b)
 	if err != nil || !ok {
 		return err
 	}
-	if err := addCount(ctx, tx, ev, StatRUDTotal, 1); err != nil {
+	if err := addCount(ctx, b, ev, StatRUDTotal, 1); err != nil {
 		return err
 	}
 	// The per-cause board comes from the cause the event carried, not from a
@@ -479,7 +477,7 @@ func (rudFold) Apply(ctx context.Context, tx *sql.Tx, ev Event, fs FlightStateRe
 	if !ok {
 		return nil
 	}
-	return addCount(ctx, tx, ev, stat, 1)
+	return addCount(ctx, b, ev, stat, 1)
 }
 
 // orbitsFold implements `orbits_achieved` (§5.6).
@@ -487,16 +485,16 @@ type orbitsFold struct{}
 
 func (orbitsFold) Name() string { return StatOrbitsAchieved }
 
-func (orbitsFold) Apply(ctx context.Context, tx *sql.Tx, ev Event, fs FlightStateReader) error {
+func (orbitsFold) Apply(ctx context.Context, b *Batch, ev Event) error {
 	p, ok := payloadOf[VehicleOrbit](ev)
 	if !ok || p.Phase != "achieved" {
 		return nil
 	}
-	ok, err := scoreable(ctx, ev, fs)
+	ok, err := scoreable(ctx, ev, b)
 	if err != nil || !ok {
 		return err
 	}
-	return addCount(ctx, tx, ev, StatOrbitsAchieved, 1)
+	return addCount(ctx, b, ev, StatOrbitsAchieved, 1)
 }
 
 // soiFold implements `soi_bodies` (§5.6): the number of distinct bodies whose
@@ -508,29 +506,20 @@ type soiFold struct{}
 
 func (soiFold) Name() string { return StatSOIBodies }
 
-func (soiFold) Apply(ctx context.Context, tx *sql.Tx, ev Event, fs FlightStateReader) error {
+func (soiFold) Apply(ctx context.Context, b *Batch, ev Event) error {
 	p, ok := payloadOf[VehicleSOI](ev)
 	if !ok || p.ToBody == "" {
 		return nil
 	}
-	ok, err := scoreable(ctx, ev, fs)
+	ok, err := scoreable(ctx, ev, b)
 	if err != nil || !ok {
 		return err
 	}
-	res, err := tx.ExecContext(ctx,
-		`INSERT OR IGNORE INTO player_body (player_id, kind, body, first_seq) VALUES (?, 'soi', ?, ?)`,
-		ev.PlayerID, p.ToBody, ev.Seq)
-	if err != nil {
-		return fmt.Errorf("stats: record soi body %q: %w", p.ToBody, err)
+	added, err := b.AddBody(ctx, ev.PlayerID, "soi", p.ToBody, ev.Seq)
+	if err != nil || !added {
+		return err // an err, or a body already visited
 	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("stats: record soi body %q: %w", p.ToBody, err)
-	}
-	if n == 0 {
-		return nil // already visited
-	}
-	return addCount(ctx, tx, ev, StatSOIBodies, 1)
+	return addCount(ctx, b, ev, StatSOIBodies, 1)
 }
 
 // recoveredFold implements `kittens_recovered` (§5.6): the sum of
@@ -539,16 +528,16 @@ type recoveredFold struct{}
 
 func (recoveredFold) Name() string { return StatKittensRecovered }
 
-func (recoveredFold) Apply(ctx context.Context, tx *sql.Tx, ev Event, fs FlightStateReader) error {
+func (recoveredFold) Apply(ctx context.Context, b *Batch, ev Event) error {
 	p, ok := payloadOf[FlightEnded](ev)
 	if !ok || p.Reason != "recovered" || p.CrewCount < 1 {
 		return nil
 	}
-	ok, err := scoreable(ctx, ev, fs)
+	ok, err := scoreable(ctx, ev, b)
 	if err != nil || !ok {
 		return err
 	}
-	return addCount(ctx, tx, ev, StatKittensRecovered, float64(p.CrewCount))
+	return addCount(ctx, b, ev, StatKittensRecovered, float64(p.CrewCount))
 }
 
 // distanceFold implements `distance_travelled` (§5.6): the sum, over a player's
@@ -563,7 +552,7 @@ type distanceFold struct{}
 
 func (distanceFold) Name() string { return StatDistanceTravelled }
 
-func (distanceFold) Apply(ctx context.Context, tx *sql.Tx, ev Event, _ FlightStateReader) error {
+func (distanceFold) Apply(ctx context.Context, b *Batch, ev Event) error {
 	p, ok := payloadOf[RosterSnapshot](ev)
 	if !ok || len(p.Kittens) == 0 {
 		return nil
@@ -572,35 +561,19 @@ func (distanceFold) Apply(ctx context.Context, tx *sql.Tx, ev Event, _ FlightSta
 		if k.Kid == "" {
 			continue
 		}
-		kia := 0
-		if k.KIA {
-			kia = 1
-		}
-		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO kitten (player_id, kid, name, travelled_m, fastest_ms, missions, mission_time_s, kia, updated_seq)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-			 ON CONFLICT (player_id, kid) DO UPDATE SET
-			   name = excluded.name,
-			   travelled_m = max(kitten.travelled_m, excluded.travelled_m),
-			   fastest_ms = max(kitten.fastest_ms, excluded.fastest_ms),
-			   missions = max(kitten.missions, excluded.missions),
-			   mission_time_s = max(kitten.mission_time_s, excluded.mission_time_s),
-			   kia = max(kitten.kia, excluded.kia),
-			   updated_seq = excluded.updated_seq`,
-			ev.PlayerID, k.Kid, k.Name, k.TravelledM, k.FastestMs, k.Missions, k.MissionTimeS, kia, ev.Seq); err != nil {
-			return fmt.Errorf("stats: upsert kitten %q: %w", k.Kid, err)
+		if err := b.UpsertKitten(ctx, ev.PlayerID, k, ev.Seq); err != nil {
+			return err
 		}
 	}
 
-	var total sql.NullFloat64
-	if err := tx.QueryRowContext(ctx,
-		`SELECT sum(travelled_m) FROM kitten WHERE player_id = ?`, ev.PlayerID).Scan(&total); err != nil {
-		return fmt.Errorf("stats: sum kitten distance: %w", err)
+	total, err := b.KittenDistance(ctx, ev.PlayerID)
+	if err != nil {
+		return err
 	}
-	if !total.Valid || total.Float64 <= 0 {
+	if total <= 0 {
 		return nil
 	}
-	return setValue(ctx, tx, ev, StatDistanceTravelled, total.Float64)
+	return setValue(ctx, b, ev, StatDistanceTravelled, total)
 }
 
 // --- career-time folds --------------------------------------------------------
@@ -632,11 +605,11 @@ func (distanceFold) Apply(ctx context.Context, tx *sql.Tx, ev Event, _ FlightSta
 
 // careerTime reports the career-relative time an event happened at, and whether
 // the event is eligible to set one of the boards above.
-func careerTime(ctx context.Context, ev Event, fs FlightStateReader) (float64, bool, error) {
+func careerTime(ctx context.Context, ev Event, b *Batch) (float64, bool, error) {
 	if !ev.HasCareer() || !ev.HasSimTime || ev.SimTime < 0 {
 		return 0, false, nil
 	}
-	ok, err := scoreable(ctx, ev, fs)
+	ok, err := scoreable(ctx, ev, b)
 	if err != nil || !ok {
 		return 0, false, err
 	}
@@ -660,16 +633,16 @@ type toOrbitFold struct{}
 
 func (toOrbitFold) Name() string { return StatFastestToOrbit }
 
-func (toOrbitFold) Apply(ctx context.Context, tx *sql.Tx, ev Event, fs FlightStateReader) error {
+func (toOrbitFold) Apply(ctx context.Context, b *Batch, ev Event) error {
 	p, ok := payloadOf[VehicleOrbit](ev)
 	if !ok || p.Phase != "achieved" {
 		return nil
 	}
-	t, ok, err := careerTime(ctx, ev, fs)
+	t, ok, err := careerTime(ctx, ev, b)
 	if err != nil || !ok {
 		return err
 	}
-	return putBest(ctx, tx, ev, StatFastestToOrbit, careerMillis(t), map[string]any{
+	return putBest(ctx, b, ev, StatFastestToOrbit, careerMillis(t), map[string]any{
 		"career": ev.Career,
 		"body":   p.Body,
 		"flight": ids.String(ev.FlightID),
@@ -687,12 +660,12 @@ type toBodyFold struct{}
 
 func (toBodyFold) Name() string { return "fastest_to_body" }
 
-func (toBodyFold) Apply(ctx context.Context, tx *sql.Tx, ev Event, fs FlightStateReader) error {
+func (toBodyFold) Apply(ctx context.Context, b *Batch, ev Event) error {
 	p, ok := payloadOf[VehicleSOI](ev)
 	if !ok || p.ToBody == "" {
 		return nil
 	}
-	t, ok, err := careerTime(ctx, ev, fs)
+	t, ok, err := careerTime(ctx, ev, b)
 	if err != nil || !ok {
 		return err
 	}
@@ -701,11 +674,8 @@ func (toBodyFold) Apply(ctx context.Context, tx *sql.Tx, ev Event, fs FlightStat
 	// after soiFold (fold order in fold.go), so the row is already there. The
 	// coalesce covers a row soiFold inserted on a career-less event, which has
 	// no time yet — min() over NULL is NULL in SQLite.
-	if _, err := tx.ExecContext(ctx,
-		`UPDATE player_body SET first_sim_t = min(coalesce(first_sim_t, ?), ?)
-		 WHERE player_id = ? AND kind = 'soi' AND body = ?`,
-		t, t, ev.PlayerID, p.ToBody); err != nil {
-		return fmt.Errorf("stats: record arrival time at %q: %w", p.ToBody, err)
+	if err := b.LowerBodyTime(ctx, ev.PlayerID, "soi", p.ToBody, t); err != nil {
+		return err
 	}
 
 	stat, ok := FastestToStat(p.ToBody)
@@ -715,7 +685,7 @@ func (toBodyFold) Apply(ctx context.Context, tx *sql.Tx, ev Event, fs FlightStat
 		// board of its own.
 		return nil
 	}
-	return putBest(ctx, tx, ev, stat, careerMillis(t), map[string]any{
+	return putBest(ctx, b, ev, stat, careerMillis(t), map[string]any{
 		"career": ev.Career,
 		"from":   p.FromBody,
 		"flight": ids.String(ev.FlightID),

@@ -202,6 +202,9 @@ func run(ctx context.Context, cfg config.Config, log *slog.Logger, ready func(pu
 		Broadcaster:  broadcaster,
 		Notify:       writer.Notify(),
 		StoreOptions: storeOpts,
+		BatchSize:    cfg.Projector.BatchSize,
+		FlushRows:    cfg.Projector.FlushRows,
+		Decoders:     cfg.Projector.Decoders,
 		Log:          log,
 	})
 	if err != nil {

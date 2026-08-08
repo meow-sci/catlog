@@ -475,7 +475,7 @@ func (e *Events) EventsSince(ctx context.Context, after int64, limit int) ([]Sto
 	if err != nil {
 		return nil, fmt.Errorf("store: read events: %w", err)
 	}
-	return scanStoredEvents(rows)
+	return scanStoredEvents(rows, limit)
 }
 
 // PlayerEvents reads one page of a player's own log, **newest first** — the
@@ -503,20 +503,39 @@ func (e *Events) PlayerEvents(ctx context.Context, playerID, before int64, limit
 	if err != nil {
 		return nil, fmt.Errorf("store: read player %d events: %w", playerID, err)
 	}
-	return scanStoredEvents(rows)
+	return scanStoredEvents(rows, limit)
 }
 
 const eventSelect = `SELECT seq, event_id, player_id, flight_id, session_id, career, type, ver, sim_time, wall_time, recv_time, payload FROM event`
 
-func scanStoredEvents(rows *sql.Rows) ([]StoredEvent, error) {
+// scanStoredEvents reads a result set of event rows. want is the caller's LIMIT,
+// used only to size the result slice.
+//
+// Two details here are about allocation rather than clarity, and they are worth
+// the words because this is the projector's read path: every event catlog has
+// ever stored goes through it once per fold and once per rebuild pass.
+//
+// The payload is scanned into a `[]byte` rather than a `string`. Scanning into a
+// string copies the driver's bytes into one, and `json.RawMessage(s)` then
+// copies that string into a fresh slice — two copies of every payload in the
+// log. Scanning into a byte slice is the one copy that `database/sql` requires
+// anyway (the driver's buffer is only valid until the next Next).
+//
+// The result slice is pre-sized to the caller's limit. A batch of a thousand
+// events otherwise grows a slice of ~150-byte structs from nil, which is a
+// dozen reallocations and a dozen copies of everything scanned so far.
+func scanStoredEvents(rows *sql.Rows, want int) ([]StoredEvent, error) {
 	defer rows.Close()
-	var out []StoredEvent
+	if want < 0 {
+		want = 0
+	}
+	out := make([]StoredEvent, 0, want)
 	for rows.Next() {
 		var (
 			se                    StoredEvent
 			eventID, flight, sess []byte
 			career                sql.NullString
-			payload               string
+			payload               []byte
 		)
 		if err := rows.Scan(&se.Seq, &eventID, &se.PlayerID, &flight, &sess, &career, &se.Type, &se.Ver,
 			&se.SimTime, &se.WallTime, &se.RecvTime, &payload); err != nil {
@@ -533,7 +552,7 @@ func scanStoredEvents(rows *sql.Rows) ([]StoredEvent, error) {
 		if se.SessionID, err = ids.FromNullBytes(sess); err != nil {
 			return nil, fmt.Errorf("store: event seq %d session_id: %w", se.Seq, err)
 		}
-		se.Payload = json.RawMessage(payload)
+		se.Payload = payload
 		out = append(out, se)
 	}
 	return out, rows.Err()
