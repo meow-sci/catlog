@@ -820,10 +820,62 @@ internal static class Text
     internal static string Seconds(TimeSpan span)
         => span.TotalSeconds.ToString("0.00", CultureInfo.InvariantCulture) + " s";
 
+    /// <summary>
+    /// Adjectives for <see cref="Handle"/>. 64 entries — the count is load-bearing, see there.
+    /// </summary>
+    private static readonly string[] Adjectives =
+    [
+        "amber", "ancient", "bashful", "blazing", "bold", "brave", "brisk", "chipper",
+        "clever", "cosmic", "cranky", "crisp", "curious", "dapper", "daring", "dizzy",
+        "dreamy", "eager", "electric", "fearless", "fluffy", "frosty", "gallant", "gentle",
+        "gleaming", "glorious", "grumpy", "hasty", "hungry", "idle", "jolly", "keen",
+        "lucky", "lunar", "merry", "mighty", "nimble", "noble", "opal", "patient",
+        "peculiar", "plucky", "polite", "quiet", "restless", "rowdy", "rusty", "scruffy",
+        "serene", "sleepy", "smitten", "snug", "solar", "spry", "stellar", "sturdy",
+        "sunny", "tidy", "tiny", "valiant", "velvet", "wandering", "whiskered", "wistful",
+    ];
+
+    /// <summary>
+    /// Nouns for <see cref="Handle"/>. 64 entries — the count is load-bearing, see there.
+    /// </summary>
+    private static readonly string[] Nouns =
+    [
+        "airlock", "apogee", "ascent", "aurora", "beacon", "biscuit", "booster", "cabin",
+        "canopy", "comet", "compass", "corona", "cradle", "crater", "dynamo", "eclipse",
+        "ember", "fairing", "ferry", "gantry", "gasket", "gimbal", "hatch", "kepler",
+        "kitten", "lander", "lantern", "lattice", "meridian", "meteor", "mitten", "nebula",
+        "nozzle", "orbit", "paddock", "parsec", "payload", "pinwheel", "piston", "plume",
+        "quasar", "radiator", "rover", "rudder", "saucer", "sextant", "shuttle", "sprocket",
+        "stanchion", "starling", "strut", "tether", "thruster", "trellis", "truss", "turbine",
+        "vector", "vernier", "voyager", "whisker", "window", "zenith", "zephyr", "zodiac",
+    ];
+
     /// <summary>Builds a handle for a player, inside the §4.7 rules.</summary>
     /// <param name="ns">The run's identity namespace.</param>
     /// <param name="index">The player's index.</param>
     /// <returns>The handle.</returns>
+    /// <remarks>
+    /// <para>
+    /// Docker-style <c>adjective_noun</c>, because a page of <c>lg19fdd32c036_0018</c> is
+    /// unreadable and a load run's whole purpose is to be looked at. Underscore, not a space:
+    /// §4.7 allows US-ASCII alphanumerics plus <c>. _ -</c> only, so a space would come back
+    /// <c>handle_invalid</c> and provision nothing.
+    /// </para>
+    /// <para>
+    /// <b>The namespace suffix is not decoration.</b> Handles are globally unique and never
+    /// recycled (D9), so a second run that re-drew <c>plucky_pinwheel</c> would fail to claim
+    /// it forever after. The suffix is derived from the namespace — which defaults to a
+    /// timestamp — so each run occupies its own corner of the handle space.
+    /// </para>
+    /// <para>
+    /// The pair is chosen by walking the cross product with a stride coprime to its size, so
+    /// distinct indices give distinct pairs: no collision handling, and no chance of two
+    /// players in one run racing for one handle. That holds for the first
+    /// <see cref="Adjectives"/> × <see cref="Nouns"/> = 4096 players; beyond that the walk
+    /// wraps and the index is appended to keep it unique. The stride is offset by the
+    /// namespace hash so two runs get different names rather than the same list twice.
+    /// </para>
+    /// </remarks>
     internal static string Handle(string ns, int index)
     {
         var clean = new StringBuilder(ns.Length);
@@ -835,10 +887,32 @@ internal static class Text
 
         if (clean.Length == 0)
             clean.Append("lg");
-        // Handles are 1–150 characters of US-ASCII alphanumerics plus `.`, `_` and `-`, starting
-        // and ending alphanumeric (§4.7). This is well inside that.
-        if (clean.Length > 24)
-            clean.Length = 24;
-        return clean.ToString() + "_" + index.ToString("0000", CultureInfo.InvariantCulture);
+
+        // A short, stable suffix rather than the whole namespace: enough to separate runs,
+        // short enough that the readable half stays the part you notice.
+        uint hash = 2166136261u;
+        foreach (char c in clean.ToString())
+            hash = (hash ^ c) * 16777619u;
+        string suffix = (hash % 0xFFFFFu).ToString("x5", CultureInfo.InvariantCulture);
+
+        // index → slot must be a bijection, or two players race for one handle. Both steps
+        // below are bijections on 12 bits, so their composition is one:
+        //
+        //   1. multiply by an odd number — invertible modulo any power of two;
+        //   2. rotate the 12 bits — a permutation.
+        //
+        // The rotation is why it is here rather than the multiply alone. A constant stride
+        // moves the low bits (the noun) briskly and the high bits (the adjective) by a near
+        // constant, so consecutive players came out `gleaming_saucer`, `blazing_kepler`,
+        // `rusty_ascent`, `gleaming_sextant` — a three-adjective cycle you notice immediately.
+        // Rotating carries the fast-moving low bits up into the adjective.
+        int combos = Adjectives.Length * Nouns.Length; // 4096 = 2^12
+        uint mixed = ((uint)index * 2731u + hash) & 0xFFFu;
+        uint slot = ((mixed << 5) | (mixed >> 7)) & 0xFFFu;
+        string pair = Adjectives[(int)slot / Nouns.Length] + "_" + Nouns[(int)slot % Nouns.Length];
+
+        return index < combos
+            ? pair + "_" + suffix
+            : pair + "_" + suffix + index.ToString("0000", CultureInfo.InvariantCulture);
     }
 }
