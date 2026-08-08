@@ -1,6 +1,6 @@
 # catlog credential file
 
-Origin: [INITIAL_IMPL_PLAN.md](../INITIAL_IMPL_PLAN.md) §4.6, extracted verbatim.
+Origin: [INITIAL_IMPL_PLAN.md](./INITIAL_IMPL_PLAN.md ) §4.6, extracted verbatim.
 
 > Everything in this document is the single source of truth for both the C# mod and the Go
 > server. Changing anything here requires bumping `format` and a line in

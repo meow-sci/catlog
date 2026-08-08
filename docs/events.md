@@ -1,6 +1,6 @@
 # catlog events — envelope & taxonomy
 
-Origin: [INITIAL_IMPL_PLAN.md](../INITIAL_IMPL_PLAN.md) §4.1–§4.2, extracted verbatim.
+Origin: [INITIAL_IMPL_PLAN.md](./INITIAL_IMPL_PLAN.md ) §4.1–§4.2, extracted verbatim.
 
 > Everything in this document is the single source of truth for both the C# mod and the Go
 > server. Changing anything here requires bumping `ver` on the affected event and a line in

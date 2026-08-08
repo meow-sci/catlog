@@ -1,6 +1,6 @@
 # catlog identity — user_key & handles
 
-Origin: [INITIAL_IMPL_PLAN.md](../INITIAL_IMPL_PLAN.md) §4.7, extracted verbatim.
+Origin: [INITIAL_IMPL_PLAN.md](./INITIAL_IMPL_PLAN.md ) §4.7, extracted verbatim.
 
 > Everything in this document is the single source of truth for both the C# mod and the Go
 > server. Changing anything here requires a line in [DECISIONS.md](DECISIONS.md).
