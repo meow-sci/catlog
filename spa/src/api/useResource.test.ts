@@ -1,4 +1,5 @@
 import { renderHook, waitFor } from '@testing-library/react';
+import { StrictMode } from 'react';
 import { describe, expect, it } from 'vitest';
 import { stubFetch } from '../test/http.ts';
 import { apiGet } from './client.ts';
@@ -83,6 +84,43 @@ describe('useResource', () => {
 
     b.unmount();
     expect(aborted?.aborted).toBe(true);
+  });
+
+  it('recovers when StrictMode aborts the first mount and immediately remounts', async () => {
+    // The regression: StrictMode runs mount -> cleanup -> mount. The cleanup
+    // drops refs to 0 and aborts the in-flight request; the remount then found
+    // that same entry still in the map, unsettled, and subscribed to it. Its
+    // promise was already rejected with the abort, and the abort branch is
+    // deliberately silent (an abort is a consumer's own cleanup, not a failure
+    // to show) — so the hook sat on `loading` forever and never re-requested.
+    //
+    // In the browser this was every page that loads through `useResource`
+    // stuck on "Loading boards…", while the SSE feed — which does not use this
+    // hook — worked, which is what made it look like a server problem.
+    const mock = stubFetch([{ path: '/v1/leaderboards', body: { boards: [] } }]);
+
+    const { result } = renderHook(() => useResource('boards', boards), { wrapper: StrictMode });
+
+    await waitFor(() => {
+      expect(result.current.status).toBe('ready');
+    });
+    expect(mock.mock.calls.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('does not hand an aborted request to a new consumer', async () => {
+    const mock = stubFetch([{ path: '/v1/leaderboards', body: { boards: [] } }]);
+
+    // Last consumer out aborts the in-flight request...
+    const first = renderHook(() => useResource('boards', boards));
+    first.unmount();
+
+    // ...so the next consumer must start its own, not adopt the dead one.
+    const second = renderHook(() => useResource('boards', boards));
+    await waitFor(() => {
+      expect(second.result.current.status).toBe('ready');
+    });
+    // Two calls, not one: the aborted request is not an answer to reuse.
+    expect(mock).toHaveBeenCalledTimes(2);
   });
 
   it('stays idle on a null key and asks for nothing', () => {

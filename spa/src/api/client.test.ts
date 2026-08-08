@@ -67,6 +67,18 @@ describe('apiGet', () => {
     expect(mock.mock.calls[0]?.[1]).toMatchObject({ credentials: 'omit' });
   });
 
+  it('never renders out of the browser HTTP cache', async () => {
+    // §4.8's `stale-while-revalidate=300` is for the shared cache in front of
+    // the origin. A browser honours it too, and with no `max-age` that made
+    // every response stale on arrival — the SPA rendered one revision behind the
+    // server for up to five minutes, while the revalidation request went out
+    // anyway. Measured: no reduction in origin requests, just older data.
+    // Dropping this option silently reintroduces that.
+    const mock = stubFetch([{ path: '/v1/leaderboards', body: { boards: [] } }]);
+    await getBoards();
+    expect(mock.mock.calls[0]?.[1]).toMatchObject({ cache: 'no-cache' });
+  });
+
   it('encodes paging and path parameters', async () => {
     const mock = stubFetch([
       {

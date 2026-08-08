@@ -62,7 +62,18 @@ function acquire(key: string, load: (signal: AbortSignal) => Promise<unknown>): 
   const hit = entries.get(key);
   // An unsettled entry is reused at any age: it is still the freshest possible
   // answer, and starting a second identical request would be the bug.
-  if (hit !== undefined && (!hit.settled || Date.now() - hit.at < TTL_MS)) return hit;
+  //
+  // An *aborted* one never is, and that clause is load-bearing. The cleanup
+  // below cancels a request when its last consumer leaves, and a consumer can
+  // come back in the very same commit — React's StrictMode does exactly that on
+  // every mount in development, and so does any quick unmount/remount. Handing
+  // the newcomer the dead entry subscribed it to a promise that was already
+  // rejected with the abort, which the effect deliberately ignores (an abort is
+  // a consumer's own cleanup, not a failure to show) — so the hook sat on
+  // `loading` forever and never asked again. A cancelled request is not an
+  // answer, however fresh it is.
+  const usable = hit !== undefined && !hit.controller.signal.aborted;
+  if (usable && (!hit.settled || Date.now() - hit.at < TTL_MS)) return hit;
   const controller = new AbortController();
   const entry: Entry = {
     promise: load(controller.signal),

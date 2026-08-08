@@ -26,7 +26,7 @@ commit. See [ARCHITECTURE.md](ARCHITECTURE.md#7-keeping-the-documentation-true) 
 - **[Identity, handles & moderation](#identity-handles--moderation)** — `IDENT-*`, 15 entries
 - **[Projector, boards & the read API](#projector-boards--the-read-api)** — `PROJ-*`, 84 entries
 - **[Archive & restore](#archive--restore)** — `ARCH-*`, 13 entries
-- **[The two frontends](#the-two-frontends)** — `UI-*`, 53 entries
+- **[The two frontends](#the-two-frontends)** — `UI-*`, 55 entries
 - **[The mod and its KSA-free core](#the-mod-and-its-ksa-free-core)** — `MOD-*`, 69 entries
 - **[The load harness](#the-load-harness)** — `LOAD-*`, 26 entries
 - **[nginx, systemd & deployment](#nginx-systemd--deployment)** — `OPS-*`, 17 entries
@@ -1491,6 +1491,36 @@ The header search renders a plain accessible input and upgrades to the RAC Combo
 *Accepted · 2026-08-08 · WP-UI-POLISH.*
 
 `useResource` caches for 30 s because the server's header can't. `s-maxage` is shared-cache-only, so browsers were storing nothing and every navigation refetched. A module-level cache (TTL matching the server's own freshness window, in-flight dedupe, errors never cached, refcounted abort so only the last consumer aborts a flight) keeps the client honest without a data library. Also: relative timestamps moved into a `RelativeTime` leaf so the 30 s clock tick re-renders ~50 text nodes instead of rebuilding every RAC table collection, and the feed store gained a single-event fast path (head insert, Set-based `arrived`) replacing a per-event full sort.
+
+### UI-054 — `useResource` never hands an aborted request to a new consumer, and the fetch stub honours `signal`
+
+*Accepted · 2026-08-08 · docs.*
+
+**The symptom was every page of the React reader stuck on "Loading boards…" while the live feed worked perfectly**, which reads exactly like a server or CORS problem and is neither. `/v1/leaderboards` came back `net::ERR_ABORTED` once and was never requested again; `/v1/feed` and `/v1/feed/stream` were fine because the feed is nanostores plus SSE and does not go through this hook at all. Reproduced with and without `CATLOG_LIMITS_RATELIMIT_DISABLED=1`, so the rate-limit switch was a red herring.
+
+**The mechanism.** `useResource` shares one in-flight request per key, and its cleanup cancels that request when the *last* consumer unmounts. React's StrictMode runs mount → cleanup → mount on every mount in development, so the cleanup dropped the reference count to zero and aborted, and the immediate remount then found that same entry still in the map and still unsettled — and `acquire`'s fast path reused it. The newcomer subscribed to a promise that had already rejected with the abort, and the effect's rejection branch deliberately ignores aborts (an abort is a consumer's own cleanup, not a failure to show). So nothing rendered, nothing errored, and nothing ever asked again.
+
+The fix is one clause: an entry whose controller has already fired is not reusable, however fresh it is. A cancelled request is not an answer. Cached *successful* answers are unaffected — a settled entry is never aborted, because the cleanup only aborts when `!settled`.
+
+**This is not only a StrictMode artefact.** Any unmount and remount inside the same commit hits it — a route change and back, a key that flips and returns — so it was a production bug that development merely made constant.
+
+**Why 305 passing tests said nothing.** `stubFetch` ignored `init` entirely, so an aborted request still resolved `200`. The suite was structurally incapable of reproducing anything about cancellation, and the one existing abort test only asserted that `signal.aborted` became true — never that the promise rejected or that a later consumer recovered. The stub now checks the signal twice, as the real thing does: once on entry, and once after yielding, so a caller that aborts synchronously sees a rejection rather than an answer. With that alone the two new regression cases failed on `loading`, which is the browser symptom exactly.
+
+The lesson worth keeping: **a test double that quietly ignores a parameter does not weaken a test, it deletes the whole category of bug that parameter exists for.**
+
+### UI-055 — The React reader never renders out of the browser HTTP cache
+
+*Accepted · 2026-08-08 · docs.*
+
+**The symptom: the SPA showed data exactly one revision older than the datastar site, on every load, however many times you reloaded.** Both surfaces send byte-identical `Cache-Control: public, s-maxage=30, stale-while-revalidate=300`, so the headers were not the difference — the browser's treatment of them was. A datastar page is a top-level **document**, and a reload revalidates a document. The SPA's data is a **`fetch` subresource**, which Chrome has not force-revalidated on reload for years, so it falls under ordinary cache rules.
+
+**Those rules were worse than they look.** `s-maxage` is ignored by a private cache, but `stale-while-revalidate` is **not** — Chrome honours it. There is no `max-age`, no `Expires` and no `Last-Modified` on these responses, so the browser's freshness lifetime is **zero**: every response was stale the instant it was stored, and the 300-second SWR window then served it while revalidating behind it. Every page therefore rendered the *previous* load's body. Measured against a live server: `server=31 spa=30`, `server=32 spa=31`, `server=33 spa=32`, and current on every load with the HTTP cache disabled.
+
+**The measurement that decided the fix.** A counting pass-through in front of catlogd showed the origin receiving **one request per page load regardless** — the SWR revalidation goes out whether or not the stale body was served. So in a private cache the staleness bought no saving at all: identical origin load, older data. There was no freshness-versus-cost trade to make, which is the only reason this is a one-line change rather than a judgement call about §2.
+
+`apiGet` now sets `cache: 'no-cache'`. It changes only what this client asks for, so the CDN's SWR — where the header genuinely earns its place, one revalidation serving every visitor — is untouched; and Cloudflare ignores client `Cache-Control` request directives by default, so it cannot be used to bust the shared cache either. `no-cache` rather than `no-store` keeps a 304 available; nothing carries a validator today, so these are full 200s in practice, and the fix if that ever matters is an `ETag` on the server rather than a change here.
+
+**The comment in `client.ts` asserted that these headers were "ignored by browsers", and that false premise is the whole reason this survived.** It is corrected in place, because a wrong explanation is worse than none — it stops the next reader looking. Pinned by `client.test.ts`, so dropping the option is a failing test rather than a silent regression.
 
 ---
 

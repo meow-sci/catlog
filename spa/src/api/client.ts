@@ -13,13 +13,20 @@ import type {
  * The catlog read API client.
  *
  * Deliberately small: one typed call per endpoint over one `fetch` wrapper.
- * There is no caching layer *here* — the split is that the server owns
- * freshness (§4.8 ships `s-maxage=30, stale-while-revalidate=300` on every
- * response, which is aimed at a shared cache and ignored by browsers), while
- * `useResource` keeps a client-side memory of the same 30-second window: it
- * dedupes concurrent identical requests and reuses a settled answer within the
- * window the server already declared fresh. Nothing in this file remembers
- * anything, so a caller outside `useResource` always hits the network.
+ * There is no caching layer *here*. The split is that §4.8's
+ * `s-maxage=30, stale-while-revalidate=300` is aimed at the **shared** cache in
+ * front of the origin, while `useResource` keeps the client-side memory of the
+ * same 30-second window: it dedupes concurrent identical requests and reuses a
+ * settled answer within it. Nothing in this file remembers anything, so a caller
+ * outside `useResource` always hits the network.
+ *
+ * An earlier version of this comment claimed those headers were "ignored by
+ * browsers". Half of that is true and the wrong half was load-bearing:
+ * `s-maxage` is ignored by a private cache, but **`stale-while-revalidate` is
+ * not** — Chrome honours it. With no `max-age` in the header the browser's
+ * freshness lifetime is zero, so every response was stale the moment it was
+ * stored and the SWR window then served it for up to five minutes. See
+ * `cache: 'no-cache'` in [apiGet] for what that did and why it is set.
  */
 
 /**
@@ -117,6 +124,30 @@ export async function apiGet<T>(path: string, signal?: AbortSignal): Promise<T> 
       // Access-Control-Allow-Credentials. Saying so explicitly keeps a future
       // `credentials: 'include'` from being added by habit.
       credentials: 'omit',
+      // Always revalidate with the network; never render out of the browser's
+      // HTTP cache.
+      //
+      // §4.8's `stale-while-revalidate=300` exists for the shared cache in front
+      // of the origin, where one revalidation serves every visitor — that is
+      // real and stays. In a *private* cache it was pure loss. With no `max-age`
+      // the freshness lifetime is zero, so SWR served the previous load's body
+      // and revalidated behind it: every page rendered exactly one revision
+      // behind the server, for up to five minutes.
+      //
+      // The measurement that settles the trade: with SWR serving stale, the
+      // origin still received one request per page load. The revalidation goes
+      // out either way, so the staleness bought no saving at all — same load,
+      // older data. This costs nothing and returns current data.
+      //
+      // It changes only what this client asks for, so the CDN's SWR is intact.
+      // Cloudflare ignores client `Cache-Control` request directives by default,
+      // so this cannot be used to bust the shared cache either.
+      //
+      // `no-cache`, not `no-store`: a conditional request is still allowed to
+      // come back 304. Nothing on these responses carries an `ETag` or
+      // `Last-Modified` today, so in practice they are full 200s — that is the
+      // whole cost, and the fix if it ever matters is a validator on the server.
+      cache: 'no-cache',
     });
   } catch (cause) {
     // An abort is the caller's own cleanup and must stay recognisable.
