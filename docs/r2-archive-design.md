@@ -1,6 +1,6 @@
 # R2 archive — design only
 
-Status: **design, not implemented.** Written by WP10 (`INITIAL_IMPL_PLAN.md` §5.10, §12).
+Status: **design, not implemented.** The seam it plugs into is §5.10 ([server.md](server.md)); nothing here is built, and no cloud SDK is a dependency.
 
 **D8 is a hard boundary: no code in this repository calls R2, and the AWS SDK is not a
 dependency of the `server` module.** The archive that exists and runs today is the filesystem

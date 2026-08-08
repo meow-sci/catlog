@@ -7,7 +7,7 @@ namespace MeowSci.Catlog.Sim.Scenarios;
 
 /// <summary>
 /// A complete orbital mission: launch, atmosphere exit, circularisation, a few orbits on rails,
-/// deorbit, re-entry, splashdown and recovery (INITIAL_IMPL_PLAN §7.3 scenario 2).
+/// deorbit, re-entry, splashdown and recovery (§7.3 scenario 2).
 /// </summary>
 /// <remarks>
 /// <para>

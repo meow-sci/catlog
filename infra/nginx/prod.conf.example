@@ -1,4 +1,4 @@
-# catlog — nginx PRODUCTION example (INITIAL_IMPL_PLAN.md §6.2, §11, §13.7).
+# catlog — nginx PRODUCTION example (§6.2, §11, §13.7).
 #
 # THIS FILE DOCUMENTS, IT DOES NOT AUTOMATE (D1: the DigitalOcean droplet is
 # owner-managed). Nothing in infra/deploy/deploy.sh installs it. Copy it by

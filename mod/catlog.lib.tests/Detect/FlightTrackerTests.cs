@@ -6,7 +6,7 @@ using Xunit;
 namespace MeowSci.Catlog.Lib.Tests.Detect;
 
 /// <summary>
-/// INITIAL_IMPL_PLAN §7.2: <c>(vehicle_id, launch_game_time)</c> → flight ULID, session ULID, and
+/// §7.2: <c>(vehicle_id, launch_game_time)</c> → flight ULID, session ULID, and
 /// per-flight flag accumulation.
 /// </summary>
 public sealed class FlightTrackerTests

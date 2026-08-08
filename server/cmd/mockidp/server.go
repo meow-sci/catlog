@@ -259,7 +259,7 @@ func (s *Server) handleIndex(w http.ResponseWriter, _ *http.Request) {
 	b.WriteString(`<!doctype html><html lang="en"><head><meta charset="utf-8">
 <title>mockidp</title></head><body>
 <h1>catlog mockidp</h1>
-<p>Local stand-in for Discord, Google and GitHub (INITIAL_IMPL_PLAN &sect;5.8.1).</p>
+<p>Local stand-in for Discord, Google and GitHub (&sect;5.8.1).</p>
 <ul>`)
 	for _, a := range s.accounts {
 		fmt.Fprintf(&b, "<li>%s &mdash; <code>%s:%s</code>, created %s</li>",

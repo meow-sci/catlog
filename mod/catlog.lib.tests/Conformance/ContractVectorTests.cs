@@ -13,7 +13,7 @@ using Xunit;
 namespace MeowSci.Catlog.Lib.Tests.Conformance;
 
 /// <summary>
-/// INITIAL_IMPL_PLAN §4.10: cross-language conformance against <c>contracts/testdata/</c> — the
+/// §4.10: cross-language conformance against <c>contracts/testdata/</c> — the
 /// vectors that guarantee mod↔server interop without KSA.
 /// </summary>
 /// <remarks>

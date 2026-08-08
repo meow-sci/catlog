@@ -7,7 +7,7 @@ using Xunit;
 namespace MeowSci.Catlog.Lib.Tests.Config;
 
 /// <summary>
-/// INITIAL_IMPL_PLAN §7.2: <c>catlog.toml</c> — load never throws, clamp don't reject, atomic save.
+/// §7.2: <c>catlog.toml</c> — load never throws, clamp don't reject, atomic save.
 /// </summary>
 public sealed class ModConfigTests
 {

@@ -1,14 +1,15 @@
-# catlog — root orchestration (INITIAL_IMPL_PLAN.md §9.1).
-# Every path is relative to the repo root; every work package keeps these green.
+# catlog — root orchestration (DEVELOPMENT.md).
+# Every path is relative to the repo root; every target runs from there.
 #
-# Targets whose work package has not landed yet print "not yet implemented (WPn)"
-# and exit 0, so `make` never breaks while the plan is being executed in order.
+# SCOPE: all four buildable things — the Go server (`server/`), the .NET mod and
+# harnesses (`mod/`), the server-rendered datastar site (`site/`) and the React
+# reader (`spa/`).
 #
-# SCOPE: the Go server, the .NET mod and the server-rendered datastar site.
-# The React reader is a separate, independently built and independently deployed
-# application with its own toolchain; it is driven only by pnpm from inside its
-# own directory and is deliberately absent from every target here. Its README
-# says how to run it. The two share an HTTP contract and nothing else.
+# The two frontends stay *independently deployable* — `spa/` has its own
+# lockfile, its own toolchain and its own CI workflow, and needs no Go or .NET
+# toolchain to install, lint, test or build. What the `spa-*` targets below add
+# is a single place to drive all of it from, not a coupling: every one of them
+# is a thin `pnpm -C spa …` that works identically when typed by hand.
 
 SHELL := /bin/bash
 .DEFAULT_GOAL := help
@@ -25,6 +26,22 @@ ASSERT     ?=
 SPEED      ?=
 # make db-snapshot SNAPSHOT_DIR=/tmp/foo … where the snapshot lands.
 SNAPSHOT_DIR ?= ./data-snapshot
+
+# --- spa/ (the React reader) -----------------------------------------------
+# `make dev` runs vite alongside catlogd, and vite proxies /v1 to CATLOG_DEV_API
+# (= SERVER_URL) — so the SPA runs *same-origin* in development and does not
+# depend on the server's CORS allow-list being right. `make spa-preview` is the
+# opposite on purpose: a built bundle on its own origin, which is the shape a
+# real deployment has, so it exercises [cors] allowed_origins for real. Both
+# ports are already in catlogd.dev.toml's allow-list.
+# `--host 127.0.0.1` because vite otherwise binds `localhost`, which resolves to
+# ::1 first on macOS — so the vite server would be the one thing in the repo not
+# reachable at the 127.0.0.1 address every other component, config and doc uses.
+SPA_PORT         ?= 5173
+SPA_PREVIEW_PORT ?= 4173
+SPA_HOST         ?= 127.0.0.1
+SPA_URL          ?= http://$(SPA_HOST):$(SPA_PORT)
+SPA_PREVIEW_URL  ?= http://$(SPA_HOST):$(SPA_PREVIEW_PORT)
 
 # --- catlog.loadgen ---------------------------------------------------------
 # The high-volume harness. Everything below is a pass-through: unset variables
@@ -51,25 +68,27 @@ LOADGEN_ARGS ?=
 # Throwaway data directory for `make e2e` (§8). Never ./data — see the target.
 E2E_DATA_DIR ?= data-e2e
 
-.PHONY: help bootstrap build server-build mod-build site-build \
-        test server-test mod-test test-integration test-nginx \
+.PHONY: help bootstrap build server-build mod-build site-build spa-build \
+        test server-test mod-test spa-test spa-check test-integration test-nginx \
         e2e e2e-browser e2e-full server-run-test-env \
-        sim loadgen dev mockidp-run keys seed testvectors db-snapshot clean
+        sim loadgen dev dev-server spa-dev spa-preview spa-smoke spa-deps \
+        mockidp-run keys seed testvectors db-snapshot clean
 
 ## help: list targets
 help:
-	@echo "catlog — make targets (INITIAL_IMPL_PLAN §9.1)"
+	@echo "catlog — make targets (see DEVELOPMENT.md)"
 	@echo
 	@grep -E '^## ' $(MAKEFILE_LIST) | sed -e 's/^## /  /'
 
-## bootstrap: fetch every build dependency (go modules, NuGet, pnpm)
+## bootstrap: fetch every build dependency (go modules, NuGet, pnpm × 2)
 bootstrap:
 	cd server && go mod download
 	dotnet restore mod/catlog.slnx
 	pnpm -C site install
+	pnpm -C spa install
 
-## build: server-build + mod-build + site-build
-build: server-build mod-build site-build
+## build: server-build + mod-build + site-build + spa-build
+build: server-build mod-build site-build spa-build
 
 ## server-build: compile catlogd, catlogctl and mockidp into server/bin/
 server-build:
@@ -79,12 +98,19 @@ server-build:
 mod-build:
 	dotnet build mod/catlog.slnx -c Release
 
-## site-build: bundle static assets into site/dist/
+## site-build: bundle the datastar site's static assets into site/dist/
 site-build:
 	pnpm -C site build
 
-## test: server-test + mod-test (no docker, no network)
-test: server-test mod-test
+## spa-build: type-check and bundle the React reader into spa/dist/
+# VITE_CATLOG_API_BASE is baked in at build time; spa/.env defaults it to the
+# local catlogd. A deployment sets it in the environment, which wins over .env.
+# SPA_BASE=/sub/ builds for a subpath. See DEVELOPMENT.md.
+spa-build:
+	pnpm -C spa build
+
+## test: server-test + mod-test + spa-test (no docker, no network)
+test: server-test mod-test spa-test
 
 ## server-test: go unit tests
 server-test:
@@ -93,6 +119,14 @@ server-test:
 ## mod-test: catlog.lib unit tests (incl. the §7.1 assembly guard)
 mod-test:
 	dotnet test mod/catlog.lib.tests
+
+## spa-test: React reader unit tests (vitest, happy-dom, no browser, no network)
+spa-test: spa-deps
+	pnpm -C spa test
+
+## spa-check: everything CI runs for the reader — typecheck, lint, format, test
+spa-check: spa-deps
+	pnpm -C spa check
 
 ## test-integration: server integration tests + mod-vs-server tests
 # The mod leg launches server/bin/catlogd on random loopback ports with throwaway
@@ -164,8 +198,9 @@ sim:
 	  $(if $(strip $(SPEED)),--speed "$(SPEED)",)
 
 ## loadgen: high-volume harness — many randomised players at a live server (PLAYERS=, DURATION=, SEED=, …; --help lists them all)
-# Needs `make dev` in another terminal: it provisions every player through the
-# real mockidp OAuth flow and ships through the real catlog.lib pipeline.
+# Needs `make dev` (or the lighter `make dev-server`) in another terminal: it
+# provisions every player through the real mockidp OAuth flow and ships through
+# the real catlog.lib pipeline.
 #
 #   make loadgen                                     # 25 players, 45 simulated minutes
 #   make loadgen PLAYERS=250 DURATION=3h ASSERT=1    # a serious run, invariants checked
@@ -197,15 +232,58 @@ loadgen:
 	  $(if $(strip $(VERBOSE)),--verbose,) \
 	  $(LOADGEN_ARGS)
 
-## dev: run catlogd + mockidp in the foreground (Ctrl-C stops both)
-dev: server-build
+## dev: catlogd + mockidp + the React reader's vite server (Ctrl-C stops all three)
+# One command brings up everything a browser can reach: the datastar site on
+# 8080 (rendered by catlogd), the React reader on 5173 (vite, with /v1 proxied
+# back to 8080 so it is same-origin), and the three stand-in identity providers
+# on 9090. Use `make dev-server` when the reader is not wanted — `make loadgen`
+# and the e2e suites need only catlogd and mockidp.
+dev: server-build spa-deps
+	@echo "catlogd  -> $(SERVER_URL)   (datastar site + read API)"
+	@echo "spa      -> $(SPA_URL)   (react reader; /v1 proxied to catlogd)"
+	@echo "mockidp  -> $(MOCKIDP_URL)"
+	@echo "log in at $(SERVER_URL)/auth/discord/start (also google, github)"
+	@server/bin/catlogd -config server/catlogd.dev.toml & catlogd_pid=$$!; \
+	 server/bin/mockidp -config server/mockidp.toml & mockidp_pid=$$!; \
+	 CATLOG_DEV_API=$(SERVER_URL) \
+	   pnpm -C spa dev --host $(SPA_HOST) --port $(SPA_PORT) --strictPort & spa_pid=$$!; \
+	 trap 'kill $$catlogd_pid $$mockidp_pid $$spa_pid 2>/dev/null' EXIT INT TERM; \
+	 wait
+
+## dev-server: catlogd + mockidp only, no reader (what loadgen and e2e need)
+dev-server: server-build
 	@echo "catlogd  -> $(SERVER_URL)"
-	@echo "mockidp  -> http://127.0.0.1:9090"
+	@echo "mockidp  -> $(MOCKIDP_URL)"
 	@echo "log in at $(SERVER_URL)/auth/discord/start (also google, github)"
 	@server/bin/catlogd -config server/catlogd.dev.toml & catlogd_pid=$$!; \
 	 server/bin/mockidp -config server/mockidp.toml & mockidp_pid=$$!; \
 	 trap 'kill $$catlogd_pid $$mockidp_pid 2>/dev/null' EXIT INT TERM; \
 	 wait
+
+## spa-dev: the reader's vite server alone (when catlogd is already running)
+spa-dev: spa-deps
+	CATLOG_DEV_API=$(SERVER_URL) pnpm -C spa dev --host $(SPA_HOST) --port $(SPA_PORT) --strictPort
+
+## spa-preview: serve the *built* bundle on its own origin, as a static host would
+# Cross-origin against catlogd on purpose — this is the target that proves
+# [cors] allowed_origins is right, which `make dev` deliberately cannot.
+# Needs `make spa-build` first.
+spa-preview: spa-deps
+	pnpm -C spa preview --host $(SPA_HOST) --port $(SPA_PREVIEW_PORT) --strictPort
+
+## spa-smoke: real chromium against a built, served bundle and a seeded catlogd
+# Expects `make spa-preview` (or `make spa-dev`) up and a server that has been
+# seeded — `make seed`, or POST /admin/seed. SPA_URL points at whichever is up.
+spa-smoke: spa-deps e2e-browser
+	SPA_URL=$(SPA_PREVIEW_URL)/ pnpm -C spa smoke
+
+# Guard, not a build step: every spa-* target and `make dev` need the reader's
+# dependencies on disk, and vite's failure without them scrolls past inside a
+# three-process `make dev`. Fail here instead, naming the fix.
+spa-deps:
+	@test -d spa/node_modules || { \
+	  echo "spa/node_modules is missing — run 'make bootstrap' (or 'pnpm -C spa install')" >&2; \
+	  exit 1; }
 
 ## mockidp-run: run mockidp alone on 127.0.0.1:9090 (playwright webServer, §8)
 mockidp-run: server-build
@@ -229,5 +307,6 @@ db-snapshot:
 
 ## clean: remove build output (keeps data/ and node_modules/)
 clean:
-	rm -rf server/bin site/dist site/e2e/.report site/e2e/.results $(E2E_DATA_DIR) data-e2e-full
+	rm -rf server/bin site/dist spa/dist spa/node_modules/.tmp \
+	       site/e2e/.report site/e2e/.results $(E2E_DATA_DIR) data-e2e-full
 	dotnet clean mod/catlog.slnx -c Release --verbosity quiet

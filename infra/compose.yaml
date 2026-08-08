@@ -1,4 +1,4 @@
-# catlog — optional local nginx (INITIAL_IMPL_PLAN.md §9.3).
+# catlog — optional local nginx (§9.3).
 #
 # Nothing in `make test` needs this: the nginx behaviour that matters is
 # asserted by the testcontainers suite (§6.3, server/internal/nginxproxy). This

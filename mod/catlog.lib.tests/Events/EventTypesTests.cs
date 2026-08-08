@@ -5,7 +5,7 @@ using Xunit;
 
 namespace MeowSci.Catlog.Lib.Tests.Events;
 
-/// <summary>INITIAL_IMPL_PLAN §4.2: the launch-set registry, and the outbox kind classification.</summary>
+/// <summary>§4.2: the launch-set registry, and the outbox kind classification.</summary>
 public sealed partial class EventTypesTests
 {
     [Fact]

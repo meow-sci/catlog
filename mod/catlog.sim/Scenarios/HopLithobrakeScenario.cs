@@ -7,7 +7,7 @@ namespace MeowSci.Catlog.Sim.Scenarios;
 
 /// <summary>
 /// A suborbital hop that comes down hard but intact: apogee 45 km on kerbin, touchdown at
-/// 62 m/s with two kittens aboard, then recovery (INITIAL_IMPL_PLAN §7.3 scenario 1).
+/// 62 m/s with two kittens aboard, then recovery (§7.3 scenario 1).
 /// </summary>
 /// <remarks>
 /// The two boards this asserts exercise opposite halves of the pipeline.

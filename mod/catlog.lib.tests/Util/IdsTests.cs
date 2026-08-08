@@ -7,7 +7,7 @@ using Xunit;
 
 namespace MeowSci.Catlog.Lib.Tests.Util;
 
-/// <summary>INITIAL_IMPL_PLAN D19 (client-minted ULIDs) and §4.2 (the <c>kid</c> derivation).</summary>
+/// <summary>D19 (client-minted ULIDs) and §4.2 (the <c>kid</c> derivation).</summary>
 public sealed partial class IdsTests
 {
     [Fact]

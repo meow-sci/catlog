@@ -1,4 +1,4 @@
-# catlog — nightly maintenance (INITIAL_IMPL_PLAN.md §11, §5.6, §5.10).
+# catlog — nightly maintenance (§11, §5.6, §5.10).
 #
 # install to: /etc/systemd/system/catlog-nightly.service   (started by the timer)
 #   systemctl daemon-reload && systemctl enable --now catlog-nightly.timer

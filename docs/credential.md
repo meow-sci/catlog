@@ -1,11 +1,10 @@
 # catlog credential file
 
-Origin: [INITIAL_IMPL_PLAN.md](./INITIAL_IMPL_PLAN.md ) §4.6, extracted verbatim.
+Owns **§4.6**. The license and proof JWS it carries are specified in [ingest-api.md](ingest-api.md).
 
-> Everything in this document is the single source of truth for both the C# mod and the Go
-> server. Changing anything here requires bumping `format` and a line in
-> [DECISIONS.md](DECISIONS.md). The license and proof JWS it carries are specified in
-> [ingest-api.md](ingest-api.md).
+> **Normative.** This document is the single source of truth for both the C# mod and the Go server.
+> **Changing this file's shape requires bumping `format`.** Anything that changes here needs a dated entry in [DECISIONS.md](DECISIONS.md) saying why,
+> in the same commit — see [ARCHITECTURE.md](ARCHITECTURE.md#7-keeping-the-documentation-true).
 
 ## Credential file (what the player downloads / the sim uses)
 

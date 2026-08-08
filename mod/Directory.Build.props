@@ -8,7 +8,7 @@
              conflicts) are errors too, not just compiler (CS) warnings. -->
         <MSBuildTreatWarningsAsErrors>true</MSBuildTreatWarningsAsErrors>
         <GenerateDocumentationFile>true</GenerateDocumentationFile>
-        <!-- House style (INITIAL_IMPL_PLAN §7.2): every using is explicit. This is the
+        <!-- House style (§7.2): every using is explicit. This is the
              one place catlog deliberately differs from gatOS, which enables them. -->
         <ImplicitUsings>disable</ImplicitUsings>
         <WarningsAsErrors/>

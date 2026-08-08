@@ -10,7 +10,7 @@ using Xunit;
 namespace MeowSci.Catlog.Lib.Tests.Detect;
 
 /// <summary>
-/// INITIAL_IMPL_PLAN §7.5 golden scenarios: an input snapshot/signal sequence produces an exact
+/// §7.5 golden scenarios: an input snapshot/signal sequence produces an exact
 /// envelope sequence. This is the test that pins the whole worker-side pipeline together.
 /// </summary>
 public sealed class EventPipelineTests

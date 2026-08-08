@@ -1,5 +1,5 @@
 /**
- * The wire shapes of catlog's public read API (INITIAL_IMPL_PLAN.md §4.8).
+ * The wire shapes of catlog's public read API (§4.8).
  *
  * Hand-written rather than generated: the endpoints are few and they are pinned
  * by Go tests, so a generator would be more machinery than the thing it

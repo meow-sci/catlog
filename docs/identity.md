@@ -1,9 +1,10 @@
 # catlog identity — user_key & handles
 
-Origin: [INITIAL_IMPL_PLAN.md](./INITIAL_IMPL_PLAN.md ) §4.7, extracted verbatim.
+Owns **§4.7**.
 
-> Everything in this document is the single source of truth for both the C# mod and the Go
-> server. Changing anything here requires a line in [DECISIONS.md](DECISIONS.md).
+> **Normative.** This document is the single source of truth for both the C# mod and the Go server.
+> Handle rules are permanent by design (D9) — read [CONSTITUTION.md](CONSTITUTION.md) §1 and §7 before touching any of them. Anything that changes here needs a dated entry in [DECISIONS.md](DECISIONS.md) saying why,
+> in the same commit — see [ARCHITECTURE.md](ARCHITECTURE.md#7-keeping-the-documentation-true).
 
 ## Identity, user_key, handles
 

@@ -27,7 +27,7 @@ Three items are flagged as **Borderline**, and only one of them is really about 
    but it is the one board whose number can legitimately drop overnight, which will eventually be
    mistaken for one.
 
-The larger finding is forward-looking: `plans/CATLOG_PROPOSALS.md` §4.3 proposes a **six-layer**
+The larger finding is forward-looking: `the original proposals (now removed; see [DECISIONS.md](DECISIONS.md))` §4.3 proposes a **six-layer**
 anti-forgery scheme. Two layers are built (and are the good ones). **Four are not, and under this
 principle they should never be.** That is worth settling now, before someone reads the proposals
 document as a to-do list.
@@ -92,7 +92,7 @@ scheme rests on.
 bit 5 and excludes the flight. Fail-closed, and it means a newer mod is never a scoring loophole
 while the server catches up. Two lines.
 
-**Boards are derived (S3, S4).** This is `CATLOG_PROPOSALS` §4.3 layer 1, implemented and correct.
+**Boards are derived (S3, S4).** This was layer 1 of the original six-layer integrity proposal, and it is the layer that was implemented — correctly. Four of the other five are settled as never-to-be-built ([ROADMAP.md](ROADMAP.md)).
 Every *value* is computed by folding events and none is ever accepted as a submitted stat; `seq` is
 the events.db rowid, tie-breaks use it, and the feed timestamps with `recv_time` rather than the
 client's `wall_t`. This costs nothing extra — it is just what event sourcing looks like — and it
@@ -149,7 +149,7 @@ cross-language conformance vectors in `contracts/testdata/`.
   and the `(player, jti)` batch replay short-circuit at step 11. Both work with the chain deleted.
 - **It is not load-bearing for ordering.** The projector's cursor is the server-local `seq` rowid.
   Batch `seq` orders nothing downstream.
-- **It is not a credential-theft signal in practice.** `plans/CATLOG_PROPOSALS.md:234` describes a
+- **It is not a credential-theft signal in practice.** `the original proposals (now removed; see [DECISIONS.md](DECISIONS.md)):234` describes a
   fork as "a high-signal indicator of credential theft". But a fork is not recorded anywhere — no
   row, no log line, no per-player counter — and the mod's *documented* recovery (§4.5.3) is to mint
   a fresh `sid` and reset `seq = 1`. So a thief pays one 409 and continues. The `gap` column is
@@ -274,7 +274,7 @@ exist to stop stat manipulation.
 
 ## Proposed but not implemented
 
-`plans/CATLOG_PROPOSALS.md` §4.3 proposes six layers of "layered skepticism". Two are built. **The
+`the original proposals (now removed; see [DECISIONS.md](DECISIONS.md))` §4.3 proposes six layers of "layered skepticism". Two are built. **The
 constitution's §8 test settles the other four, and the answer is no** — recording that here means
 nobody has to re-derive it, and nobody builds one on a quiet afternoon.
 
@@ -306,7 +306,7 @@ Read in full: `server/internal/stats/` (fold, flight, boards, event), `server/in
 `mod/catlog.lib/Detect/`, `mod/catlog/Patcher.cs`, `mod/catlog/PolledSignals.cs`,
 `mod/catlog/VehicleTelemetry.cs`. Searched the whole tree for the vocabulary of the unbuilt layers
 (`z-score`, `quarantine`, `suspicion`, `plausib*`, `anomal*`, `outlier`, `heuristic`) — the only
-hits outside `plans/` are the word "plausible" in test fixtures and a `cheater` simulator scenario,
+hits are the word "plausible" in test fixtures and a `cheater` simulator scenario,
 which is a *test* of the flag exclusion rather than a mechanism.
 
 Line references are to the tree at the time of writing and will drift; the file and symbol names

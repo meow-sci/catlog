@@ -7,7 +7,7 @@ using Xunit;
 namespace MeowSci.Catlog.Lib.Tests.Detect;
 
 /// <summary>
-/// INITIAL_IMPL_PLAN §7.2 detector rules: situation diff, atmosphere hysteresis (±2%), orbit
+/// §7.2 detector rules: situation diff, atmosphere hysteresis (±2%), orbit
 /// achieved (<c>ecc &lt; 1 &amp;&amp; pe_alt &gt; atmo_height + 1000</c>), orbit escaped, SOI change,
 /// and the 2 s per-(vehicle, kind) debounce.
 /// </summary>

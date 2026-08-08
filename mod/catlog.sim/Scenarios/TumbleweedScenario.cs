@@ -5,7 +5,7 @@ namespace MeowSci.Catlog.Sim.Scenarios;
 
 /// <summary>
 /// A kitten EVAs from a mun lander, bounds around at low gravity and goes over three times
-/// (INITIAL_IMPL_PLAN §7.3 scenario 4).
+/// (§7.3 scenario 4).
 /// </summary>
 /// <remarks>
 /// <para>

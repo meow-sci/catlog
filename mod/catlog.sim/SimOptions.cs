@@ -7,7 +7,7 @@ using MeowSci.Catlog.Lib;
 
 namespace MeowSci.Catlog.Sim;
 
-/// <summary>Everything the CLI can be told (INITIAL_IMPL_PLAN §7.3).</summary>
+/// <summary>Everything the CLI can be told (§7.3).</summary>
 public sealed class SimOptions
 {
     /// <summary>The default public base URL (§3).</summary>

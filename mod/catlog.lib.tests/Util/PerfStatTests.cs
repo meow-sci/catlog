@@ -4,7 +4,7 @@ using Xunit;
 namespace MeowSci.Catlog.Lib.Tests.Util;
 
 /// <summary>
-/// INITIAL_IMPL_PLAN §7.4: the in-game timing counters behind the status window. Copied from
+/// §7.4: the in-game timing counters behind the status window. Copied from
 /// gatOS; this pins the accumulator arithmetic, not the wall-clock accuracy.
 /// </summary>
 public sealed class PerfStatTests

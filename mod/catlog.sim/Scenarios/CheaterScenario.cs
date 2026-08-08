@@ -7,7 +7,7 @@ namespace MeowSci.Catlog.Sim.Scenarios;
 
 /// <summary>
 /// Two teleport-flagged flights that try to buy a leaderboard, one flagged before it scores and
-/// one flagged after (INITIAL_IMPL_PLAN §7.3 scenario 5).
+/// one flagged after (§7.3 scenario 5).
 /// </summary>
 /// <remarks>
 /// <para>

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# catlog — deploy to the owner-managed VPS (INITIAL_IMPL_PLAN.md §11, D1).
+# catlog — deploy to the owner-managed VPS (§11, D1).
 #
 #   infra/deploy/deploy.sh --host catlog@vps.example.com [--dry-run]
 #

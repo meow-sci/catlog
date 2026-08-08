@@ -7,7 +7,7 @@ using Xunit;
 namespace MeowSci.Catlog.Lib.Tests.Detect;
 
 /// <summary>
-/// INITIAL_IMPL_PLAN §7.2 / D15: the 30 s sim-time min/max/mean/last folds behind
+/// §7.2 / D15: the 30 s sim-time min/max/mean/last folds behind
 /// <c>telemetry.window</c>.
 /// </summary>
 public sealed class WindowAccumulatorTests

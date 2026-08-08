@@ -5,7 +5,7 @@ using Xunit;
 
 namespace MeowSci.Catlog.Lib.Tests.Events;
 
-/// <summary>INITIAL_IMPL_PLAN §4.1: the normative envelope shared with the Go server.</summary>
+/// <summary>§4.1: the normative envelope shared with the Go server.</summary>
 public sealed class EventEnvelopeTests
 {
     [Fact]

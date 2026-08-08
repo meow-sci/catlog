@@ -37,8 +37,17 @@ internal sealed class TempDir : IDisposable
 internal static class TestPaths
 {
     /// <summary>
-    /// The repository root, found by walking up from the test assembly until a directory
-    /// containing <c>INITIAL_IMPL_PLAN.md</c> is seen; null when not found (e.g. a packaged run).
+    /// The repository root, found by walking up from the test assembly until a directory holding
+    /// the root <c>Makefile</c> beside <c>server/</c> and <c>contracts/</c> is seen; null when not
+    /// found (e.g. a packaged run).
+    /// </summary>
+    /// <remarks>
+    /// The marker is three things rather than one because a single common filename can match a
+    /// parent directory by accident, and the failure is invisible: a null root makes
+    /// <see cref="ContractsTestData"/> null, which makes all 16 conformance tests <em>skip</em>
+    /// rather than fail. That is exactly what happened while the marker was
+    /// <c>INITIAL_IMPL_PLAN.md</c> — a file that lived in <c>plans/</c> and never at the root, so
+    /// the whole cross-language suite silently stopped running. Pick markers that cannot drift.
     /// </summary>
     internal static string? RepoRoot { get; } = FindRepoRoot();
 
@@ -66,8 +75,12 @@ internal static class TestPaths
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
         while (directory is not null)
         {
-            if (System.IO.File.Exists(System.IO.Path.Combine(directory.FullName, "INITIAL_IMPL_PLAN.md")))
+            if (System.IO.File.Exists(System.IO.Path.Combine(directory.FullName, "Makefile"))
+                && System.IO.Directory.Exists(System.IO.Path.Combine(directory.FullName, "server"))
+                && System.IO.Directory.Exists(System.IO.Path.Combine(directory.FullName, "contracts")))
+            {
                 return directory.FullName;
+            }
             directory = directory.Parent;
         }
 

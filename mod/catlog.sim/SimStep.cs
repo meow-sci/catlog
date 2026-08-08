@@ -7,7 +7,7 @@ namespace MeowSci.Catlog.Sim;
 
 /// <summary>
 /// One simulated game frame: the sim instant, the passive telemetry sampled at it, and the
-/// discrete signals the game raised during it (INITIAL_IMPL_PLAN §7.3).
+/// discrete signals the game raised during it (§7.3).
 /// </summary>
 /// <remarks>
 /// <para>
@@ -64,7 +64,7 @@ public sealed record SimStep(
 
 /// <summary>
 /// A scripted gameplay scenario: a sequence of frames plus the leaderboard values the events
-/// those frames produce must land on (INITIAL_IMPL_PLAN §7.3).
+/// those frames produce must land on (§7.3).
 /// </summary>
 /// <remarks>
 /// Scenarios never build <see cref="EventEnvelope"/>s. They emit exactly what a game thread emits —

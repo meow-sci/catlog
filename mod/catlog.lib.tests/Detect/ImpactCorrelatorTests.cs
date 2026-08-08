@@ -6,7 +6,7 @@ using Xunit;
 namespace MeowSci.Catlog.Lib.Tests.Detect;
 
 /// <summary>
-/// INITIAL_IMPL_PLAN §7.2 / §4.2: <c>vehicle.impact.survived</c> = no destruction of the same
+/// §7.2 / §4.2: <c>vehicle.impact.survived</c> = no destruction of the same
 /// vehicle in the same frame. Impacts are held one full frame so a manual destroy — which the game
 /// applies in the input pass, after the solver pass — still counts (docs/ksa-integration.md §3).
 /// </summary>

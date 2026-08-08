@@ -6,7 +6,7 @@ using Xunit;
 
 namespace MeowSci.Catlog.Lib.Tests.Auth;
 
-/// <summary>INITIAL_IMPL_PLAN §4.5: compact JWS, ES256 only, BCL only.</summary>
+/// <summary>§4.5: compact JWS, ES256 only, BCL only.</summary>
 public sealed class JwsTests
 {
     private const string Header = "{\"alg\":\"ES256\",\"typ\":\"catlog-proof+jwt\"}";

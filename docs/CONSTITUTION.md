@@ -4,7 +4,8 @@ catlog is a hobby project. One person runs it, on one cheap VPS, for the fun of 
 Agency community that did not ask for it. Everything below follows from that.
 
 These are the standing principles — what catlog optimises for when two reasonable designs
-compete. They are not the plan and not a feature list. **[DECISIONS.md](DECISIONS.md) records what
+compete. They are not a design document and not a feature list;
+[ARCHITECTURE.md](ARCHITECTURE.md) describes what exists. **[DECISIONS.md](DECISIONS.md) records what
 we chose; this document says what we were optimising for when we chose it.** When a new decision
 has to be made, read this first, decide, then write the decision (and its rationale) into
 `DECISIONS.md`. When an existing decision looks wrong, check it against these principles before
@@ -135,6 +136,26 @@ principle is never a reason to remove them:
 - **Moderation** — bans, purges, tombstones, handle retirement, the deny-list (§7 above).
 - **Durability** — archive checksums, restore verification, backup integrity. These protect the
   log from bit rot and from us, not from players.
+
+## 9. The documentation is part of the system, not a description of it
+
+Every contract in `docs/` is what two independent implementations — the Go server and the C# mod —
+are built against. A change that leaves a document wrong is an **incomplete change**. In the same
+commit: update the affected document, and record the decision and its *reasoning* in
+[DECISIONS.md](DECISIONS.md). The full table of what to update when is in
+[ARCHITECTURE.md](ARCHITECTURE.md#7-keeping-the-documentation-true), and the agent-facing version is in
+[../CLAUDE.md](../CLAUDE.md).
+
+*Why:* one person maintains this, assisted by agents that read the repository fresh every time, and
+neither can hold the reasons in their head. A wrong document is worse than a missing one, because it
+is believed — and a decision recorded without its *why* gets re-litigated within the year, which is
+the specific failure this whole file exists to prevent. The cost is a paragraph at the time of the
+change; the alternative is re-deriving an argument that was already won.
+
+Two corollaries. **Nothing describes something that is gone** — a passage whose subject was deleted
+is deleted or marked superseded, never left. And **a contract change carries its version bump**: an
+event or payload bumps `ver`, an endpoint bumps `ver`, the credential file bumps `format`. Those
+bumps are what let a client and a server disagree loudly rather than silently.
 
 ---
 

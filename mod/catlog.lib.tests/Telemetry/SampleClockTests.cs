@@ -4,7 +4,7 @@ using Xunit;
 
 namespace MeowSci.Catlog.Lib.Tests.Telemetry;
 
-/// <summary>INITIAL_IMPL_PLAN §7.2: the dt-accumulating, drop-not-backfill sample rate limiter.</summary>
+/// <summary>§7.2: the dt-accumulating, drop-not-backfill sample rate limiter.</summary>
 public sealed class SampleClockTests
 {
     [Fact]

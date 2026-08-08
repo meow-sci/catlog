@@ -6,7 +6,7 @@ using Xunit;
 namespace MeowSci.Catlog.Lib.Tests.Util;
 
 /// <summary>
-/// INITIAL_IMPL_PLAN §4.5: base64url without padding, and the SHA-256 shapes behind <c>bh</c>,
+/// §4.5: base64url without padding, and the SHA-256 shapes behind <c>bh</c>,
 /// <c>ph</c> and <c>jkt</c>.
 /// </summary>
 public sealed class BytesTests

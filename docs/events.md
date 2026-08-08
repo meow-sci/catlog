@@ -1,10 +1,10 @@
 # catlog events — envelope & taxonomy
 
-Origin: [INITIAL_IMPL_PLAN.md](./INITIAL_IMPL_PLAN.md ) §4.1–§4.2, extracted verbatim.
+Owns **§4.1–§4.2**.
 
-> Everything in this document is the single source of truth for both the C# mod and the Go
-> server. Changing anything here requires bumping `ver` on the affected event and a line in
-> [DECISIONS.md](DECISIONS.md).
+> **Normative.** This document is the single source of truth for both the C# mod and the Go server.
+> **Changing an event or a payload field requires bumping that event's `ver`.** Anything that changes here needs a dated entry in [DECISIONS.md](DECISIONS.md) saying why,
+> in the same commit — see [ARCHITECTURE.md](ARCHITECTURE.md#7-keeping-the-documentation-true).
 
 ## Event envelope
 

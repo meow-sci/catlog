@@ -8,7 +8,7 @@ namespace MeowSci.Catlog.Sim.Scenarios;
 /// <summary>
 /// Thirty minutes of a busy save compressed into a few seconds: a thirty-craft resident fleet,
 /// three complete missions, an EVA and a docking, ~2 000 events including telemetry windows
-/// (INITIAL_IMPL_PLAN §7.3 scenario 6).
+/// (§7.3 scenario 6).
 /// </summary>
 /// <remarks>
 /// <para>

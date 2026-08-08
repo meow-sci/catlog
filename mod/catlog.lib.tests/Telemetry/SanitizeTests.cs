@@ -3,7 +3,7 @@ using Xunit;
 
 namespace MeowSci.Catlog.Lib.Tests.Telemetry;
 
-/// <summary>INITIAL_IMPL_PLAN §7.2: NaN/Inf scrubbing at the capture boundary.</summary>
+/// <summary>§7.2: NaN/Inf scrubbing at the capture boundary.</summary>
 public sealed class SanitizeTests
 {
     [Theory]

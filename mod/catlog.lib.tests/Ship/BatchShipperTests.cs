@@ -16,7 +16,7 @@ using Xunit;
 namespace MeowSci.Catlog.Lib.Tests.Ship;
 
 /// <summary>
-/// INITIAL_IMPL_PLAN §4.5.2 / §4.5.3 / §7.2: batch triggers, the seq/ph chain, and every mod-side
+/// §4.5.2 / §4.5.3 / §7.2: batch triggers, the seq/ph chain, and every mod-side
 /// recovery path. No sockets and no real waiting — the transport and the clock are both injected.
 /// </summary>
 public sealed class BatchShipperTests

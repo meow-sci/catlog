@@ -9,7 +9,7 @@ namespace MeowSci.Catlog.Sim;
 /// <summary>
 /// The <c>catlog.sim</c> entry point: plays a scripted gameplay scenario through the real
 /// <c>catlog.lib</c> pipeline at a live server, then checks the leaderboards it should have moved
-/// (INITIAL_IMPL_PLAN §7.3).
+/// (§7.3).
 /// </summary>
 /// <remarks>
 /// No part of this program fabricates an <c>EventEnvelope</c>. Scenarios emit telemetry snapshots
@@ -170,7 +170,7 @@ public static class Program
 
     private static void List()
     {
-        Console.WriteLine("catlog.sim scenarios (INITIAL_IMPL_PLAN §7.3)");
+        Console.WriteLine("catlog.sim scenarios (§7.3)");
         Console.WriteLine();
         foreach (IScenario scenario in ScenarioCatalog.All)
         {

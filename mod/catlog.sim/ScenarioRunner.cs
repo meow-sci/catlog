@@ -37,7 +37,7 @@ public sealed record RunSummary(
 /// <summary>
 /// Drives a scenario through the real client pipeline: <see cref="GameBridge"/> →
 /// <see cref="EventPipeline"/> → <see cref="OutboxDb"/> → <see cref="BatchShipper"/> → a live
-/// server (INITIAL_IMPL_PLAN §7.3).
+/// server (§7.3).
 /// </summary>
 /// <remarks>
 /// <para>

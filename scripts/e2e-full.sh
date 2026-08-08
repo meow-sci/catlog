@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# catlog full-stack proof (INITIAL_IMPL_PLAN §8, "Full stack proof").
+# catlog full-stack proof (§8, "Full stack proof").
 #
 #   clean data dir
 #     → start catlogd + mockidp

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * catlog site build (INITIAL_IMPL_PLAN §8).
+ * catlog site build (§8).
  *
  *   assets/js/*.js   --esbuild bundle-->  dist/js/
  *   assets/css/      --copy---------->    dist/css/

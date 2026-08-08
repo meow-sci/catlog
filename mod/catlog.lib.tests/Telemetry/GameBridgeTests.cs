@@ -6,7 +6,7 @@ using Xunit;
 namespace MeowSci.Catlog.Lib.Tests.Telemetry;
 
 /// <summary>
-/// INITIAL_IMPL_PLAN §7.2 threading contract: telemetry is latest-wins, discrete signals are
+/// §7.2 threading contract: telemetry is latest-wins, discrete signals are
 /// lossless. This is the seam WP8 calls from the game thread.
 /// </summary>
 public sealed class GameBridgeTests

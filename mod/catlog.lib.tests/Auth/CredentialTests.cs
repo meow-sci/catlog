@@ -7,7 +7,7 @@ using Xunit;
 namespace MeowSci.Catlog.Lib.Tests.Auth;
 
 /// <summary>
-/// INITIAL_IMPL_PLAN §4.6: the credential file. Loading never throws, and a credential whose key
+/// §4.6: the credential file. Loading never throws, and a credential whose key
 /// does not match the license's <c>cnf.jkt</c> is refused rather than shipped.
 /// </summary>
 public sealed class CredentialTests

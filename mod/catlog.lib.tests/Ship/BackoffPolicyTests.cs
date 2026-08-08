@@ -5,7 +5,7 @@ using Xunit;
 namespace MeowSci.Catlog.Lib.Tests.Ship;
 
 /// <summary>
-/// INITIAL_IMPL_PLAN §4.5.3: exponential backoff <c>1 s · 2ⁿ</c> with full jitter, capped at
+/// §4.5.3: exponential backoff <c>1 s · 2ⁿ</c> with full jitter, capped at
 /// five minutes.
 /// </summary>
 public sealed class BackoffPolicyTests

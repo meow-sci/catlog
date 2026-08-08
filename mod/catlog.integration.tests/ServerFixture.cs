@@ -22,7 +22,7 @@ public sealed record IssuedCredential(string Handle, string Path, Credential Cre
 
 /// <summary>
 /// A real <c>catlogd</c> on a random loopback port with a throwaway data directory
-/// (INITIAL_IMPL_PLAN §7.5).
+/// (§7.5 — see docs/mod.md).
 /// </summary>
 /// <remarks>
 /// <para>
@@ -335,8 +335,12 @@ internal static class RepoLayout
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         while (dir is not null)
         {
-            if (File.Exists(Path.Combine(dir.FullName, "INITIAL_IMPL_PLAN.md"))
-                && Directory.Exists(Path.Combine(dir.FullName, "server")))
+            // Three markers, not one: a lone common filename can match a parent directory by
+            // accident. The previous marker was INITIAL_IMPL_PLAN.md, which lived in plans/ and
+            // never at the root — see the note in catlog.lib.tests/TestEnv.cs.
+            if (File.Exists(Path.Combine(dir.FullName, "Makefile"))
+                && Directory.Exists(Path.Combine(dir.FullName, "server"))
+                && Directory.Exists(Path.Combine(dir.FullName, "contracts")))
             {
                 return dir.FullName;
             }

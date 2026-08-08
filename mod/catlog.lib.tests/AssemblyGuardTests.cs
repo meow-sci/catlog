@@ -7,7 +7,7 @@ using Xunit;
 namespace MeowSci.Catlog.Lib.Tests;
 
 /// <summary>
-/// INITIAL_IMPL_PLAN D13 / §7.1: catlog.lib is KSA-free. This is the test that keeps the whole
+/// D13 / §7.1: catlog.lib is KSA-free. This is the test that keeps the whole
 /// ingest path unit-testable on a machine with no game install — if it ever fails, the demarcation
 /// has been breached and the offending reference belongs in mod/catlog/.
 /// </summary>

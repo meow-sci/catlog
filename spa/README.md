@@ -47,13 +47,18 @@ It is never sent to catlog as an identifier, and `credentials: 'omit'` in the
 API client is load-bearing.
 
 **This is a standalone application.** It has its own toolchain, its own
-lockfile, its own build and its own deployment, and it is driven entirely by
-pnpm from inside this directory. It does not read from `server/`, `site/` or
-`mod/` at build time, it never invokes `make`, and it needs no Go or .NET
-toolchain to install, lint, test or build. The root `Makefile` does not mention
-it. The only thing it shares with the rest of the repo is an HTTP contract — the
-read API and the CORS allow-list that lets a browser reach it — which is exactly
-the seam two independently deployed things are supposed to have.
+lockfile, its own build and its own deployment. It does not read from `server/`,
+`site/` or `mod/` at build time, it never invokes `make`, and it needs no Go or
+.NET toolchain to install, lint, test or build. The only thing it shares with the
+rest of the repo is an HTTP contract — the read API and the CORS allow-list that
+lets a browser reach it — which is exactly the seam two independently deployed
+things are supposed to have.
+
+The root `Makefile` does drive it (`make spa-build`, `spa-test`, `spa-check`,
+`spa-dev`, `spa-preview`, `spa-smoke`, and `make dev` runs vite alongside
+catlogd), but every one of those targets is a one-line `pnpm -C spa …` that
+behaves identically typed by hand. That is a shared entry point, not a coupling —
+see `docs/DECISIONS.md`, `REPO-025`.
 
 catlog has two frontends and they are independent by design: the server-rendered
 datastar site (`site/` + `server/internal/web/`) is the other one. Same data, two
@@ -64,6 +69,8 @@ running.
 ## Commands
 
 Requires Node 24+ and pnpm. **pnpm only** — never npm, npx or yarn.
+
+From the repo root, `make bootstrap` installs these along with everything else.
 
 ```sh
 pnpm install          # once

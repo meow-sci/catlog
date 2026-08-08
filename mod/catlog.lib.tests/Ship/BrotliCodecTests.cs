@@ -5,7 +5,7 @@ using Xunit;
 
 namespace MeowSci.Catlog.Lib.Tests.Ship;
 
-/// <summary>INITIAL_IMPL_PLAN D18 / §4.3: Brotli framing of the NDJSON body.</summary>
+/// <summary>D18 / §4.3: Brotli framing of the NDJSON body.</summary>
 public sealed class BrotliCodecTests
 {
     [Fact]

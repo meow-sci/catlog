@@ -4,7 +4,7 @@ using Xunit;
 namespace MeowSci.Catlog.Lib.Tests.Telemetry;
 
 /// <summary>
-/// INITIAL_IMPL_PLAN §4.2 (situation is an open set) plus the packed-bitfield table verified in
+/// §4.2 (situation is an open set) plus the packed-bitfield table verified in
 /// docs/ksa-integration.md §1: <c>value = (surfaceContact &lt;&lt; 1) | onRails</c>.
 /// </summary>
 public sealed class SituationInfoTests

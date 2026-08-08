@@ -1,6 +1,6 @@
 # §1.3 Event detection — patch points (re-verified against build **2026.8.5.5168**)
 
-Drop-in replacement for `plans/CATLOG_PROPOSALS.md` §1.3 (lines ~66–97).
+Drop-in replacement for `the original proposals (now removed)` §1.3 (lines ~66–97).
 
 - **CURRENT** decomp: `/Users/asherwin/repos/meow-sci/ksa-game-assemblies/current/decomp` — build `2026.8.5.5168` (`current/version.json`, note: *not* `../version.json`).
 - **PREVIOUS** decomp available for diffing: `/Users/asherwin/repos/meow-sci/ksa-game-assemblies_prev/current/decomp` — build `2026.8.3.5117`.
@@ -297,7 +297,7 @@ Two caveats worth knowing:
 
 ### 5b.2 There is no career, save or player identifier — **CONFIRMED, the plan's claim holds**
 
-`plans/CATLOG_PROPOSALS.md` §1.4 says "KSA has no player/account/save GUID anywhere (verified)"
+`the original proposals (now removed)` §1.4 says "KSA has no player/account/save GUID anywhere (verified)"
 against a build that is not on disk. Re-verified here against 5168, and it is correct.
 
 The save root is `UniverseData` and it has **exactly four fields** — every one of them enumerated:

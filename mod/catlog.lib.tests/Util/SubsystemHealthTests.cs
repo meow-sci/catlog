@@ -6,7 +6,7 @@ using Xunit;
 namespace MeowSci.Catlog.Lib.Tests.Util;
 
 /// <summary>
-/// INITIAL_IMPL_PLAN §7.2: the per-subsystem dead latch — one ERROR log, then that subsystem is off
+/// §7.2: the per-subsystem dead latch — one ERROR log, then that subsystem is off
 /// for the session and visible in the status window.
 /// </summary>
 public sealed class SubsystemHealthTests

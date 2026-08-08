@@ -47,7 +47,7 @@ public sealed record Baseline(
 
 /// <summary>
 /// The scenario-facing client for the server's public read API and its loopback admin API
-/// (INITIAL_IMPL_PLAN §7.3, §4.8, §5.9).
+/// (§7.3, §4.8, §5.9).
 /// </summary>
 /// <remarks>
 /// <para>

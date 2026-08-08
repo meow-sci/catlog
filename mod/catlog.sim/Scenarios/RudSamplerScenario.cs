@@ -6,7 +6,7 @@ using MeowSci.Catlog.Lib.Telemetry;
 namespace MeowSci.Catlog.Sim.Scenarios;
 
 /// <summary>
-/// Six short flights, one destroyed per §4.2 cause (INITIAL_IMPL_PLAN §7.3 scenario 3).
+/// Six short flights, one destroyed per §4.2 cause (§7.3 scenario 3).
 /// </summary>
 /// <remarks>
 /// <para>

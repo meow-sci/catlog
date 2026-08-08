@@ -1,4 +1,4 @@
-# catlog — catlogd unit (INITIAL_IMPL_PLAN.md §11).
+# catlog — catlogd unit (§11).
 #
 # install to: /etc/systemd/system/catlogd.service
 #   systemctl daemon-reload && systemctl enable --now catlogd

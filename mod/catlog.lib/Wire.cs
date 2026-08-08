@@ -1,7 +1,7 @@
 namespace MeowSci.Catlog.Lib;
 
 /// <summary>
-/// Every wire constant and limit from INITIAL_IMPL_PLAN §4.3–§4.5 (mirrored in
+/// Every wire constant and limit from §4.3–§4.5 (mirrored in
 /// <c>docs/ingest-api.md</c>), in one place. The Go server enforces these; the mod mirrors
 /// them so a batch is never built that the server would reject. Changing anything here is a
 /// contract change and needs a line in <c>docs/DECISIONS.md</c>.

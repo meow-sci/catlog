@@ -8,7 +8,7 @@ using Xunit;
 namespace MeowSci.Catlog.Lib.Tests.Util;
 
 /// <summary>
-/// INITIAL_IMPL_PLAN §7.2: the game-thread → worker snapshot exchange (copied from gatOS).
+/// §7.2: the game-thread → worker snapshot exchange (copied from gatOS).
 /// </summary>
 public sealed class SnapshotStoreTests
 {

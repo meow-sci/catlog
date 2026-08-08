@@ -7,7 +7,7 @@ using Xunit;
 namespace MeowSci.Catlog.Lib.Tests.Auth;
 
 /// <summary>
-/// INITIAL_IMPL_PLAN §4.5.2: EC public JWK export and RFC 7638 thumbprints. The thumbprint is the
+/// §4.5.2: EC public JWK export and RFC 7638 thumbprints. The thumbprint is the
 /// hinge of proof-of-possession — the license binds <c>cnf.jkt</c> and the server compares it to
 /// the thumbprint of the JWK embedded in the proof header.
 /// </summary>

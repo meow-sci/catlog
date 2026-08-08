@@ -1,7 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 
 /**
- * catlog end-to-end suite (INITIAL_IMPL_PLAN §8).
+ * catlog end-to-end suite (§8).
  *
  * Everything runs against a local catlogd and a local mockidp — no external
  * network, ever (D2). WebCrypto works because `http://127.0.0.1` is a secure

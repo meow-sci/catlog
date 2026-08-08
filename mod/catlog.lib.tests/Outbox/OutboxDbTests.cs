@@ -8,7 +8,7 @@ using Xunit;
 namespace MeowSci.Catlog.Lib.Tests.Outbox;
 
 /// <summary>
-/// INITIAL_IMPL_PLAN §7.2: the SQLite write-ahead outbox — append/drain ordering, prune drops
+/// §7.2: the SQLite write-ahead outbox — append/drain ordering, prune drops
 /// passive first, crash recovery on reopen mid-batch, and the shipper-state round-trip.
 /// </summary>
 public sealed class OutboxDbTests

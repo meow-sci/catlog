@@ -1,10 +1,10 @@
 # catlog HTTP API — ingest, auth, read, errors, conformance vectors
 
-Origin: [INITIAL_IMPL_PLAN.md](./INITIAL_IMPL_PLAN.md ) §4.3–§4.5 and §4.8–§4.10, extracted verbatim.
+Owns **§4.3–§4.5, §4.8–§4.10**. Event payloads are in [events.md](events.md).
 
-> Everything in this document is the single source of truth for both the C# mod and the Go
-> server. Changing anything here requires bumping `ver` on the affected endpoint and a line in
-> [DECISIONS.md](DECISIONS.md). Event payloads live in [events.md](events.md).
+> **Normative.** This document is the single source of truth for both the C# mod and the Go server.
+> **Changing an endpoint's shape requires bumping its `ver`.** Anything that changes here needs a dated entry in [DECISIONS.md](DECISIONS.md) saying why,
+> in the same commit — see [ARCHITECTURE.md](ARCHITECTURE.md#7-keeping-the-documentation-true).
 
 ## Wire format & limits
 
