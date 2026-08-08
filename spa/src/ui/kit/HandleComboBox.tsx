@@ -41,10 +41,18 @@ export function HandleComboBox(props: {
   readonly onSubmitQuery?: (query: string) => void;
   /** Cleared after a commit — what a "add another handle" picker wants. */
   readonly clearOnCommit?: boolean;
+  /**
+   * What the box starts out holding. `HeaderSearch` mounts this component in
+   * place of a plain input the visitor has already typed into, and the letters
+   * they typed must survive the swap.
+   */
+  readonly defaultQuery?: string;
+  /** Focus the input on mount — the other half of surviving that swap. */
+  readonly restoreFocus?: boolean;
   readonly className?: string;
   readonly id?: string;
 }) {
-  const [query, setQuery] = useState('');
+  const [query, setQuery] = useState(props.defaultQuery ?? '');
   const result = useHandleSuggestions(query);
   const handles = result.status === 'ready' ? result.data.handles : [];
   const items: Suggestion[] = handles.map((handle) => ({ id: handle, handle }));
@@ -92,6 +100,16 @@ export function HandleComboBox(props: {
             <Search aria-hidden className="text-fg-subtle size-4 shrink-0" />
             <Input
               id={props.id}
+              // A callback rather than the `autoFocus` attribute: the swap this
+              // supports happens well after page load, when the browser may not
+              // honour late `autofocus`, and the caret belongs after what was
+              // already typed rather than in front of it.
+              ref={(el) => {
+                if (el !== null && props.restoreFocus === true) {
+                  el.focus();
+                  el.setSelectionRange(el.value.length, el.value.length);
+                }
+              }}
               placeholder={props.placeholder ?? 'Find a handle'}
               className="text-fg placeholder:text-fg-subtle min-h-8 w-full min-w-0 bg-transparent py-1 text-base outline-none"
             />

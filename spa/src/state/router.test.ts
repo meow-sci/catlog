@@ -423,8 +423,61 @@ describe('the new routes', () => {
     expect(parseRoute('/p/demo_ace/events', '/')).toEqual({
       name: 'playerEvents',
       handle: 'demo_ace',
+      type: '',
     });
-    expect(hrefFor({ name: 'playerEvents', handle: 'demo_ace' }, '/')).toBe('/p/demo_ace/events');
+    expect(hrefFor({ name: 'playerEvents', handle: 'demo_ace', type: '' }, '/')).toBe(
+      '/p/demo_ace/events',
+    );
+  });
+
+  it('keeps the per-handle type filter in the URL, so back undoes a filter change', () => {
+    expect(parseRoute('/p/demo_ace/events?type=vehicle.rud', '/')).toEqual({
+      name: 'playerEvents',
+      handle: 'demo_ace',
+      type: 'vehicle.rud',
+    });
+    expect(hrefFor({ name: 'playerEvents', handle: 'demo_ace', type: 'vehicle.rud' }, '/')).toBe(
+      '/p/demo_ace/events?type=vehicle.rud',
+    );
+    // The unfiltered log stays the one cacheable address.
+    expect(hrefFor({ name: 'playerEvents', handle: 'demo_ace', type: '' }, '/')).toBe(
+      '/p/demo_ace/events',
+    );
+  });
+
+  it('routes the global raw log, filters in the URL and defaults out of it', () => {
+    expect(parseRoute('/events', '/')).toEqual({ name: 'events', type: '', handle: '' });
+    expect(parseRoute('/events?type=vehicle.rud&handle=demo_ace', '/')).toEqual({
+      name: 'events',
+      type: 'vehicle.rud',
+      handle: 'demo_ace',
+    });
+    expect(hrefFor({ name: 'events', type: '', handle: '' }, '/')).toBe('/events');
+    expect(hrefFor({ name: 'events', type: 'vehicle.rud', handle: '' }, '/')).toBe(
+      '/events?type=vehicle.rud',
+    );
+    expect(hrefFor({ name: 'events', type: '', handle: 'demo_ace' }, '/')).toBe(
+      '/events?handle=demo_ace',
+    );
+    // Round-trips at a subpath deployment too.
+    expect(
+      parseRoute(hrefFor({ name: 'events', type: 'a.b', handle: 'c' }, '/catlog/'), '/catlog/'),
+    ).toEqual({ name: 'events', type: 'a.b', handle: 'c' });
+  });
+
+  it('gives the two event logs distinct fetch keys, and refetches on a filter change', () => {
+    // The filter is part of the key, so changing it refetches.
+    expect(routeKey({ name: 'playerEvents', handle: 'a', type: '' })).not.toBe(
+      routeKey({ name: 'playerEvents', handle: 'a', type: 'vehicle.rud' }),
+    );
+    expect(routeKey({ name: 'events', type: '', handle: '' })).not.toBe(
+      routeKey({ name: 'events', type: 'vehicle.rud', handle: '' }),
+    );
+    // The global log filtered to one handle is not the per-handle log's key:
+    // the two endpoints answer with different envelopes.
+    expect(routeKey({ name: 'events', type: '', handle: 'a' })).not.toBe(
+      routeKey({ name: 'playerEvents', handle: 'a', type: '' }),
+    );
   });
 
   it('makes a search a linkable place rather than only an overlay', () => {

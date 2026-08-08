@@ -48,7 +48,17 @@ type Config struct {
 	Boards Boards `toml:"boards"`
 	// Projector is the [projector] section.
 	Projector Projector `toml:"projector"`
-	CORS      CORS      `toml:"cors"`
+	// Archive is the [archive] section.
+	Archive Archive `toml:"archive"`
+	CORS    CORS    `toml:"cors"`
+}
+
+// Archive is the [archive] section: the §5.10 nightly copy's per-run bound.
+type Archive struct {
+	// MaxEventsPerRun caps how many events one archive pass copies before it
+	// advances the cursor and returns; a backlog is drained in resumable steps
+	// of this size. Zero means the archiver's default (100,000).
+	MaxEventsPerRun int `toml:"max_events_per_run"`
 }
 
 // Server is the [server] section.
@@ -76,6 +86,13 @@ type Server struct {
 	// refuses the combination of `clock_control = true` with an https
 	// `base_url` — because a deployment reachable over TLS is not a laptop.
 	ClockControl bool `toml:"clock_control"`
+	// MaxStreamClients caps concurrent SSE subscribers per stream route
+	// (`/v1/feed/stream`, `/v1/events/stream`). Each open stream holds a
+	// connection, a goroutine and a frame buffer for as long as the tab lives,
+	// so this is the knob that keeps N browsers from being a memory bill.
+	// Over the cap a stream open is answered 429 + Retry-After. Zero means
+	// the read API's default (64, readapi.DefaultMaxStreamClients).
+	MaxStreamClients int `toml:"max_stream_clients"`
 }
 
 // Data is the [data] section.
@@ -89,6 +106,12 @@ type Data struct {
 	// the life of the process. Zero or negative disables the timer; shutdown
 	// still checkpoints.
 	CheckpointIntervalS int `toml:"checkpoint_interval_s"`
+	// CompressPayloads is whether events.db compresses event payloads on
+	// write (zstd + a trained dictionary; see store migration 0003). Default
+	// true; false is the escape hatch — new rows are then stored as plain
+	// JSON text, and rows written either way stay readable, so the flag can
+	// be flipped freely.
+	CompressPayloads bool `toml:"compress_payloads"`
 }
 
 // Ingest is the [ingest] section (§4.3 limits, §4.5.2 htu).
@@ -100,6 +123,11 @@ type Ingest struct {
 	MaxBodyBytes int64 `toml:"max_body_bytes"`
 	// MaxEvents caps events per batch (§4.3: 2000 → 413).
 	MaxEvents int `toml:"max_events"`
+	// MaxInFlight caps how many ingest requests may hold a body in memory at
+	// once — the knob that sizes peak ingest memory on a small box. Zero (the
+	// default) means 4× GOMAXPROCS; over the cap is 503 + Retry-After, same as
+	// a full write queue.
+	MaxInFlight int `toml:"max_inflight"`
 }
 
 // Auth is the [auth] section (D16, §4.7 quotas).
@@ -241,6 +269,12 @@ type Projector struct {
 	// also not where the time goes, so this is a knob for a future with fatter
 	// payloads rather than a lever on today's numbers.
 	Decoders int `toml:"decoders"`
+	// TickS is the fallback poll interval in seconds. The ingest writer's
+	// notify channel wakes the projector for every real arrival; the ticker
+	// only recovers from a dropped wake-up, so this trades idle wake-ups
+	// against worst-case lag after one. Zero means the projector's default
+	// (5 s).
+	TickS int `toml:"tick_s"`
 }
 
 // CORS is the [cors] section: which foreign origins may read the public §4.8
@@ -279,12 +313,17 @@ func Default() Config {
 			// Off unless a config says otherwise. A default that allowed a real
 			// deployment would be a default that shipped one.
 			ClockControl: false,
+			// Zero on purpose: the default lives in readapi
+			// (DefaultMaxStreamClients, 64) — not imported, to keep config free
+			// of a dependency on the read layer (same rule as min_players).
+			MaxStreamClients: 0,
 		},
 		Data: Data{
 			Dir: "./data",
 			// 60 s == store.DefaultCheckpointInterval; not imported, to keep
 			// config free of a dependency on the storage layer.
 			CheckpointIntervalS: 60,
+			CompressPayloads:    true,
 		},
 		Ingest: Ingest{
 			AcceptedHTU:  []string{"http://127.0.0.1:8080/v1/ingest"},
@@ -406,6 +445,9 @@ func (c Config) Validate() error {
 	if c.Ingest.MaxEvents <= 0 {
 		errs = append(errs, errors.New("ingest.max_events must be positive"))
 	}
+	if c.Ingest.MaxInFlight < 0 {
+		errs = append(errs, errors.New("ingest.max_inflight must be zero (auto) or positive"))
+	}
 	if c.Auth.LicenseTTLDays <= 0 {
 		errs = append(errs, errors.New("auth.license_ttl_days must be positive"))
 	}
@@ -446,6 +488,12 @@ func (c Config) Validate() error {
 	}
 	if c.Projector.Decoders < 0 {
 		errs = append(errs, errors.New("projector.decoders must not be negative"))
+	}
+	if c.Projector.TickS < 0 {
+		errs = append(errs, errors.New("projector.tick_s must be zero (default) or positive"))
+	}
+	if c.Archive.MaxEventsPerRun < 0 {
+		errs = append(errs, errors.New("archive.max_events_per_run must be zero (default) or positive"))
 	}
 	// A CORS origin is compared to the browser's `Origin` header by exact string
 	// equality, so a typo cannot fail at request time in any visible way — the

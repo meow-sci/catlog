@@ -369,9 +369,11 @@ test.describe("the raw event log", () => {
     expect(text).not.toContain('"wall_t"');
     expect(text).not.toContain('"user_key"');
 
-    // A type filter narrows to types actually on the page.
-    const chip = page.locator("#events-types a[data-type]").first();
-    const type = await chip.getAttribute("data-type");
+    // The filter offers the whole documented taxonomy — not only this page's
+    // types, which would collapse the filter to the active type once one was
+    // chosen. Pick a type actually present so the narrowing is observable.
+    const type = await rows.first().getAttribute("data-type");
+    const chip = page.locator(`#events-types a[data-type="${type}"]`);
     await chip.click();
     await expect(page).toHaveURL(new RegExp(`type=${encodeURIComponent(type ?? "")}`));
     for (const row of await page.locator("#events-log tr.event-row").all()) {
@@ -401,10 +403,25 @@ test.describe("the raw event log", () => {
 test.describe("theme", () => {
   test("the toggle persists and the page never repaints from the wrong theme", async ({ page }) => {
     await page.goto("/");
+    // The control names the CURRENT mode before it is ever clicked — a
+    // three-state cycle whose label only appears after the first click is a
+    // control a screen-reader user meets with no state at all.
+    await expect(page.locator("#theme-toggle")).toHaveAttribute(
+      "aria-label",
+      "Theme: system — click to switch",
+    );
     await page.locator("#theme-toggle").click();
     const first = await page.evaluate(() => localStorage.getItem("catlog:theme"));
     expect(first).toBe("light");
     await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+    await expect(page.locator("#theme-toggle")).toHaveAttribute(
+      "aria-label",
+      "Theme: light — click to switch",
+    );
+    await expect(page.locator("#theme-toggle")).toHaveAttribute(
+      "title",
+      "Theme: light — click to switch",
+    );
 
     // The attribute is applied by a synchronous <head> script, so it is already
     // right on the very first frame after a reload rather than after a flash.

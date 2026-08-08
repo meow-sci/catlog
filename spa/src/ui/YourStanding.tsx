@@ -3,8 +3,8 @@ import { getPlayer } from '../api/client.ts';
 import { useResource } from '../api/useResource.ts';
 import { $me, $meDismissed, clearMe, dismissMeNotice } from '../state/me.ts';
 import { ALLTIME, hrefFor, PAGE_SIZE } from '../state/router.ts';
-import { $now, formatAgo } from './format.ts';
 import { Button, Loading, Panel, PanelBody, PanelHeader, Rank, Value } from './kit/index.ts';
+import { RelativeTime } from './RelativeTime.tsx';
 
 /** How many of a player's best placements the front page shows. */
 const BEST = 3;
@@ -19,7 +19,6 @@ const BEST = 3;
 export function YourStanding() {
   const me = useStore($me);
   const dismissed = useStore($meDismissed);
-  const now = useStore($now);
   const player = useResource(me === null ? null : `player:${me}`, (signal) =>
     getPlayer(me ?? '', signal),
   );
@@ -128,7 +127,7 @@ export function YourStanding() {
       )}
       {latest > 0 && (
         <p className="border-border text-fg-muted border-t px-3 py-2 text-sm">
-          Last record {formatAgo(latest, now)}.
+          Last record <RelativeTime at={latest} />.
         </p>
       )}
     </Panel>

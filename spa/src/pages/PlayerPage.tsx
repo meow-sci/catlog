@@ -6,7 +6,8 @@ import { useResource } from '../api/useResource.ts';
 import { $me, clearMe, isMe, setMe } from '../state/me.ts';
 import { ALLTIME, hrefFor, PAGE_SIZE } from '../state/router.ts';
 import { describeContext, hasContext } from '../ui/context.ts';
-import { $now, formatAgo, formatInstant } from '../ui/format.ts';
+import { formatInstant } from '../ui/format.ts';
+import { RelativeTime } from '../ui/RelativeTime.tsx';
 import {
   DataCell,
   DataRow,
@@ -35,7 +36,6 @@ export function PlayerPage(props: { readonly handle: string }) {
   const { handle } = props;
   const player = useResource(`player:${handle}`, (signal) => getPlayer(handle, signal));
   const me = useStore($me);
-  const now = useStore($now);
   const mine = isMe(handle, me);
 
   // §4.8 answers 404 for unknown, retired and banned handles identically, on
@@ -94,7 +94,7 @@ export function PlayerPage(props: { readonly handle: string }) {
             <Users aria-hidden className="size-3.5" />
             Compare
           </LinkButton>
-          <LinkButton href={hrefFor({ name: 'playerEvents', handle })} variant="ghost">
+          <LinkButton href={hrefFor({ name: 'playerEvents', handle, type: '' })} variant="ghost">
             <ScrollText aria-hidden className="size-3.5" />
             Raw events
           </LinkButton>
@@ -129,7 +129,7 @@ export function PlayerPage(props: { readonly handle: string }) {
                 Updated
               </HeadCell>
             </HeadRow>
-            <TableRows items={stats.map((s) => ({ ...s, id: s.stat }))} dependencies={[now]}>
+            <TableRows items={stats.map((s) => ({ ...s, id: s.stat }))}>
               {(stat: PlayerStat & { id: string }) => (
                 <DataRow id={stat.stat} data-stat={stat.stat} data-rank={stat.rank}>
                   <DataCell>
@@ -162,7 +162,7 @@ export function PlayerPage(props: { readonly handle: string }) {
                     <Value value={stat.value} unit={stat.unit} rewound={stat.rewound} />
                   </DataCell>
                   <DataCell align="end" className="text-fg-muted hidden text-sm md:table-cell">
-                    {formatAgo(stat.updated, now)}
+                    <RelativeTime at={stat.updated} />
                   </DataCell>
                 </DataRow>
               )}

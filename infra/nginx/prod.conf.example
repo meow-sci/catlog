@@ -80,6 +80,42 @@
 # limit is keyed by credential thumbprint (§4.3), not by IP, so a spoofed or
 # collapsed client address never lets one player exceed their batch budget.
 
+# ---------------------------------------------------------------------------
+# OPTIONAL: micro-cache the read surfaces in nginx
+# ---------------------------------------------------------------------------
+# Every §4.8 read response is `Cache-Control: public, s-maxage=30` — designed
+# for a CDN. With no CDN in front, nginx itself can be that shared cache: a
+# 15 s micro-cache absorbs a popularity spike (one origin hit per URL per 15 s,
+# everything else served from disk) and costs nothing when idle. Not enabled by
+# default because it adds a moving part the single-box deployment does not need
+# until it is actually popular.
+#
+# The zone lives in the http{} context — put this line next to the limit_req
+# zones above:
+#
+#   proxy_cache_path /var/cache/nginx/catlog levels=1:2 keys_zone=catlog_read:10m
+#                    max_size=100m inactive=10m use_temp_path=off;
+#
+# Then add, inside BOTH `location /v1/` (create it above `location /` so the
+# JSON API is covered without touching /v1/ingest — exact-match — or the SSE
+# streams, whose regex location outranks any prefix match; none of those is
+# ever cached) AND `location /`:
+#
+#   proxy_cache catlog_read;
+#   proxy_cache_valid 200 15s;              # short: the origin already says 30 s
+#   proxy_cache_use_stale updating error timeout;   # one refresh per URL, not a stampede
+#   proxy_cache_lock on;
+#   add_header X-Cache-Status $upstream_cache_status;   # debugging aid; remove when bored
+#
+# Notes:
+#   * proxy_cache honours s-maxage/Cache-Control by default; proxy_cache_valid
+#     above only fills in for responses without one (it does not override).
+#   * Cookies: the public read API sets none, but `location /` also serves the
+#     signed-in dashboard pages. nginx refuses to cache responses with
+#     Set-Cookie on defaults — keep it that way (no proxy_ignore_headers).
+#   * If Cloudflare is ever put in front (§13.7 above), remove this: two
+#     stacked shared caches make every staleness question twice as hard.
+
 # --- HTTP: ACME + permanent redirect ---------------------------------------
 
 server {
@@ -147,8 +183,13 @@ server {
         proxy_read_timeout 60s;
     }
 
-    # --- datastar SSE feed (§4.8) ------------------------------------------
-    location = /v1/feed/sse {
+    # --- SSE streams (§4.8) ------------------------------------------------
+    # Covers the datastar feed (/v1/feed/sse), the JSON feed stream
+    # (/v1/feed/stream), the raw event stream (/v1/events/stream) and its
+    # future datastar twin (/v1/events/sse). One regex rather than four
+    # duplicated blocks, so a new stream route fails loudly (buffered chunks)
+    # rather than working by accident under the buffered `location /` defaults.
+    location ~ ^/v1/(feed/(sse|stream)|events/(sse|stream))$ {
         proxy_pass http://127.0.0.1:8080;
         proxy_http_version 1.1;
         proxy_set_header Connection "";

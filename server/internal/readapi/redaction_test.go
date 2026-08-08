@@ -55,6 +55,9 @@ func publicGETs(handle string) []string {
 		"/v1/players/" + handle + "/events",
 		"/v1/players/" + handle + "/events?type=session.started",
 		"/v1/compare?handles=alpha_pilot,beta_pilot",
+		"/v1/events",
+		"/v1/events?type=session.started",
+		"/v1/events?handle=" + handle,
 		"/v1/feed",
 	}
 }
@@ -258,9 +261,6 @@ func (f *fixture) rawFlightEvent(playerID int64, flight ids.ID, typ, career stri
 func (f *fixture) statContext(playerID int64, stat string, value float64, context string) {
 	f.t.Helper()
 	seq := f.rawEvent(playerID, "vehicle.orbit", sharedCareer, map[string]any{"phase": "achieved", "body": "earth"})
-	if _, err := f.proj.Writer().ExecContext(f.t.Context(),
-		`INSERT INTO player_stat (player_id, stat, value, context, updated_seq) VALUES (?, ?, ?, ?, ?)`,
-		playerID, stat, value, context, seq); err != nil {
-		f.t.Fatal(err)
-	}
+	f.projWrite(`INSERT INTO player_stat (player_id, stat, value, context, updated_seq) VALUES (?, ?, ?, ?, ?)`,
+		playerID, stat, value, context, seq)
 }

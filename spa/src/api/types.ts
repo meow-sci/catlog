@@ -228,10 +228,23 @@ export interface CompareResponse {
   boards: CompareBoard[];
 }
 
-// --- GET /v1/players/{handle}/events -----------------------------------------
+// --- GET /v1/players/{handle}/events and GET /v1/events ----------------------
 
 /** One stored event envelope, as the public API publishes it. */
 export interface EventRow {
+  /**
+   * The server-assigned position in the stored log — the same value the paging
+   * cursor is made of, and the `id:` of the row's SSE frame on
+   * `GET /v1/events/stream`. Strictly increasing with arrival, so it is also
+   * what a client merges the snapshot and the stream by.
+   */
+  seq: number;
+  /**
+   * The player's handle, on the global views (`GET /v1/events` and the stream),
+   * where one page mixes players. The per-player endpoint omits it: its
+   * envelope already names the one handle every row belongs to.
+   */
+  handle?: string;
   /** The envelope's client-minted ULID — the dedup key. */
   id: string;
   type: string;
@@ -267,7 +280,11 @@ export interface EventRow {
 }
 
 export interface EventsResponse {
-  handle: string;
+  /**
+   * Absent on the global log (`GET /v1/events`) unless `?handle=` filtered —
+   * there, each row names its own player instead.
+   */
+  handle?: string;
   /** The effective page size after clamping. */
   limit: number;
   /** Echoed when `?type=` was given. */

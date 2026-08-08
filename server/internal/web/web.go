@@ -77,6 +77,15 @@ type Read interface {
 	Player(ctx context.Context, handle string) (readapi.PlayerResponse, bool, error)
 	// PlayerEvents is the raw log behind `/p/{handle}/events`.
 	PlayerEvents(ctx context.Context, handle, typ string, before int64, limit int) (readapi.EventsResponse, bool, error)
+	// GlobalEvents is the whole log's newest page, every player mixed together —
+	// `/events`. A `?handle=`-filtered page goes through PlayerEvents instead,
+	// the same delegation `GET /v1/events` does, so the two cannot disagree.
+	GlobalEvents(ctx context.Context, typ string, before int64, limit int) (readapi.EventsResponse, error)
+	// PublicEvents renders a committed batch off the raw broadcaster as its
+	// public rows: handle-less players and flagged flights dropped, redaction
+	// applied per row. The SSE tail renders nothing it has not been through —
+	// the drop and redaction rules live behind this seam, in one place.
+	PublicEvents(ctx context.Context, batch []store.StoredEvent) ([]readapi.EventRow, error)
 	// Search is handle search. It does no I/O — the directory is in memory —
 	// which is why it takes neither a context nor an error.
 	Search(q string, limit int) readapi.SearchResponse
@@ -96,6 +105,14 @@ type Feed interface {
 	Subscribe() (<-chan []store.FeedRow, func())
 }
 
+// RawEvents is the raw twin: every stored event the fold loop commits past,
+// unredacted. *projector.RawBroadcaster implements it. What arrives here must
+// go through [Read.PublicEvents] before any of it is rendered — nothing in
+// this package may touch a payload the redaction has not seen.
+type RawEvents interface {
+	Subscribe() (<-chan []store.StoredEvent, func())
+}
+
 // Accounts loads the signed-in account's dashboard. *identity.Server implements
 // it.
 type Accounts interface {
@@ -112,6 +129,8 @@ type Deps struct {
 	Projections Projections
 	// Feed is the live half of the same. Required.
 	Feed Feed
+	// Raw feeds the events pages' live tail. Required.
+	Raw RawEvents
 	// Sessions gates /dashboard. Required.
 	Sessions *identity.Sessions
 	// Accounts loads what /dashboard renders. Required.
@@ -137,6 +156,8 @@ func New(deps Deps) (*Server, error) {
 		return nil, errors.New("web: Projections is required")
 	case deps.Feed == nil:
 		return nil, errors.New("web: Feed is required")
+	case deps.Raw == nil:
+		return nil, errors.New("web: Raw is required")
 	case deps.Sessions == nil:
 		return nil, errors.New("web: Sessions is required")
 	case deps.Accounts == nil:
@@ -164,6 +185,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /boards/{stat}", s.handleBoard)
 	mux.HandleFunc("GET /p/{handle}", s.handleProfile)
 	mux.HandleFunc("GET /p/{handle}/events", s.handlePlayerEvents)
+	mux.HandleFunc("GET /events", s.handleEvents)
 	mux.HandleFunc("GET /search", s.handleSearch)
 	mux.HandleFunc("GET /search/suggest", s.handleSearchSuggest)
 	mux.HandleFunc("GET /compare", s.handleCompare)
@@ -172,8 +194,9 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /docs/{page}", s.handleDocs)
 	mux.HandleFunc("GET /docs", s.handleDocsIndex)
 
-	// The one route that must not carry the §4.8 cache header.
+	// The two routes that must not carry the §4.8 cache header.
 	mux.HandleFunc("GET "+FeedPath, s.handleFeed)
+	mux.HandleFunc("GET "+EventsSSEPath, s.handleEventsSSE)
 
 	if dir := s.deps.Config.Server.StaticDir; dir != "" {
 		mux.Handle("GET /static/", s.staticHandler(dir))

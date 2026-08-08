@@ -3,6 +3,7 @@ package adminapi
 import (
 	"context"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/meow-sci/catlog/server/internal/authz"
@@ -197,35 +198,63 @@ type BoardCount struct {
 	Count int64  `json:"count"`
 }
 
+// statsCacheTTL bounds how long the census half of `GET /admin/stats` may be
+// served from memory once nothing is writing. The loadgen harness and the mod's
+// projector-wait both poll this endpoint; a poll loop watching the projector
+// catch up must not run a full `count(*)` over the event table on every
+// iteration.
+//
+// It is a backstop, not the correctness argument: the cache is keyed on
+// [store.DB.WriteGen], so a committed write invalidates it immediately. The TTL
+// only covers what changes without a write of ours — the projections file
+// growing under the projector's own transactions, say.
+const statsCacheTTL = 30 * time.Second
+
+// statsCache memoizes the counting half of the stats response — everything that
+// costs a `count(*)` and can only change when a write commits. The live half —
+// max_seq, the projector checkpoint and lag, queue depth, handle count, file
+// sizes — is read fresh on every request, because those are exactly the numbers
+// the pollers poll for.
+//
+// The key is (events write generation, projections write generation), not the
+// head of the event log. Appending events moves the head, but a purge (§4.7)
+// deletes a player's rows without moving it — so a cache keyed on the head
+// answered `events.total` with a pre-purge count for the whole TTL, and
+// catlog.loadgen's zero-loss invariant read that stale count as its baseline
+// and failed. Whatever changes the census had to commit a transaction to change
+// it, so counting transactions is the key that cannot miss.
+type statsCache struct {
+	mu          sync.Mutex
+	at          time.Time
+	eventsGen   int64
+	projGen     int64
+	valid       bool
+	events      EventStats // Total, Players, Banned; MaxSeq and Handles are always fresh
+	streams     StreamStats
+	projections store.ProjectionCounts
+	boards      []BoardCount
+}
+
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	var out StatsResponse
 
+	var maxSeq int64
 	if s.deps.Events != nil {
-		total, err := s.deps.Events.CountEvents(ctx, 0)
-		if err != nil {
-			s.fail(w, err, "count events")
-			return
-		}
-		maxSeq, err := s.deps.Events.MaxSeq(ctx)
-		if err != nil {
+		var err error
+		if maxSeq, err = s.deps.Events.MaxSeq(ctx); err != nil {
 			s.fail(w, err, "read the event head")
 			return
 		}
-		players, banned, err := s.deps.Events.CountPlayers(ctx)
-		if err != nil {
-			s.fail(w, err, "count players")
-			return
-		}
-		census, err := s.deps.Events.StreamCensus(ctx)
-		if err != nil {
-			s.fail(w, err, "count streams")
-			return
-		}
-		out.Events = EventStats{Total: total, MaxSeq: maxSeq, Players: players, Banned: banned}
-		out.Streams = StreamStats{
-			Total: census.Total, Gapped: census.Gapped, GappedPlayers: census.GappedPlayers,
-		}
+	}
+
+	if err := s.census(ctx, &out); err != nil {
+		s.fail(w, err, "read the stats census")
+		return
+	}
+	out.Events.MaxSeq = maxSeq
+
+	if s.deps.Events != nil {
 		out.Storage.EventsDBBytes = s.deps.Events.FileSize()
 		out.Storage.EventsWALBytes = s.deps.Events.WALSize()
 	}
@@ -235,37 +264,110 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	if wtr := s.projections.Writer; wtr != nil {
 		out.Ingest = IngestStats{QueueDepth: wtr.QueueDepth(), QueueCap: ingest.QueueDepth}
 	}
-
 	if p := s.projections.Projector; p != nil {
 		out.Projector = ProjectorStats{
 			CheckpointSeq: p.CheckpointSeq(),
 			LagSeq:        p.Lag(),
 			Folds:         p.FoldNames(),
 		}
+		err := p.Live().With(func(proj *store.Projections) error {
+			out.Storage.ProjectionsDBBytes = proj.FileSize()
+			out.Storage.ProjectionsWALBytes = proj.WALSize()
+			return nil
+		})
+		if err != nil {
+			s.fail(w, err, "read the projection files")
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// census fills the counted half of out, from the cache when the head of the
+// log has not moved since it was filled and it is younger than [statsCacheTTL].
+// The mutex is held across a recount on purpose: concurrent pollers wait for
+// one set of queries rather than racing their own.
+func (s *Server) census(ctx context.Context, out *StatsResponse) error {
+	// Sampled before the queries run, never after. A write that commits while
+	// the census is being counted then lands on a generation *newer* than the
+	// one cached, so the next request recounts. Sampling afterwards would file
+	// half-fresh numbers under the new generation and keep them.
+	eventsGen, projGen, err := s.censusGen()
+	if err != nil {
+		return err
+	}
+
+	s.stats.mu.Lock()
+	defer s.stats.mu.Unlock()
+	now := s.deps.Now()
+	if s.stats.valid && s.stats.eventsGen == eventsGen && s.stats.projGen == projGen &&
+		now.Sub(s.stats.at) < statsCacheTTL {
+		out.Events, out.Streams, out.Projections, out.Boards =
+			s.stats.events, s.stats.streams, s.stats.projections, s.stats.boards
+		return nil
+	}
+
+	var fresh StatsResponse
+	if s.deps.Events != nil {
+		total, err := s.deps.Events.CountEvents(ctx, 0)
+		if err != nil {
+			return err
+		}
+		players, banned, err := s.deps.Events.CountPlayers(ctx)
+		if err != nil {
+			return err
+		}
+		census, err := s.deps.Events.StreamCensus(ctx)
+		if err != nil {
+			return err
+		}
+		fresh.Events = EventStats{Total: total, Players: players, Banned: banned}
+		fresh.Streams = StreamStats{
+			Total: census.Total, Gapped: census.Gapped, GappedPlayers: census.GappedPlayers,
+		}
+	}
+	if p := s.projections.Projector; p != nil {
 		var counts map[string]int64
 		err := p.Live().With(func(proj *store.Projections) error {
 			var err error
-			if out.Projections, err = proj.Counts(ctx); err != nil {
+			if fresh.Projections, err = proj.Counts(ctx); err != nil {
 				return err
 			}
 			counts, err = proj.StatCounts(ctx)
-			out.Storage.ProjectionsDBBytes = proj.FileSize()
-			out.Storage.ProjectionsWALBytes = proj.WALSize()
 			return err
 		})
 		if err != nil {
-			s.fail(w, err, "read the projection census")
-			return
+			return err
 		}
 		// minPlayers 1: the owner's view is every board that exists, including
 		// the ones `GET /v1/leaderboards` is still holding back because only one
 		// player is on them. Publication is a display rule; this endpoint is not
 		// a display.
 		for _, b := range stats.Catalog(counts, 1) {
-			out.Boards = append(out.Boards, BoardCount{Stat: b.Stat, Count: counts[b.Stat]})
+			fresh.Boards = append(fresh.Boards, BoardCount{Stat: b.Stat, Count: counts[b.Stat]})
 		}
 	}
-	writeJSON(w, http.StatusOK, out)
+
+	s.stats.events, s.stats.streams, s.stats.projections, s.stats.boards =
+		fresh.Events, fresh.Streams, fresh.Projections, fresh.Boards
+	s.stats.eventsGen, s.stats.projGen = eventsGen, projGen
+	s.stats.at, s.stats.valid = now, true
+	out.Events, out.Streams, out.Projections, out.Boards =
+		fresh.Events, fresh.Streams, fresh.Projections, fresh.Boards
+	return nil
+}
+
+// censusGen reads the write generation of each database the census counts.
+// Together they are the cache key: nothing in the census can change without one
+// of the two committing a transaction.
+func (s *Server) censusGen() (eventsGen, projGen int64, err error) {
+	if s.deps.Events != nil {
+		eventsGen = s.deps.Events.WriteGen()
+	}
+	if p := s.projections.Projector; p != nil {
+		projGen = p.Live().WriteGen()
+	}
+	return eventsGen, projGen, err
 }
 
 func (s *Server) fail(w http.ResponseWriter, err error, what string) {

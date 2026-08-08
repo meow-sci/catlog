@@ -91,6 +91,7 @@ type Verifier struct {
 	events *store.Events
 	deny   *DenyList
 	cache  *licenseCache
+	creds  *credCache
 	// limiter is nil when cfg.RateLimitDisabled is set, and step 9 is skipped.
 	limiter *Limiter
 
@@ -122,6 +123,7 @@ func New(cfg Config, ks *keys.Set, events *store.Events, deny *DenyList) *Verifi
 		events:  events,
 		deny:    deny,
 		cache:   newLicenseCache(cfg.CacheSize),
+		creds:   newCredCache(),
 		limiter: limiter,
 		now:     time.Now,
 	}
@@ -358,7 +360,18 @@ func (v *Verifier) licenseClaims(compact string, parts compactParts) (LicenseCla
 // credential is step 5: the credential row must exist, be live, and agree with
 // the license about handle and player. It also catches a banned or deleted
 // account, whose rows the license alone cannot know about.
+//
+// A success is memoized per jkt (cache.go): a shipping client sends a batch
+// every couple of seconds, and re-proving the same two rows each time made
+// step 5 the only per-batch database reads in the chain. The deny-list version
+// read *before* the queries is the invalidation key — any moderation action
+// bumps it — with [CredentialCacheTTL] as the safety net.
 func (v *Verifier) credential(ctx context.Context, license LicenseClaims, userKey keys.UserKey) (int64, *Error) {
+	denyVer := v.deny.version()
+	if pid, ok := v.creds.get(license.Cnf.JKT, license.Handle, userKey, v.now(), denyVer); ok {
+		return pid, nil
+	}
+
 	cred, err := v.events.CredentialByJKT(ctx, license.Cnf.JKT)
 	if errors.Is(err, store.ErrNotFound) {
 		return 0, fail(5, CodeLicenseInvalid, "no credential for this key")
@@ -386,6 +399,10 @@ func (v *Verifier) credential(ctx context.Context, license LicenseClaims, userKe
 	if player.UserKey != userKey {
 		return 0, fail(5, CodeLicenseInvalid, "license sub does not match the credential's player")
 	}
+	v.creds.put(license.Cnf.JKT, credEntry{
+		playerID: cred.PlayerID, handle: cred.Handle, userKey: player.UserKey,
+		at: v.now(), denyVer: denyVer,
+	})
 	return cred.PlayerID, nil
 }
 

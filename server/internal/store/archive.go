@@ -54,7 +54,7 @@ func (e *Events) ArchiveCursor(ctx context.Context, q Querier) (int64, error) {
 // other constraint failure (§5.4).
 func (e *Events) SetArchiveCursor(ctx context.Context, q Querier, lastSeq int64) error {
 	if q == nil {
-		q = e.Writer()
+		q = e.autocommit()
 	}
 	if lastSeq < 0 {
 		return fmt.Errorf("store: archive cursor %d is negative", lastSeq)
@@ -88,7 +88,7 @@ var ErrSeqConflict = errors.New("store: event seq conflict")
 // of events.db, not from here.
 func (e *Events) RestorePlayer(ctx context.Context, q Querier, playerID int64, uk keys.UserKey, idp string, createdAt int64) error {
 	if q == nil {
-		q = e.Writer()
+		q = e.autocommit()
 	}
 	if playerID <= 0 {
 		return fmt.Errorf("store: restore player: player_id %d is not positive", playerID)
@@ -134,23 +134,24 @@ func (e *Events) RestorePlayer(ctx context.Context, q Querier, playerID int64, u
 // failure mode this path must not have.
 func (e *Events) RestoreEvents(ctx context.Context, q Querier, playerID int64, evs []StoredEvent) (inserted, deduped int, err error) {
 	if q == nil {
-		q = e.Writer()
+		q = e.autocommit()
 	}
 	const insertSQL = `INSERT OR IGNORE INTO event
-	  (seq, event_id, player_id, flight_id, session_id, career, type, ver, sim_time, wall_time, recv_time, payload)
-	  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	  (seq, event_id, player_id, flight_id, session_id, career, type, ver, sim_time, wall_time, recv_time, payload, enc)
+	  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	for _, se := range evs {
 		if se.Seq <= 0 {
 			return inserted, deduped, fmt.Errorf("store: restore event %s: seq %d is not positive", ids.String(se.ID), se.Seq)
 		}
-		payload := se.Payload
-		if len(payload) == 0 {
-			payload = []byte("{}")
-		}
+		// The archive carries JSON text; restoring compresses it exactly as
+		// InsertEvents would, so a restore-from-archive into a fresh database —
+		// the honest file-size reclamation path, with VACUUM unused by policy
+		// (§5.4) — also lands the storage win.
+		payload, enc := e.encodePayload(se.Payload)
 		res, err := q.ExecContext(ctx, insertSQL,
 			se.Seq, ids.Bytes(se.ID), playerID, ids.NullBytes(se.FlightID), ids.NullBytes(se.SessionID),
-			nullString(se.Career), se.Type, se.Ver, se.SimTime, se.WallTime, se.RecvTime, string(payload))
+			nullString(se.Career), se.Type, se.Ver, se.SimTime, se.WallTime, se.RecvTime, payload, enc)
 		if err != nil {
 			return inserted, deduped, fmt.Errorf("store: restore event %s: %w", ids.String(se.ID), err)
 		}

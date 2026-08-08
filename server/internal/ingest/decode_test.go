@@ -78,6 +78,9 @@ func TestDecodeNDJSONRejections(t *testing.T) {
 		{"interior blank line", authz.CodeMalformedBatch, validLine + "\n\n" + validLine + "\n"},
 		{"CRLF framing", authz.CodeMalformedBatch, validLine + "\r\n"},
 		{"trailing content on a line", authz.CodeMalformedBatch, validLine + " {}\n"},
+		// One envelope per line: a JSON value that only parses by continuing
+		// past the newline is a framing error, not two half-lines.
+		{"envelope spans two lines", authz.CodeMalformedBatch, `{"id":"01JZ0000000000000000000001",` + "\n" + `"type":"vehicle.rud"}` + "\n" + validLine + "\n"},
 	}
 
 	for _, tc := range cases {
@@ -93,6 +96,25 @@ func TestDecodeNDJSONRejections(t *testing.T) {
 				t.Errorf("status = %d, want 400", got)
 			}
 		})
+	}
+}
+
+// TestDecodeNDJSONErrorNamesTheLine pins that a rejection points at the
+// offending line, and that a syntax offset is line-relative — both survived the
+// move from a decoder per line to one decoder per batch.
+func TestDecodeNDJSONErrorNamesTheLine(t *testing.T) {
+	batch := validLine + "\n" + "{broken\n" + validLine + "\n"
+	_, aerr := decodeNDJSON([]byte(batch), DefaultLimits())
+	if aerr == nil {
+		t.Fatal("decodeNDJSON accepted a broken line")
+	}
+	if !strings.HasPrefix(aerr.Detail, "line 2: ") {
+		t.Errorf("detail = %q, want a 'line 2: ' prefix", aerr.Detail)
+	}
+	// A per-line decoder over "{broken" alone reports byte 2; the batch-wide
+	// decoder must rebase its absolute offset to say the same thing.
+	if !strings.Contains(aerr.Detail, "invalid JSON at byte 2") {
+		t.Errorf("detail = %q, want a line-relative byte offset (byte 2)", aerr.Detail)
 	}
 }
 

@@ -54,14 +54,32 @@ const INITIAL: FeedState = { rows: [], status: 'connecting', arrived: [] };
  * Pure, and exported so it can be tested without a socket. Dedup is by id
  * because feed ids are a monotonic INTEGER PRIMARY KEY (§5.4) — a row that has
  * been seen once can never legitimately arrive with different content.
+ *
+ * Two paths, one behaviour. The hot path is one stream event against a panel
+ * this function already produced (sorted descending, deduped): because ids are
+ * monotonic the new row nearly always belongs at the head, so it is inserted —
+ * or replaces its duplicate — in place, with no re-sort of thirty rows per
+ * event. A multi-row `incoming` (the snapshot, on mount or reconnect) takes the
+ * general dedupe-and-sort path, which runs a handful of times per session.
  */
 export function mergeFeed(
   existing: readonly FeedRow[],
   incoming: readonly FeedRow[],
 ): readonly FeedRow[] {
+  const [row] = incoming;
+  if (row !== undefined && incoming.length === 1) {
+    // A duplicate id keeps its position; the incoming copy is preferred.
+    if (existing.some((r) => r.id === row.id)) {
+      return existing.map((r) => (r.id === row.id ? row : r)).slice(0, FEED_LIMIT);
+    }
+    // First index that should sit below the new row — 0 in the monotonic case.
+    const below = existing.findIndex((r) => r.id < row.id);
+    const at = below === -1 ? existing.length : below;
+    return [...existing.slice(0, at), row, ...existing.slice(at)].slice(0, FEED_LIMIT);
+  }
   const byId = new Map<number, FeedRow>();
-  for (const row of [...incoming, ...existing]) {
-    if (!byId.has(row.id)) byId.set(row.id, row);
+  for (const r of [...incoming, ...existing]) {
+    if (!byId.has(r.id)) byId.set(r.id, r);
   }
   return [...byId.values()].sort((a, b) => b.id - a.id).slice(0, FEED_LIMIT);
 }
@@ -138,10 +156,10 @@ export const $feed: ReadableAtom<FeedState> = (() => {
         }
         const rows = mergeFeed(store.get().rows, [row]);
         // Only ids still on screen: the list is capped, and an animation for a
-        // row that scrolled off is a timer with nothing to do.
-        const arrived = [...store.get().arrived, row.id].filter((id) =>
-          rows.some((r) => r.id === id),
-        );
+        // row that scrolled off is a timer with nothing to do. A Set makes the
+        // sweep one pass rather than a scan of `rows` per remembered id.
+        const onScreen = new Set(rows.map((r) => r.id));
+        const arrived = [...store.get().arrived, row.id].filter((id) => onScreen.has(id));
         store.set({ rows, status: 'live', arrived });
       });
       source.addEventListener('error', () => {

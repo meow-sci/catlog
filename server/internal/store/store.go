@@ -32,7 +32,9 @@
 // # SQL constraints
 //
 // No `WITH RECURSIVE` (unimplemented in tursogo — no flag enables it), no
-// `VACUUM`, no `WITHOUT ROWID`, no `STRICT`, no expression indexes (§5.4).
+// `STRICT`, no expression indexes (§5.4). No `VACUUM` and no `WITHOUT ROWID`
+// either, but by policy (§5.4), not capability: tursogo supports both behind a
+// DSN experimental flag we do not enable (docs/DECISIONS.md, WP1).
 // Dedup and upserts use `INSERT OR IGNORE` / `ON CONFLICT DO UPDATE` rather
 // than error inspection, because tursogo collapses every constraint violation
 // onto one sentinel and offers no extended result code.
@@ -52,6 +54,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	_ "turso.tech/database/tursogo" // registers the "turso" database/sql driver
@@ -91,6 +94,13 @@ type Options struct {
 	// disabling it is safe for a short-lived store (a test) and unwise for a
 	// long-lived one. [DefaultCheckpointInterval] is what catlogd uses.
 	CheckpointInterval time.Duration
+	// DisablePayloadCompression turns off zstd compression of event payloads
+	// on the events.db write path (`[data] compress_payloads = false` — the
+	// escape hatch). Writes then store JSON text with enc = 0, exactly as
+	// before migration 0003. Reads are unaffected: both encodings are always
+	// readable, so flipping this at any point is safe. Ignored by
+	// [OpenProjections].
+	DisablePayloadCompression bool
 	// Now is the server clock. Defaults to [time.Now].
 	//
 	// This is the seam that decides an event's `recv_time` — the timestamp
@@ -135,11 +145,29 @@ type DB struct {
 	// now is the server clock; see [Options.Now]. Never nil.
 	now func() time.Time
 
+	// writeGen counts committed write transactions. It exists so a cache over
+	// a query of this database can tell "nothing has changed" from "nothing has
+	// been *appended*": a purge deletes rows without moving any sequence, so a
+	// cache keyed on the head of the log alone goes stale and stays stale.
+	// See [DB.WriteGen].
+	writeGen atomic.Int64
+
 	closeOnce sync.Once
 	closeErr  error
 	stop      chan struct{}
 	stopped   chan struct{}
 }
+
+// WriteGen is a counter of committed write transactions on this database. It
+// only ever increases, it means nothing on its own, and the only thing it is
+// for is invalidating a cache: if it has not moved, no write has committed
+// since it was read, so anything derived from the data is still true.
+//
+// A sequence number cannot do this job. `max(seq)` moves when events are
+// appended and does not move when a purge deletes a player's rows (§4.7), so
+// `GET /admin/stats` keyed on it answered with a pre-purge count for its whole
+// cache TTL every time an account was deleted.
+func (d *DB) WriteGen() int64 { return d.writeGen.Load() }
 
 // nowMillis is the store's clock, in unix milliseconds.
 //
@@ -159,7 +187,17 @@ type Querier interface {
 }
 
 // Events is events.db: the raw log plus the identity tables (§5.4).
-type Events struct{ *DB }
+type Events struct {
+	*DB
+
+	// dec decompresses enc != 0 payloads; built at open over every dictionary
+	// payload_dict holds (see payload.go). Never nil after OpenEvents.
+	dec *zstdDecoder
+	// compress is whether InsertEvents/RestoreEvents zstd-compress payloads
+	// ([data] compress_payloads, default on). Reads always handle both
+	// encodings regardless.
+	compress bool
+}
 
 // Projections is projections.db: everything derived and rebuildable (§5.4).
 type Projections struct{ *DB }
@@ -170,7 +208,12 @@ func OpenEvents(ctx context.Context, path string, opts Options) (*Events, error)
 	if err != nil {
 		return nil, err
 	}
-	return &Events{db}, nil
+	e := &Events{DB: db, compress: !opts.DisablePayloadCompression}
+	if err := e.initPayloadCodec(ctx); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	return e, nil
 }
 
 // OpenProjections opens (creating if needed) projections.db at path and
@@ -267,6 +310,33 @@ func (d *DB) Writer() *sql.DB { return d.w }
 // writer handle.
 func (d *DB) Reader() *sql.DB { return d.r }
 
+// autocommit is the writer handle wrapped so that a statement run outside any
+// transaction of ours still moves [DB.WriteGen]. Every typed query in this
+// package that accepts a nil [Querier] falls back to it rather than to
+// [DB.Writer] directly, so "no write has committed" is a claim about the whole
+// database and not just about the transactional half of it.
+func (d *DB) autocommit() Querier { return counted{d} }
+
+// counted is [DB.autocommit]'s wrapper. Reads pass straight through: only a
+// statement that can change something bumps the generation.
+type counted struct{ d *DB }
+
+func (c counted) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	res, err := c.d.w.ExecContext(ctx, query, args...)
+	if err == nil {
+		c.d.writeGen.Add(1)
+	}
+	return res, err
+}
+
+func (c counted) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	return c.d.w.QueryContext(ctx, query, args...)
+}
+
+func (c counted) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
+	return c.d.w.QueryRowContext(ctx, query, args...)
+}
+
 // WithWriteTx runs fn inside a write transaction on the writer handle,
 // committing on success and rolling back on any error or panic.
 func (d *DB) WithWriteTx(ctx context.Context, fn func(*sql.Tx) error) (err error) {
@@ -292,6 +362,7 @@ func (d *DB) WithWriteTx(ctx context.Context, fn func(*sql.Tx) error) (err error
 	if err = tx.Commit(); err != nil {
 		return fmt.Errorf("store: commit %s transaction: %w", d.name, err)
 	}
+	d.writeGen.Add(1)
 	return nil
 }
 
@@ -323,9 +394,10 @@ func (d *DB) WALSize() int64 {
 	return fi.Size()
 }
 
-// FileSize reports the size of the main database file in bytes. With no VACUUM
-// available (§5.4), watching this is how purge-driven free-page growth gets
-// noticed (§13.1).
+// FileSize reports the size of the main database file in bytes. With VACUUM
+// unused by policy (§5.4 — it exists behind an experimental DSN flag we do not
+// enable), watching this is how purge-driven free-page growth gets noticed
+// (§13.1).
 func (d *DB) FileSize() int64 {
 	if d.memory {
 		return 0

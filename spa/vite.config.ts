@@ -62,6 +62,28 @@ function deepLinkFallback(): Plugin {
 
 export default defineConfig({
   base: BASE,
+  build: {
+    rollupOptions: {
+      output: {
+        // Pin React itself (plus its jsx/compiler runtimes and `scheduler`,
+        // which live under the react/react-dom package directories) to one
+        // stable `vendor` chunk. Without this, rolldown folds react-dom into
+        // whatever shell chunk imports it, and every one-line edit to the shell
+        // renames that chunk — invalidating ~140 KB of framework a returning
+        // visitor's cache already held. React's release cadence is months; the
+        // shell's is days. `advancedChunks` is rolldown's replacement for
+        // Rollup's `manualChunks`, which rolldown-based Vite does not support.
+        advancedChunks: {
+          groups: [
+            {
+              name: 'vendor',
+              test: /[/\\]node_modules[/\\](?:\.pnpm[/\\][^/\\]+[/\\]node_modules[/\\])?(?:react|react-dom|scheduler)[/\\]/,
+            },
+          ],
+        },
+      },
+    },
+  },
   // Explicit, because the deep links depend on it: Vite's dev and preview
   // servers answer an unmatched path with `index.html` in `spa` mode, which is
   // the local equivalent of the `404.html` above.

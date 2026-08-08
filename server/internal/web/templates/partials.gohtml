@@ -1,8 +1,10 @@
 {{/*
 Shared fragments. `feed-list` and `feed-item` are also what the SSE handler
-patches in (§5.7), so a line that arrives over the wire is byte-identical to one
-rendered into a page. `search-suggest` is the same arrangement for the header
-search box.
+patches in (§5.7), so a line that arrives over the wire is identical to one
+rendered into a page — with one deliberate exception: the per-row live patch
+passes Arrived, which stamps `data-arrived`, the attribute the arrival flash is
+scoped to. Primed rows must not animate. `search-suggest` is the same
+arrangement for the header search box.
 */}}
 
 {{/*
@@ -41,7 +43,10 @@ career-rewind qualification.
 {{- /* .Board is a readapi.BoardResponse (or anything embedding one); .Compact
        hides the detail and time columns for the front page. */ -}}
 {{- $board := .Board -}}
-<div class="table-wrap">
+{{- /* The wrapper scrolls, so it must be reachable without a pointer: tabindex
+       makes it keyboard-scrollable, and a focusable region needs a role and a
+       name. Same treatment on every .table-wrap. */}}
+<div class="table-wrap" role="region" tabindex="0" aria-label="{{$board.Title}}">
 <table class="catlog-board" data-stat="{{$board.Stat}}">
   <thead>
     <tr>
@@ -74,8 +79,18 @@ career-rewind qualification.
 </div>
 {{- end}}
 
+{{/*
+One feed line, from a web.FeedItem. `datetime` must be a machine-readable
+instant (`iso`), not the display string. The summary's leading handle becomes a
+profile link — stats.Summarize composes every line handle-first, and
+`trimHandle` returns "" (falling back to the plain sentence) if that shape ever
+changes. `data-arrived` appears only on the live per-row patch (see feed.go)
+and is what the arrival flash is scoped to.
+*/}}
 {{define "feed-item" -}}
-<li class="feed-item" id="{{feedID .ID}}" data-feed-id="{{.ID}}" data-type="{{.Type}}"><time datetime="{{datetime .At}}">{{datetime .At}}</time> <span class="feed-summary">{{.Summary}}</span></li>
+<li class="feed-item" id="{{feedID .ID}}" data-feed-id="{{.ID}}" data-type="{{.Type}}"{{if .Arrived}} data-arrived=""{{end}}><time datetime="{{iso .At}}">{{datetime .At}}</time> <span class="feed-summary">
+  {{- with trimHandle .Summary .Handle}}<a href="{{playerPath $.Handle}}">{{$.Handle}}</a> {{.}}{{else}}{{.Summary}}{{end -}}
+</span></li>
 {{- end}}
 
 {{/*
@@ -84,16 +99,27 @@ with, "sse" once the stream has replaced it. It is the readiness signal the e2e
 feed spec waits on — without it there is no way to tell an open stream from a
 page whose datastar module never ran, because both show the same rows.
 */}}
+{{- /* No data-count here: the SSE handler prepends items without re-rendering
+       this list, so a count stamped at render time would go stale with the
+       first live line — an attribute that is sometimes wrong is worse than no
+       attribute. aria-live lets a screen reader hear new lines without the
+       focus moving (`polite`: a leaderboard event is never urgent), and
+       tabindex + a name make the scrollable list keyboard-scrollable. */}}
 {{define "feed-list" -}}
-<ul id="feed" class="catlog-feed" data-source="{{.Source}}" data-count="{{len .Rows}}">
-{{- range .Rows}}{{template "feed-item" .}}{{end}}
+<ul id="feed" class="catlog-feed" data-source="{{.Source}}" aria-live="polite" aria-relevant="additions" tabindex="0" aria-label="Live feed">
+{{- range .Rows}}{{template "feed-item" (feedItem .)}}{{end}}
 {{- if not .Rows}}<li class="feed-empty">Nothing has happened yet. Fly something.</li>{{end}}
 </ul>
 {{- end}}
 
 {{define "feed-panel" -}}
+{{- /* #feed-status is the connection hint me.js maintains from datastar's
+       fetch-lifecycle events plus the patches the stream lands (connecting /
+       live / reconnecting, modelled on the SPA's FeedPanel). It ships empty
+       and stays empty when no stream is ever opened — a page with no JS makes
+       no claim about a connection it does not have. */}}
 <article id="feed-panel" class="panel" data-init="@get('/v1/feed/sse')">
-  <header><h2 class="panel-title">Live feed</h2></header>
+  <header><h2 class="panel-title">Live feed</h2><span id="feed-status" role="status"></span></header>
   {{template "feed-list" .}}
   <span id="feed-heartbeat" hidden></span>
   <footer>Streamed over server-sent events. Flights flagged as cheated never appear here.</footer>
@@ -101,10 +127,144 @@ page whose datastar module never ran, because both show the same rows.
 {{- end}}
 
 {{/* The header box's suggestion popover. `truncated` means narrow the query;
-     there is no offset and there is deliberately no "load more". */}}
+     there is no offset and there is deliberately no "load more".
+
+     Deliberately NOT a listbox: role="listbox"/"option" announce a combobox
+     contract (aria-expanded, aria-activedescendant, arrow-key management) that
+     nothing here implements, and links are not options. A plain list of links
+     in a polite live region is the honest version — the SPA's React Aria
+     ComboBox is the other frontend's answer to the same requirement. */}}
 {{define "search-suggest" -}}
-<ul id="search-suggest" role="listbox" aria-label="Handle suggestions">
-{{- range .Handles}}<li role="option"><a href="{{playerPath .}}">{{.}}</a></li>{{end}}
+<ul id="search-suggest" aria-live="polite" aria-label="Handle suggestions">
+{{- range .Handles}}<li><a href="{{playerPath .}}">{{.}}</a></li>{{end}}
 {{- if .Truncated}}<li class="suggest-note">More handles match. Try a longer query.</li>{{end}}
 </ul>
+{{- end}}
+
+{{/*
+One raw-log row, from a web.EventItem. Both events pages, the SSE tail's prime
+and its live patches all render rows here, so a row is byte-identical wherever
+it appears — the feed-item discipline. `data-arrived` appears only on the live
+per-row patch (see events.go) and is what the arrival flash is scoped to. The
+id is `eventRowID`, which is also how the tail removes rows that scrolled past
+the cap. Payload numbers are raw, in the unit the event carried, with the
+formatted form as a title — the inverse of the default tables, deliberately.
+*/}}
+{{define "event-row" -}}
+<tr class="event-row" id="{{eventRowID .Seq}}" data-seq="{{.Seq}}" data-type="{{.Type}}" data-event="{{.ID}}"{{if .Arrived}} data-arrived=""{{end}}>
+  <td class="seq">{{.Seq}}</td>
+  <td class="recv"><time datetime="{{iso .Recv}}">{{datetime .Recv}}</time></td>
+  <td class="handle"><a href="{{playerPath .Handle}}">{{.Handle}}</a></td>
+  <td class="type"><code>{{.Type}}</code> <small class="muted">v{{.Ver}}</small></td>
+  {{- /* sim_t is absent, not zero, when the event carried none. */}}
+  <td class="simt">{{if .SimT}}<span title="{{exactUnit .SimT "s"}}">{{value .SimT "s"}}</span>{{else}}&#8212;{{end}}</td>
+  <td>
+    <details class="details-blob">
+      <summary>Payload</summary>
+      <pre><code>{{blob .Payload}}</code></pre>
+      <p class="event-ids">
+        id {{.ID}}{{if .Flight}} &#183; flight {{.Flight}}{{end}}{{if .Session}} &#183; session {{.Session}}{{end}}{{if .Career}} &#183; career {{.Career}}{{end}}
+      </p>
+    </details>
+  </td>
+</tr>
+{{- end}}
+
+{{/*
+The log's body, from a web.EventsBody. `data-source` is the same "ssr"|"sse"
+readiness signal the feed list carries: the page ships "ssr", and the tail's
+prime replaces this tbody with an identical one marked "sse" — without it there
+is no way to tell an open stream from a page whose datastar module never ran.
+aria-live lets a screen reader hear live rows without the focus moving.
+*/}}
+{{define "events-body" -}}
+<tbody id="events-body" data-source="{{.Source}}" aria-live="polite" aria-relevant="additions">
+{{- range .Rows}}
+{{template "event-row" (eventItem .)}}
+{{- end}}
+{{- if not .Rows}}
+<tr id="events-empty"><td colspan="6">{{if .Filter}}No events of that type on this page of the log.{{else}}Nothing here yet. Fly something.{{end}}</td></tr>
+{{- end}}
+</tbody>
+{{- end}}
+
+{{/*
+The shared table-plus-tail block both events pages render, from a
+web.eventsPanel.
+
+The tail (`#events-tail`) exists only on a live page — page one, no cursor —
+and is what holds the SSE open: `data-init` runs `@get` when the element
+initialises, and `requestCancellation: 'cleanup'` registers the abort with
+datastar's attribute cleanup, so removing `data-init` closes the stream and
+restoring it reconnects (and re-primes). That toggle is me.js's `#events-live`
+button, which ships hidden because without JS there is no stream to pause.
+`#events-status` is the connection hint me.js maintains, same as `#feed-status`.
+`#events-heartbeat` is what the 20 s patch writes to, keeping nginx and any CDN
+from dropping an idle stream.
+*/}}
+{{define "events-panel" -}}
+<section id="events-panel" class="events-panel">
+  {{- if .Live}}
+  <div class="events-tools">
+    <button type="button" id="events-live" class="quiet" hidden aria-pressed="true">Live</button>
+    <span id="events-status" role="status"></span>
+  </div>
+  <span id="events-tail" hidden data-init="@get('{{.SSEURL}}', {requestCancellation: 'cleanup'})"></span>
+  {{- end}}
+  <div class="table-wrap" role="region" tabindex="0" aria-label="{{.Label}}">
+  <table id="events-log">
+    <thead>
+      <tr>
+        <th scope="col" class="seq">Seq</th>
+        <th scope="col" class="recv">Received</th>
+        <th scope="col">Handle</th>
+        <th scope="col">Type</th>
+        {{- /* The career clock is a duration column (rule 7): no cell says
+               "s", so the header names the quantity, as the boards do. */}}
+        <th scope="col" class="simt">Career clock</th>
+        <th scope="col">Payload</th>
+      </tr>
+    </thead>
+    {{template "events-body" .EventsBody}}
+  </table>
+  </div>
+  <span id="events-heartbeat" hidden></span>
+</section>
+{{- end}}
+
+{{/*
+The `?type=` filter chips, from a web.eventsData. URLs are precomputed in Go —
+the global page's chips carry `?handle=` through — so both pages share this one
+markup and cannot drift.
+*/}}
+{{define "events-types" -}}
+{{- if .Chips}}
+<nav class="periods" id="events-types" aria-label="Event type">
+  <a class="chip{{if not .Filter}} selected{{end}}" href="{{.AllURL}}">All types</a>
+  {{- range .Chips}}
+  <a class="chip{{if .Selected}} selected{{end}}" data-type="{{.Type}}" href="{{.URL}}">{{.Type}}</a>
+  {{- end}}
+</nav>
+{{- end}}
+{{- end}}
+
+{{/*
+The shared pager, from a web.eventsData: back to newest, and older by cursor.
+Paged until the cursor is gone, never until a page looks short: a filtered page
+that hit the server's scan bound comes back short *with* a cursor, and stopping
+there would silently truncate somebody's history.
+*/}}
+{{define "events-pager" -}}
+<nav class="pager" aria-label="Pagination">
+  {{- if .Before}}
+  <a href="{{.NewestURL}}" id="events-newest">Back to newest</a>
+  {{- else}}
+  <span id="events-newest" aria-disabled="true">Back to newest</span>
+  {{- end}}
+  {{- if .NextURL}}
+  <a href="{{.NextURL}}" id="events-older">Older</a>
+  {{- else}}
+  <span id="events-older" aria-disabled="true">End of the log</span>
+  {{- end}}
+</nav>
 {{- end}}

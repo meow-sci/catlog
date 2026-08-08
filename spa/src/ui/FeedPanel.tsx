@@ -3,8 +3,8 @@ import { Radio, RadioReceiver } from 'lucide-react';
 import { $feed, withoutHandle } from '../state/feed.ts';
 import { hrefFor } from '../state/router.ts';
 import { cn } from './cn.ts';
-import { $now, formatAgo, isoInstant } from './format.ts';
 import { Empty, Loading, Panel, PanelHeader } from './kit/index.ts';
+import { RelativeTime } from './RelativeTime.tsx';
 
 const STATUS_LABEL: Record<string, string> = {
   connecting: 'connecting',
@@ -26,7 +26,6 @@ const STATUS_LABEL: Record<string, string> = {
  */
 export function FeedPanel() {
   const feed = useStore($feed);
-  const now = useStore($now);
   const isLive = feed.status === 'live';
 
   return (
@@ -80,12 +79,7 @@ export function FeedPanel() {
                 >
                   {row.handle}
                 </a>
-                <time
-                  dateTime={isoInstant(row.at)}
-                  className="text-fg-muted shrink-0 text-xs tabular-nums"
-                >
-                  {formatAgo(row.at, now)}
-                </time>
+                <RelativeTime at={row.at} className="text-fg-muted shrink-0 text-xs tabular-nums" />
               </div>
               {/* Prose: no tabular figures. `withoutHandle` drops the leading
                   handle the server composed, because it is already a link above

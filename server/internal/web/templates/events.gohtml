@@ -8,62 +8,9 @@
   <p class="muted"><small>Numbers here are raw, in the unit the event carried &#8212; hover one for how catlog would write it. Flights flagged as cheated are not in this log; the installation identifier is never published, and career and kitten identifiers are relabelled per player. <a href="/docs/privacy">Why</a>.</small></p>
 </div>
 
-{{- if $e.Types}}
-<nav class="periods" id="events-types" aria-label="Event type">
-  <a class="chip{{if not $e.Filter}} selected{{end}}" href="{{eventsPath $e.Handle}}">All types</a>
-  {{- range $e.Types}}
-  <a class="chip{{if eq . $e.Filter}} selected{{end}}" data-type="{{.}}" href="{{eventsPath $e.Handle}}?type={{.}}">{{.}}</a>
-  {{- end}}
-</nav>
-{{- end}}
+{{template "events-types" $e}}
 
-<div class="table-wrap">
-<table id="events-log">
-  <thead>
-    <tr>
-      <th scope="col" class="recv">Received</th>
-      <th scope="col">Type</th>
-      <th scope="col" class="simt">Sim time</th>
-      <th scope="col">Payload</th>
-    </tr>
-  </thead>
-  <tbody>
-    {{- range $e.Events}}
-    <tr class="event-row" data-type="{{.Type}}" data-event="{{.ID}}">
-      <td class="recv">{{datetime .Recv}}</td>
-      <td class="type"><code>{{.Type}}</code> <small class="muted">v{{.Ver}}</small></td>
-      {{- /* sim_t is absent, not zero, when the event carried none. */}}
-      <td class="simt">{{if .SimT}}<span title="{{exactUnit .SimT "s"}}">{{value .SimT "s"}}</span>{{else}}&#8212;{{end}}</td>
-      <td>
-        <details class="details-blob">
-          <summary>Payload</summary>
-          <pre><code>{{blob .Payload}}</code></pre>
-          <p class="event-ids">
-            id {{.ID}}{{if .Flight}} &#183; flight {{.Flight}}{{end}}{{if .Session}} &#183; session {{.Session}}{{end}}{{if .Career}} &#183; career {{.Career}}{{end}}
-          </p>
-        </details>
-      </td>
-    </tr>
-    {{- else}}
-    <tr id="events-empty"><td colspan="4">{{if $e.Filter}}No events of that type on this page of the log.{{else}}Nothing here yet. Fly something.{{end}}</td></tr>
-    {{- end}}
-  </tbody>
-</table>
-</div>
+{{template "events-panel" $e.Panel}}
 
-<nav class="pager" aria-label="Pagination">
-  {{- if $e.Before}}
-  <a href="{{eventsPath $e.Handle}}{{if $e.Filter}}?type={{$e.Filter}}{{end}}" id="events-newest">Back to newest</a>
-  {{- else}}
-  <span id="events-newest" aria-disabled="true">Back to newest</span>
-  {{- end}}
-  {{- /* Paged until the cursor is gone, never until a page looks short: a
-         filtered page that hit the server's scan bound comes back short *with* a
-         cursor, and stopping there would silently truncate somebody's history. */}}
-  {{- if $e.NextURL}}
-  <a href="{{$e.NextURL}}" id="events-older">Older</a>
-  {{- else}}
-  <span id="events-older" aria-disabled="true">End of the log</span>
-  {{- end}}
-</nav>
+{{template "events-pager" $e}}
 {{- end}}

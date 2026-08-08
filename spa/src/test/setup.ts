@@ -1,5 +1,6 @@
 import { cleanup } from '@testing-library/react';
 import { afterEach, beforeEach, vi } from 'vitest';
+import { clearResourceCache } from '../api/useResource.ts';
 import { clearMe } from '../state/me.ts';
 
 /**
@@ -22,6 +23,10 @@ beforeEach(() => {
   //    cross-test dependency that only shows up when the files run in a
   //    different order.
   window.localStorage.clear();
+  // 4. **No test inherits another's API answers.** `useResource` remembers a
+  //    settled response for 30 seconds — longer than a test file — and every
+  //    test stubs `fetch` with its own fixtures for the same keys.
+  clearResourceCache();
   // The atom itself has to be reset too: a lazy nanostore keeps its value for a
   // second after the last subscriber unsubscribes, so clearing storage alone
   // leaves the previous test's handle in memory.

@@ -7,8 +7,10 @@
 -- player_id here is resolved to a handle in Go, via the in-memory map loaded at
 -- start and invalidated by the identity code.
 --
--- Same Turso discipline as events.db: no STRICT, no WITHOUT ROWID, no
--- expression indexes, FK clauses are documentation only.
+-- Same Turso discipline as events.db: no STRICT, no expression indexes, FK
+-- clauses are documentation only. WITHOUT ROWID (and VACUUM) are avoided by
+-- policy (§5.4), not capability — they exist behind a DSN experimental flag
+-- we do not enable (docs/DECISIONS.md, WP1).
 
 -- One shared cursor for every fold: `projection = 'all'` (§5.6).
 CREATE TABLE proj_checkpoint (projection TEXT PRIMARY KEY, last_seq INTEGER NOT NULL, updated_at INTEGER NOT NULL);
@@ -49,6 +51,6 @@ CREATE TABLE kitten (
 );
 
 -- Recent-activity feed for the SSE panel (§5.7). Capped at 500 rows by the
--- projector after each insert — there is no VACUUM in Turso (§5.4), so the
+-- projector after each insert — VACUUM is unused by policy (§5.4), so the
 -- cap keeps the free-page churn bounded rather than the file small.
 CREATE TABLE feed (id INTEGER PRIMARY KEY, at INTEGER NOT NULL, handle TEXT NOT NULL, type TEXT NOT NULL, summary TEXT NOT NULL);

@@ -3,6 +3,8 @@ package readapi
 import (
 	"context"
 	"encoding/json"
+	"sync"
+	"time"
 
 	"github.com/meow-sci/catlog/server/internal/stats"
 	"github.com/meow-sci/catlog/server/internal/store"
@@ -18,20 +20,62 @@ import (
 // be a second place for a banned player to leak onto a public surface, so the
 // handlers in readapi.go and the templates in web both call these.
 
+// statCountsTTL is how long one board census may be served before it is
+// recounted. Anything under the CDN's own s-maxage=30 is invisible from
+// outside; 10 s just bounds how often an origin-hitting burst pays the
+// group-by.
+const statCountsTTL = 10 * time.Second
+
+// countsCache memoizes [store.Projections.StatCounts] — see statCounts.
+type countsCache struct {
+	mu     sync.Mutex
+	at     time.Time
+	gen    int64
+	counts map[string]int64
+}
+
 // statCounts is `player_stat` grouped by stat: one row per (player, stat), so
 // the count is the number of players on each board.
 //
 // One query answers "how big is every board", which is what the board index,
 // a profile's `players` denominator and a comparison all need. Asking per board
 // instead would be one indexed count per row rendered.
+//
+// The answer is cached for [statCountsTTL], and only while nothing has been
+// written to projections.db: the fold is the only thing that changes this
+// census, so an idle server serves it for free and a busy one pays the group-by
+// at most once per TTL. The mutex is held across the recount on purpose —
+// concurrent misses wait for one query instead of racing their own.
+//
+// The key is [store.DB.WriteGen] on projections.db, not the head of the event
+// log. Those differ in the window that matters: ingest stops, the head stops
+// moving, and the fold is still running. Keyed on the head, a read landing in
+// that window cached a half-folded census and served it for the whole TTL —
+// which is `GET /v1/leaderboards` under-reporting its boards for ten seconds
+// right after a load run, exactly when something is looking.
+//
+// Callers treat the returned map as read-only; it is shared.
 func (s *Server) statCounts(ctx context.Context) (map[string]int64, error) {
+	gen := s.deps.Projections.WriteGen()
+
+	s.counts.mu.Lock()
+	defer s.counts.mu.Unlock()
+	now := s.deps.Now()
+	if s.counts.counts != nil && s.counts.gen == gen && now.Sub(s.counts.at) < statCountsTTL {
+		return s.counts.counts, nil
+	}
+
 	var counts map[string]int64
 	err := s.deps.Projections.With(func(p *store.Projections) error {
 		var err error
 		counts, err = p.StatCounts(ctx)
 		return err
 	})
-	return counts, err
+	if err != nil {
+		return nil, err
+	}
+	s.counts.counts, s.counts.gen, s.counts.at = counts, gen, now
+	return counts, nil
 }
 
 // BoardList assembles `GET /v1/leaderboards` (§4.8).
@@ -270,6 +314,14 @@ func (s *Server) player(ctx context.Context, handle string, counts map[string]in
 		}
 	}
 
+	// Both rank directions in one pass each: two statements per profile, however
+	// many boards the player is on, instead of one [store.Projections.StatAhead]
+	// per row — which a comparison then multiplied by its handle count.
+	ahead, err := s.aheadCounts(ctx, entry.PlayerID, rows)
+	if err != nil {
+		return PlayerResponse{}, true, err
+	}
+
 	banned := s.deps.Directory.BannedIDs()
 	out := PlayerResponse{Handle: entry.Handle, Since: entry.Since, Stats: make([]PlayerRow, 0, len(rows))}
 	for _, row := range rows {
@@ -283,7 +335,7 @@ func (s *Server) player(ctx context.Context, handle string, counts map[string]in
 			// still sitting in projections.db until the next rebuild.
 			continue
 		}
-		rank, err := s.rank(ctx, row, board.Ascending, banned)
+		rank, err := s.rank(ctx, row, board.Ascending, banned, ahead[row.Stat])
 		if err != nil {
 			return PlayerResponse{}, true, err
 		}
@@ -300,6 +352,45 @@ func (s *Server) player(ctx context.Context, handle string, counts map[string]in
 		})
 	}
 	return out, true, nil
+}
+
+// aheadCounts resolves the unfiltered half of every rank on a profile: for each
+// of the player's rows on a board this build can name, how many rows outrank
+// it. One [store.Projections.StatAheadForPlayer] statement per rank direction.
+func (s *Server) aheadCounts(ctx context.Context, playerID int64, rows []store.StatRow) (map[string]int64, error) {
+	var desc, asc []string
+	for _, row := range rows {
+		board, known := stats.Describe(row.Stat)
+		if !known {
+			continue
+		}
+		if board.Ascending {
+			asc = append(asc, row.Stat)
+		} else {
+			desc = append(desc, row.Stat)
+		}
+	}
+
+	out := map[string]int64{}
+	err := s.deps.Projections.With(func(p *store.Projections) error {
+		for _, dir := range []struct {
+			statKeys []string
+			asc      bool
+		}{{desc, false}, {asc, true}} {
+			part, err := p.StatAheadForPlayer(ctx, playerID, dir.statKeys, dir.asc)
+			if err != nil {
+				return err
+			}
+			for stat, n := range part {
+				out[stat] = n
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // ClampPaging applies §4.8's bounds. A too-large limit is clamped rather than

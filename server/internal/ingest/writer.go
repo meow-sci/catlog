@@ -16,7 +16,14 @@ import (
 // with 503 + Retry-After rather than by growing memory: the mod already knows
 // how to back off, and an unbounded queue only converts overload into an
 // out-of-memory kill.
-const QueueDepth = 256
+//
+// 64, down from an original 256: every queued job is held by a handler that is
+// blocked in Await and gated by [Limits.MaxInFlight], so the queue can never
+// legitimately hold more jobs than there are in-flight requests. The depth only
+// bounds worst-case memory — jobs whose handlers timed out but whose events
+// (up to ~2 MiB decoded each) are still queued — and 64 of those is already far
+// beyond anything a healthy writer accumulates.
+const QueueDepth = 64
 
 // ErrBusy is returned by [Writer.Submit] when the queue is full.
 var ErrBusy = errors.New("ingest: write queue is full")

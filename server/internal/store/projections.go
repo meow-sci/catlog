@@ -185,6 +185,64 @@ func (p *Projections) StatAhead(ctx context.Context, stat string, asc bool, valu
 	return n, nil
 }
 
+// StatAheadForPlayer is [Projections.StatAhead] for every one of a player's
+// rows on the given boards, in one statement: a correlated count over each of
+// the player's own rows. The boards must all rank in the same direction — the
+// read API calls this once for descending boards and once for ascending, which
+// makes a profile cost two rank statements instead of one per board.
+//
+// The tie rule inside the subquery is byte-for-byte [Projections.StatAhead]'s,
+// which is what keeps a profile's rank consistent with the board page.
+func (p *Projections) StatAheadForPlayer(ctx context.Context, playerID int64, statKeys []string, asc bool) (map[string]int64, error) {
+	if len(statKeys) == 0 {
+		return nil, nil
+	}
+	cmp := ">"
+	if asc {
+		cmp = "<"
+	}
+	out := make(map[string]int64, len(statKeys))
+	// Chunked like [Projections.StatsForPlayers], and for the same reason —
+	// though a player is on at most a few dozen boards, so one chunk is the
+	// overwhelmingly common case.
+	const chunk = 200
+	for start := 0; start < len(statKeys); start += chunk {
+		part := statKeys[start:min(start+chunk, len(statKeys))]
+		args := make([]any, 0, len(part)+1)
+		args = append(args, playerID)
+		for _, s := range part {
+			args = append(args, s)
+		}
+		rows, err := p.Reader().QueryContext(ctx,
+			`SELECT me.stat,
+			        (SELECT count(*) FROM player_stat o
+			         WHERE o.stat = me.stat
+			           AND (o.value `+cmp+` me.value OR (o.value = me.value AND o.updated_seq < me.updated_seq)))
+			 FROM player_stat me
+			 WHERE me.player_id = ? AND me.stat IN (`+placeholders(len(part))+`)`, args...)
+		if err != nil {
+			return nil, fmt.Errorf("store: ranks for player %d: %w", playerID, err)
+		}
+		for rows.Next() {
+			var (
+				stat string
+				n    int64
+			)
+			if err := rows.Scan(&stat, &n); err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("store: scan player rank: %w", err)
+			}
+			out[stat] = n
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return nil, fmt.Errorf("store: ranks for player %d: %w", playerID, err)
+		}
+	}
+	return out, nil
+}
+
 // StatPlayers is how many players hold a value on one board.
 //
 // `player_stat` has one row per (player, stat), so the row count *is* the number
@@ -342,8 +400,8 @@ func (p *Projections) FlaggedFlights(ctx context.Context, flights []ids.ID) (map
 
 // --- feed --------------------------------------------------------------------
 
-// FeedCap is the §5.4 bound on the `feed` table. There is no VACUUM (§5.4), so
-// the cap keeps free-page churn bounded rather than the file small.
+// FeedCap is the §5.4 bound on the `feed` table. VACUUM is unused by policy
+// (§5.4), so the cap keeps free-page churn bounded rather than the file small.
 const FeedCap = 500
 
 // FeedRow is one row of `feed` (§5.4).

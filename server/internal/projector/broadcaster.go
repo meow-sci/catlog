@@ -80,3 +80,78 @@ func (b *Broadcaster) Clients() int {
 	defer b.mu.Unlock()
 	return len(b.subs)
 }
+
+// RawBroadcaster is [Broadcaster] for the raw event stream behind
+// `GET /v1/events/stream`: the same contract — batches arrive only after the
+// transaction that stored their projection pass committed, in seq order, and a
+// subscriber that stops reading loses batches rather than blocking the
+// projector — carrying [store.StoredEvent] rows instead of feed rows.
+//
+// A second type rather than a parameter on the first because the two streams
+// are wired to different consumers (package web's datastar handler holds the
+// feed one) and never share a subscriber list.
+//
+// What travels here is the stored row, unredacted: the §1 redaction is applied
+// once per row by the readapi hub before anything reaches a socket, exactly as
+// the paginated view redacts on read. Nothing subscribes to this except that
+// hub.
+type RawBroadcaster struct {
+	mu   sync.Mutex
+	next int64
+	subs map[int64]chan []store.StoredEvent
+}
+
+// NewRawBroadcaster returns a raw broadcaster with no subscribers.
+func NewRawBroadcaster() *RawBroadcaster {
+	return &RawBroadcaster{subs: map[int64]chan []store.StoredEvent{}}
+}
+
+// Subscribe registers a listener and returns its channel plus the function that
+// unregisters and closes it. Calling cancel twice is safe.
+func (b *RawBroadcaster) Subscribe() (<-chan []store.StoredEvent, func()) {
+	ch := make(chan []store.StoredEvent, subscriberBuffer)
+
+	b.mu.Lock()
+	id := b.next
+	b.next++
+	b.subs[id] = ch
+	n := len(b.subs)
+	b.mu.Unlock()
+	metricRawSubs.Set(int64(n))
+
+	var once sync.Once
+	return ch, func() {
+		once.Do(func() {
+			b.mu.Lock()
+			delete(b.subs, id)
+			n := len(b.subs)
+			b.mu.Unlock()
+			metricRawSubs.Set(int64(n))
+			close(ch)
+		})
+	}
+}
+
+// Publish delivers a committed batch of stored events to every subscriber,
+// dropping the batch for any subscriber whose buffer is full.
+func (b *RawBroadcaster) Publish(evs []store.StoredEvent) {
+	if len(evs) == 0 {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, ch := range b.subs {
+		select {
+		case ch <- evs:
+		default:
+			// Dropped on purpose — see subscriberBuffer.
+		}
+	}
+}
+
+// Clients reports the number of live subscribers.
+func (b *RawBroadcaster) Clients() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return len(b.subs)
+}

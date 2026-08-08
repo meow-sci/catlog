@@ -2,8 +2,6 @@ package web
 
 import (
 	"net/http"
-	"net/url"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -62,8 +60,12 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 		data.Feed.Rows, err = p.RecentFeed(r.Context(), FeedLimit)
 		return err
 	}); err != nil {
-		s.serverError(w, r, err, "read the activity feed")
-		return
+		// Degrade exactly as the SSE prime does for the same query (feed.go):
+		// an empty feed panel — which the stream will fill the moment the read
+		// works again — beats 500ing the whole front page over its one live
+		// decoration.
+		s.deps.Log.Error("priming the front-page feed failed", "err", err)
+		data.Feed.Rows = nil
 	}
 	list, err := s.deps.Read.BoardList(r.Context())
 	if err != nil {
@@ -217,80 +219,6 @@ func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {
 		Title: player.Handle + " — catlog",
 		Nav:   "boards",
 		Data:  player,
-	})
-}
-
-// --- GET /p/{handle}/events -------------------------------------------------------
-
-// EventRows is one page of the raw log.
-const EventRows = 50
-
-// eventsData is `/p/{handle}/events`.
-type eventsData struct {
-	readapi.EventsResponse
-	// Types are the event types present on this page, so the filter offers what
-	// the reader can actually see rather than the whole §4.2 taxonomy.
-	Types []string
-	// Filter is the active `?type=`, empty for none.
-	Filter string
-	// Before echoes the cursor this page was read at, so "start again" can be
-	// offered only when it would do something.
-	Before string
-	// NextURL is the link to the next (older) page, empty at the end of the log.
-	//
-	// It is built from `Next` and nothing else: a filtered page that hit the
-	// server's scan bound comes back short *with* a cursor and is not the end of
-	// the log, so paging until a page looks short would silently truncate
-	// somebody's history.
-	NextURL string
-}
-
-func (s *Server) handlePlayerEvents(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query()
-	handle := r.PathValue("handle")
-	filter := q.Get("type")
-
-	var before int64
-	if raw := q.Get("before"); raw != "" {
-		n, err := strconv.ParseInt(raw, 10, 64)
-		if err != nil || n < 0 {
-			s.notFound(w, r, "That is not a cursor catlog issued.")
-			return
-		}
-		before = n
-	}
-
-	out, known, err := s.deps.Read.PlayerEvents(r.Context(), handle, filter, before, EventRows)
-	switch {
-	case !known:
-		s.notFound(w, r, "No such player.")
-		return
-	case err != nil:
-		s.serverError(w, r, err, "read the event log")
-		return
-	}
-
-	data := eventsData{EventsResponse: out, Filter: filter, Before: q.Get("before")}
-	seen := map[string]bool{}
-	for _, ev := range out.Events {
-		if !seen[ev.Type] {
-			seen[ev.Type] = true
-			data.Types = append(data.Types, ev.Type)
-		}
-	}
-	sort.Strings(data.Types)
-	if out.Next != "" {
-		next := url.Values{"before": {out.Next}}
-		if filter != "" {
-			next.Set("type", filter)
-		}
-		data.NextURL = "/p/" + url.PathEscape(out.Handle) + "/events?" + next.Encode()
-	}
-
-	s.render(w, r, http.StatusOK, "events", publicCache, page{
-		Title: out.Handle + "'s events — catlog",
-		Nav:   "boards",
-		Data:  data,
 	})
 }
 
@@ -567,6 +495,9 @@ func (s *Server) handleDocs(w http.ResponseWriter, r *http.Request) {
 // handleDocsIndex sends bare /docs to the install page rather than 404ing: it is
 // the page somebody arriving from the game needs first.
 func (s *Server) handleDocsIndex(w http.ResponseWriter, r *http.Request) {
+	// Same public cache header as the compare redirect above: the target never
+	// varies, so a shared cache may hold the 302 like any other public page.
+	w.Header().Set("Cache-Control", publicCache)
 	http.Redirect(w, r, "/docs/install", http.StatusFound)
 }
 
@@ -583,7 +514,10 @@ func (s *Server) handleNotFound(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) notFound(w http.ResponseWriter, r *http.Request, detail string) {
-	s.render(w, r, http.StatusNotFound, "notfound", publicCache, page{
+	// Never publicly cached: the catch-all matches every URL nobody thought
+	// of, and `s-maxage` would let each distinct miss occupy its own CDN entry
+	// — an unbounded cache anybody can fill by asking for nonsense.
+	s.render(w, r, http.StatusNotFound, "notfound", privateCache, page{
 		Title: "Not found — catlog",
 		Data:  notFoundData{Detail: detail, Path: r.URL.Path},
 	})

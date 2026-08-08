@@ -1,11 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { BoardsPage } from '../pages/BoardsPage.tsx';
 import { ComparePage } from '../pages/ComparePage.tsx';
+import { EventsPage } from '../pages/EventsPage.tsx';
 import { PlayerEventsPage } from '../pages/PlayerEventsPage.tsx';
 import { SearchPage } from '../pages/SearchPage.tsx';
 import { BoardTable } from '../ui/BoardTable.tsx';
+import { HeaderSearch } from '../ui/HeaderSearch.tsx';
 import { HandleComboBox } from '../ui/kit/HandleComboBox.tsx';
+import { EventSummary } from '../ui/kit/EventSummary.tsx';
 import { DataTable } from '../ui/kit/index.ts';
+import { RelativeTime } from '../ui/RelativeTime.tsx';
 import { YourStanding } from '../ui/YourStanding.tsx';
 
 /**
@@ -48,10 +52,20 @@ describe('React Compiler', () => {
     ['BoardTable', BoardTable],
     ['DataTable', DataTable],
     ['HandleComboBox', HandleComboBox],
+    // The two components the performance pass added: the deferred header search
+    // (in the shell, so on every first paint) and the self-ticking timestamp
+    // leaf (rendered once per table row, so a bailout multiplies).
+    ['HeaderSearch', HeaderSearch],
+    ['RelativeTime', RelativeTime],
     ['YourStanding', YourStanding],
     ['ComparePage', ComparePage],
     ['SearchPage', SearchPage],
     ['PlayerEventsPage', PlayerEventsPage],
+    // The wave-3 additions: the virtualized global log (lazy chunk) and the
+    // allow-list summary rendered once per virtualized row, where a bailout
+    // multiplies.
+    ['EventsPage', EventsPage],
+    ['EventSummary', EventSummary],
   ])('compiled %s (auto-memoization is on)', (_name, component) => {
     expect(component.toString()).toMatch(ALLOCATES_MEMO_CACHE);
   });

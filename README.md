@@ -209,6 +209,32 @@ cd server && go test ./internal/projector/ -run '^$' -bench 'BenchmarkDrain' -be
 `BenchmarkDrainMemory` reports bytes and allocations per event and the peak live heap;
 `BenchmarkDrainTuning` sweeps `batch_size` and the decoder count.
 
+### Running it more than once
+
+Runs accumulate. Nothing about that is wrong — a database that already holds a few million events
+is a more honest target than an empty one, and `--assert` measures *deltas*, so every invariant
+holds on the tenth run as it does on the first. `--namespace` defaults to a timestamp, so each run
+mints its own players and the same `--seed` replays the same gameplay under fresh identities; pass
+`--namespace` explicitly only when you want to re-run against a database that already holds those
+players.
+
+Two practical notes:
+
+- **`data/events.db` only grows.** A `PLAYERS=550` run adds about 340 MB (measured: 6.3 M events
+  in 1.9 GB, ~315 B/event with the WP-STORE-ZSTD dictionary), and there is no `VACUUM` by policy
+  (§5.4), so a purge does not give the pages back — nor does the compression reach rows written
+  before it landed. For throughput work, point the server at a scratch database and delete the
+  directory afterwards — the harness needs nothing from the last run:
+
+  ```sh
+  CATLOG_DATA_DIR=/tmp/catlog-load CATLOG_LIMITS_RATELIMIT_DISABLED=1 make dev
+  ```
+
+- **One process per database file.** tursogo takes an exclusive whole-file lock, so an IDE database
+  tool or a stray `catlogd` holding `data/events.db` stops `make dev` from starting at all:
+  `Locking error: Failed locking file 'data/events.db'`. That is what `make db-snapshot` is for —
+  it copies both databases to `./data-snapshot` for ad-hoc SQL.
+
 ## End-to-end
 
 ```sh

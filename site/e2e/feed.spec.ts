@@ -51,6 +51,11 @@ test.describe("the live feed", () => {
     await expect(line).toHaveAttribute("data-type", "vehicle.rud");
     await expect(line).toContainText("demo_ace");
     await expect(line).toContainText("a collision");
+    // Only the streamed line is marked arrived — the arrival flash is scoped to
+    // it, so primed rows never animate on load or reconnect.
+    await expect(line).toHaveAttribute("data-arrived", "");
+    // The summary's leading handle is a profile link.
+    await expect(line.locator(`a[href="/p/demo_ace"]`)).toHaveText("demo_ace");
 
     // The newest line is prepended, so it is first.
     await expect(page.locator("#feed li.feed-item").first()).toContainText(marker);

@@ -46,7 +46,7 @@ export function Details(props: {
  * **Raw** on purpose in the event log: this is the view where a reader wants
  * `7799`, not `7 799 m/s` — the inverse of a default table, and deliberate. The
  * formatted reading is available as a `title` on the keys that have a unit (see
- * `PayloadTable`), so nothing is lost either way.
+ * `PayloadValues`), so nothing is lost either way.
  */
 export function Json(props: { readonly value: unknown }) {
   return (

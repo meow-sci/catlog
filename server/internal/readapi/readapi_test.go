@@ -1,6 +1,7 @@
 package readapi_test
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -37,7 +38,9 @@ type live struct{ p *store.Projections }
 
 func (l live) With(fn func(*store.Projections) error) error { return fn(l.p) }
 
-func newFixture(t *testing.T) *fixture {
+func (l live) WriteGen() int64 { return l.p.WriteGen() }
+
+func newFixture(t *testing.T, opts ...func(*readapi.Deps)) *fixture {
 	t.Helper()
 	f := &fixture{
 		t:        t,
@@ -49,12 +52,16 @@ func newFixture(t *testing.T) *fixture {
 	if err := f.dir.Reload(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	srv, err := readapi.New(readapi.Deps{
+	deps := readapi.Deps{
 		Projections: live{f.proj},
 		Events:      f.events,
 		Directory:   f.dir,
 		Log:         testutil.DiscardLogger(),
-	})
+	}
+	for _, opt := range opts {
+		opt(&deps)
+	}
+	srv, err := readapi.New(deps)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,15 +123,27 @@ func (f *fixture) event(playerID int64, n int) int64 {
 	return seq
 }
 
+// projWrite writes to projections.db the way the projector does — through a
+// write transaction, not the bare handle. The distinction is load-bearing: the
+// board census cache is keyed on the projections write generation, which only a
+// committed transaction moves, so a fixture that wrote around it would be
+// invisible to every read that follows.
+func (f *fixture) projWrite(query string, args ...any) {
+	f.t.Helper()
+	if err := f.proj.WithWriteTx(f.t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(f.t.Context(), query, args...)
+		return err
+	}); err != nil {
+		f.t.Fatal(err)
+	}
+}
+
 // stat writes a player_stat row at a real event seq.
 func (f *fixture) stat(playerID int64, stat string, value float64, n int) {
 	f.t.Helper()
 	seq := f.event(playerID, n)
-	if _, err := f.proj.Writer().ExecContext(f.t.Context(),
-		`INSERT INTO player_stat (player_id, stat, value, context, updated_seq) VALUES (?, ?, ?, ?, ?)`,
-		playerID, stat, value, `{"body":"duna"}`, seq); err != nil {
-		f.t.Fatal(err)
-	}
+	f.projWrite(`INSERT INTO player_stat (player_id, stat, value, context, updated_seq) VALUES (?, ?, ?, ?, ?)`,
+		playerID, stat, value, `{"body":"duna"}`, seq)
 }
 
 func (f *fixture) get(path string) *httptest.ResponseRecorder {
@@ -369,6 +388,127 @@ func TestBannedPlayersAreFilteredFromBoardsAndRanks(t *testing.T) {
 
 	if rec := f.get("/v1/players/cheater"); rec.Code != http.StatusNotFound {
 		t.Errorf("a banned player's profile returned %d, want 404", rec.Code)
+	}
+}
+
+// countingLive wraps the projections handle and counts the queries that reach
+// it, which is how the census cache's behavior is observable.
+type countingLive struct {
+	p     *store.Projections
+	calls int
+}
+
+func (l *countingLive) With(fn func(*store.Projections) error) error {
+	l.calls++
+	return fn(l.p)
+}
+
+func (l *countingLive) WriteGen() int64 { return l.p.WriteGen() }
+
+// TestStatCountsAreCached pins the board-census cache: repeated index reads are
+// served from memory, and a write to projections.db invalidates it — which is
+// what keeps the unit above safe for every test that writes a row and re-reads.
+//
+// The key is the projections write generation, not the head of the event log.
+// Those come apart in the window that matters: ingest stops, the head stops
+// moving, and the fold is still running. Keyed on the head, a read landing
+// there cached a half-folded census and served it for the whole TTL — a board
+// index that under-reports for ten seconds right after a load run.
+func TestStatCountsAreCached(t *testing.T) {
+	f := newFixture(t)
+	whiskers := f.player("whiskers")
+	f.stat(whiskers, stats.StatStagings, 5, 1)
+
+	counting := &countingLive{p: f.proj}
+	srv, err := readapi.New(readapi.Deps{
+		Projections: counting,
+		Events:      f.events,
+		Directory:   f.dir,
+		Log:         testutil.DiscardLogger(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	first, err := srv.BoardList(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	after := counting.calls
+	if after == 0 {
+		t.Fatal("the first index read never queried the projections")
+	}
+
+	second, err := srv.BoardList(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counting.calls != after {
+		t.Errorf("a repeated index read queried again (%d → %d calls); the census must be cached", after, counting.calls)
+	}
+	if len(second.Boards) != len(first.Boards) {
+		t.Errorf("cached index = %d boards, first read = %d", len(second.Boards), len(first.Boards))
+	}
+
+	// An event that has not been folded yet changes no board, so it does not
+	// invalidate anything: the census is a statement about projections.db.
+	f.event(whiskers, 2)
+	if _, err := srv.BoardList(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if counting.calls != after {
+		t.Errorf("an unfolded event recounted the census (%d → %d calls); "+
+			"the census counts projections, not the log", after, counting.calls)
+	}
+
+	// The fold landing is what must drop the cache, TTL or no TTL.
+	f.stat(whiskers, stats.StatOrbitsAchieved, 3, 3)
+	third, err := srv.BoardList(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counting.calls == after {
+		t.Error("the index read after a fold was served stale; a projections write must invalidate the census")
+	}
+	count := func(r readapi.BoardsResponse, stat string) int64 {
+		for _, b := range r.Boards {
+			if b.Stat == stat {
+				return b.Count
+			}
+		}
+		return -1
+	}
+	if before, now := count(first, stats.StatOrbitsAchieved), count(third, stats.StatOrbitsAchieved); now != before+1 {
+		t.Errorf("%s count = %d after the fold, want %d — the recount must be fresh, not just a recount",
+			stats.StatOrbitsAchieved, now, before+1)
+	}
+}
+
+// TestSmallPageSurvivesABannedFirstFetch pins the sized first read of
+// visibleRows: a small limit reads a small first page, and when that page turns
+// out to be all banned players the scan escalates until the request is honest.
+func TestSmallPageSurvivesABannedFirstFetch(t *testing.T) {
+	f := newFixture(t)
+	// 25 banned players hold the top of the board — more than a limit=2
+	// request's slacked first page — with two honest players below them.
+	for i := range 27 {
+		handle := fmt.Sprintf("player_%02d", i)
+		p := f.player(handle)
+		f.stat(p, stats.StatStagings, float64(100-i), i)
+		if i < 25 {
+			f.ban(handle)
+		}
+	}
+
+	got := decode[readapi.BoardResponse](t, f.get("/v1/leaderboards/stagings?limit=2"))
+	if len(got.Rows) != 2 {
+		t.Fatalf("%d rows, want 2 despite the whole first fetch being banned", len(got.Rows))
+	}
+	if got.Rows[0].Handle != "player_25" || got.Rows[0].Rank != 1 {
+		t.Errorf("top row = %q rank %d, want player_25 at 1", got.Rows[0].Handle, got.Rows[0].Rank)
+	}
+	if got.Rows[1].Handle != "player_26" || got.Rows[1].Rank != 2 {
+		t.Errorf("second row = %q rank %d, want player_26 at 2", got.Rows[1].Handle, got.Rows[1].Rank)
 	}
 }
 

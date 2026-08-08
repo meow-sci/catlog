@@ -17,6 +17,7 @@ import (
 	// package ingest's init, and catlogd links both packages. /debug/vars only
 	// shows what the binary has actually registered.
 	_ "github.com/meow-sci/catlog/server/internal/ingest"
+	"github.com/meow-sci/catlog/server/internal/store"
 	"github.com/meow-sci/catlog/server/internal/testutil"
 )
 
@@ -314,4 +315,91 @@ func truncate(s string) string {
 		return s
 	}
 	return s[:40] + "…"
+}
+
+// TestAdminStatsCensusIsCached pins the /admin/stats counting cache: the poll
+// loops (loadgen, the mod's projector wait) must not pay a full count(*) per
+// poll, and nothing a committed write changed may be answered from memory.
+//
+// The second half is a regression. The key used to be the head of the event
+// log, which a purge does not move — so `events.total` kept answering with the
+// pre-purge count for a full TTL, and catlog.loadgen read that stale number as
+// the baseline for its zero-loss invariant and reported events it had never
+// lost.
+func TestAdminStatsCensusIsCached(t *testing.T) {
+	cfg := testutil.Config(t)
+	events := testutil.Events(t)
+	ks := testutil.KeysAt(t, cfg.Data.Dir)
+	now := time.Unix(1_770_000_000, 0).UTC()
+
+	s := New(Deps{
+		Config: cfg, Keys: ks, Events: events,
+		Log: testutil.DiscardLogger(),
+		Now: func() time.Time { return now },
+	})
+	s.RegisterProjections(ProjectionDeps{})
+	srv := httptest.NewServer(s.Handler())
+	t.Cleanup(srv.Close)
+
+	stats := func() (total, banned float64) {
+		t.Helper()
+		res, err := srv.Client().Get(srv.URL + "/admin/stats")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		var body map[string]any
+		if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
+			t.Fatalf("stats response: %v", err)
+		}
+		ev := body["events"].(map[string]any)
+		return ev["total"].(float64), ev["banned"].(float64)
+	}
+
+	if total, _ := stats(); total != 0 {
+		t.Fatalf("empty log total = %v, want 0", total)
+	}
+
+	// A new event moves the head of the log and must show on the very next
+	// poll, TTL or no TTL — the projector-wait loops depend on it.
+	player := testutil.Player(t, events, ks, "dev", "census")
+	if _, _, err := events.InsertEvents(t.Context(), nil, player, []store.Event{{
+		ID: testutil.ULID(t), SessionID: testutil.ULID(t), Type: "vehicle.rud", Ver: 1, WallTime: 1,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if total, _ := stats(); total != 1 {
+		t.Errorf("total after an insert = %v, want 1 immediately", total)
+	}
+
+	// With nothing writing, the count really is memoized rather than recounted:
+	// poke a value into the cache that no query could produce and watch the
+	// endpoint hand it back. This is what keeps a poll loop off count(*).
+	s.stats.mu.Lock()
+	s.stats.events.Total = 4242
+	s.stats.mu.Unlock()
+	if total, _ := stats(); total != 4242 {
+		t.Errorf("total with nothing written = %v, want the cached 4242", total)
+	}
+
+	// A ban writes no event, so it does not move the head of the log — but it
+	// does commit, and the census counts banned players.
+	if err := events.SetBan(t.Context(), nil, player, now.UnixMilli(), "test"); err != nil {
+		t.Fatal(err)
+	}
+	total, banned := stats()
+	if banned != 1 {
+		t.Errorf("banned right after the ban = %v, want 1 immediately", banned)
+	}
+	if total != 1 {
+		t.Errorf("total after the ban = %v, want the recounted 1", total)
+	}
+
+	// The regression: a purge deletes rows without moving the head of the log.
+	if _, err := events.PurgePlayer(t.Context(), player); err != nil {
+		t.Fatal(err)
+	}
+	if total, _ := stats(); total != 0 {
+		t.Errorf("total right after the purge = %v, want 0 immediately", total)
+	}
 }

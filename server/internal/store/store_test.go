@@ -86,7 +86,8 @@ func TestMigrationsCreateTheFullDDL(t *testing.T) {
 		e := testutil.Events(t)
 		want := []string{
 			"archive_cursor", "credential", "event", "handle", "ingest_batch",
-			"player", "retired_handle", "schema_version", "stream_state", "tombstone",
+			"payload_dict", "player", "retired_handle", "schema_version",
+			"stream_state", "tombstone",
 		}
 		if got := tableNames(t, e.DB); !equal(got, want) {
 			t.Errorf("tables = %v, want %v", got, want)
@@ -95,8 +96,8 @@ func TestMigrationsCreateTheFullDDL(t *testing.T) {
 		if got := indexNames(t, e.DB); !equal(got, wantIdx) {
 			t.Errorf("indexes = %v, want %v", got, wantIdx)
 		}
-		if e.Version != 2 {
-			t.Errorf("schema version = %d, want 2", e.Version)
+		if e.Version != 3 {
+			t.Errorf("schema version = %d, want 3", e.Version)
 		}
 	})
 
@@ -177,8 +178,8 @@ func TestMigrationsAreIdempotent(t *testing.T) {
 
 func TestMigrationsRunOnMemoryStores(t *testing.T) {
 	e := testutil.MemEvents(t)
-	if e.Version != 2 {
-		t.Errorf("version = %d, want 2", e.Version)
+	if e.Version != 3 {
+		t.Errorf("version = %d, want 3", e.Version)
 	}
 	if got := len(tableNames(t, e.DB)); got == 0 {
 		t.Error("in-memory store has no tables")
@@ -561,6 +562,58 @@ func TestProjectionCheckpoint(t *testing.T) {
 	}
 	if seq != 99 {
 		t.Errorf("checkpoint = %d, want 99", seq)
+	}
+}
+
+// TestStatAheadForPlayerMatchesStatAhead pins the collapsed rank query to the
+// per-row one: same counts, same tie rule, in both directions. If the two ever
+// disagree, a profile shows a rank its board page contradicts.
+func TestStatAheadForPlayerMatchesStatAhead(t *testing.T) {
+	p := testutil.MemProjections(t)
+
+	// Two boards, four players, including a value tie broken by updated_seq.
+	rows := []struct {
+		player int64
+		stat   string
+		value  float64
+		seq    int64
+	}{
+		{1, "rud_total", 10, 5}, {2, "rud_total", 25, 3}, {3, "rud_total", 25, 2}, {4, "rud_total", 7, 9},
+		{1, "fastest_to_orbit", 300, 4}, {2, "fastest_to_orbit", 120, 6}, {3, "fastest_to_orbit", 120, 1},
+	}
+	for _, r := range rows {
+		if _, err := p.Writer().ExecContext(t.Context(),
+			`INSERT INTO player_stat (player_id, stat, value, context, updated_seq) VALUES (?, ?, ?, NULL, ?)`,
+			r.player, r.stat, r.value, r.seq); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for _, r := range rows {
+		asc := r.stat == "fastest_to_orbit" // career times rank smallest-first
+		bulk, err := p.StatAheadForPlayer(t.Context(), r.player, []string{r.stat}, asc)
+		if err != nil {
+			t.Fatalf("StatAheadForPlayer(%d, %s): %v", r.player, r.stat, err)
+		}
+		one, err := p.StatAhead(t.Context(), r.stat, asc, r.value, r.seq)
+		if err != nil {
+			t.Fatalf("StatAhead(%s): %v", r.stat, err)
+		}
+		if bulk[r.stat] != one {
+			t.Errorf("player %d on %s: bulk ahead = %d, per-row = %d", r.player, r.stat, bulk[r.stat], one)
+		}
+	}
+
+	// Both directions in one call each, the way a profile asks.
+	bulk, err := p.StatAheadForPlayer(t.Context(), 2, []string{"rud_total"}, false)
+	if err != nil {
+		t.Fatalf("StatAheadForPlayer: %v", err)
+	}
+	if bulk["rud_total"] != 1 { // only the seq-2 tie-winner is ahead of seq 3
+		t.Errorf("player 2 rud_total ahead = %d, want 1 (tie broken by earliest seq)", bulk["rud_total"])
+	}
+	if empty, err := p.StatAheadForPlayer(t.Context(), 2, nil, false); err != nil || empty != nil {
+		t.Errorf("no stats = (%v, %v), want (nil, nil)", empty, err)
 	}
 }
 

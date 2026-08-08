@@ -1,9 +1,11 @@
 -- events.db initial schema — INITIAL_IMPL_PLAN.md §5.4, verbatim.
 --
--- Turso discipline applied throughout (§5.4): no STRICT, no WITHOUT ROWID, no
--- expression indexes (handle_lc is materialized instead), no VACUUM, UTF-8
--- only. FOREIGN KEY clauses are documentation — PRAGMA foreign_keys is never
--- enabled, so nothing here is enforced by the engine.
+-- Turso discipline applied throughout (§5.4): no STRICT, no expression indexes
+-- (handle_lc is materialized instead), UTF-8 only. WITHOUT ROWID and VACUUM
+-- are avoided by policy (§5.4), not capability — tursogo supports both behind
+-- a DSN experimental flag we do not enable (docs/DECISIONS.md, WP1). FOREIGN
+-- KEY clauses are documentation — PRAGMA foreign_keys is never enabled, so
+-- nothing here is enforced by the engine.
 --
 -- ULIDs are stored as 16-byte BLOBs (D19); timestamps are unix milliseconds
 -- stored as INTEGER; payloads are JSON text.

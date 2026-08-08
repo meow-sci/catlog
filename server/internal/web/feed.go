@@ -107,7 +107,11 @@ func (s *Server) handleFeed(w http.ResponseWriter, r *http.Request) {
 				}
 				high = row.ID
 
-				item, err := s.fragment("feed-item", row)
+				// Arrived marks only this live copy: the CSS arrival flash is
+				// scoped to it, so primed and reconnect-primed rows never
+				// animate — the flash means "new since you opened this page",
+				// not "the stream (re)connected".
+				item, err := s.fragment("feed-item", FeedItem{FeedRow: row, Arrived: true})
 				if err != nil {
 					s.deps.Log.Error("rendering a feed line failed", "id", row.ID, "err", err)
 					continue
@@ -138,6 +142,20 @@ type FeedList struct {
 	Rows   []store.FeedRow
 	Source string
 }
+
+// FeedItem is what the `feed-item` template renders: one row, plus whether it
+// just arrived over the open stream. Arrived is false for every row a whole
+// list renders (the SSR page and the SSE prime) and true only for the per-row
+// live patch — it stamps `data-arrived`, which is the only thing the arrival
+// flash is scoped to.
+type FeedItem struct {
+	store.FeedRow
+	Arrived bool
+}
+
+// newFeedItem wraps a row for the `feed-list` template's range, exposed to
+// templates as `feedItem`. A list never marks a row as arrived.
+func newFeedItem(row store.FeedRow) FeedItem { return FeedItem{FeedRow: row} }
 
 // The two values [FeedList.Source] takes.
 const (

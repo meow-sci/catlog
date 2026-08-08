@@ -32,6 +32,29 @@ describe('mergeFeed', () => {
     expect(mergeFeed([], many)).toHaveLength(FEED_LIMIT);
     expect(mergeFeed([], many)[0]?.id).toBe(FEED_LIMIT + 19);
   });
+
+  // The single-event path — what every stream frame takes. Ids are monotonic,
+  // so a new row lands at the head without a re-sort; these pin the edges.
+  it('puts a single newer event at the head', () => {
+    expect(mergeFeed([row(3), row(2), row(1)], [row(4)]).map((r) => r.id)).toEqual([4, 3, 2, 1]);
+  });
+
+  it('slots a single out-of-order event where it belongs', () => {
+    expect(mergeFeed([row(4), row(2), row(1)], [row(3)]).map((r) => r.id)).toEqual([4, 3, 2, 1]);
+    expect(mergeFeed([row(4), row(3), row(2)], [row(1)]).map((r) => r.id)).toEqual([4, 3, 2, 1]);
+  });
+
+  it('starts an empty panel from a single event', () => {
+    expect(mergeFeed([], [row(7)]).map((r) => r.id)).toEqual([7]);
+  });
+
+  it('caps after a single event lands on a full panel', () => {
+    const full = Array.from({ length: FEED_LIMIT }, (_, i) => row(FEED_LIMIT - i));
+    const merged = mergeFeed(full, [row(FEED_LIMIT + 1)]);
+    expect(merged).toHaveLength(FEED_LIMIT);
+    expect(merged[0]?.id).toBe(FEED_LIMIT + 1);
+    expect(merged.at(-1)?.id).toBe(2);
+  });
 });
 
 describe('withoutHandle', () => {

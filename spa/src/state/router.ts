@@ -45,7 +45,23 @@ export type Route =
       readonly period: string;
     }
   | { readonly name: 'player'; readonly handle: string }
-  | { readonly name: 'playerEvents'; readonly handle: string }
+  | {
+      readonly name: 'playerEvents';
+      readonly handle: string;
+      /**
+       * The `?type=` filter, `''` for every type. In the URL rather than in
+       * component state so a filtered log is a link somebody can paste, and so
+       * the back button undoes a filter change the way it undoes a page change.
+       */
+      readonly type: string;
+    }
+  | {
+      readonly name: 'events';
+      /** The `?type=` filter, `''` for every type. */
+      readonly type: string;
+      /** The `?handle=` filter, `''` for everybody. */
+      readonly handle: string;
+    }
   | { readonly name: 'search'; readonly q: string }
   | { readonly name: 'compare'; readonly handles: readonly string[] }
   | { readonly name: 'notFound'; readonly path: string };
@@ -161,7 +177,18 @@ export function parseRoute(url: string, base: string = BASE_PATH): Route {
     return { name: 'player', handle: decodeURIComponent(tail) };
   }
   if (head === 'p' && segments.length === 3 && tail !== undefined && segments[2] === 'events') {
-    return { name: 'playerEvents', handle: decodeURIComponent(tail) };
+    return {
+      name: 'playerEvents',
+      handle: decodeURIComponent(tail),
+      type: params.get('type') ?? '',
+    };
+  }
+  if (head === 'events' && segments.length === 1) {
+    // The live-tail toggle is deliberately *not* here: its default depends on
+    // where in the log the viewer is, so a `?tail=` snapshot in a shared link
+    // would impose the sharer's transient toggle on the reader. The filters are
+    // the shareable part of this page; the toggle is view state.
+    return { name: 'events', type: params.get('type') ?? '', handle: params.get('handle') ?? '' };
   }
   if (head === 'search' && segments.length === 1) {
     return { name: 'search', q: params.get('q') ?? '' };
@@ -193,8 +220,19 @@ export function pathFor(route: Route): string {
     }
     case 'player':
       return `/p/${encodeURIComponent(route.handle)}`;
-    case 'playerEvents':
-      return `/p/${encodeURIComponent(route.handle)}/events`;
+    case 'playerEvents': {
+      const suffix = route.type === '' ? '' : `?type=${encodeURIComponent(route.type)}`;
+      return `/p/${encodeURIComponent(route.handle)}/events${suffix}`;
+    }
+    case 'events': {
+      // Only the non-default parts reach the URL, the same rule as a board's
+      // paging: `/events` stays one cacheable, shareable address.
+      const query = new URLSearchParams();
+      if (route.type !== '') query.set('type', route.type);
+      if (route.handle !== '') query.set('handle', route.handle);
+      const suffix = query.size > 0 ? `?${query.toString()}` : '';
+      return `/events${suffix}`;
+    }
     case 'search':
       return route.q === '' ? '/search' : `/search?q=${encodeURIComponent(route.q)}`;
     case 'compare':
@@ -235,7 +273,11 @@ export function routeKey(route: Route): string {
     case 'player':
       return `player:${route.handle}`;
     case 'playerEvents':
-      return `events:${route.handle}`;
+      return `events:${route.handle}:${route.type}`;
+    case 'events':
+      // A distinct namespace from the per-player log, so the two can never
+      // produce the same key for different data.
+      return `log:${route.type}:${route.handle}`;
     case 'search':
       return `search:${route.q}`;
     case 'compare':

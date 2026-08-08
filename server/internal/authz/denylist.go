@@ -79,6 +79,16 @@ func (d *DenyList) AddJKT(jkt string) {
 	d.ver++
 }
 
+// version reports the mutation counter alone. The credential cache reads it as
+// its invalidation key: every moderation path — ban, unban, purge, revoke —
+// mutates this set (identity.Moderator refreshes it after each one), so "the
+// deny-list has not changed" is exactly "no credential's standing has changed".
+func (d *DenyList) version() int64 {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.ver
+}
+
 // Snapshot returns the sorted contents and the version counter — what the
 // published deny-list JWS is built from (§5.8).
 func (d *DenyList) Snapshot() (subs, jkts []string, ver int64) {

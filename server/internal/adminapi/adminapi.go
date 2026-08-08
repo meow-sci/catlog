@@ -78,6 +78,8 @@ type Server struct {
 	// archive carries the WP10 dependencies, installed by
 	// [Server.RegisterArchive]. Same contract again.
 	archive ArchiveDeps
+	// stats memoizes the counting half of GET /admin/stats; see projections.go.
+	stats statsCache
 }
 
 // New builds the admin mux with the WP2 routes: pprof, expvar and

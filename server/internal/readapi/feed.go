@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/meow-sci/catlog/server/internal/store"
@@ -40,6 +42,104 @@ import (
 // nothing above the store layer.
 type Feed interface {
 	Subscribe() (<-chan []store.FeedRow, func())
+}
+
+// feedHub sits between the broadcaster and the stream handlers so each row is
+// JSON-encoded **once** per broadcast, not once per subscriber: with N tabs
+// open, the projector's commit used to cost N identical marshals of every row.
+// Package web does the same for its HTML frames; this is the JSON half.
+//
+// The hub holds exactly one upstream subscription, taken when the first client
+// arrives and cancelled when the last one leaves, so a server nobody is
+// streaming from runs no extra goroutine.
+type feedHub struct {
+	feed Feed
+	log  *slog.Logger
+	// cap is [Deps.MaxStreamClients] with its default applied: how many
+	// subscribers this hub will carry before refusing the next one.
+	cap int
+
+	mu   sync.Mutex
+	next int64
+	subs map[int64]chan [][]byte
+	stop func()
+}
+
+func newFeedHub(feed Feed, log *slog.Logger, cap int) *feedHub {
+	return &feedHub{feed: feed, log: log, cap: cap, subs: map[int64]chan [][]byte{}}
+}
+
+// subscribe registers a stream client. Frames arrive fully rendered — one SSE
+// `id:`/`event:`/`data:` block per feed row — and are shared between
+// subscribers, so a handler writes them and must not modify them.
+//
+// ok is false when the hub is at [feedHub.cap]: every stream open holds a
+// connection, a goroutine and a buffer for as long as the tab lives, so the
+// cap is what keeps N browsers from being a memory bill (Constitution §2). The
+// caller answers 429 and the client retries later.
+func (h *feedHub) subscribe() (frames <-chan [][]byte, cancel func(), ok bool) {
+	// The buffer mirrors the broadcaster's own: a client that cannot keep up
+	// loses batches rather than stalling anyone else.
+	ch := make(chan [][]byte, 8)
+
+	h.mu.Lock()
+	if len(h.subs) >= h.cap {
+		h.mu.Unlock()
+		return nil, nil, false
+	}
+	id := h.next
+	h.next++
+	h.subs[id] = ch
+	if h.stop == nil {
+		rows, cancel := h.feed.Subscribe()
+		h.stop = cancel
+		go h.run(rows)
+	}
+	h.mu.Unlock()
+
+	var once sync.Once
+	return ch, func() {
+		once.Do(func() {
+			h.mu.Lock()
+			delete(h.subs, id)
+			if len(h.subs) == 0 && h.stop != nil {
+				h.stop()
+				h.stop = nil
+			}
+			h.mu.Unlock()
+			close(ch)
+		})
+	}, true
+}
+
+// run renders each upstream batch once and fans the frames out. It exits when
+// the upstream subscription is cancelled, which closes rows.
+func (h *feedHub) run(rows <-chan []store.FeedRow) {
+	for batch := range rows {
+		frames := make([][]byte, 0, len(batch))
+		for _, row := range batch {
+			payload, err := json.Marshal(row)
+			if err != nil {
+				h.log.Error("encoding a feed row failed", "id", row.ID, "err", err)
+				continue
+			}
+			// `id:` lets a browser surface lastEventId; the server does not
+			// consume it on reconnect (see the package comment above).
+			frames = append(frames, fmt.Appendf(nil, "id: %d\nevent: feed\ndata: %s\n\n", row.ID, payload))
+		}
+		if len(frames) == 0 {
+			continue
+		}
+		h.mu.Lock()
+		for _, ch := range h.subs {
+			select {
+			case ch <- frames:
+			default:
+				// Dropped on purpose — same rule as the broadcaster.
+			}
+		}
+		h.mu.Unlock()
+	}
 }
 
 // Paging bounds for `GET /v1/feed`.
@@ -123,7 +223,11 @@ func (s *Server) handleFeedStream(w http.ResponseWriter, r *http.Request) {
 	// there is no window to lose a row in — but the ordering also means a client
 	// that opened the stream and then fetched the snapshot cannot miss anything
 	// committed between the two calls, only see it twice, which it dedupes by id.
-	rows, cancel := s.deps.Feed.Subscribe()
+	frames, cancel, ok := s.feedHub.subscribe()
+	if !ok {
+		s.refuseStream(w)
+		return
+	}
 	defer cancel()
 
 	h := w.Header()
@@ -157,19 +261,14 @@ func (s *Server) handleFeedStream(w http.ResponseWriter, r *http.Request) {
 			}
 			flusher.Flush()
 
-		case batch, ok := <-rows:
+		case batch, ok := <-frames:
 			if !ok {
 				return
 			}
-			for _, row := range batch {
-				payload, err := json.Marshal(row)
-				if err != nil {
-					s.deps.Log.Error("encoding a feed row failed", "id", row.ID, "err", err)
-					continue
-				}
-				// `id:` lets a browser surface lastEventId; the server does not
-				// consume it on reconnect (see the package comment above).
-				if _, err := fmt.Fprintf(w, "id: %d\nevent: feed\ndata: %s\n\n", row.ID, payload); err != nil {
+			for _, frame := range batch {
+				// Rendered once by the hub; every subscriber writes these same
+				// bytes.
+				if _, err := w.Write(frame); err != nil {
 					return
 				}
 			}

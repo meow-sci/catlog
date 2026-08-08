@@ -71,9 +71,3 @@ export function applyTheme(choice: ThemeChoice): void {
     document.documentElement.setAttribute('data-theme', choice);
   }
 }
-
-/** What the page actually looks like right now, given a choice and the OS. */
-export function resolveTheme(choice: ThemeChoice): 'light' | 'dark' {
-  if (choice !== 'system') return choice;
-  return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
-}

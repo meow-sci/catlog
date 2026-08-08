@@ -43,6 +43,9 @@ const (
 // rebuild swap's read lock (§5.6). *projector.Live implements it.
 type Projections interface {
 	With(fn func(*store.Projections) error) error
+	// WriteGen is a monotonic count of committed writes to the live handle. It
+	// is the board census cache's key; see [Server.statCounts].
+	WriteGen() int64
 }
 
 // Deps is what the read API needs.
@@ -56,6 +59,14 @@ type Deps struct {
 	// Feed is the §5.6 broadcaster behind `GET /v1/feed/stream`. Optional: a
 	// Server built without one serves the feed snapshot but not the stream.
 	Feed Feed
+	// RawEvents is the raw event broadcaster behind `GET /v1/events/stream`
+	// (*projector.RawBroadcaster). Optional, same rule as Feed: without one the
+	// paginated `/v1/events` is served but the stream route does not exist.
+	RawEvents RawEvents
+	// MaxStreamClients caps concurrent SSE subscribers, per stream route. Zero
+	// or less means [DefaultMaxStreamClients]. Over the cap a stream open is
+	// answered 429 rate_limited + Retry-After rather than held.
+	MaxStreamClients int
 	// MinBoardPlayers is how many distinct players a board whose key came out of
 	// the event stream (`fastest_to_<body>`, `rud_<cause>`) needs before
 	// `GET /v1/leaderboards` lists it. Zero or less means [stats.DefaultMinPlayers].
@@ -88,6 +99,14 @@ type Server struct {
 	cors cors
 	// minBoardPlayers is [Deps.MinBoardPlayers] with its default applied.
 	minBoardPlayers int
+	// counts memoizes the board census; see [Server.statCounts] in query.go.
+	counts countsCache
+	// feedHub fans one broadcaster subscription out to every stream client;
+	// see feed.go. Nil when no Feed was supplied.
+	feedHub *feedHub
+	// eventsHub is feedHub's twin for the raw event stream; see
+	// events_stream.go. Nil when no RawEvents was supplied.
+	eventsHub *eventsHub
 }
 
 // New builds the read API.
@@ -110,11 +129,22 @@ func New(deps Deps) (*Server, error) {
 	if minPlayers < 1 {
 		minPlayers = stats.DefaultMinPlayers
 	}
-	return &Server{
+	maxClients := deps.MaxStreamClients
+	if maxClients <= 0 {
+		maxClients = DefaultMaxStreamClients
+	}
+	s := &Server{
 		deps:            deps,
 		cors:            cors{allowed: slices.Clone(deps.AllowedOrigins)},
 		minBoardPlayers: minPlayers,
-	}, nil
+	}
+	if deps.Feed != nil {
+		s.feedHub = newFeedHub(deps.Feed, deps.Log, maxClients)
+	}
+	if deps.RawEvents != nil {
+		s.eventsHub = newEventsHub(s, deps.RawEvents, deps.Log, maxClients)
+	}
+	return s, nil
 }
 
 // Register mounts the §4.8 routes on a mux.
@@ -129,6 +159,10 @@ func (s *Server) Register(mux *http.ServeMux) {
 	s.public(mux, "/v1/players/{handle}", s.handlePlayer)
 	s.public(mux, "/v1/players/{handle}/events", s.handlePlayerEvents)
 	s.public(mux, "/v1/compare", s.handleCompare)
+	s.public(mux, "/v1/events", s.handleEvents)
+	if s.deps.RawEvents != nil {
+		s.public(mux, "/v1/events/stream", s.handleEventsStream)
+	}
 	s.public(mux, "/v1/feed", s.handleFeed)
 	if s.deps.Feed != nil {
 		s.public(mux, "/v1/feed/stream", s.handleFeedStream)
@@ -274,7 +308,14 @@ func (s *Server) visibleRows(ctx context.Context, stat, period, bucket string, a
 		scanned int
 	)
 	for len(visible) < need && scanned < maxScan {
-		page := max(need-len(visible), scanPage)
+		// The first read is sized to the request — a 3-row featured board should
+		// not read 256 rows to serve 3. 4× plus a little slack absorbs the usual
+		// zero-or-few bans; only when that was not enough (someone on the page
+		// really is banned) do later reads escalate to the full scan page.
+		page := scanPage
+		if scanned == 0 {
+			page = min(max(need*4, need+16), scanPage)
+		}
 		var batch []store.StatRow
 		err := s.deps.Projections.With(func(p *store.Projections) error {
 			var err error
@@ -395,25 +436,17 @@ func (s *Server) handlePlayer(w http.ResponseWriter, r *http.Request) {
 // rank is the player's visible position on a board: everyone ahead of them,
 // minus the banned players among those, plus one.
 //
-// The subtraction is what keeps a profile's rank consistent with the board page
-// the same player appears on. Bans are rare, so the extra query only runs when
-// somebody actually is banned.
-func (s *Server) rank(ctx context.Context, row store.StatRow, asc bool, banned []int64) (int, error) {
-	var ahead int64
-	err := s.deps.Projections.With(func(p *store.Projections) error {
-		var err error
-		ahead, err = p.StatAhead(ctx, row.Stat, asc, row.Value, row.UpdatedSeq)
-		return err
-	})
-	if err != nil {
-		return 0, err
-	}
+// ahead is the unfiltered count, resolved for the whole profile at once by
+// [Server.aheadCounts]. The subtraction is what keeps a profile's rank
+// consistent with the board page the same player appears on. Bans are rare, so
+// the extra query only runs when somebody actually is banned.
+func (s *Server) rank(ctx context.Context, row store.StatRow, asc bool, banned []int64, ahead int64) (int, error) {
 	if len(banned) == 0 {
 		return int(ahead) + 1, nil
 	}
 
 	var hidden []store.StatRow
-	err = s.deps.Projections.With(func(p *store.Projections) error {
+	err := s.deps.Projections.With(func(p *store.Projections) error {
 		var err error
 		hidden, err = p.StatsForPlayers(ctx, row.Stat, banned)
 		return err

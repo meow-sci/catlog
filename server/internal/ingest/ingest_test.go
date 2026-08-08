@@ -534,6 +534,30 @@ func TestIngestBackpressure(t *testing.T) {
 	}
 }
 
+// TestIngestInFlightCap covers the [Limits.MaxInFlight] gate: a request that
+// arrives while every slot is holding a body is answered 503 + Retry-After
+// before it reads a byte, exactly like a full write queue.
+func TestIngestInFlightCap(t *testing.T) {
+	r := newRig(t)
+
+	// Occupy every slot. The gate sits between authz and the body read, so a
+	// full channel is indistinguishable from that many requests mid-body.
+	for range cap(r.h.inflight) {
+		r.h.inflight <- struct{}{}
+	}
+
+	res, body := r.ship(r.batch(1))
+	wantStatus(t, res, body, http.StatusServiceUnavailable)
+	if got := res.Header.Get("Retry-After"); got != "5" {
+		t.Errorf("Retry-After = %q, want \"5\"", got)
+	}
+
+	// Freeing one slot makes the same request land.
+	<-r.h.inflight
+	res, body = r.ship(r.batch(1))
+	wantStatus(t, res, body, http.StatusOK)
+}
+
 // TestIngestWriterTimeout proves the handler never blocks forever on a stalled
 // writer: it gives up on its own deadline and reports backpressure.
 func TestIngestWriterTimeout(t *testing.T) {

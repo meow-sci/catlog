@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"runtime"
 	"strings"
+	"sync"
 
 	"github.com/andybalholm/brotli"
 
@@ -26,6 +28,15 @@ type Limits struct {
 	MaxEvents int
 	// MaxLineBytes caps one NDJSON line (16 KiB → 400).
 	MaxLineBytes int
+	// MaxInFlight caps how many requests may hold a body in memory at once
+	// (read, decompressed, decoded — the expensive span of the handler). Not a
+	// wire limit: the caps above bound what one request may cost, this bounds
+	// how many such costs the process pays concurrently, which is what actually
+	// sizes peak ingest memory on a small box. Zero means 4× GOMAXPROCS — a
+	// few requests of headroom per core without letting a burst hold tens of
+	// decompressed batches. The request over the cap gets the same 503 +
+	// Retry-After the full write queue answers with.
+	MaxInFlight int
 }
 
 // DefaultLimits returns the §4.3 values.
@@ -35,6 +46,7 @@ func DefaultLimits() Limits {
 		MaxDecompressedBytes: 8 << 20,
 		MaxEvents:            2000,
 		MaxLineBytes:         16 << 10,
+		MaxInFlight:          4 * runtime.GOMAXPROCS(0),
 	}
 }
 
@@ -51,6 +63,9 @@ func (l Limits) withDefaults() Limits {
 	}
 	if l.MaxLineBytes <= 0 {
 		l.MaxLineBytes = d.MaxLineBytes
+	}
+	if l.MaxInFlight <= 0 {
+		l.MaxInFlight = d.MaxInFlight
 	}
 	return l
 }
@@ -75,12 +90,22 @@ func readBody(r io.Reader, limits Limits) ([]byte, *authz.Error) {
 	return body, nil
 }
 
+// brotliReaders recycles decompressor state between requests. A brotli reader
+// carries multi-hundred-KiB dictionaries and ring buffers; allocating one per
+// batch made the decompressor, not the decompression, the ingest path's
+// biggest allocation.
+var brotliReaders = sync.Pool{New: func() any { return new(brotli.Reader) }}
+
 // decompress expands a brotli body under the §4.3 8 MiB ceiling, again enforced
 // while reading — a decompression bomb must not be materialized to discover
 // that it is one.
 func decompress(body []byte, limits Limits) ([]byte, *authz.Error) {
 	limits = limits.withDefaults()
-	r := brotli.NewReader(bytes.NewReader(body))
+	r := brotliReaders.Get().(*brotli.Reader)
+	defer brotliReaders.Put(r)
+	if err := r.Reset(bytes.NewReader(body)); err != nil {
+		return nil, &authz.Error{Code: authz.CodeMalformedBatch, Step: 13, Detail: "body is not valid brotli"}
+	}
 	out, err := io.ReadAll(io.LimitReader(r, limits.MaxDecompressedBytes+1))
 	if err != nil {
 		return nil, &authz.Error{Code: authz.CodeMalformedBatch, Step: 13, Detail: "body is not valid brotli"}
@@ -115,56 +140,79 @@ type envelope struct {
 // Batch-fatal by design: one bad line rejects the whole batch. The mod and the
 // server ship together, so a malformed or unknown-typed event means version
 // skew, and §4.1 says to surface that loudly rather than to drop rows quietly.
+//
+// It scans line boundaries over the raw bytes and runs one json.Decoder down
+// the whole batch, checking after every envelope that the value ended on its
+// own line. The previous shape — a string copy of the batch, a split into per
+// -line strings and a fresh decoder per line — allocated roughly three times
+// the batch size before a single envelope was validated; the framing rules it
+// enforced are unchanged.
 func decodeNDJSON(data []byte, limits Limits) ([]store.Event, *authz.Error) {
 	limits = limits.withDefaults()
 
 	// A batch is NDJSON with an optional trailing newline; interior blank lines
 	// are a framing error, not something to skip past.
-	text := string(data)
-	text = strings.TrimSuffix(text, "\n")
-	if text == "" {
+	data = bytes.TrimSuffix(data, []byte{'\n'})
+	if len(data) == 0 {
 		return nil, malformed("batch contains no events")
 	}
-	if strings.ContainsRune(text, '\r') {
+	if bytes.IndexByte(data, '\r') >= 0 {
 		return nil, malformed("batch uses CRLF line endings; NDJSON is LF only")
 	}
 
-	lines := strings.Split(text, "\n")
-	if len(lines) > limits.MaxEvents {
+	nLines := bytes.Count(data, []byte{'\n'}) + 1
+	if nLines > limits.MaxEvents {
 		return nil, &authz.Error{
 			Code: authz.CodeTooLarge, Step: 13,
-			Detail: fmt.Sprintf("batch has %d events, the limit is %d", len(lines), limits.MaxEvents),
+			Detail: fmt.Sprintf("batch has %d events, the limit is %d", nLines, limits.MaxEvents),
 		}
 	}
 
-	out := make([]store.Event, 0, len(lines))
-	for i, line := range lines {
-		ev, aerr := decodeEnvelope(line, limits)
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields() // §4.1: unknown envelope keys are rejected
+
+	out := make([]store.Event, 0, nLines)
+	pos := 0
+	for i := range nLines {
+		end := len(data)
+		if nl := bytes.IndexByte(data[pos:], '\n'); nl >= 0 {
+			end = pos + nl
+		}
+		ev, aerr := decodeEnvelope(dec, data[pos:end], int64(pos), int64(end), limits)
 		if aerr != nil {
 			aerr.Detail = fmt.Sprintf("line %d: %s", i+1, aerr.Detail)
 			return nil, aerr
 		}
 		out = append(out, ev)
+		pos = end + 1
 	}
 	return out, nil
 }
 
-func decodeEnvelope(line string, limits Limits) (store.Event, *authz.Error) {
-	if line == "" {
+// decodeEnvelope validates one NDJSON line. dec is the batch-wide decoder,
+// already positioned at this line; start and end are the line's byte offsets in
+// the batch, which is how the one-envelope-per-line framing is enforced without
+// a per-line reader.
+func decodeEnvelope(dec *json.Decoder, line []byte, start, end int64, limits Limits) (store.Event, *authz.Error) {
+	if len(line) == 0 {
 		return store.Event{}, malformed("empty line")
 	}
 	if len(line) > limits.MaxLineBytes {
 		return store.Event{}, malformed(fmt.Sprintf("event line is %d bytes, the limit is %d", len(line), limits.MaxLineBytes))
 	}
 
-	dec := json.NewDecoder(strings.NewReader(line))
-	dec.DisallowUnknownFields() // §4.1: unknown envelope keys are rejected
-
 	var env envelope
 	if err := dec.Decode(&env); err != nil {
-		return store.Event{}, malformed(envelopeError(err))
+		return store.Event{}, malformed(envelopeError(err, start))
 	}
-	if dec.More() {
+	// The decoder reads values, not lines: a value that parses but runs past
+	// the newline — or leaves anything but blanks behind on its line — is the
+	// framing error the old per-line reader caught with More().
+	off := dec.InputOffset()
+	if off > end {
+		return store.Event{}, malformed("trailing content after the envelope")
+	}
+	if len(bytes.Trim(line[off-start:], " \t")) > 0 {
 		return store.Event{}, malformed("trailing content after the envelope")
 	}
 
@@ -264,15 +312,17 @@ func validCareer(s string) bool {
 
 // envelopeError turns a decoder error into a client-safe detail. json's
 // "unknown field" message is worth passing through — it names the offending key,
-// which is exactly what a mod author needs.
-func envelopeError(err error) string {
+// which is exactly what a mod author needs. lineStart rebases the batch-wide
+// decoder's syntax offset onto the offending line, matching what the old
+// per-line reader reported.
+func envelopeError(err error, lineStart int64) string {
 	msg := err.Error()
 	if strings.Contains(msg, "unknown field") {
 		return "envelope has an " + truncate(msg[strings.Index(msg, "unknown field"):], 80)
 	}
 	var syn *json.SyntaxError
 	if errors.As(err, &syn) {
-		return fmt.Sprintf("invalid JSON at byte %d", syn.Offset)
+		return fmt.Sprintf("invalid JSON at byte %d", max(syn.Offset-lineStart, 0))
 	}
 	var typ *json.UnmarshalTypeError
 	if errors.As(err, &typ) {

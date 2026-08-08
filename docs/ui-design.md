@@ -632,7 +632,8 @@ Rule 7 was added this way and is the worked example.
 | `/boards` | ● | The index. Which boards exist, how populated, which way each reads |
 | `/boards/{stat}` | ● | One board, paged, with a period selector, my row highlighted and reachable in one click |
 | `/p/{handle}` | ● | One player: every placement, every rank *and its denominator*, and a way to start comparing |
-| `/p/{handle}/events` | ● | **New.** The raw event log for that handle |
+| `/p/{handle}/events` | ● | **New.** The raw event log for that handle, live-tailed on page one |
+| `/events` | ● | **New.** The whole raw log, every player mixed together — same rows, same redaction, `?type=`/`?handle=` filters, live-tailed on page one |
 | `/compare?handles=a,b,c` | ● | **New.** Up to 8 players side by side across every board any of them is on |
 | `/search?q=` | ● | **New.** Handle search as a real, linkable page, not only an overlay |
 | `/login` | ○ | Choose an IdP; understand what it hands over |
@@ -772,6 +773,27 @@ the datastar site, the *Raw events* link on the SPA's `PlayerPage` — and neith
 
 `EventRow` does **not** get a `flagged` field, and must not: there is nothing flagged left in
 the response to mark.
+
+**The global log and the live tail — datastar contract.** `GET /v1/events` gave the same
+page of the same log a global view (every row naming its handle, handle-less players and
+flagged flights excluded at the seam), and the datastar site renders it at `/events` with
+`?type=` chips, an optional `?handle=` narrowing (rendered as `#events-handle-filter` with a
+clear link, 404ing an unknown handle exactly as the per-handle page does), and `?before=`
+cursor paging under the same page-until-the-cursor-is-gone rule. Both events pages render
+rows through **one `event-row` partial** — per-handle, global, the SSE prime and every live
+patch produce byte-identical rows, the `feed-item` discipline — with columns seq, received
+(`<time datetime>`), handle (profile link), type, career clock (`units.Format(v, "s")`, raw
+figure in the `title`) and the payload disclosure.
+
+The live tail is `GET /v1/events/sse` (web, datastar HTML frames; the JSON twin remains
+`/v1/events/stream`): subscribe-then-prime against the page's own filter, the prime
+replacing `#events-body` marked `data-source="sse"`, live rows prepended with
+`data-arrived`, the DOM capped at the page size by `eventRowID` removal. It runs **only on
+page one** — a `?before=` page is historical and renders no tail. Pausing is honest and
+mechanical: the tail element's `@get` is opened with `requestCancellation: 'cleanup'`, so
+me.js's `#events-live` toggle closes the stream by removing `data-init` and reconnects (and
+re-primes) by restoring it. Paused means closed, never buffered. The connection hint is the
+feed's `wireStreamStatus` mechanism shared, not copied, with one extra state, `paused`.
 
 ### 6.3 What is redacted — the install hazard
 
@@ -1177,7 +1199,7 @@ nothing else is.
 | **Personalisation** | client-side: `me.js` stamps `data-me="<handle>"` on `<html>` and CSS does the rest (`tr[data-handle="…"]`). Forced by `s-maxage=30` | client-side: a nanostores atom over `localStorage` |
 | **Comparison** | server-rendered at `/compare?handles=…` via a new `Compare` method on `web.Read`, cacheable by URL, no client JS | fetch `/v1/compare`, render with React Aria |
 | **Search** | server-rendered `/search?q=`, progressively enhanced with a debounced datastar suggestion patch | React Aria `ComboBox` against `/v1/players?q=` |
-| **Raw events** | server-rendered `/p/{handle}/events` via `web.Read.PlayerEvents` | fetch `/v1/players/{handle}/events` |
+| **Raw events** | server-rendered `/p/{handle}/events` + `/events` via `web.Read`, live-tailed by `/v1/events/sse` (datastar HTML frames) | fetch `/v1/players/{handle}/events` / `/v1/events`, live via `/v1/events/stream` (JSON) |
 | **Live feed** | `/v1/feed/sse`, HTML `PatchElements` frames, zero client code | `/v1/feed/stream`, JSON, nanostores + `EventSource` |
 | **Account surface** | owns `/login`, `/dashboard`, the wizard, `/docs/*` | has none, and links out |
 | **Routing** | server routes, full page loads | History API, base-path aware, `404.html` fallback |
@@ -1214,9 +1236,21 @@ contain the server's `min_players` number); `#board-title[data-stat]`;
 `#search-short`, `#search-empty`; `#compare-table` with `th.handle-col[data-handle]`,
 `tr[data-stat][data-ascending]`, `td.value[data-value][data-handle]`, `td.best`,
 `td.absent`, `#compare-handles .chip[data-handle] .chip-remove`, `#compare-add`,
-`#compare-add-handle`, `#compare-empty`; `#events-log tr.event-row[data-type]`,
-`#events-types a[data-type]`, `#events-newest`, `#events-older`; `#theme-toggle`;
-`#feed-panel`; `#feed[data-source][data-count]`; `li.feed-item[data-feed-id][data-type]`;
+`#compare-add-handle`, `#compare-empty`; `#events-log tr.event-row[data-seq][data-type]`
+(rendered by the shared `event-row` partial with id `event-row-<seq>`; a row patched in live
+additionally carries `data-arrived`), `#events-body[data-source]` (the tail's "ssr|sse"
+readiness signal), `#events-types a[data-type]`, `#events-newest`, `#events-older`,
+`#events-panel` (and `#events-panel[data-stream]` + `#events-status`, the shared connection
+hint, plus its `paused` state), `#events-live` (the pause/resume toggle, hidden until me.js
+wires it), `#events-tail` (the `data-init` element holding the SSE open),
+`#events-heartbeat`, `#events-handle-filter[data-handle]` with `#events-handle-clear` on the
+global page, `#nav-events`; `#theme-toggle`;
+`#feed-panel` (and `#feed-panel[data-stream]` + `#feed-status`, the connection hint me.js
+maintains); `#feed[data-source]` — the datastar site no longer stamps `data-count`, which
+the SSE prepend path could not keep true and a sometimes-wrong attribute is worse than none
+(the SPA, which re-renders the list, still carries it); `li.feed-item[data-feed-id][data-type]`
+(a line patched in live additionally carries `data-arrived`, the only thing the arrival
+flash is scoped to);
 `#not-found`, `#not-found-detail`, `#not-found-home`; `#auth-error[data-error]` with
 `#auth-error-code`, `#auth-error-detail`, `#auth-error-retry`; `#docs-title`;
 `#privacy-no-email`; `#privacy-scopes`; `#privacy-flagged`; `#docs-api-endpoints`; the whole
@@ -1225,9 +1259,10 @@ contain the server's `min_players` number); `#board-title[data-stat]`;
 spec file in the same commit, never after.
 
 **`feed-list` and `feed-item` being one partial, used by both the page and the SSE
-handler.** A line patched in over the wire is byte-identical to one rendered into the page
-because they come from the same template. Inlining feed markup into `home.gohtml` breaks the
-live feed in a way that looks like a datastar bug.
+handler.** A line patched in over the wire is identical to one rendered into the page
+because they come from the same template — with one deliberate exception: the per-row live
+patch sets `Arrived`, stamping `data-arrived` so only genuinely new lines flash. Inlining
+feed markup into `home.gohtml` breaks the live feed in a way that looks like a datastar bug.
 
 **`data-source="ssr|sse"`.** The only signal distinguishing an open stream from a page whose
 datastar module never ran — both show the same rows. `feed.spec.ts` waits on it.

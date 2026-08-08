@@ -184,6 +184,7 @@ describe('the raw event log', () => {
     next: '41822',
     events: [
       {
+        seq: 41823,
         id: '01J9VA',
         type: 'vehicle.impact',
         ver: 1,
@@ -202,6 +203,7 @@ describe('the raw event log', () => {
     limit: 50,
     events: [
       {
+        seq: 41822,
         id: '01J9VB',
         type: 'session.started',
         ver: 1,
@@ -215,7 +217,7 @@ describe('the raw event log', () => {
   it('shows raw numbers with the formatted reading beside them — the inverse of a board', async () => {
     stubFetch([{ path: '/v1/players/demo_ace/events', body: page1 }]);
     const user = userEvent.setup();
-    render(<PlayerEventsPage handle="demo_ace" />);
+    render(<PlayerEventsPage handle="demo_ace" type="" />);
 
     await screen.findByText('vehicle.impact');
     await user.click(screen.getByRole('button', { name: 'Payload' }));
@@ -231,7 +233,7 @@ describe('the raw event log', () => {
 
   it('renders sim_t as a duration, because that is what a career clock is', async () => {
     stubFetch([{ path: '/v1/players/demo_ace/events', body: page1 }]);
-    render(<PlayerEventsPage handle="demo_ace" />);
+    render(<PlayerEventsPage handle="demo_ace" type="" />);
     // 1832.5 seconds into the career.
     expect(await screen.findByText('30m 32s')).toBeTruthy();
   });
@@ -242,7 +244,7 @@ describe('the raw event log', () => {
       { path: '/v1/players/demo_ace/events', body: page1 },
     ]);
     const user = userEvent.setup();
-    render(<PlayerEventsPage handle="demo_ace" />);
+    render(<PlayerEventsPage handle="demo_ace" type="" />);
 
     await screen.findByText('vehicle.impact');
     // One event and a cursor: a client that stopped on a short page would
@@ -259,7 +261,7 @@ describe('the raw event log', () => {
 
   it('never shows a hashed user identifier, whatever the payload carries', async () => {
     stubFetch([{ path: '/v1/players/demo_ace/events', body: page1 }]);
-    const { container } = render(<PlayerEventsPage handle="demo_ace" />);
+    const { container } = render(<PlayerEventsPage handle="demo_ace" type="" />);
     await screen.findByText('vehicle.impact');
 
     // Redaction is the server's job and cannot be done in a frontend — but the
@@ -277,7 +279,7 @@ describe('the raw event log', () => {
         body: { error: 'not_found', detail: 'no such player' },
       },
     ]);
-    render(<PlayerEventsPage handle="nobody" />);
+    render(<PlayerEventsPage handle="nobody" type="" />);
 
     expect(await screen.findByRole('heading', { name: 'Nothing here' })).toBeTruthy();
     for (const leak of [/banned/i, /retired/i]) {

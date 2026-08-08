@@ -1,7 +1,6 @@
 import { useStore } from '@nanostores/react';
 import { Cat, Monitor, Moon, Sun, X } from 'lucide-react';
 import { lazy, Suspense, useEffect, useRef } from 'react';
-import { ToggleButtonGroup } from 'react-aria-components';
 import { API_BASE } from './api/client.ts';
 import { BoardPage } from './pages/BoardPage.tsx';
 import { BoardsPage } from './pages/BoardsPage.tsx';
@@ -18,7 +17,9 @@ import {
 } from './state/router.ts';
 import { $theme, setTheme, type ThemeChoice } from './state/theme.ts';
 import { cn } from './ui/cn.ts';
-import { Button, HandleComboBox, Loading, Panel, ToggleButton } from './ui/kit/index.ts';
+import { ErrorBoundary } from './ui/ErrorBoundary.tsx';
+import { HeaderSearch } from './ui/HeaderSearch.tsx';
+import { Button, Loading, Panel } from './ui/kit/index.ts';
 
 /**
  * The three screens that are reached deliberately rather than landed on.
@@ -38,6 +39,12 @@ const ComparePage = lazy(async () => ({
 }));
 const PlayerEventsPage = lazy(async () => ({
   default: (await import('./pages/PlayerEventsPage.tsx')).PlayerEventsPage,
+}));
+// The global raw log brings the biggest dependency of all — React Aria's
+// Virtualizer + TableLayout, which nothing else imports — so it must stay a
+// lazy chunk to keep the virtualizer machinery off the critical path entirely.
+const EventsPage = lazy(async () => ({
+  default: (await import('./pages/EventsPage.tsx')).EventsPage,
 }));
 const SearchPage = lazy(async () => ({
   default: (await import('./pages/SearchPage.tsx')).SearchPage,
@@ -83,9 +90,15 @@ export function App() {
         className="mx-auto w-full max-w-6xl flex-1 px-4 py-6 outline-none"
       >
         {/* The fallback is a loading state, so it gets no whimsy (§9.2). */}
-        <Suspense fallback={<Loading label="Loading…" />}>
-          <Screen route={route} />
-        </Suspense>
+        {/* The boundary sits around the routed content and nothing else: the
+            event pages render arbitrary server JSON, and a payload no renderer
+            anticipated must cost one page view, not the shell. `resetKey`
+            (not `key`) so ordinary navigation never remounts the page tree. */}
+        <ErrorBoundary resetKey={key}>
+          <Suspense fallback={<Loading label="Loading…" />}>
+            <Screen route={route} />
+          </Suspense>
+        </ErrorBoundary>
       </main>
       <SiteFooter />
     </div>
@@ -121,7 +134,11 @@ function Screen(props: { readonly route: Route }) {
     case 'player':
       return <PlayerPage key={route.handle} handle={route.handle} />;
     case 'playerEvents':
-      return <PlayerEventsPage key={route.handle} handle={route.handle} />;
+      // Keyed by handle only: a type-filter change is the same log narrowed,
+      // and the pager re-keys itself off the route's type.
+      return <PlayerEventsPage key={route.handle} handle={route.handle} type={route.type} />;
+    case 'events':
+      return <EventsPage type={route.type} handle={route.handle} />;
     case 'search':
       return <SearchPage q={route.q} />;
     case 'compare':
@@ -167,14 +184,22 @@ function SiteHeader(props: { readonly route: Route }) {
             isActive={active === 'boards' || active === 'board'}
           />
           <NavLink
+            route={{ name: 'events', type: '', handle: '' }}
+            label="Events"
+            isActive={active === 'events'}
+          />
+          <NavLink
             route={{ name: 'compare', handles: [] }}
             label="Compare"
             isActive={active === 'compare'}
           />
         </nav>
         {/* The search box is on every page, and it is also a real `/search?q=`
-            route, so a search is a link rather than only an overlay. */}
-        <HandleComboBox
+            route, so a search is a link rather than only an overlay. It starts
+            as a plain input and upgrades to the suggesting combo box on first
+            focus — see `HeaderSearch` for why the shell will not pay for a
+            popover nobody has opened. */}
+        <HeaderSearch
           label="Search handles"
           placeholder="Find a handle"
           className="order-last w-full sm:order-none sm:ml-auto sm:w-56"
@@ -253,39 +278,74 @@ const THEMES: readonly { readonly id: ThemeChoice; readonly label: string }[] = 
  * Light, dark, or whatever the machine says — and none of them is "the real one
  * with the other bolted on" (§2.1).
  *
- * A `ToggleButtonGroup` rather than a two-state switch, because `system` is a
- * real answer and a switch cannot express it: a viewer whose OS flips at sunset
+ * Three options rather than a two-state switch, because `system` is a real
+ * answer and a switch cannot express it: a viewer whose OS flips at sunset
  * wants the page to flip with it, and there is no position of a two-way toggle
  * that means that.
+ *
+ * A hand-rolled radiogroup rather than React Aria's `ToggleButtonGroup`: this
+ * sits in the shell, so whatever it imports is on every first paint, and three
+ * mutually exclusive buttons are exactly what the WAI-ARIA radio pattern
+ * specifies — `aria-checked` announces the state, the checked button is the
+ * group's one tab stop, and the arrow keys move *and* select, wrapping at the
+ * ends, the same keyboard behaviour the grouped toggle buttons had.
  */
 function ThemeSwitch() {
   const theme = useStore($theme);
   return (
-    <ToggleButtonGroup
+    <div
+      role="radiogroup"
       aria-label="Theme"
-      selectionMode="single"
-      disallowEmptySelection
-      selectedKeys={new Set([theme])}
-      onSelectionChange={(keys) => {
-        const [first] = [...keys];
-        if (first !== undefined) setTheme(first as ThemeChoice);
-      }}
       className="border-border bg-panel-sunken flex items-center gap-0.5 rounded-full border p-0.5"
     >
-      {THEMES.map((choice) => (
-        <ToggleButton
+      {/* Buttons carrying the radio role — the WAI-ARIA APG radio-group
+          pattern — rather than visually-hidden native inputs: this is what the
+          React Aria group rendered here before it was hand-rolled, and native
+          radios would put the focus ring on an invisible element. */}
+      {/* oxlint-disable jsx-a11y/prefer-tag-over-role */}
+      {THEMES.map((choice, index) => (
+        <button
           key={choice.id}
-          id={choice.id}
-          variant="ghost"
+          type="button"
+          role="radio"
+          aria-checked={theme === choice.id}
           aria-label={choice.label}
-          className="size-7 min-h-0 rounded-full p-0"
+          tabIndex={theme === choice.id ? 0 : -1}
+          onClick={() => {
+            setTheme(choice.id);
+          }}
+          onKeyDown={(event) => {
+            const delta =
+              event.key === 'ArrowRight' || event.key === 'ArrowDown'
+                ? 1
+                : event.key === 'ArrowLeft' || event.key === 'ArrowUp'
+                  ? -1
+                  : 0;
+            if (delta === 0) return;
+            event.preventDefault();
+            const next = THEMES[(index + delta + THEMES.length) % THEMES.length];
+            if (next === undefined) return;
+            setTheme(next.id);
+            // Focus follows selection, per the radio pattern. The buttons are
+            // this group's only <button> children, in THEMES order.
+            event.currentTarget
+              .closest('[role="radiogroup"]')
+              ?.querySelectorAll('button')
+              [(index + delta + THEMES.length) % THEMES.length]?.focus();
+          }}
+          className={cn(
+            'inline-flex size-7 cursor-pointer items-center justify-center rounded-full transition-colors duration-150',
+            'text-fg-muted hover:bg-wash-hover hover:text-fg active:bg-wash-press',
+            'aria-checked:bg-accent aria-checked:text-accent-fg',
+          )}
         >
           {choice.id === 'light' && <Sun aria-hidden className="size-3.5" />}
           {choice.id === 'dark' && <Moon aria-hidden className="size-3.5" />}
           {choice.id === 'system' && <Monitor aria-hidden className="size-3.5" />}
-        </ToggleButton>
+        </button>
       ))}
-    </ToggleButtonGroup>
+      {/* oxlint-enable jsx-a11y/prefer-tag-over-role */}
+    </div>
   );
 }
 

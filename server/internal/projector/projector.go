@@ -19,9 +19,12 @@ import (
 const DefaultBatchSize = 1000
 
 // DefaultTick is §5.6's fallback poll: the projector wakes on the ingest
-// writer's notify channel, and once a second regardless, so a missed wake-up
-// costs a second of lag rather than an unbounded backlog.
-const DefaultTick = time.Second
+// writer's notify channel, and on this interval regardless, so a missed
+// wake-up costs seconds of lag rather than an unbounded backlog. 5 s, up from
+// an original 1 s: the notify channel covers every real arrival, so the ticker
+// only exists for the wake-up that got dropped, and at 1 s an idle server was
+// spending most of its projector wake-ups discovering there was nothing to do.
+const DefaultTick = 5 * time.Second
 
 // Options configures [New].
 type Options struct {
@@ -34,6 +37,24 @@ type Options struct {
 	// Broadcaster receives committed feed rows. Optional; nil means no feed
 	// fan-out, which is what the fold tests use.
 	Broadcaster *Broadcaster
+	// Raw receives every stored event a [Projector.Step] batch read, after the
+	// batch's transaction committed — the source behind `GET /v1/events/stream`.
+	// Optional; nil means no raw fan-out.
+	//
+	// The whole batch is published, **including events this build could not
+	// decode**: the fold skips those (logSkipOnce) by §4.1 design, but the raw
+	// views read events.db, where they exist — a live stream that dropped them
+	// would silently disagree with the paginated log it claims to be the live
+	// half of. Redaction is the subscriber's job (readapi), exactly as it is on
+	// the paginated path.
+	//
+	// Publishing happens only here, never from a rebuild — the same rule the
+	// feed Broadcaster follows: [Projector.Rebuild] writes into a scratch
+	// database checkpointed at head and streams nothing, so a rebuild cannot
+	// replay the whole log at connected clients. The one way to re-stream
+	// history is deleting projections.db so the incremental loop re-folds from
+	// seq 0 — an operator action, bounded by each subscriber's 8-batch buffer.
+	Raw *RawBroadcaster
 	// Notify is the ingest writer's wake-up channel (§5.5). Optional; without
 	// it the projector runs on its ticker alone.
 	Notify <-chan struct{}
@@ -67,6 +88,7 @@ type Projector struct {
 	live      *Live
 	dir       *directory.Directory
 	bcast     *Broadcaster
+	raw       *RawBroadcaster
 	notify    <-chan struct{}
 	upcasters *Upcasters
 	storeOpts store.Options
@@ -143,6 +165,7 @@ func New(opts Options) (*Projector, error) {
 		live:       opts.Live,
 		dir:        opts.Directory,
 		bcast:      opts.Broadcaster,
+		raw:        opts.Raw,
 		notify:     opts.Notify,
 		upcasters:  opts.Upcasters,
 		storeOpts:  opts.StoreOptions,
@@ -237,6 +260,7 @@ func (p *Projector) Step(ctx context.Context) (Progress, error) {
 	var (
 		prog Progress
 		feed []store.FeedRow
+		evs  []store.StoredEvent
 	)
 	err := p.live.With(func(proj *store.Projections) error {
 		after, err := proj.Checkpoint(ctx, nil, store.AllProjections)
@@ -245,7 +269,7 @@ func (p *Projector) Step(ctx context.Context) (Progress, error) {
 		}
 		prog.LastSeq = after
 
-		evs, err := p.events.EventsSince(ctx, after, p.batchSize)
+		evs, err = p.events.EventsSince(ctx, after, p.batchSize)
 		if err != nil {
 			return err
 		}
@@ -306,10 +330,21 @@ func (p *Projector) Step(ctx context.Context) (Progress, error) {
 	if p.bcast != nil && len(feed) > 0 {
 		p.bcast.Publish(feed)
 	}
+	// The raw batch goes out whole — decode failures included; see Options.Raw.
+	if p.raw != nil {
+		p.raw.Publish(evs)
+	}
 	if prog.Skipped > 0 {
 		metricSkipped.Add(int64(prog.Skipped))
 	}
-	p.publishLag(ctx, prog.LastSeq)
+	if prog.Read == 0 {
+		// An empty read proves there is nothing past the checkpoint, so the lag
+		// is zero by construction — no MaxSeq query needed on the idle ticks,
+		// which are most ticks.
+		p.publishCaughtUp(prog.LastSeq)
+	} else {
+		p.publishLag(ctx, prog.LastSeq)
+	}
 	return prog, nil
 }
 
@@ -362,6 +397,15 @@ func (p *Projector) logSkipOnce(se store.StoredEvent, err error) {
 	// No payload in the line: it is player-supplied and unbounded (§5.11).
 	p.log.Warn("skipping events this build cannot fold",
 		"type", se.Type, "ver", se.Ver, "first_seq", se.Seq, "err", err)
+}
+
+// publishCaughtUp is publishLag for a step that read nothing: the checkpoint
+// is provably at the head, so the lag is zero without asking the event log.
+func (p *Projector) publishCaughtUp(checkpoint int64) {
+	p.checkpoint.Store(checkpoint)
+	metricCheckpoint.Set(checkpoint)
+	p.lag.Store(0)
+	metricLag.Set(0)
 }
 
 // publishLag refreshes `projector_lag_seq` (§5.9).

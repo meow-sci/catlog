@@ -41,6 +41,7 @@ Content-Security-Policy is ever added, this is the one thing needing a hash.
     <nav id="site-nav" aria-label="Main">
       <a href="/boards" id="nav-boards" {{if eq .Nav "boards"}}aria-current="page"{{end}}>Leaderboards</a>
       <a href="/compare" id="nav-compare" {{if eq .Nav "compare"}}aria-current="page"{{end}}>Compare</a>
+      <a href="/events" id="nav-events" {{if eq .Nav "events"}}aria-current="page"{{end}}>Events</a>
       <a href="/docs/install" id="nav-docs" {{if eq .Nav "docs"}}aria-current="page"{{end}}>Docs</a>
     </nav>
 
@@ -65,7 +66,10 @@ Content-Security-Policy is ever added, this is the one thing needing a hash.
         <label class="sr-only" for="search-q">Search handles</label>
         <input type="search" id="search-q" name="q" placeholder="Find a handle" autocomplete="off"
                spellcheck="false" maxlength="150" value="{{.Search}}">
-        <ul id="search-suggest" role="listbox" aria-label="Handle suggestions"></ul>
+        {{- /* Not a listbox: nothing implements the combobox contract those
+               roles announce. A polite live region over plain links matches
+               what the `search-suggest` partial patches in. */}}
+        <ul id="search-suggest" aria-live="polite" aria-label="Handle suggestions"></ul>
       </form>
 
       {{- /* Filled in by me.js from localStorage; absent, not empty, when unset. */}}

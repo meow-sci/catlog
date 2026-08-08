@@ -12,9 +12,13 @@ import type {
  * The catlog read API client.
  *
  * Deliberately small: one typed call per endpoint over one `fetch` wrapper.
- * There is no caching layer here — caching is the server's job (§4.8 ships
- * `s-maxage=30, stale-while-revalidate=300` on every response) and duplicating
- * it in the browser would only add a second, wronger answer.
+ * There is no caching layer *here* — the split is that the server owns
+ * freshness (§4.8 ships `s-maxage=30, stale-while-revalidate=300` on every
+ * response, which is aimed at a shared cache and ignored by browsers), while
+ * `useResource` keeps a client-side memory of the same 30-second window: it
+ * dedupes concurrent identical requests and reuses a settled answer within the
+ * window the server already declared fresh. Nothing in this file remembers
+ * anything, so a caller outside `useResource` always hits the network.
  */
 
 /**
@@ -239,7 +243,11 @@ export const MAX_COMPARE_HANDLES = 8;
  */
 export function getPlayerEvents(
   handle: string,
-  options: { readonly type?: string; readonly before?: string; readonly limit?: number } = {},
+  options: {
+    readonly type?: string | undefined;
+    readonly before?: string | undefined;
+    readonly limit?: number | undefined;
+  } = {},
   signal?: AbortSignal,
 ): Promise<EventsResponse> {
   const params = new URLSearchParams({ limit: String(options.limit ?? EVENT_PAGE_SIZE) });
@@ -253,6 +261,48 @@ export function getPlayerEvents(
 
 /** How many events one page of the raw log asks for. The server clamps above 200. */
 export const EVENT_PAGE_SIZE = 50;
+
+/**
+ * One page of the global raw event log, newest first — every player mixed
+ * together, each row naming its handle.
+ *
+ * The same envelope, cursor and rules as [getPlayerEvents]: `before` is the
+ * opaque cursor from the previous page's `next`, and a client pages until
+ * `next` is **absent**, never until a page comes back short. `handle` narrows
+ * it to one player server-side (and 404s an unknown one with the same one
+ * answer as everywhere else).
+ */
+export function getEvents(
+  options: {
+    readonly type?: string | undefined;
+    readonly handle?: string | undefined;
+    readonly before?: string | undefined;
+    readonly limit?: number | undefined;
+  } = {},
+  signal?: AbortSignal,
+): Promise<EventsResponse> {
+  const params = new URLSearchParams({ limit: String(options.limit ?? EVENT_PAGE_SIZE) });
+  if (options.type !== undefined && options.type !== '') params.set('type', options.type);
+  if (options.handle !== undefined && options.handle !== '') params.set('handle', options.handle);
+  if (options.before !== undefined && options.before !== '') params.set('before', options.before);
+  return apiGet<EventsResponse>(`/v1/events?${params.toString()}`, signal);
+}
+
+/**
+ * URL of the live half of the raw event log (`event: raw` frames of EventRow
+ * JSON). Consumed by EventSource, not by fetch. The stream has no replay on
+ * reconnect — a reconnecting client re-reads the paginated snapshot — and it
+ * answers 429 once the server's subscriber cap is reached.
+ */
+export function eventsStreamUrl(
+  options: { readonly type?: string; readonly handle?: string } = {},
+): string {
+  const params = new URLSearchParams();
+  if (options.type !== undefined && options.type !== '') params.set('type', options.type);
+  if (options.handle !== undefined && options.handle !== '') params.set('handle', options.handle);
+  const query = params.size > 0 ? `?${params.toString()}` : '';
+  return apiUrl('/v1/events/stream' + query);
+}
 
 export function getFeed(limit: number, signal?: AbortSignal): Promise<FeedResponse> {
   return apiGet<FeedResponse>(`/v1/feed?limit=${String(limit)}`, signal);

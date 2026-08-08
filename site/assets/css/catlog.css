@@ -1012,6 +1012,45 @@ tr.rank-rest td.rank {
   font-size: var(--text-sm);
 }
 
+#events-log td.seq,
+#events-log th.seq {
+  text-align: right;
+}
+
+#events-log td.seq {
+  font-variant-numeric: tabular-nums;
+  color: var(--color-fg-muted);
+}
+
+/* The live tail's controls: the pause/resume button (hidden until me.js wires
+   it — no JS, no stream, no claim) and the connection hint, same treatment as
+   the feed's. */
+.events-tools {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+
+#events-live[hidden] {
+  display: none;
+}
+
+#events-live[aria-pressed='true'] {
+  color: var(--color-accent-text);
+}
+
+#events-status {
+  font-size: var(--text-xs);
+  color: var(--color-fg-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+#events-panel[data-stream='live'] #events-status {
+  color: var(--color-accent-text);
+}
+
 #events-log td.type code {
   background: none;
   border: 0;
@@ -1084,7 +1123,12 @@ tr.rank-rest td.rank {
 
 /* A line patched in over SSE gets a brief flash, so "it updated without a
    reload" is visible rather than merely true. This and the 150 ms hover
-   transition are the only two animations on the site. */
+   transition are the only two animations on the site.
+
+   Scoped to [data-arrived], which only the per-row live patch stamps
+   (web/feed.go): the SSR render and the stream's prime/reconnect replace the
+   whole list, and thirty rows flashing at once would say "everything is new"
+   about a page where nothing is. */
 @keyframes catlog-arrive {
   from {
     background: rgb(44 250 31 / 0.22);
@@ -1094,18 +1138,34 @@ tr.rank-rest td.rank {
   }
 }
 
-#feed li {
+#feed li[data-arrived],
+#events-log tr[data-arrived] {
   animation: catlog-arrive 1.2s ease-out;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  #feed li {
+  #feed li[data-arrived],
+  #events-log tr[data-arrived] {
     animation: none;
   }
 
   * {
     transition-duration: 0.01ms !important;
   }
+}
+
+/* The connection hint me.js maintains next to the panel title (connecting /
+   live / reconnecting). Empty — and invisible — until a stream is actually
+   opened, so a page without JS claims nothing. */
+#feed-status {
+  font-size: var(--text-xs);
+  color: var(--color-fg-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+#feed-panel[data-stream='live'] #feed-status {
+  color: var(--color-accent-text);
 }
 
 /* --- 8. "me" ------------------------------------------------------------------ */

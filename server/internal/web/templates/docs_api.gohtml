@@ -17,14 +17,26 @@
     <tr><td><code>GET /v1/players/{handle}</code></td><td>a player's records and ranks, each with the board's direction and population; 404 for an unknown handle</td></tr>
     <tr><td><code>GET /v1/players?q=whisk</code></td><td>handle search; prefix matches first, then substring. Two characters minimum</td></tr>
     <tr><td><code>GET /v1/players/{handle}/events?limit=50&amp;before=…</code></td><td>the raw event log, newest first, cursor-paged. Page until <code>next</code> is absent, not until a page comes back short</td></tr>
+    <tr><td><code>GET /v1/events?type=…&amp;handle=…</code></td><td>the same raw log across every player, each row naming its handle; both filters optional</td></tr>
+    <tr><td><code>GET /v1/events/stream?type=…&amp;handle=…</code></td><td>live raw events as server-sent events, filters applied server-side (never cached, never replays — re-read <code>/v1/events</code> on reconnect)</td></tr>
     <tr><td><code>GET /v1/compare?handles=a,b,c</code></td><td>up to eight players pivoted board-first, read against one view of the projections</td></tr>
-    <tr><td><code>GET /v1/feed/sse</code></td><td>the live activity stream as server-sent events (never cached)</td></tr>
+    <tr><td><code>GET /v1/feed?limit=30</code></td><td>the activity feed as JSON rows, newest first</td></tr>
+    <tr><td><code>GET /v1/feed/stream</code></td><td>the same feed rows live, as server-sent events (never cached)</td></tr>
+    <tr><td><code>GET /v1/feed/sse</code></td><td>the live activity stream as datastar HTML fragments — this site's own transport; API clients want <code>/v1/feed/stream</code></td></tr>
     <tr><td><code>GET /.well-known/catlog-jwks.json</code></td><td>the public keys catlog signs licenses with</td></tr>
     <tr><td><code>GET /.well-known/catlog-denylist.json</code></td><td>the signed revocation list</td></tr>
     <tr><td><code>GET /healthz</code></td><td><code>{"ok": true}</code></td></tr>
   </tbody>
 </table>
 <pre><code>curl -s {{.BaseURL}}/v1/leaderboards/biggest_lithobrake_survived | jq '.rows[0]'</code></pre>
+<p>
+  The raw views publish what catlog recorded, with three exceptions that never appear anywhere:
+  the mod's install id is dropped, the client's own clock (<code>wall_t</code>) is dropped, and
+  the <code>career</code> and kitten ids are relabelled per player — same shape, stable for that
+  player, unrelatable between players. Flights flagged by the mod's stock-data checks and events
+  of players without a public handle are excluded rather than shown. See
+  <a href="/docs/privacy">privacy</a> for why.
+</p>
 </section>
 
 <section id="docs-api-ingest">

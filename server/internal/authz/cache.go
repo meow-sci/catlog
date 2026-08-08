@@ -4,6 +4,9 @@ import (
 	"container/list"
 	"crypto/sha256"
 	"sync"
+	"time"
+
+	"github.com/meow-sci/catlog/server/internal/keys"
 )
 
 // LicenseCacheSize is the §4.5.3 step-2 cache capacity: 10k parsed licenses,
@@ -75,4 +78,63 @@ func (c *licenseCache) len() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.ll.Len()
+}
+
+// --- credential cache --------------------------------------------------------
+
+// CredentialCacheTTL bounds how long a verified credential row is trusted
+// without a re-read. The deny-list version is the real invalidation — every
+// ban, unban, revoke and purge bumps it — so the TTL is a safety net for a
+// write that somehow reached the database without a deny-list refresh.
+const CredentialCacheTTL = 60 * time.Second
+
+// credentialCacheMax bounds the map. One entry per active credential, so
+// hitting it means ten thousand distinct players in one TTL; dropping the lot
+// costs each of them one re-read.
+const credentialCacheMax = 10_000
+
+// credEntry is one memoized step-5 success: the row facts the checks compared,
+// plus when and against which deny-list version they were true.
+type credEntry struct {
+	playerID int64
+	handle   string
+	userKey  keys.UserKey
+	at       time.Time
+	denyVer  int64
+}
+
+// credCache memoizes §4.5.3 step 5 — CredentialByJKT plus PlayerByID — which
+// every accepted batch was paying as two point queries. Only successes are
+// cached: a hit stands in for "credential live, handle and player agree, not
+// banned", and is honoured only while the deny-list version matches and the
+// entry is younger than [CredentialCacheTTL].
+type credCache struct {
+	mu sync.Mutex
+	m  map[string]credEntry
+}
+
+func newCredCache() *credCache {
+	return &credCache{m: make(map[string]credEntry, 256)}
+}
+
+// get returns the cached player id when every fact the fill checked still
+// matches this request's license.
+func (c *credCache) get(jkt, handle string, userKey keys.UserKey, now time.Time, denyVer int64) (int64, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	e, ok := c.m[jkt]
+	if !ok || e.denyVer != denyVer || now.Sub(e.at) >= CredentialCacheTTL ||
+		e.handle != handle || e.userKey != userKey {
+		return 0, false
+	}
+	return e.playerID, true
+}
+
+func (c *credCache) put(jkt string, e credEntry) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.m) >= credentialCacheMax {
+		clear(c.m)
+	}
+	c.m[jkt] = e
 }

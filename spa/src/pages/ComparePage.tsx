@@ -11,7 +11,6 @@ import {
   DataTable,
   Empty,
   Failure,
-  HandleComboBox,
   HeadCell,
   HeadRow,
   Loading,
@@ -21,6 +20,7 @@ import {
   TableRows,
   Value,
 } from '../ui/kit/index.ts';
+import { HandleComboBox } from '../ui/kit/HandleComboBox.tsx';
 import { HandleTags } from '../ui/kit/HandleTags.tsx';
 import { unitLabel } from '../ui/units.ts';
 
@@ -194,32 +194,39 @@ function CompareTable(props: {
         ))}
       </HeadRow>
       <TableRows items={props.boards.map((b) => ({ ...b, id: b.stat }))}>
-        {(board: CompareBoard & { id: string }) => (
-          <DataRow id={board.stat} data-stat={board.stat}>
-            <DataCell>
-              <a
-                href={hrefFor({ name: 'board', stat: board.stat, offset: 0, period: ALLTIME })}
-                className="text-fg hover:text-accent-text font-medium"
-              >
-                {board.title}
-              </a>
-              {/* One row is one board, so the row header carries what a column
+        {(board: CompareBoard & { id: string }) => {
+          // Hoisted out of the cells: one pass for the best value and one Map
+          // for the lookups, instead of a `find` per cell and a scan per column.
+          const best = bestHandle(board);
+          const byHandle = new Map(board.rows.map((row) => [row.handle, row]));
+          return (
+            <DataRow id={board.stat} data-stat={board.stat}>
+              <DataCell>
+                <a
+                  href={hrefFor({ name: 'board', stat: board.stat, offset: 0, period: ALLTIME })}
+                  className="text-fg hover:text-accent-text font-medium"
+                >
+                  {board.title}
+                </a>
+                {/* One row is one board, so the row header carries what a column
                   header carries elsewhere: the label of what these cells hold. */}
-              <span className="text-fg-muted block text-sm">
-                {unitLabel(board.unit)} · {board.ascending ? 'lowest wins' : 'highest wins'} ·{' '}
-                {board.players} on the board
-              </span>
-            </DataCell>
-            {props.columns.map((column) => (
-              <CompareCell
-                key={column.handle}
-                board={board}
-                handle={column.handle}
-                best={bestHandle(board)}
-              />
-            ))}
-          </DataRow>
-        )}
+                <span className="text-fg-muted block text-sm">
+                  {unitLabel(board.unit)} · {board.ascending ? 'lowest wins' : 'highest wins'} ·{' '}
+                  {board.players} on the board
+                </span>
+              </DataCell>
+              {props.columns.map((column) => (
+                <CompareCell
+                  key={column.handle}
+                  board={board}
+                  row={byHandle.get(column.handle)}
+                  handle={column.handle}
+                  best={best}
+                />
+              ))}
+            </DataRow>
+          );
+        }}
       </TableRows>
     </DataTable>
   );
@@ -238,10 +245,11 @@ function bestHandle(board: CompareBoard): string | null {
 
 function CompareCell(props: {
   readonly board: CompareBoard;
+  readonly row: CompareRow | undefined;
   readonly handle: string;
   readonly best: string | null;
 }) {
-  const row = props.board.rows.find((r) => r.handle === props.handle);
+  const { row } = props;
   if (row === undefined) {
     return (
       <DataCell align="end" className="text-fg-subtle">

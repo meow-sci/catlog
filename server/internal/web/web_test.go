@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -26,10 +27,14 @@ import (
 // is the rendering, not the queries — those are readapi's, and its own suite
 // covers them.
 type fakeRead struct {
-	boards  readapi.BoardsResponse
-	board   map[string]readapi.BoardResponse
-	player  map[string]readapi.PlayerResponse
-	events  map[string]readapi.EventsResponse
+	boards readapi.BoardsResponse
+	board  map[string]readapi.BoardResponse
+	player map[string]readapi.PlayerResponse
+	events map[string]readapi.EventsResponse
+	global readapi.EventsResponse
+	// players maps a player id to its handle for PublicEvents; an id off the
+	// map is a handle-less player, which PublicEvents must drop.
+	players map[int64]string
 	handles []string
 	err     error
 	// lastPeriod and lastOffset record what the board page actually asked for,
@@ -88,6 +93,51 @@ func (f *fakeRead) PlayerEvents(_ context.Context, handle, typ string, _ int64, 
 		e.Events = kept
 	}
 	return e, true, nil
+}
+
+func (f *fakeRead) GlobalEvents(_ context.Context, typ string, _ int64, limit int) (readapi.EventsResponse, error) {
+	if f.err != nil {
+		return readapi.EventsResponse{}, f.err
+	}
+	out := f.global
+	out.Limit, out.Type = limit, typ
+	if typ != "" {
+		kept := out.Events[:0:0]
+		for _, ev := range out.Events {
+			if ev.Type == typ {
+				kept = append(kept, ev)
+			}
+		}
+		out.Events = kept
+	}
+	return out, nil
+}
+
+// PublicEvents mirrors the readapi seam's contract shallowly: handle-less
+// players dropped, every surviving row named. The real redaction is readapi's
+// and is tested there; these tests assert the web handler renders only what
+// this seam returned.
+func (f *fakeRead) PublicEvents(_ context.Context, batch []store.StoredEvent) ([]readapi.EventRow, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	rows := make([]readapi.EventRow, 0, len(batch))
+	for _, ev := range batch {
+		handle, ok := f.players[ev.PlayerID]
+		if !ok {
+			continue
+		}
+		row := readapi.EventRow{
+			Seq: ev.Seq, Handle: handle, Type: ev.Type, Ver: ev.Ver,
+			Career: ev.Career, Recv: ev.RecvTime, Payload: ev.Payload,
+		}
+		if ev.SimTime.Valid {
+			t := ev.SimTime.Float64
+			row.SimT = &t
+		}
+		rows = append(rows, row)
+	}
+	return rows, nil
 }
 
 func (f *fakeRead) Search(q string, limit int) readapi.SearchResponse {
@@ -156,6 +206,7 @@ type fixture struct {
 	accounts    *fakeAccounts
 	sessions    *identity.Sessions
 	broadcaster *projector.Broadcaster
+	raw         *projector.RawBroadcaster
 	projections *store.Projections
 	userKey     keys.UserKey
 }
@@ -212,18 +263,36 @@ func newFixture(t *testing.T) *fixture {
 				Handle: "demo_crasher", Next: "41822",
 				Events: []readapi.EventRow{
 					{
-						ID: "01J9VEVENT1", Type: "vehicle.impact", Ver: 1,
+						Seq: 41824, ID: "01J9VEVENT1", Type: "vehicle.impact", Ver: 1,
 						Session: "01J9VSESSION", Flight: "01J9VFLIGHT",
 						Career: "b7k2q9x4m0nrt3vz", SimT: ptr(1832.5), Recv: 1767225600000,
 						Payload: json.RawMessage(`{"speed_ms":214,"body":"duna","survived":true}`),
 					},
 					{
-						ID: "01J9VEVENT2", Type: "vehicle.rud", Ver: 1, Recv: 1767225500000,
+						Seq: 41823, ID: "01J9VEVENT2", Type: "vehicle.rud", Ver: 1, Recv: 1767225500000,
 						Payload: json.RawMessage(`{"cause":"ground_impact"}`),
 					},
 				},
 			},
 		},
+		// The global log: demo_crasher's page interleaved with another player,
+		// every row naming its handle — what GlobalEvents publishes.
+		global: readapi.EventsResponse{
+			Next: "41822",
+			Events: []readapi.EventRow{
+				{
+					Seq: 41824, Handle: "demo_crasher", ID: "01J9VEVENT1", Type: "vehicle.impact", Ver: 1,
+					Session: "01J9VSESSION", Flight: "01J9VFLIGHT",
+					Career: "b7k2q9x4m0nrt3vz", SimT: ptr(1832.5), Recv: 1767225600000,
+					Payload: json.RawMessage(`{"speed_ms":214,"body":"duna","survived":true}`),
+				},
+				{
+					Seq: 41823, Handle: "demo_ace", ID: "01J9VEVENT3", Type: "vehicle.orbit", Ver: 1, Recv: 1767225550000,
+					Payload: json.RawMessage(`{"body":"luna"}`),
+				},
+			},
+		},
+		players: map[int64]string{1: "demo_crasher", 2: "demo_ace"},
 	}
 	for _, stat := range web.FeaturedBoards {
 		read.board[stat] = readapi.BoardResponse{Stat: stat, Title: "Board " + stat, Unit: "m/s"}
@@ -238,12 +307,14 @@ func newFixture(t *testing.T) *fixture {
 
 	accounts := &fakeAccounts{}
 	broadcaster := projector.NewBroadcaster()
+	raw := projector.NewRawBroadcaster()
 
 	srv, err := web.New(web.Deps{
 		Config:      testutil.Config(t),
 		Read:        read,
 		Projections: live,
 		Feed:        broadcaster,
+		Raw:         raw,
 		Sessions:    sessions,
 		Accounts:    accounts,
 		Log:         testutil.DiscardLogger(),
@@ -256,7 +327,7 @@ func newFixture(t *testing.T) *fixture {
 
 	return &fixture{
 		srv: srv, mux: mux, read: read, accounts: accounts, sessions: sessions,
-		broadcaster: broadcaster, projections: proj,
+		broadcaster: broadcaster, raw: raw, projections: proj,
 		userKey: keys.UserKey{1, 2, 3},
 	}
 }
@@ -509,6 +580,19 @@ func TestCacheHeaders(t *testing.T) {
 		t.Errorf("GET /login Cache-Control = %q, want no-store", got)
 	}
 
+	// 404s are never publicly cacheable: the catch-all matches every URL nobody
+	// thought of, and each distinct miss would occupy its own CDN entry.
+	if got := f.get(t, "/no/such/page").Header().Get("Cache-Control"); got != "no-store" {
+		t.Errorf("404 Cache-Control = %q, want no-store", got)
+	}
+
+	// The /docs index redirect is as cacheable as its fixed target.
+	if w := f.get(t, "/docs"); w.Code != http.StatusFound {
+		t.Errorf("GET /docs = %d, want 302", w.Code)
+	} else if got := w.Header().Get("Cache-Control"); got != readapi.CacheControl {
+		t.Errorf("GET /docs Cache-Control = %q, want %q", got, readapi.CacheControl)
+	}
+
 	// The SSE feed is the one public route that must not be cached at all.
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, web.FeedPath, nil)
@@ -673,6 +757,9 @@ func TestFeedPrimesThenStreams(t *testing.T) {
 	if got := w.body(); !strings.Contains(got, "event: datastar-patch-elements") {
 		t.Fatalf("the prime is not a datastar patch:\n%s", got)
 	}
+	// Primed rows are not "arrived": the flash is scoped to data-arrived, and a
+	// (re)connect that animated thirty old rows would claim they were new.
+	mustNotContain(t, w.body(), "data-arrived", "prime")
 
 	// A live row. Publish only reaches a subscriber that already exists, which
 	// is why the handler subscribes before it primes.
@@ -686,6 +773,10 @@ func TestFeedPrimesThenStreams(t *testing.T) {
 	mustContain(t, body, "data: selector #feed", "live patch")
 	mustContain(t, body, "data: mode prepend", "live patch")
 	mustContain(t, body, `id="feed-item-99"`, "live patch")
+	// Only the live per-row patch is marked arrived, and the summary's leading
+	// handle is rendered as a profile link with the rest left as prose.
+	mustContain(t, body, "data-arrived", "live patch")
+	mustContain(t, body, `<a href="/p/demo_crasher">demo_crasher</a> lithobraked at 214`, "live patch")
 
 	// A replayed row (id at or below the high-water mark) must not be patched in
 	// twice: the prime and the live channel overlap by design.
@@ -768,5 +859,249 @@ func waitFor(t *testing.T, w *flushRecorder, ok func(string) bool) {
 		case <-deadline:
 			t.Fatalf("timed out waiting for the stream; got:\n%s", w.body())
 		}
+	}
+}
+
+// --- the raw event pages ---------------------------------------------------------------
+
+// The global page renders rows with their handles, the chip row, the handle
+// filter notice, and the pager — and carries the public cache header like every
+// other public page.
+func TestGlobalEventsPageRenders(t *testing.T) {
+	f := newFixture(t)
+
+	body := f.get(t, "/events").Body.String()
+	mustContain(t, body, `id="events-log"`, "events page")
+	mustContain(t, body, `id="events-body" data-source="ssr"`, "events page")
+	mustContain(t, body, `id="event-row-41824"`, "events page")
+	mustContain(t, body, `data-seq="41824"`, "events page")
+	// Every row names its player as a profile link.
+	mustContain(t, body, `<a href="/p/demo_crasher">demo_crasher</a>`, "events page")
+	mustContain(t, body, `<a href="/p/demo_ace">demo_ace</a>`, "events page")
+	// The received column is a machine-readable instant plus the display text.
+	mustContain(t, body, `<time datetime="2026-01-01T00:00:00Z">2026-01-01 00:00 UTC</time>`, "events page")
+	// The career clock renders through the unit table, raw figure in the title.
+	mustContain(t, body, `title="1832.5 s"`, "events page")
+	mustContain(t, body, "30m 32s", "events page")
+	// Chips: the taxonomy union, with the page's own types present.
+	mustContain(t, body, `id="events-types"`, "events page")
+	mustContain(t, body, `data-type="vehicle.orbit"`, "events page")
+	// Pager: newest is disabled on page one, older links by cursor.
+	mustContain(t, body, `<span id="events-newest" aria-disabled="true">`, "events page")
+	mustContain(t, body, `href="/events?before=41822" id="events-older"`, "events page")
+	// The nav names the page.
+	mustContain(t, body, `id="nav-events" aria-current="page"`, "events page")
+
+	if got := f.get(t, "/events").Header().Get("Cache-Control"); got != readapi.CacheControl {
+		t.Errorf("GET /events Cache-Control = %q, want %q", got, readapi.CacheControl)
+	}
+}
+
+// `?handle=` narrows the global page to one player through the same PlayerEvents
+// call the per-handle page uses — same rows, same 404 for unknown, retired and
+// banned — and renders as a notice with a way out.
+func TestGlobalEventsHandleFilter(t *testing.T) {
+	f := newFixture(t)
+
+	body := f.get(t, "/events?handle=demo_crasher").Body.String()
+	mustContain(t, body, `id="events-handle-filter"`, "handle filter")
+	mustContain(t, body, `data-handle="demo_crasher"`, "handle filter")
+	mustContain(t, body, `id="events-handle-clear" href="/events"`, "handle filter")
+	// The per-player envelope names the handle once; the page stamps it onto
+	// every row so the shared partial still renders the link.
+	mustContain(t, body, `<a href="/p/demo_crasher">demo_crasher</a>`, "handle filter")
+	// The chip URLs carry the handle filter through.
+	mustContain(t, body, `href="/events?handle=demo_crasher&amp;type=vehicle.impact"`, "handle filter")
+
+	w := f.get(t, "/events?handle=nobody")
+	if w.Code != http.StatusNotFound {
+		t.Errorf("GET /events?handle=nobody = %d, want 404", w.Code)
+	}
+
+	if w := f.get(t, "/events?before=not-a-cursor"); w.Code != http.StatusNotFound {
+		t.Errorf("GET /events?before=not-a-cursor = %d, want 404", w.Code)
+	}
+}
+
+// eventRowRx pulls every rendered log row out of a page, disclosure included.
+var eventRowRx = regexp.MustCompile(`(?s)<tr class="event-row".*?</tr>`)
+
+// The per-handle page and the global page render rows through one partial, so
+// the same event is byte-identical on both — the feed-item discipline. This is
+// the assertion that catches the two views drifting apart cell by cell.
+func TestEventsPagesShareOneRowPartial(t *testing.T) {
+	f := newFixture(t)
+
+	global := eventRowRx.FindAllString(f.get(t, "/events").Body.String(), -1)
+	perHandle := eventRowRx.FindAllString(f.get(t, "/p/demo_crasher/events").Body.String(), -1)
+
+	if len(global) == 0 || len(perHandle) == 0 {
+		t.Fatalf("no rows extracted: global %d, per-handle %d", len(global), len(perHandle))
+	}
+	// Seq 41824 is on both pages; the two renderings must be identical bytes.
+	find := func(rows []string, id string) string {
+		for _, row := range rows {
+			if strings.Contains(row, id) {
+				return row
+			}
+		}
+		return ""
+	}
+	g, p := find(global, `id="event-row-41824"`), find(perHandle, `id="event-row-41824"`)
+	switch {
+	case g == "" || p == "":
+		t.Fatalf("seq 41824 missing: global %q, per-handle %q", g, p)
+	case g != p:
+		t.Errorf("the two pages render the same row differently:\nglobal:     %s\nper-handle: %s", g, p)
+	}
+}
+
+// The live tail exists only on page one: a page read at a cursor is historical,
+// and its markup must not open a stream that prepends today's rows above last
+// week's.
+func TestEventsLiveTailOnlyOnPageOne(t *testing.T) {
+	f := newFixture(t)
+
+	one := f.get(t, "/events").Body.String()
+	mustContain(t, one, `id="events-tail"`, "page one")
+	mustContain(t, one, `data-init="@get('/v1/events/sse', {requestCancellation: 'cleanup'})"`, "page one")
+	mustContain(t, one, `id="events-live"`, "page one")
+
+	// The tail carries the page's own filter into the stream URL.
+	filtered := f.get(t, "/events?type=vehicle.impact&handle=demo_crasher").Body.String()
+	mustContain(t, filtered,
+		`data-init="@get('/v1/events/sse?handle=demo_crasher&amp;type=vehicle.impact', {requestCancellation: 'cleanup'})"`,
+		"filtered page")
+
+	deep := f.get(t, "/events?before=41822").Body.String()
+	mustNotContain(t, deep, `id="events-tail"`, "deep page")
+	mustNotContain(t, deep, `id="events-live"`, "deep page")
+
+	// The per-handle page tails too, scoped to its handle.
+	perHandle := f.get(t, "/p/demo_crasher/events").Body.String()
+	mustContain(t, perHandle,
+		`data-init="@get('/v1/events/sse?handle=demo_crasher', {requestCancellation: 'cleanup'})"`,
+		"per-handle page")
+	perHandleDeep := f.get(t, "/p/demo_crasher/events?before=41822").Body.String()
+	mustNotContain(t, perHandleDeep, `id="events-tail"`, "deep per-handle page")
+}
+
+// --- the events SSE tail ---------------------------------------------------------------
+
+// Subscribe-then-prime, one live row, the arrival mark, the seq dedupe and the
+// DOM cap — handleFeed's contract, on the raw log.
+func TestEventsSSEPrimesThenStreams(t *testing.T) {
+	f := newFixture(t)
+
+	reqCtx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	r := httptest.NewRequest(http.MethodGet, web.EventsSSEPath, nil).WithContext(reqCtx)
+	w := &flushRecorder{ResponseRecorder: httptest.NewRecorder(), wrote: make(chan struct{}, 64)}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		f.mux.ServeHTTP(w, r)
+	}()
+
+	// The prime replaces the whole tbody, marked as the stream's copy.
+	waitFor(t, w, func(body string) bool { return strings.Contains(body, `id="events-body" data-source="sse"`) })
+	mustContain(t, w.body(), "event: datastar-patch-elements", "prime")
+	mustNotContain(t, w.body(), "data-arrived", "prime")
+
+	// A live row: through the seam, above the high-water mark.
+	f.raw.Publish([]store.StoredEvent{{
+		Seq: 41900, PlayerID: 2, RecvTime: 1767225700000,
+		Event: store.Event{Type: "vehicle.rud", Ver: 1, Payload: json.RawMessage(`{"cause":"tumble"}`)},
+	}})
+	waitFor(t, w, func(body string) bool { return strings.Contains(body, `id="event-row-41900"`) })
+
+	body := w.body()
+	mustContain(t, body, "data: selector #events-body", "live patch")
+	mustContain(t, body, "data: mode prepend", "live patch")
+	mustContain(t, body, "data-arrived", "live patch")
+	mustContain(t, body, `<a href="/p/demo_ace">demo_ace</a>`, "live patch")
+
+	// A replayed seq (at or below the high-water mark) is never patched twice,
+	// and a handle-less player's row never reaches the page at all.
+	before := strings.Count(w.body(), `id="event-row-41900"`)
+	f.raw.Publish([]store.StoredEvent{
+		{Seq: 41900, PlayerID: 2, Event: store.Event{Type: "vehicle.rud", Ver: 1, Payload: json.RawMessage(`{"cause":"duplicate"}`)}},
+		{Seq: 41901, PlayerID: 99, Event: store.Event{Type: "vehicle.rud", Ver: 1, Payload: json.RawMessage(`{"cause":"nameless"}`)}},
+		{Seq: 41902, PlayerID: 1, Event: store.Event{Type: "vehicle.orbit", Ver: 1, Payload: json.RawMessage(`{"body":"sentinel"}`)}},
+	})
+	waitFor(t, w, func(b string) bool { return strings.Contains(b, "sentinel") })
+	if after := strings.Count(w.body(), `id="event-row-41900"`); after != before {
+		t.Errorf("a replayed row was patched in again (%d → %d)", before, after)
+	}
+	mustNotContain(t, w.body(), "duplicate", "replayed row")
+	mustNotContain(t, w.body(), "nameless", "handle-less row")
+
+	// The DOM cap: push the page past EventRows and the oldest row is removed
+	// by the id the row partial stamped.
+	burst := make([]store.StoredEvent, 0, web.EventRows)
+	for i := range web.EventRows {
+		burst = append(burst, store.StoredEvent{
+			Seq: int64(42000 + i), PlayerID: 1,
+			Event: store.Event{Type: "vehicle.rud", Ver: 1, Payload: json.RawMessage(`{}`)},
+		})
+	}
+	f.raw.Publish(burst)
+	waitFor(t, w, func(b string) bool { return strings.Contains(b, "data: mode remove") })
+	mustContain(t, w.body(), "data: selector #event-row-41823", "trim")
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the SSE handler did not return after the client disconnected")
+	}
+	if f.raw.Clients() != 0 {
+		t.Errorf("the raw subscriber was not cancelled: %d left", f.raw.Clients())
+	}
+}
+
+// `?type=` and `?handle=` scope the tail to the page's filter: the prime reads
+// the filtered page and live rows are matched per subscriber.
+func TestEventsSSEHonoursTheFilters(t *testing.T) {
+	f := newFixture(t)
+
+	reqCtx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	r := httptest.NewRequest(http.MethodGet,
+		web.EventsSSEPath+"?type=vehicle.impact&handle=demo_crasher", nil).WithContext(reqCtx)
+	w := &flushRecorder{ResponseRecorder: httptest.NewRecorder(), wrote: make(chan struct{}, 64)}
+	go f.mux.ServeHTTP(w, r)
+
+	// The prime is the filtered page: demo_crasher's impact, nobody else's rows.
+	waitFor(t, w, func(body string) bool { return strings.Contains(body, `data-source="sse"`) })
+	mustContain(t, w.body(), `id="event-row-41824"`, "filtered prime")
+	mustNotContain(t, w.body(), `id="event-row-41823"`, "filtered prime")
+
+	// Wrong type, wrong player, then a match — only the match is patched in.
+	f.raw.Publish([]store.StoredEvent{
+		{Seq: 41903, PlayerID: 1, Event: store.Event{Type: "vehicle.rud", Ver: 1, Payload: json.RawMessage(`{"cause":"wrong_type"}`)}},
+		{Seq: 41904, PlayerID: 2, Event: store.Event{Type: "vehicle.impact", Ver: 1, Payload: json.RawMessage(`{"body":"wrong_player"}`)}},
+		{Seq: 41905, PlayerID: 1, Event: store.Event{Type: "vehicle.impact", Ver: 1, Payload: json.RawMessage(`{"body":"match"}`)}},
+	})
+	waitFor(t, w, func(b string) bool { return strings.Contains(b, "match") })
+	mustNotContain(t, w.body(), "wrong_type", "type filter")
+	mustNotContain(t, w.body(), "wrong_player", "handle filter")
+	mustContain(t, w.body(), "data-arrived", "filtered live patch")
+}
+
+// The events tail is the other public route that must never be cached.
+func TestEventsSSEIsNeverCached(t *testing.T) {
+	f := newFixture(t)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, web.EventsSSEPath, nil)
+	ctx, cancel := context.WithCancel(r.Context())
+	cancel()
+	f.mux.ServeHTTP(w, r.WithContext(ctx))
+	if got := w.Header().Get("Cache-Control"); got == readapi.CacheControl {
+		t.Errorf("the events SSE tail carries the read-API cache header: %q", got)
+	}
+	if got := w.Header().Get("Content-Type"); !strings.HasPrefix(got, "text/event-stream") {
+		t.Errorf("GET %s content-type = %q", web.EventsSSEPath, got)
 	}
 }

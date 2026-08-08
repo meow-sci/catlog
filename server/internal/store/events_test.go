@@ -463,6 +463,59 @@ func TestEventsSinceAndMaxSeq(t *testing.T) {
 	}
 }
 
+func TestRecentEventsIsNewestFirstAcrossPlayers(t *testing.T) {
+	e := testutil.MemEvents(t)
+	set := testutil.Keys(t)
+	alice := testutil.Player(t, e, set, "discord", "alice")
+	bob := testutil.Player(t, e, set, "discord", "bob")
+
+	// Interleaved arrivals: the global page orders by seq, not by player.
+	for range 3 {
+		if _, _, err := e.InsertEvents(t.Context(), nil, alice, []store.Event{newEvent(t, "vehicle.staging")}); err != nil {
+			t.Fatalf("InsertEvents: %v", err)
+		}
+		if _, _, err := e.InsertEvents(t.Context(), nil, bob, []store.Event{newEvent(t, "telemetry.window")}); err != nil {
+			t.Fatalf("InsertEvents: %v", err)
+		}
+	}
+
+	page, err := e.RecentEvents(t.Context(), 0, 4)
+	if err != nil {
+		t.Fatalf("RecentEvents: %v", err)
+	}
+	if len(page) != 4 || page[0].Seq != 6 || page[3].Seq != 3 {
+		t.Fatalf("first page seqs = %v, want 6..3", seqsOf(page))
+	}
+	if page[0].PlayerID != bob || page[1].PlayerID != alice {
+		t.Errorf("rows are not interleaved by arrival: players %d, %d", page[0].PlayerID, page[1].PlayerID)
+	}
+
+	// before is exclusive, exactly like PlayerEvents' cursor.
+	rest, err := e.RecentEvents(t.Context(), page[3].Seq, 100)
+	if err != nil {
+		t.Fatalf("RecentEvents (resume): %v", err)
+	}
+	if len(rest) != 2 || rest[0].Seq != 2 || rest[1].Seq != 1 {
+		t.Errorf("resume page seqs = %v, want 2, 1", seqsOf(rest))
+	}
+
+	if page, err := e.RecentEvents(t.Context(), 1, 100); err != nil || len(page) != 0 {
+		t.Errorf("RecentEvents before the oldest = %d rows (err %v), want 0", len(page), err)
+	}
+	if page, err := e.RecentEvents(t.Context(), 0, 0); err != nil || page != nil {
+		t.Errorf("RecentEvents with limit 0 = %v (err %v), want nil", page, err)
+	}
+}
+
+// seqsOf lists a page's seqs for failure messages.
+func seqsOf(page []store.StoredEvent) []int64 {
+	out := make([]int64, len(page))
+	for i, ev := range page {
+		out[i] = ev.Seq
+	}
+	return out
+}
+
 func TestInsertEventsRejectsUntypedEvent(t *testing.T) {
 	e := testutil.MemEvents(t)
 	set := testutil.Keys(t)
@@ -471,6 +524,64 @@ func TestInsertEventsRejectsUntypedEvent(t *testing.T) {
 	ev := newEvent(t, "")
 	if _, _, err := e.InsertEvents(t.Context(), nil, alice, []store.Event{ev}); err == nil {
 		t.Error("an event with no type was accepted")
+	}
+}
+
+func TestInsertEventsDedupsWithinOneBatch(t *testing.T) {
+	e := testutil.MemEvents(t)
+	set := testutil.Keys(t)
+	alice := testutil.Player(t, e, set, "discord", "alice")
+
+	// The same event_id twice in one call — a client that duplicated a line
+	// before shipping. INSERT OR IGNORE treats an intra-statement duplicate
+	// exactly like a stored one, so the aggregates must say 2 accepted / 1
+	// deduped, not 3/0.
+	a, b := newEvent(t, "flight.started"), newEvent(t, "vehicle.rud")
+	accepted, deduped, err := e.InsertEvents(t.Context(), nil, alice, []store.Event{a, b, a})
+	if err != nil {
+		t.Fatalf("InsertEvents: %v", err)
+	}
+	if accepted != 2 || deduped != 1 {
+		t.Errorf("intra-batch dup = %d accepted / %d deduped, want 2/1", accepted, deduped)
+	}
+	if n, err := e.CountEvents(t.Context(), alice); err != nil || n != 2 {
+		t.Errorf("event count = %d (err %v), want 2", n, err)
+	}
+}
+
+func TestInsertEventsAcrossChunks(t *testing.T) {
+	e := testutil.MemEvents(t)
+	set := testutil.Keys(t)
+	alice := testutil.Player(t, e, set, "discord", "alice")
+
+	// Bigger than one EventInsertChunk, so the batch spans two statements —
+	// including a duplicate whose first copy lands in the first chunk and whose
+	// second copy lands in the second.
+	n := store.EventInsertChunk + 50
+	batch := make([]store.Event, 0, n)
+	for range n - 1 {
+		batch = append(batch, newEvent(t, "vehicle.rud"))
+	}
+	batch = append(batch, batch[0])
+
+	accepted, deduped, err := e.InsertEvents(t.Context(), nil, alice, batch)
+	if err != nil {
+		t.Fatalf("InsertEvents: %v", err)
+	}
+	if accepted != n-1 || deduped != 1 {
+		t.Errorf("chunked insert = %d accepted / %d deduped, want %d/1", accepted, deduped, n-1)
+	}
+	if got, err := e.CountEvents(t.Context(), alice); err != nil || got != int64(n-1) {
+		t.Errorf("event count = %d (err %v), want %d", got, err, n-1)
+	}
+
+	// Replaying the whole thing changes nothing (D19).
+	accepted, deduped, err = e.InsertEvents(t.Context(), nil, alice, batch)
+	if err != nil {
+		t.Fatalf("replay InsertEvents: %v", err)
+	}
+	if accepted != 0 || deduped != n {
+		t.Errorf("replay = %d accepted / %d deduped, want 0/%d", accepted, deduped, n)
 	}
 }
 

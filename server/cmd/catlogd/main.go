@@ -124,7 +124,11 @@ func run(ctx context.Context, cfg config.Config, log *slog.Logger, ready func(pu
 		Now:                srvClock.Now,
 	}
 
-	events, err := store.OpenEvents(ctx, cfg.EventsDBPath(), storeOpts)
+	// Payload compression is an events.db concern only; the flag is ignored
+	// by OpenProjections, so the shared options struct stays shared.
+	eventsOpts := storeOpts
+	eventsOpts.DisablePayloadCompression = !cfg.Data.CompressPayloads
+	events, err := store.OpenEvents(ctx, cfg.EventsDBPath(), eventsOpts)
 	if err != nil {
 		return fmt.Errorf("open events database: %w", err)
 	}
@@ -174,6 +178,7 @@ func run(ctx context.Context, cfg config.Config, log *slog.Logger, ready func(pu
 	ingestHandler := ingest.NewHandler(verifier, writer, ingest.Limits{
 		MaxBodyBytes: cfg.Ingest.MaxBodyBytes,
 		MaxEvents:    cfg.Ingest.MaxEvents,
+		MaxInFlight:  cfg.Ingest.MaxInFlight,
 	}, log)
 
 	// The in-memory player_id ↔ handle map (§5.4): projections.db cannot be
@@ -195,16 +200,21 @@ func run(ctx context.Context, cfg config.Config, log *slog.Logger, ready func(pu
 		}
 	}()
 	broadcaster := projector.NewBroadcaster()
+	// The raw twin: every stored event the fold loop commits past, for the
+	// public `/v1/events/stream`. Redaction happens in readapi, at publish.
+	rawBroadcaster := projector.NewRawBroadcaster()
 	proj, err := projector.New(projector.Options{
 		Events:       events,
 		Live:         live,
 		Directory:    dir,
 		Broadcaster:  broadcaster,
+		Raw:          rawBroadcaster,
 		Notify:       writer.Notify(),
 		StoreOptions: storeOpts,
 		BatchSize:    cfg.Projector.BatchSize,
 		FlushRows:    cfg.Projector.FlushRows,
 		Decoders:     cfg.Projector.Decoders,
+		Tick:         time.Duration(cfg.Projector.TickS) * time.Second,
 		Log:          log,
 	})
 	if err != nil {
@@ -226,6 +236,10 @@ func run(ctx context.Context, cfg config.Config, log *slog.Logger, ready func(pu
 		// The JSON half of the activity feed, for the `spa/` frontend: the
 		// datastar stream in package web is HTML and stays where it is.
 		Feed: broadcaster,
+		// The live half of the raw event log (`/v1/events/stream`).
+		RawEvents: rawBroadcaster,
+		// Concurrent SSE subscribers per stream route (config [server]).
+		MaxStreamClients: cfg.Server.MaxStreamClients,
 		// How many players a board whose key came out of the event stream needs
 		// before the public index lists it (config.Boards).
 		MinBoardPlayers: cfg.Boards.MinPlayers,
@@ -275,6 +289,7 @@ func run(ctx context.Context, cfg config.Config, log *slog.Logger, ready func(pu
 	}
 	archiver, err := archive.New(archive.Options{
 		Events: events, Store: archiveStore, Log: log, Now: srvClock.Now,
+		MaxEvents: cfg.Archive.MaxEventsPerRun,
 	})
 	if err != nil {
 		return fmt.Errorf("build archiver: %w", err)
@@ -321,9 +336,13 @@ func run(ctx context.Context, cfg config.Config, log *slog.Logger, ready func(pu
 		Read:        reader,
 		Projections: live,
 		Feed:        broadcaster,
-		Sessions:    ident.Sessions(),
-		Accounts:    ident,
-		Log:         log,
+		// The events pages' live tail (`/v1/events/sse`): the same raw
+		// broadcaster the readapi JSON stream consumes, redacted through the
+		// same readapi seam before anything is rendered.
+		Raw:      rawBroadcaster,
+		Sessions: ident.Sessions(),
+		Accounts: ident,
+		Log:      log,
 	})
 	if err != nil {
 		return fmt.Errorf("build web ui: %w", err)

@@ -56,6 +56,11 @@ type Handler struct {
 	log      *slog.Logger
 	rejects  *rejectLogger
 	timeout  time.Duration
+	// inflight is the [Limits.MaxInFlight] semaphore: a slot is held from just
+	// before the body is read until the response is written, which is the span
+	// where a request owns up to 9 MiB of buffers. Without it, peak ingest
+	// memory scales with however many connections nginx lets through.
+	inflight chan struct{}
 }
 
 // NewHandler wires the verification chain to the write queue.
@@ -63,13 +68,15 @@ func NewHandler(v *authz.Verifier, w *Writer, limits Limits, log *slog.Logger) *
 	if log == nil {
 		log = slog.Default()
 	}
+	limits = limits.withDefaults()
 	return &Handler{
 		verifier: v,
 		writer:   w,
-		limits:   limits.withDefaults(),
+		limits:   limits,
 		log:      log,
 		rejects:  newRejectLogger(v.Now),
 		timeout:  HandlerTimeout,
+		inflight: make(chan struct{}, limits.MaxInFlight),
 	}
 }
 
@@ -115,6 +122,20 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	})
 	if aerr != nil {
 		h.reject(w, r, "", aerr, now)
+		return
+	}
+
+	// The in-flight gate, taken before a byte of body is read: everything past
+	// this point holds real memory. Non-blocking on purpose — a queue of
+	// waiting-to-read requests would just be the memory problem wearing a
+	// different hat, and the mod already knows what a 503 + Retry-After means.
+	select {
+	case h.inflight <- struct{}{}:
+		defer func() { <-h.inflight }()
+	default:
+		h.rejectStatus(w, r, res.JKT, http.StatusServiceUnavailable, &authz.Error{
+			Code: authz.CodeInternal, Step: 10, Detail: "too many batches in flight", RetryAfter: BusyRetryAfter,
+		}, now)
 		return
 	}
 

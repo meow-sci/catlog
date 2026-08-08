@@ -18,10 +18,15 @@
  * | `Details` | `Disclosure` | `aria-expanded`/`aria-controls` on a real button, panel out of the tree while closed |
  * | `Button`, `ToggleButton` | `Button` | one press model across pointer/touch/keyboard/AT, and the `data-focus-visible` the single focus ring hangs off |
  *
- * `HandleTags` is deliberately **not** re-exported here even though it is part
- * of the kit. Only the comparison page uses it, and this barrel is imported by
- * the app shell — so re-exporting it would drag React Aria's `TagGroup` into the
- * chunk every visitor downloads. Import it from `./HandleTags.tsx` directly.
+ * `HandleTags` and `HandleComboBox` are deliberately **not** re-exported here
+ * even though they are part of the kit. This barrel is imported by the app
+ * shell, so a re-export here is a promise that every visitor downloads the
+ * React Aria machinery behind it on first paint. `HandleTags` would drag in
+ * `TagGroup` for a chip row only the comparison page renders; `HandleComboBox`
+ * would drag in `ComboBox` + `ListBox` + `Popover` (and the overlay machinery
+ * under them) for a suggestion list nobody has focused yet — the header search
+ * starts as a plain input and upgrades on focus (`ui/HeaderSearch.tsx`). Import
+ * both from their own files directly.
  *
  * Everything else — `Panel`, `StatTile`, `Value`, `Rank`, `Pill`, `Loading`,
  * `Failure`, `Empty` — is presentation with no interaction to get wrong, so it
@@ -38,7 +43,6 @@ export {
   TableRows,
 } from './DataTable.tsx';
 export { Details, Json } from './Details.tsx';
-export { HandleComboBox } from './HandleComboBox.tsx';
 export { Panel, PanelBody, PanelFooter, PanelHeader } from './Panel.tsx';
 export { Pill, RewoundMark, Token } from './Pill.tsx';
 export { Rank } from './Rank.tsx';

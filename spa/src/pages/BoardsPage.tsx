@@ -55,7 +55,14 @@ export function BoardsPage() {
                 Players
               </HeadCell>
             </HeadRow>
-            <TableRows items={boards.data.boards.map((b) => ({ ...b, id: b.stat }))}>
+            <TableRows
+              items={boards.data.boards.map((b) => ({ ...b, id: b.stat }))}
+              renderEmptyState={() => (
+                <p className="text-fg-muted px-4 py-8 text-sm">
+                  No boards yet. Fly something, and give catlog something to rank.
+                </p>
+              )}
+            >
               {(board: BoardSummary & { id: string }) => (
                 <DataRow id={board.stat} className="boards-row" data-stat={board.stat}>
                   {/* A link in the cell, not `href` on the Row. React Aria will

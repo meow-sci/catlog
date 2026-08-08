@@ -52,6 +52,23 @@ EnvironmentFile=-/etc/catlog/catlogd.env
 Environment=TURSO_GO_CACHE_DIR=/var/lib/catlog/turso-cache
 ExecStartPre=/usr/bin/install -d -m 0700 -o catlog -g catlog /var/lib/catlog/turso-cache
 
+# ---------------------------------------------------------------------------
+# Memory: tell the Go runtime about the box (§2: cheap enough to forget about)
+# ---------------------------------------------------------------------------
+# GOMEMLIMIT is a soft ceiling for the Go heap: as it is approached the GC runs
+# harder instead of letting the RSS wander into the OOM killer. Size it to the
+# box minus nginx/system headroom — ~700MiB is right for a 1 GB droplet; scale
+# accordingly. Once it is set, GOGC=200-400 is a free CPU win: the collector
+# runs less often when idle and the limit still caps the worst case. Both are
+# examples, not defaults, because only the owner knows the box.
+#Environment=GOMEMLIMIT=700MiB
+#Environment=GOGC=300
+# The systemd backstops behind the soft limit: MemoryHigh throttles/reclaims
+# before MemoryMax kills. Keep MemoryHigh above GOMEMLIMIT so the runtime gets
+# to react first, and MemoryMax above that so a kill stays the last resort.
+#MemoryHigh=800M
+#MemoryMax=900M
+
 Restart=on-failure
 RestartSec=2s
 # Shutdown drains the ingest write queue, checkpoints both WALs and closes the

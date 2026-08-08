@@ -30,6 +30,10 @@ static_dir   = "site/dist"               # served at /static/ in dev; nginx serv
 # year. Development only: it defaults to false, catlogd refuses to start with it
 # on an https base_url, and the route lives on the loopback-only admin mux.
 clock_control = true
+# Concurrent SSE subscribers per stream route (/v1/feed/stream,
+# /v1/events/stream); over the cap is 429 + Retry-After. 0 means the read API's
+# default of 64.
+max_stream_clients = 0
 
 [data]
 dir = "./data"                            # events.db, projections.db, keys/, archive/ (§3)
@@ -37,6 +41,11 @@ dir = "./data"                            # events.db, projections.db, keys/, ar
 # database file unless we ask (see docs/DECISIONS.md, WP1). Every open database
 # runs PRAGMA wal_checkpoint(TRUNCATE) on this interval and again at shutdown.
 checkpoint_interval_s = 60
+# Event payloads are zstd-compressed with a trained dictionary on write
+# (store migration 0003) — measured ~3.3x on the payload column. false is the
+# escape hatch: new rows are stored as plain JSON text. Rows written either
+# way stay readable, so flipping this is always safe.
+compress_payloads = true
 
 [ingest]
 # Compared to the proof's `htu` by exact string equality — no normalization
@@ -44,6 +53,11 @@ checkpoint_interval_s = 60
 accepted_htu   = ["http://127.0.0.1:8080/v1/ingest"]
 max_body_bytes = 1048576                  # 1 MiB compressed → 413 too_large (§4.3)
 max_events     = 2000                     # per batch → 413 too_large (§4.3)
+# How many ingest requests may hold a body in memory at once (read, brotli-
+# expanded, decoded — up to ~9 MiB each at the caps above). This is the knob
+# that sizes peak ingest memory; 0 means 4× GOMAXPROCS. Over the cap the client
+# gets 503 + Retry-After: 5, the same answer as a full write queue.
+max_inflight   = 0
 
 [auth]
 license_ttl_days     = 180                # D16
@@ -131,6 +145,12 @@ batch_size = 1000
 # Rows per flushed statement. Beyond a few hundred the per-row cost is flat, so
 # this bounds the bound-parameter count rather than being a tuning knob.
 flush_rows = 500
+
+# Fallback poll interval, seconds. The ingest writer's notify channel wakes the
+# projector for every real arrival; the ticker exists only to recover from a
+# dropped wake-up, so this trades idle wake-ups against worst-case lag after
+# one. 0 means the default (5 s).
+tick_s = 0
 
 # Goroutines that decode a batch's payloads before the serial fold. 0 means one
 # per core, less one for the ingest that produced the backlog.

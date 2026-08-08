@@ -23,6 +23,8 @@ CRED       ?=
 ASSERT     ?=
 # make sim SPEED=100 … paces the run at 100 sim seconds per wall second; unset runs flat out.
 SPEED      ?=
+# make db-snapshot SNAPSHOT_DIR=/tmp/foo … where the snapshot lands.
+SNAPSHOT_DIR ?= ./data-snapshot
 
 # --- catlog.loadgen ---------------------------------------------------------
 # The high-volume harness. Everything below is a pass-through: unset variables
@@ -52,7 +54,7 @@ E2E_DATA_DIR ?= data-e2e
 .PHONY: help bootstrap build server-build mod-build site-build \
         test server-test mod-test test-integration test-nginx \
         e2e e2e-browser e2e-full server-run-test-env \
-        sim loadgen dev mockidp-run keys seed testvectors clean
+        sim loadgen dev mockidp-run keys seed testvectors db-snapshot clean
 
 ## help: list targets
 help:
@@ -220,6 +222,10 @@ seed: server-build
 ## testvectors: regenerate contracts/testdata (§4.10) — byte-identical every run
 testvectors: server-build
 	server/bin/catlogctl testvectors generate contracts/testdata
+
+## db-snapshot: copy the live databases to ./data-snapshot for IDE/ad-hoc SQL
+db-snapshot:
+	scripts/db-snapshot.sh $(SNAPSHOT_DIR)
 
 ## clean: remove build output (keeps data/ and node_modules/)
 clean:

@@ -22,7 +22,7 @@ import (
 // already blocks another claim.
 func (e *Events) MarkHandleRetired(ctx context.Context, q Querier, handle, reason string, at int64) error {
 	if q == nil {
-		q = e.Writer()
+		q = e.autocommit()
 	}
 	if _, err := q.ExecContext(ctx,
 		`INSERT OR IGNORE INTO retired_handle (handle_lc, reason, retired_at) VALUES (?, ?, ?)`,
@@ -38,7 +38,7 @@ func (e *Events) MarkHandleRetired(ctx context.Context, q Querier, handle, reaso
 // which is what makes "never recycled" hold (D9).
 func (e *Events) UnretireHandle(ctx context.Context, q Querier, handle string) error {
 	if q == nil {
-		q = e.Writer()
+		q = e.autocommit()
 	}
 	if _, err := q.ExecContext(ctx, `DELETE FROM retired_handle WHERE handle_lc = ?`, LC(handle)); err != nil {
 		return fmt.Errorf("store: un-retire handle %q: %w", handle, err)
@@ -55,7 +55,7 @@ func (e *Events) UnretireHandle(ctx context.Context, q Querier, handle string) e
 // revoked.
 func (e *Events) UnrevokeCredentialsAt(ctx context.Context, q Querier, playerID, at int64) (int64, error) {
 	if q == nil {
-		q = e.Writer()
+		q = e.autocommit()
 	}
 	res, err := q.ExecContext(ctx,
 		`UPDATE credential SET revoked_at = NULL WHERE player_id = ? AND revoked_at = ?`, playerID, at)
@@ -119,7 +119,7 @@ func (e *Events) PurgePlayer(ctx context.Context, playerID int64) (PurgeCounts, 
 		}
 		return nil
 	})
-	// No VACUUM is available (§5.4), so the freed pages stay in the file.
+	// VACUUM is unused by policy (§5.4), so the freed pages stay in the file.
 	// /admin/stats reports the file size for exactly this reason (§13.1).
 	return c, err
 }

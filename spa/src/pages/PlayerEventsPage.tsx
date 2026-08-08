@@ -1,21 +1,20 @@
-import { ArrowLeft, ChevronDown, SearchX } from 'lucide-react';
-import { useState } from 'react';
-import type { Key } from 'react-aria-components';
-import { Label, ListBox, ListBoxItem, Popover, Select, SelectValue } from 'react-aria-components';
+import { ArrowLeft, SearchX } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { getPlayerEvents } from '../api/client.ts';
 import type { EventRow } from '../api/types.ts';
-import { hrefFor } from '../state/router.ts';
+import { hrefFor, navigate } from '../state/router.ts';
+import { EventDetails } from '../ui/EventPayload.tsx';
+import { TypeFilter } from '../ui/EventTypeFilter.tsx';
 import { formatInstant, isoInstant } from '../ui/format.ts';
 import {
   Button,
   DataRow,
   DataTable,
   DenseCell,
-  Details,
   Empty,
   Failure,
   HeadCell,
   HeadRow,
-  Json,
   Loading,
   Panel,
   PanelFooter,
@@ -23,8 +22,10 @@ import {
   TableRows,
   Value,
 } from '../ui/kit/index.ts';
-import { KNOWN_EVENT_TYPES, useEventLog } from '../ui/useEventLog.ts';
-import { formatValue, SECONDS, unitForKey } from '../ui/units.ts';
+import { TailControls } from '../ui/TailControls.tsx';
+import { KNOWN_EVENT_TYPES, mergeHead, useEventLog } from '../ui/useEventLog.ts';
+import { useEventTail } from '../ui/useEventTail.ts';
+import { SECONDS } from '../ui/units.ts';
 
 const ALL_TYPES = '';
 
@@ -53,17 +54,36 @@ const ALL_TYPES = '';
  * public record of whose flights were flagged is exactly the durable public
  * consequence the constitution forbids.
  *
- * # Numbers here are raw, and that is the inverse of every other table
+ * # The filter lives in the URL
  *
- * A reader on this page wants `7799`, not `7 799 m/s`. So payload values are
- * printed as the API sent them, with the *formatted* reading in the `title`.
- * Unknown payload keys are rendered as well: catlog preserves them, and a raw
- * view that dropped them would be lying about what it recorded.
+ * `?type=` rather than component state, so a filtered log is a pasteable link
+ * and the back button undoes a filter change the way it undoes a page change.
+ *
+ * # The live tail
+ *
+ * The same stream the global log tails, narrowed server-side to this handle.
+ * Off by default here: a profile's log is usually read as history, and a table
+ * that moves under a reader who came to check one number is a cost, not a
+ * feature. The toggle is one press away.
  */
-export function PlayerEventsPage(props: { readonly handle: string }) {
-  const { handle } = props;
-  const [type, setType] = useState<string>(ALL_TYPES);
-  const log = useEventLog(handle, type);
+export function PlayerEventsPage(props: { readonly handle: string; readonly type: string }) {
+  const { handle, type } = props;
+  const log = useEventLog(`events:${handle}:${type}`, (before, signal) =>
+    getPlayerEvents(handle, { type, before }, signal),
+  );
+
+  // Off by default; see the file comment.
+  const [tailOn, setTailOn] = useState(false);
+  const atTop = useWindowAtTop();
+  const tail = useEventTail({
+    enabled: tailOn && log.status === 'ready',
+    type,
+    handle,
+    // Pause-while-scrolled: a reader partway down the log must not have the
+    // rows walk out from under the cursor.
+    paused: !atTop,
+    onLive: log.refresh,
+  });
 
   if (log.status === 'error' && log.error?.notFound === true) {
     return (
@@ -80,9 +100,13 @@ export function PlayerEventsPage(props: { readonly handle: string }) {
     );
   }
 
+  // Stream arrivals merged over the paged log, deduped by seq — the tail's
+  // copy of an overlapping row wins.
+  const events = tail.rows.length === 0 ? log.events : mergeHead(log.events, tail.rows);
+
   // The documented taxonomy, plus anything the loaded pages actually contain —
   // so a type a newer mod version emits is filterable the moment one appears.
-  const seen = new Set(log.events.map((e) => e.type));
+  const seen = new Set(events.map((e) => e.type));
   const types = [...new Set([...KNOWN_EVENT_TYPES, ...seen])].sort((a, b) => a.localeCompare(b));
 
   return (
@@ -98,14 +122,32 @@ export function PlayerEventsPage(props: { readonly handle: string }) {
         </p>
       </header>
 
-      <TypeFilter types={types} value={type} onChange={setType} />
+      <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
+        <TypeFilter
+          types={types}
+          value={type}
+          onChange={(next) => {
+            navigate({ name: 'playerEvents', handle, type: next });
+          }}
+        />
+        <TailControls
+          enabled={tailOn}
+          onToggle={setTailOn}
+          status={tail.status}
+          pending={tail.pending}
+          onShowNew={() => {
+            tail.flush();
+            window.scrollTo({ top: 0, behavior: 'instant' });
+          }}
+        />
+      </div>
 
       <Panel>
         <PanelHeader
           title="Event log"
           aside={
-            log.events.length > 0
-              ? `${String(log.events.length)} event${log.events.length === 1 ? '' : 's'} loaded`
+            events.length > 0
+              ? `${String(events.length)} event${events.length === 1 ? '' : 's'} loaded`
               : undefined
           }
         />
@@ -113,14 +155,14 @@ export function PlayerEventsPage(props: { readonly handle: string }) {
         {log.status === 'error' && log.error !== null && (
           <Failure what="read the event log" error={log.error} />
         )}
-        {log.status === 'ready' && log.events.length === 0 && (
+        {log.status === 'ready' && events.length === 0 && (
           <Empty>
             {type === ALL_TYPES
               ? 'Nothing has happened yet. Fly something.'
               : `No ${type} events on this page of the log.`}
           </Empty>
         )}
-        {log.events.length > 0 && <EventTable events={log.events} />}
+        {events.length > 0 && <EventTable events={events} />}
         {/*
          * **Page until `next` is absent, never until a page comes back short.**
          * A filtered page that hit the server's scan bound is short *and* has a
@@ -139,6 +181,15 @@ export function PlayerEventsPage(props: { readonly handle: string }) {
             </Button>
           </PanelFooter>
         )}
+        {log.trimmed > 0 && (
+          <PanelFooter>
+            <span>
+              Keeping the page light: the {log.trimmed} newest loaded event
+              {log.trimmed === 1 ? '' : 's'} slid off the top as you paged back. Reload to start
+              from the head again.
+            </span>
+          </PanelFooter>
+        )}
         {log.status === 'ready' && log.next === null && log.events.length > 0 && (
           <PanelFooter>
             <span>That is the whole log.</span>
@@ -149,51 +200,33 @@ export function PlayerEventsPage(props: { readonly handle: string }) {
   );
 }
 
-function TypeFilter(props: {
-  readonly types: readonly string[];
-  readonly value: string;
-  readonly onChange: (value: string) => void;
-}) {
-  const items = [
-    { id: ALL_TYPES, label: 'Every type' },
-    ...props.types.map((t) => ({ id: t, label: t })),
-  ];
-  return (
-    <Select
-      selectedKey={props.value}
-      onSelectionChange={(key: Key | null) => {
-        props.onChange(key === null ? ALL_TYPES : String(key));
-      }}
-      className="flex flex-wrap items-center gap-2"
-    >
-      <Label className="text-fg-muted text-sm">Show</Label>
-      <Button className="min-w-56 justify-between">
-        <SelectValue />
-        {/* An icon rather than ▾ U+25BE: that codepoint is in no subset of
-            the Inter package, so it would render from a fallback face. */}
-        <ChevronDown aria-hidden className="text-fg-subtle size-4" />
-      </Button>
-      <Popover className="bg-panel-raised border-border shadow-popover max-h-80 w-(--trigger-width) overflow-auto rounded-lg border py-1">
-        <ListBox items={items}>
-          {(item: { id: string; label: string }) => (
-            <ListBoxItem
-              id={item.id}
-              textValue={item.label}
-              className="data-focused:bg-wash-hover text-fg cursor-pointer px-3 py-1.5 text-base outline-none"
-            >
-              {item.label}
-            </ListBoxItem>
-          )}
-        </ListBox>
-      </Popover>
-    </Select>
-  );
+/**
+ * Whether the window is scrolled to (near) the top — what "at the head of the
+ * log" means on this page, where the document itself scrolls. The threshold is
+ * a little slack so the sticky header's height does not count as "away".
+ */
+function useWindowAtTop(): boolean {
+  const [atTop, setAtTop] = useState(true);
+  useEffect(() => {
+    const read = () => {
+      setAtTop(window.scrollY < 80);
+    };
+    read();
+    window.addEventListener('scroll', read, { passive: true });
+    return () => {
+      window.removeEventListener('scroll', read);
+    };
+  }, []);
+  return atTop;
 }
 
 function EventTable(props: { readonly events: readonly EventRow[] }) {
   return (
     <DataTable aria-label="Event log">
       <HeadRow>
+        <HeadCell id="seq" align="end">
+          Seq
+        </HeadCell>
         <HeadCell id="recv">When</HeadCell>
         <HeadCell id="type" isRowHeader>
           Type
@@ -203,9 +236,12 @@ function EventTable(props: { readonly events: readonly EventRow[] }) {
         </HeadCell>
         <HeadCell id="payload">Payload</HeadCell>
       </HeadRow>
-      <TableRows items={props.events.map((e) => ({ ...e, id: e.id }))}>
-        {(event: EventRow & { id: string }) => (
-          <DataRow id={event.id} data-type={event.type} className="event-row">
+      <TableRows items={props.events}>
+        {(event: EventRow) => (
+          <DataRow id={event.seq} data-type={event.type} className="event-row">
+            <DenseCell align="end" className="text-fg-subtle text-sm">
+              {event.seq}
+            </DenseCell>
             <DenseCell className="text-fg-muted text-sm whitespace-nowrap tabular-nums">
               <time dateTime={isoInstant(event.recv)}>{formatInstant(event.recv)}</time>
             </DenseCell>
@@ -226,77 +262,6 @@ function EventTable(props: { readonly events: readonly EventRow[] }) {
         )}
       </TableRows>
     </DataTable>
-  );
-}
-
-function EventDetails(props: { readonly event: EventRow }) {
-  const { event } = props;
-  return (
-    <Details summary="Payload">
-      <div className="space-y-3">
-        <PayloadValues payload={event.payload} />
-        <Json value={event.payload} />
-        <dl className="text-fg-muted grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 font-mono text-xs">
-          <dt>event</dt>
-          <dd className="break-all">{event.id}</dd>
-          {event.session !== undefined && (
-            <>
-              <dt>session</dt>
-              <dd className="break-all">{event.session}</dd>
-            </>
-          )}
-          {event.flight !== undefined && (
-            <>
-              <dt>flight</dt>
-              <dd className="break-all">{event.flight}</dd>
-            </>
-          )}
-          {event.career !== undefined && event.career !== '' && (
-            <>
-              <dt title="Relabelled per player, so it groups your own records and matches nobody else's">
-                career
-              </dt>
-              <dd className="break-all">{event.career}</dd>
-            </>
-          )}
-        </dl>
-      </div>
-    </Details>
-  );
-}
-
-/**
- * Top-level payload values, **raw**, with the formatted reading as a `title`.
- *
- * The unit comes from the key — `speed_ms` is metres per second, `duration_s` is
- * seconds — because there is nothing in the value that says. An unrecognised key
- * gets no unit rather than a wrong one, and is still shown.
- */
-function PayloadValues(props: { readonly payload: unknown }) {
-  if (typeof props.payload !== 'object' || props.payload === null) return null;
-  const entries = Object.entries(props.payload as Record<string, unknown>);
-  if (entries.length === 0) return null;
-  return (
-    <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-sm">
-      {entries.map(([key, value]) => {
-        const unit = unitForKey(key);
-        const readable =
-          typeof value === 'number' && Number.isFinite(value)
-            ? formatValue(value, unit)
-            : undefined;
-        return (
-          <div key={key} className="col-span-2 grid grid-cols-subgrid">
-            <dt className="text-fg-subtle font-mono">{key}</dt>
-            <dd className="text-fg font-mono tabular-nums" title={readable}>
-              {typeof value === 'object' && value !== null ? JSON.stringify(value) : String(value)}
-              {readable !== undefined && readable !== String(value) && (
-                <span className="text-fg-muted ml-2 font-sans">({readable})</span>
-              )}
-            </dd>
-          </div>
-        );
-      })}
-    </dl>
   );
 }
 

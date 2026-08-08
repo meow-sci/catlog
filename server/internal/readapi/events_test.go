@@ -251,9 +251,6 @@ func TestEventViewNeverPublishesAFlaggedFlight(t *testing.T) {
 // this fixture is: a filtering bug must not be able to hide behind a fold bug.
 func (f *fixture) flagFlight(playerID int64, flight ids.ID, flags int64) {
 	f.t.Helper()
-	if _, err := f.proj.Writer().ExecContext(f.t.Context(),
-		`INSERT INTO flight_state (flight_id, player_id, flags, started_seq) VALUES (?, ?, ?, 1)`,
-		ids.Bytes(flight), playerID, flags); err != nil {
-		f.t.Fatal(err)
-	}
+	f.projWrite(`INSERT INTO flight_state (flight_id, player_id, flags, started_seq) VALUES (?, ?, ?, 1)`,
+		ids.Bytes(flight), playerID, flags)
 }

@@ -3,7 +3,6 @@ import type { BoardRow } from '../api/types.ts';
 import { $me, isMe } from '../state/me.ts';
 import { hrefFor } from '../state/router.ts';
 import { describeContext, hasContext } from './context.ts';
-import { $now, formatAgo, isoInstant } from './format.ts';
 import {
   DataCell,
   DataRow,
@@ -15,6 +14,7 @@ import {
   TableRows,
   Value,
 } from './kit/index.ts';
+import { RelativeTime } from './RelativeTime.tsx';
 import { unitLabel } from './units.ts';
 
 /**
@@ -47,7 +47,6 @@ export function BoardTable(props: {
   /** Row rank → the board's own offset, so a compact preview can hide the "when" column. */
   readonly compact?: boolean;
 }) {
-  const now = useStore($now);
   const me = useStore($me);
   const compact = props.compact === true;
   const anyContext = props.showContext !== false && props.rows.some((r) => hasContext(r.context));
@@ -89,7 +88,7 @@ export function BoardTable(props: {
           </HeadCell>
         )}
       </HeadRow>
-      <TableRows items={props.rows} dependencies={[now, anyContext, compact, me]}>
+      <TableRows items={props.rows} dependencies={[anyContext, compact, me]}>
         {(row: BoardRow) => (
           <DataRow
             id={`${String(row.rank)}:${row.handle}`}
@@ -120,7 +119,7 @@ export function BoardTable(props: {
             )}
             {!compact && (
               <DataCell align="end" className="text-fg-muted hidden text-sm md:table-cell">
-                <time dateTime={isoInstant(row.updated)}>{formatAgo(row.updated, now)}</time>
+                <RelativeTime at={row.updated} />
               </DataCell>
             )}
           </DataRow>

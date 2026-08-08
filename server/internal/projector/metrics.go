@@ -11,6 +11,11 @@ var (
 	metricLag = publishInt("projector_lag_seq")
 	// metricSSEClients is `sse_clients`: live feed subscribers.
 	metricSSEClients = publishInt("sse_clients")
+	// metricRawSubs is `raw_stream_subs`: subscribers on the raw event
+	// broadcaster. In catlogd this is 0 or 1 — the readapi hub holds the one
+	// subscription and fans it out — so a number above 1 means a second
+	// consumer was wired in.
+	metricRawSubs = publishInt("raw_stream_subs")
 	// metricCheckpoint is not in §5.9's list. Lag alone cannot distinguish
 	// "caught up" from "not running": both read zero on an empty log.
 	metricCheckpoint = publishInt("projector_checkpoint_seq")

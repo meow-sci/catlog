@@ -503,6 +503,57 @@ func TestLicenseCacheSkipsTheSecondVerification(t *testing.T) {
 	}
 }
 
+// TestCredentialCache pins the step-5 memoization: a repeat batch skips the two
+// point queries, any deny-list mutation drops the cache immediately, and the
+// TTL catches a row change that never touched the deny-list.
+func TestCredentialCache(t *testing.T) {
+	f := newFixture(t)
+	verify := func() *Error {
+		_, aerr := f.v.Verify(t.Context(), Request{License: f.cred.License, Proof: f.proof(t, nil)})
+		return aerr
+	}
+
+	if aerr := verify(); aerr != nil {
+		t.Fatalf("warm-up: %v", aerr)
+	}
+
+	// Revoke the row directly, bypassing the moderation paths — the drift the
+	// TTL exists for. The cached success still answers: nothing bumped the
+	// deny-list and the entry is fresh.
+	if err := f.events.RevokeCredential(t.Context(), nil, f.cred.JKT, f.now.UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+	if aerr := verify(); aerr != nil {
+		t.Fatalf("within the TTL with no deny-list change: %v, want the cached success", aerr)
+	}
+
+	// Any deny-list mutation — here a ban of somebody else entirely — must drop
+	// the cache, so the next request re-reads the row and sees the revocation.
+	f.v.DenyList().AddSub("someone_else")
+	if aerr := verify(); aerr == nil || aerr.Code != CodeLicenseRevoked {
+		t.Fatalf("after a deny-list bump: %v, want %s", aerr, CodeLicenseRevoked)
+	}
+}
+
+// TestCredentialCacheExpires pins the safety net: with no deny-list activity at
+// all, a cached credential is re-read once it is older than CredentialCacheTTL.
+func TestCredentialCacheExpires(t *testing.T) {
+	f := newFixture(t)
+	if _, aerr := f.v.Verify(t.Context(), Request{License: f.cred.License, Proof: f.proof(t, nil)}); aerr != nil {
+		t.Fatalf("warm-up: %v", aerr)
+	}
+	if err := f.events.RevokeCredential(t.Context(), nil, f.cred.JKT, f.now.UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+
+	f.now = f.now.Add(CredentialCacheTTL + time.Second)
+	f.v.SetClock(func() time.Time { return f.now })
+	_, aerr := f.v.Verify(t.Context(), Request{License: f.cred.License, Proof: f.proof(t, nil)})
+	if aerr == nil || aerr.Code != CodeLicenseRevoked {
+		t.Fatalf("after the TTL: %v, want %s", aerr, CodeLicenseRevoked)
+	}
+}
+
 // TestIssueLicenseRoundTrip checks the issuance side against the verification
 // side: what IssueLicense mints, Verify accepts.
 func TestIssueLicenseRoundTrip(t *testing.T) {

@@ -1,0 +1,23 @@
+{{define "content" -}}
+{{- $e := .Data -}}
+<nav aria-label="Breadcrumb" class="muted text-sm"><a href="/">catlog</a> / Raw events</nav>
+
+<div class="page-head">
+  <h1 id="events-title">Raw events</h1>
+  <p>The log the boards are computed from &#8212; every player, mixed together, newest first. Everything else on catlog is a fold&#8217;s opinion about a history you cannot see; this is the history.</p>
+  <p class="muted"><small>Numbers here are raw, in the unit the event carried &#8212; hover one for how catlog would write it. Flights flagged as cheated are not in this log; the installation identifier is never published, and career and kitten identifiers are relabelled per player. <a href="/docs/privacy">Why</a>.</small></p>
+</div>
+
+{{- /* The active ?handle= filter, with a way out. It reads as a statement
+       about the view rather than a chip in the type row, because it is a
+       different axis: the chips narrow what kind, this narrows whose. */}}
+{{- if $e.HandleFilter}}
+<p id="events-handle-filter" class="muted" data-handle="{{$e.HandleFilter}}">Showing only <a href="{{playerPath $e.HandleFilter}}">{{$e.HandleFilter}}</a> &#183; <a id="events-handle-clear" href="{{$e.ClearURL}}">show everyone</a></p>
+{{- end}}
+
+{{template "events-types" $e}}
+
+{{template "events-panel" $e.Panel}}
+
+{{template "events-pager" $e}}
+{{- end}}

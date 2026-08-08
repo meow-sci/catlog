@@ -18,6 +18,11 @@ type Live struct {
 	mu   sync.RWMutex
 	db   *store.Projections
 	path string
+	// base carries the write generations of every handle this one replaced, so
+	// [Live.WriteGen] keeps increasing across a rebuild's swap. Without it the
+	// counter would restart on the fresh handle, and a cache keyed on it could
+	// mistake a rebuilt database for the one it had already counted.
+	base int64
 }
 
 // NewLive wraps an open projections database.
@@ -33,6 +38,16 @@ func (l *Live) With(fn func(*store.Projections) error) error {
 	return fn(l.db)
 }
 
+// WriteGen is [store.DB.WriteGen] for the live handle, made monotonic across
+// rebuild swaps. It only ever increases, and it is for one thing: a cache over
+// a projections query can compare it and know whether a fold has committed
+// since it last counted.
+func (l *Live) WriteGen() int64 {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return l.base + l.db.WriteGen()
+}
+
 // Path is the database file path. It never changes: a rebuild renames a new file
 // onto this path rather than pointing the process at a different one, so
 // external things (backups, the config) keep working.
@@ -45,6 +60,7 @@ func (l *Live) exclusive(fn func(cur *store.Projections) (*store.Projections, er
 	defer l.mu.Unlock()
 	next, err := fn(l.db)
 	if next != nil {
+		l.base += l.db.WriteGen() + 1
 		l.db = next
 	}
 	return err

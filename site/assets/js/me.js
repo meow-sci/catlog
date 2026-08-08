@@ -68,18 +68,37 @@ const sameHandle = (a, b) => a.toLowerCase() === b.toLowerCase();
 
 // --- theme -------------------------------------------------------------------
 
+/** The stored theme mode: "light", "dark" or "system" (the default). */
+function themeMode() {
+  try {
+    return localStorage.getItem(THEME_KEY) || "system";
+  } catch {
+    return "system";
+  }
+}
+
+/**
+ * Names the CURRENT mode on the control itself — aria-label and title both, on
+ * load and after every click — so what the button says is always what the page
+ * is doing, not where the cycle went last. A three-state toggle whose label
+ * only appears after the first click is a control a screen-reader user meets
+ * with no state at all.
+ */
+function renderThemeToggle(mode) {
+  const button = $("theme-toggle");
+  if (!button) return;
+  const label = `Theme: ${mode} — click to switch`;
+  button.title = label;
+  button.setAttribute("aria-label", label);
+}
+
 /**
  * light → dark → system → light. `system` removes the attribute so the media
  * query in the stylesheet wins again; the <head> script applies whatever this
  * left behind, before first paint.
  */
 function cycleTheme() {
-  let current;
-  try {
-    current = localStorage.getItem(THEME_KEY) || "system";
-  } catch {
-    current = "system";
-  }
+  const current = themeMode();
   const next = current === "light" ? "dark" : current === "dark" ? "system" : "light";
   try {
     if (next === "system") localStorage.removeItem(THEME_KEY);
@@ -89,8 +108,7 @@ function cycleTheme() {
   }
   if (next === "system") document.documentElement.removeAttribute("data-theme");
   else document.documentElement.setAttribute("data-theme", next);
-  const button = $("theme-toggle");
-  if (button) button.title = `Theme: ${next}`;
+  renderThemeToggle(next);
 }
 
 // --- rendering ----------------------------------------------------------------
@@ -264,6 +282,139 @@ async function personalise() {
   renderBoardStrip(profile);
 }
 
+// --- stream status ---------------------------------------------------------------
+
+/**
+ * The stream connection hint, shared by the live feed (`#feed-status`,
+ * `#feed-panel[data-stream]`) and the raw-events tail (`#events-status`,
+ * `#events-panel[data-stream]`).
+ *
+ * datastar owns the SSE connection (a `data-init` element inside the panel)
+ * and announces its fetch lifecycle as `datastar-fetch` CustomEvents on
+ * `document` (detail.type ∈ started / finished / error / retrying /
+ * retries-failed, detail.el the initiating element). Everything the stream
+ * lands — the prime, a row, the 20 s heartbeat — is a DOM mutation inside the
+ * panel. Between the two, three honest states modelled on the SPA's FeedPanel:
+ *
+ *   connecting   — a fetch started and nothing has arrived yet
+ *   live         — the stream patched something in
+ *   reconnecting — the fetch errored, closed, or is retrying
+ *
+ * The events panel adds a fourth, "paused", owned by wireLiveTail below: while
+ * it is set, lifecycle events and mutations are ignored, because the abort a
+ * pause causes must not read as "reconnecting".
+ *
+ * Without JS (or without datastar) nothing runs, the span stays empty, and the
+ * page makes no claim about a connection it does not have.
+ */
+function wireStreamStatus({ panel, status, isInitiator, ignore }) {
+  if (!panel || !status) return null;
+
+  const paused = () => panel.getAttribute("data-stream") === "paused";
+  const set = (state) => {
+    panel.setAttribute("data-stream", state);
+    status.textContent = state;
+  };
+
+  document.addEventListener("datastar-fetch", (event) => {
+    const detail = event.detail || {};
+    if (!isInitiator(detail.el) || paused()) return;
+    if (detail.type === "started") {
+      // A retry's own `started` must not claim a fresh connection: stay
+      // "reconnecting" until a patch actually lands.
+      if (!panel.hasAttribute("data-stream")) set("connecting");
+    } else {
+      // finished (the stream closed), error, retrying, retries-failed: the
+      // panel is stale until the stream proves otherwise.
+      set("reconnecting");
+    }
+  });
+
+  // Any patch inside the panel is proof of life — but our own status text (and,
+  // on the events panel, the pause control) is also a mutation in this subtree,
+  // so ignore anything within those elements.
+  new MutationObserver((records) => {
+    for (const record of records) {
+      const target = record.target instanceof Element ? record.target : record.target.parentElement;
+      if (!target || ignore.some((el) => el && el.contains(target))) continue;
+      if (paused()) return;
+      if (panel.getAttribute("data-stream") !== "live") set("live");
+      return;
+    }
+  }).observe(panel, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ["data-source", "data-at"],
+  });
+
+  return set;
+}
+
+function wireFeedStatus() {
+  const panel = $("feed-panel");
+  const status = $("feed-status");
+  wireStreamStatus({
+    panel,
+    status,
+    // The feed's `data-init` sits on the panel itself.
+    isInitiator: (el) => el === panel,
+    ignore: [status],
+  });
+}
+
+// --- the raw-events live tail ------------------------------------------------------
+
+/**
+ * The pause/resume control on a live events page (`#events-live`).
+ *
+ * The SSE is held open by `#events-tail`'s `data-init="@get(url,
+ * {requestCancellation: 'cleanup'})"`. That option registers the abort with
+ * datastar's per-attribute cleanup, so removing the `data-init` attribute
+ * closes the stream, and restoring it re-runs the plugin — reconnect and
+ * re-prime, which also heals whatever the pause missed. Paused therefore means
+ * *closed*, not buffered; nothing pretends to hold rows it is not receiving.
+ *
+ * The button ships hidden: without JS there is no stream, so a visible pause
+ * control would be a claim about a connection the page does not have.
+ */
+function wireLiveTail() {
+  const panel = $("events-panel");
+  const status = $("events-status");
+  const button = $("events-live");
+  const tail = $("events-tail");
+  if (!panel || !button || !tail) return;
+
+  const expr = tail.getAttribute("data-init") || "";
+  const set = wireStreamStatus({
+    panel,
+    status,
+    // The tail element initiates the fetch, not the panel.
+    isInitiator: (el) => !!el && el.id === "events-tail",
+    ignore: [status, button, tail],
+  });
+
+  button.hidden = false;
+  button.addEventListener("click", () => {
+    const live = tail.hasAttribute("data-init");
+    if (live) {
+      if (set) set("paused");
+      tail.removeAttribute("data-init");
+      button.setAttribute("aria-pressed", "false");
+      button.title = "Paused — click to resume the live tail";
+    } else {
+      // Clear the state before reconnecting so the lifecycle's `started`
+      // reads "connecting" rather than staying "paused".
+      panel.removeAttribute("data-stream");
+      if (status) status.textContent = "";
+      tail.setAttribute("data-init", expr);
+      button.setAttribute("aria-pressed", "true");
+      button.title = "Live — click to pause the tail";
+    }
+  });
+  button.title = "Live — click to pause the tail";
+}
+
 // --- wiring --------------------------------------------------------------------
 
 $("me-clear")?.addEventListener("click", () => setMe(""));
@@ -282,4 +433,7 @@ $("wizard-set-me")?.addEventListener("click", () => {
 });
 
 render();
+renderThemeToggle(themeMode());
+wireFeedStatus();
+wireLiveTail();
 personalise();

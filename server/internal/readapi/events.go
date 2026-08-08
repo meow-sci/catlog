@@ -11,7 +11,8 @@ import (
 	"github.com/meow-sci/catlog/server/internal/store"
 )
 
-// The raw-event view: `GET /v1/players/{handle}/events`.
+// The raw-event views: `GET /v1/players/{handle}/events` and `GET /v1/events`
+// (the live half lives in events_stream.go).
 //
 // # Why catlog publishes this at all
 //
@@ -56,9 +57,12 @@ const (
 	maxEventScan = 5000
 )
 
-// EventsResponse is `GET /v1/players/{handle}/events`.
+// EventsResponse is `GET /v1/players/{handle}/events`, and also
+// `GET /v1/events` — the same page of the same log, so the same envelope. The
+// per-player endpoint always fills Handle; the global one echoes it only when
+// `?handle=` filtered.
 type EventsResponse struct {
-	Handle string `json:"handle"`
+	Handle string `json:"handle,omitempty"`
 	// Limit echoes the effective page size after clamping.
 	Limit int `json:"limit"`
 	// Type echoes the `?type=` filter when one was given.
@@ -76,6 +80,15 @@ type EventsResponse struct {
 
 // EventRow is one stored §4.1 envelope, as the public API publishes it.
 type EventRow struct {
+	// Seq is the server-assigned position in the stored log — the same value
+	// the paging cursor is made of, and the `id:` of the row's stream frame.
+	// Strictly increasing with arrival, so it is also what a client merges the
+	// snapshot and the stream by.
+	Seq int64 `json:"seq"`
+	// Handle names the player on the global views (`GET /v1/events` and the
+	// stream), where a page mixes players. The per-player endpoint omits it:
+	// its envelope already names the one handle every row belongs to.
+	Handle string `json:"handle,omitempty"`
 	// ID is the envelope's client-minted ULID — the dedup key (§4.5).
 	ID   string `json:"id"`
 	Type string `json:"type"`
@@ -129,6 +142,54 @@ func (s *Server) handlePlayerEvents(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handleEvents serves `GET /v1/events`: the whole log's newest page, every
+// player mixed together — the same rows, redaction and paging as the per-player
+// view, with each row naming its handle.
+//
+// `?handle=` narrows it to one player by delegating to [Server.PlayerEvents] —
+// the same code behind `GET /v1/players/{handle}/events`, so the two cannot
+// disagree — and 404s an unknown, retired or banned handle with the same one
+// answer for all three.
+func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
+	limit, ok := s.intParam(w, r, "limit", DefaultEventLimit)
+	if !ok {
+		return
+	}
+	before, ok := s.intParam(w, r, "before", 0)
+	if !ok {
+		return
+	}
+	if before < 0 {
+		s.writeError(w, http.StatusBadRequest, authz.CodeBadRequest, "before is not a cursor this API issued")
+		return
+	}
+	typ := r.URL.Query().Get("type")
+
+	if handle := r.URL.Query().Get("handle"); handle != "" {
+		out, known, err := s.PlayerEvents(r.Context(), handle, typ, int64(before), limit)
+		switch {
+		case !known:
+			s.writeError(w, http.StatusNotFound, authz.CodeNotFound, "no such player")
+		case err != nil:
+			s.fail(w, r, err, "read the event log")
+		default:
+			// The global view's rows always name their player, filtered or not.
+			for i := range out.Events {
+				out.Events[i].Handle = out.Handle
+			}
+			s.writeJSON(w, http.StatusOK, out)
+		}
+		return
+	}
+
+	out, err := s.GlobalEvents(r.Context(), typ, int64(before), limit)
+	if err != nil {
+		s.fail(w, r, err, "read the event log")
+		return
+	}
+	s.writeJSON(w, http.StatusOK, out)
+}
+
 // PlayerEvents assembles `GET /v1/players/{handle}/events`.
 //
 // ok is false for an unknown, retired or banned handle.
@@ -139,7 +200,10 @@ func (s *Server) PlayerEvents(ctx context.Context, handle, typ string, before in
 	}
 	limit = min(max(limit, 1), MaxEventLimit)
 
-	rows, next, err := s.scanEvents(ctx, entry.PlayerID, typ, before, limit)
+	rows, next, err := s.scanEvents(ctx, typ, nil, before, limit,
+		func(before int64, limit int) ([]store.StoredEvent, error) {
+			return s.deps.Events.PlayerEvents(ctx, entry.PlayerID, before, limit)
+		})
 	if err != nil {
 		return EventsResponse{}, true, err
 	}
@@ -152,39 +216,96 @@ func (s *Server) PlayerEvents(ctx context.Context, handle, typ string, before in
 		out.Next = strconv.FormatInt(next, 10)
 	}
 	for _, ev := range rows {
-		row := EventRow{
-			ID:      ids.String(ev.ID),
-			Type:    ev.Type,
-			Ver:     ev.Ver,
-			Career:  Label(entry.PlayerID, kindCareer, ev.Career),
-			Recv:    ev.RecvTime,
-			Payload: Redact(entry.PlayerID, ev.Payload),
-		}
-		if ev.SessionID != ids.Zero {
-			row.Session = ids.String(ev.SessionID)
-		}
-		if ev.FlightID != ids.Zero {
-			row.Flight = ids.String(ev.FlightID)
-		}
-		if ev.SimTime.Valid {
-			t := ev.SimTime.Float64
-			row.SimT = &t
-		}
-		out.Events = append(out.Events, row)
+		// No per-row handle: the envelope above names it once.
+		out.Events = append(out.Events, eventRow(ev, ""))
 	}
 	return out, true, nil
 }
 
-// scanEvents reads one page, applying the `?type=` filter and the flagged-flight
-// exclusion in Go.
+// GlobalEvents assembles `GET /v1/events` without a `?handle=` filter (with
+// one, the request is [Server.PlayerEvents] wearing the global envelope — see
+// handleEvents).
+func (s *Server) GlobalEvents(ctx context.Context, typ string, before int64, limit int) (EventsResponse, error) {
+	limit = min(max(limit, 1), MaxEventLimit)
+
+	// The same over-fetch-and-drop as the per-player page, plus one more drop:
+	// a row whose player holds no handle in the directory — banned, purged, or
+	// never claimed one — has no public name to publish under, exactly the rule
+	// [Server.visibleRows] applies to boards.
+	rows, next, err := s.scanEvents(ctx, typ,
+		func(ev store.StoredEvent) bool {
+			_, ok := s.deps.Directory.Handle(ev.PlayerID)
+			return ok
+		},
+		before, limit,
+		func(before int64, limit int) ([]store.StoredEvent, error) {
+			return s.deps.Events.RecentEvents(ctx, before, limit)
+		})
+	if err != nil {
+		return EventsResponse{}, err
+	}
+
+	out := EventsResponse{Limit: limit, Type: typ, Events: make([]EventRow, 0, len(rows))}
+	if next > 0 {
+		out.Next = strconv.FormatInt(next, 10)
+	}
+	for _, ev := range rows {
+		handle, _ := s.deps.Directory.Handle(ev.PlayerID)
+		out.Events = append(out.Events, eventRow(ev, handle))
+	}
+	return out, nil
+}
+
+// eventRow renders one stored event as the public API publishes it, redaction
+// included: the payload through [Redact] and the career through [Label], both
+// salted with **the row's own** player id — a page that mixes players relabels
+// each row for its player, never once for the page, or two players' rows would
+// share labels and be linkable.
 //
-// Neither filter is in SQL. `type` has no index — `ev_player` is
+// handle is stamped onto the row for the global views and left empty ­— and so
+// omitted — for the per-player view.
+func eventRow(ev store.StoredEvent, handle string) EventRow {
+	row := EventRow{
+		Seq:     ev.Seq,
+		Handle:  handle,
+		ID:      ids.String(ev.ID),
+		Type:    ev.Type,
+		Ver:     ev.Ver,
+		Career:  Label(ev.PlayerID, kindCareer, ev.Career),
+		Recv:    ev.RecvTime,
+		Payload: Redact(ev.PlayerID, ev.Payload),
+	}
+	if ev.SessionID != ids.Zero {
+		row.Session = ids.String(ev.SessionID)
+	}
+	if ev.FlightID != ids.Zero {
+		row.Flight = ids.String(ev.FlightID)
+	}
+	if ev.SimTime.Valid {
+		t := ev.SimTime.Float64
+		row.SimT = &t
+	}
+	return row
+}
+
+// scanEvents reads one page of an event log source, applying the `?type=`
+// filter, the flagged-flight exclusion, and the caller's extra keep predicate
+// (nil for none) in Go. fetch reads one batch of the underlying log, newest
+// first, from an exclusive `before` cursor — [store.Events.PlayerEvents] bound
+// to a player, or [store.Events.RecentEvents] for the global view.
+//
+// None of the filters is in SQL. `type` has no index — `ev_player` is
 // (player_id, seq) — so a SQL `type = ?` would let one request walk a whole
 // history looking for a type that is not there; and the flag lives in the other
 // database file (§5.4), so it cannot be joined at all. Filtering here, over
 // pages, is the same over-fetch-and-drop shape [Server.visibleRows] uses for
 // bans, and it is what makes [maxEventScan] a real bound rather than a comment.
-func (s *Server) scanEvents(ctx context.Context, playerID int64, typ string, before int64, limit int) ([]store.StoredEvent, int64, error) {
+//
+// The flagged-flight lookup is per fetched batch, not per row: one
+// [store.Projections.FlaggedFlights] IN-query resolves every distinct flight
+// the batch touches (see [Server.flaggedFlights]).
+func (s *Server) scanEvents(ctx context.Context, typ string, keep func(store.StoredEvent) bool, before int64, limit int,
+	fetch func(before int64, limit int) ([]store.StoredEvent, error)) ([]store.StoredEvent, int64, error) {
 	var (
 		out     []store.StoredEvent
 		cursor  = before
@@ -195,7 +316,7 @@ func (s *Server) scanEvents(ctx context.Context, playerID int64, typ string, bef
 		if typ != "" {
 			page = eventScanPage
 		}
-		batch, err := s.deps.Events.PlayerEvents(ctx, playerID, cursor, page)
+		batch, err := fetch(cursor, page)
 		if err != nil {
 			return nil, 0, err
 		}
@@ -212,6 +333,9 @@ func (s *Server) scanEvents(ctx context.Context, playerID int64, typ string, bef
 				continue
 			}
 			if flagged[ev.FlightID] {
+				continue
+			}
+			if keep != nil && !keep(ev) {
 				continue
 			}
 			out = append(out, ev)

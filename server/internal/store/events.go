@@ -50,7 +50,7 @@ func (p Player) Banned() bool { return p.BannedAt.Valid }
 // produce two players (and cannot be told apart from a repeat login).
 func (e *Events) EnsurePlayer(ctx context.Context, q Querier, uk keys.UserKey, idp string, now int64) (int64, error) {
 	if q == nil {
-		q = e.Writer()
+		q = e.autocommit()
 	}
 	if idp == "" {
 		return 0, errors.New("store: EnsurePlayer with empty idp")
@@ -101,7 +101,7 @@ func (e *Events) scanPlayer(row *sql.Row) (Player, error) {
 // (§4.7) — they are separate rows and belong in the same transaction.
 func (e *Events) SetBan(ctx context.Context, q Querier, playerID int64, at int64, reason string) error {
 	if q == nil {
-		q = e.Writer()
+		q = e.autocommit()
 	}
 	var err error
 	if at == 0 {
@@ -203,7 +203,7 @@ func (e *Events) ClaimHandle(ctx context.Context, playerID int64, handle string,
 // safe to run twice.
 func (e *Events) RetireHandle(ctx context.Context, q Querier, handle, reason string, at int64) error {
 	if q == nil {
-		q = e.Writer()
+		q = e.autocommit()
 	}
 	lc := LC(handle)
 	if _, err := q.ExecContext(ctx, `DELETE FROM handle WHERE handle_lc = ?`, lc); err != nil {
@@ -292,7 +292,7 @@ func (c Credential) Revoked() bool { return c.RevokedAt.Valid }
 // InsertCredential records an issued license.
 func (e *Events) InsertCredential(ctx context.Context, q Querier, c Credential) error {
 	if q == nil {
-		q = e.Writer()
+		q = e.autocommit()
 	}
 	if _, err := q.ExecContext(ctx,
 		`INSERT INTO credential (jkt, player_id, handle, license_jti, issued_at, expires_at, revoked_at)
@@ -344,7 +344,7 @@ func (e *Events) CredentialsForPlayer(ctx context.Context, playerID int64) ([]Cr
 // keep their original timestamp.
 func (e *Events) RevokeCredential(ctx context.Context, q Querier, jkt string, at int64) error {
 	if q == nil {
-		q = e.Writer()
+		q = e.autocommit()
 	}
 	if _, err := q.ExecContext(ctx,
 		`UPDATE credential SET revoked_at = ? WHERE jkt = ? AND revoked_at IS NULL`, at, jkt); err != nil {
@@ -357,7 +357,7 @@ func (e *Events) RevokeCredential(ctx context.Context, q Querier, jkt string, at
 // the ban path (§4.7).
 func (e *Events) RevokeCredentialsForPlayer(ctx context.Context, q Querier, playerID int64, at int64) error {
 	if q == nil {
-		q = e.Writer()
+		q = e.autocommit()
 	}
 	if _, err := q.ExecContext(ctx,
 		`UPDATE credential SET revoked_at = ? WHERE player_id = ? AND revoked_at IS NULL`, at, playerID); err != nil {
@@ -411,44 +411,67 @@ type StoredEvent struct {
 	Event
 }
 
+// EventInsertChunk is how many event rows one insert statement carries — the
+// same shape as [FeedInsertChunk] and stats.Batch's flush, and for the same
+// reason: a tursogo statement costs ~15 µs regardless of what it says, so a
+// 2000-event batch as 2000 statements was paying for the round trips, not the
+// rows. 500 rows × 12 columns keeps the bound-parameter count well under
+// SQLite's ceiling.
+const EventInsertChunk = 500
+
 // InsertEvents writes a batch with `INSERT OR IGNORE` against the
 // (player_id, event_id) unique index, giving the idempotent union-merge D19
 // promises: resending a batch changes nothing and is reported as deduped.
+//
+// The batch goes in as chunked multi-row inserts. Per-row acceptance is not
+// observable that way — RowsAffected reports only how many rows the chunk
+// actually inserted — but nothing ever consumed it: the §4.4 response is the
+// two aggregates, and SQLite ignores an intra-statement duplicate exactly as
+// it ignores a stored one, so the totals cannot drift.
 //
 // q is normally the caller's transaction — §4.5.3 step 13 puts the events, the
 // stream_state upsert and the ingest_batch row in one commit.
 func (e *Events) InsertEvents(ctx context.Context, q Querier, playerID int64, evs []Event) (accepted, deduped int, err error) {
 	if q == nil {
-		q = e.Writer()
+		q = e.autocommit()
 	}
-	const q1 = `INSERT OR IGNORE INTO event
-	  (event_id, player_id, flight_id, session_id, career, type, ver, sim_time, wall_time, recv_time, payload)
-	  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-
-	recv := e.nowMillis()
 	for i, ev := range evs {
 		if ev.Type == "" {
-			return accepted, deduped, fmt.Errorf("store: event %d has no type", i)
+			return 0, 0, fmt.Errorf("store: event %d has no type", i)
 		}
-		payload := ev.Payload
-		if len(payload) == 0 {
-			payload = json.RawMessage("{}")
+	}
+
+	recv := e.nowMillis()
+	var sb strings.Builder
+	for start := 0; start < len(evs); start += EventInsertChunk {
+		end := min(start+EventInsertChunk, len(evs))
+
+		sb.Reset()
+		sb.WriteString(`INSERT OR IGNORE INTO event
+	  (event_id, player_id, flight_id, session_id, career, type, ver, sim_time, wall_time, recv_time, payload, enc)
+	  VALUES `)
+		args := make([]any, 0, (end-start)*12)
+		for i := start; i < end; i++ {
+			ev := evs[i]
+			payload, enc := e.encodePayload(ev.Payload)
+			if i > start {
+				sb.WriteByte(',')
+			}
+			sb.WriteString("(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+			args = append(args,
+				ids.Bytes(ev.ID), playerID, ids.NullBytes(ev.FlightID), ids.NullBytes(ev.SessionID),
+				nullString(ev.Career), ev.Type, ev.Ver, ev.SimTime, ev.WallTime, recv, payload, enc)
 		}
-		res, err := q.ExecContext(ctx, q1,
-			ids.Bytes(ev.ID), playerID, ids.NullBytes(ev.FlightID), ids.NullBytes(ev.SessionID),
-			nullString(ev.Career), ev.Type, ev.Ver, ev.SimTime, ev.WallTime, recv, string(payload))
+		res, err := q.ExecContext(ctx, sb.String(), args...)
 		if err != nil {
-			return accepted, deduped, fmt.Errorf("store: insert event %s: %w", ids.String(ev.ID), err)
+			return accepted, deduped, fmt.Errorf("store: insert events: %w", err)
 		}
 		n, err := res.RowsAffected()
 		if err != nil {
-			return accepted, deduped, fmt.Errorf("store: insert event %s: %w", ids.String(ev.ID), err)
+			return accepted, deduped, fmt.Errorf("store: insert events: %w", err)
 		}
-		if n == 1 {
-			accepted++
-		} else {
-			deduped++
-		}
+		accepted += int(n)
+		deduped += (end - start) - int(n)
 	}
 	return accepted, deduped, nil
 }
@@ -475,7 +498,7 @@ func (e *Events) EventsSince(ctx context.Context, after int64, limit int) ([]Sto
 	if err != nil {
 		return nil, fmt.Errorf("store: read events: %w", err)
 	}
-	return scanStoredEvents(rows, limit)
+	return e.scanStoredEvents(rows, limit)
 }
 
 // PlayerEvents reads one page of a player's own log, **newest first** — the
@@ -488,7 +511,11 @@ func (e *Events) EventsSince(ctx context.Context, after int64, limit int) ([]Sto
 // player shipped between two requests.
 //
 // It runs off `ev_player (player_id, seq)`, so the cost is the page, not the
-// player's history.
+// player's history. The seq column looks redundant — an index entry ends in
+// the rowid, and seq IS the rowid — but on tursogo it is load-bearing: the
+// optimizer only turns `seq < ?` into an index seek (SeekLT) when seq is a
+// named column; against ev_player(player_id) it walks entries newest-first
+// and filters, making page N cost N pages (TestEvPlayerIndexPlans pins this).
 func (e *Events) PlayerEvents(ctx context.Context, playerID, before int64, limit int) ([]StoredEvent, error) {
 	if limit <= 0 {
 		return nil, nil
@@ -503,13 +530,42 @@ func (e *Events) PlayerEvents(ctx context.Context, playerID, before int64, limit
 	if err != nil {
 		return nil, fmt.Errorf("store: read player %d events: %w", playerID, err)
 	}
-	return scanStoredEvents(rows, limit)
+	return e.scanStoredEvents(rows, limit)
 }
 
-const eventSelect = `SELECT seq, event_id, player_id, flight_id, session_id, career, type, ver, sim_time, wall_time, recv_time, payload FROM event`
+// RecentEvents reads one page of the whole log, **newest first** — the global
+// raw-event view (`GET /v1/events`), which is [Events.PlayerEvents] without the
+// player.
+//
+// before is the same exclusive upper bound on `seq`: zero or less starts at the
+// newest event. `seq` is the rowid, so this is a reverse rowid scan — no new
+// index, and the cost is the page, not the log.
+func (e *Events) RecentEvents(ctx context.Context, before int64, limit int) ([]StoredEvent, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	q := eventSelect + ` ORDER BY seq DESC LIMIT ?`
+	args := []any{limit}
+	if before > 0 {
+		q = eventSelect + ` WHERE seq < ? ORDER BY seq DESC LIMIT ?`
+		args = []any{before, limit}
+	}
+	rows, err := e.Reader().QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("store: read recent events: %w", err)
+	}
+	return e.scanStoredEvents(rows, limit)
+}
+
+const eventSelect = `SELECT seq, event_id, player_id, flight_id, session_id, career, type, ver, sim_time, wall_time, recv_time, payload, enc FROM event`
 
 // scanStoredEvents reads a result set of event rows. want is the caller's LIMIT,
 // used only to size the result slice.
+//
+// This is the single read seam every stored payload passes through, which is
+// where `enc` is folded away: an enc != 0 payload is decompressed here (see
+// payload.go), so every consumer — projector, read API, archive — receives
+// JSON byte-identical to what was ingested, whatever the row's encoding.
 //
 // Two details here are about allocation rather than clarity, and they are worth
 // the words because this is the projector's read path: every event catlog has
@@ -524,7 +580,7 @@ const eventSelect = `SELECT seq, event_id, player_id, flight_id, session_id, car
 // The result slice is pre-sized to the caller's limit. A batch of a thousand
 // events otherwise grows a slice of ~150-byte structs from nil, which is a
 // dozen reallocations and a dozen copies of everything scanned so far.
-func scanStoredEvents(rows *sql.Rows, want int) ([]StoredEvent, error) {
+func (e *Events) scanStoredEvents(rows *sql.Rows, want int) ([]StoredEvent, error) {
 	defer rows.Close()
 	if want < 0 {
 		want = 0
@@ -536,9 +592,10 @@ func scanStoredEvents(rows *sql.Rows, want int) ([]StoredEvent, error) {
 			eventID, flight, sess []byte
 			career                sql.NullString
 			payload               []byte
+			enc                   int
 		)
 		if err := rows.Scan(&se.Seq, &eventID, &se.PlayerID, &flight, &sess, &career, &se.Type, &se.Ver,
-			&se.SimTime, &se.WallTime, &se.RecvTime, &payload); err != nil {
+			&se.SimTime, &se.WallTime, &se.RecvTime, &payload, &enc); err != nil {
 			return nil, fmt.Errorf("store: scan event: %w", err)
 		}
 		se.Career = career.String
@@ -552,7 +609,9 @@ func scanStoredEvents(rows *sql.Rows, want int) ([]StoredEvent, error) {
 		if se.SessionID, err = ids.FromNullBytes(sess); err != nil {
 			return nil, fmt.Errorf("store: event seq %d session_id: %w", se.Seq, err)
 		}
-		se.Payload = payload
+		if se.Payload, err = e.decodePayload(payload, enc); err != nil {
+			return nil, fmt.Errorf("store: event seq %d: %w", se.Seq, err)
+		}
 		out = append(out, se)
 	}
 	return out, rows.Err()
@@ -610,7 +669,7 @@ func (e *Events) BatchSeen(ctx context.Context, q Querier, playerID int64, batch
 // harmlessly instead of failing the whole transaction.
 func (e *Events) InsertBatch(ctx context.Context, q Querier, playerID int64, batchID string, nEvents int, recvTime int64) error {
 	if q == nil {
-		q = e.Writer()
+		q = e.autocommit()
 	}
 	if _, err := q.ExecContext(ctx,
 		`INSERT OR IGNORE INTO ingest_batch (player_id, batch_id, n_events, recv_time) VALUES (?, ?, ?, ?)`,
@@ -659,7 +718,7 @@ func (e *Events) StreamState(ctx context.Context, q Querier, playerID int64, sid
 // stream has skipped a seq the marker stays for forensics (§4.5.3 step 12).
 func (e *Events) UpsertStreamState(ctx context.Context, q Querier, s StreamState) error {
 	if q == nil {
-		q = e.Writer()
+		q = e.autocommit()
 	}
 	gap := 0
 	if s.Gap {
@@ -724,7 +783,7 @@ type Tombstone struct {
 // reason and timestamp if the purge is repeated.
 func (e *Events) InsertTombstone(ctx context.Context, q Querier, t Tombstone) error {
 	if q == nil {
-		q = e.Writer()
+		q = e.autocommit()
 	}
 	if _, err := q.ExecContext(ctx,
 		`INSERT OR IGNORE INTO tombstone (user_key, reason, at) VALUES (?, ?, ?)`,
