@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"testing"
@@ -338,4 +339,89 @@ func TestIngestAndAdminAreWired(t *testing.T) {
 	if err := <-errCh; err != nil {
 		t.Errorf("shutdown returned an error: %v", err)
 	}
+}
+
+// TestProbeHealth covers `catlogd -healthcheck`, the container HEALTHCHECK
+// (§4.4). The four cases are the four ways the probe is asked to decide:
+// a real server, a server that is not there, one answering the wrong status,
+// and one answering 200 with a body that is not ours — the last because a
+// probe that accepted any 200 would call a misrouted proxy healthy.
+func TestProbeHealth(t *testing.T) {
+	t.Run("healthy", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(healthz))
+		defer srv.Close()
+		if err := probeHealth(hostPort(t, srv.URL)); err != nil {
+			t.Fatalf("probeHealth on a healthy server: %v", err)
+		}
+	})
+
+	t.Run("nothing listening", func(t *testing.T) {
+		// A port that was just released: nothing is bound, and the dial fails
+		// fast rather than hanging until the probe's own timeout.
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		addr := ln.Addr().String()
+		if err := ln.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := probeHealth(addr); err == nil {
+			t.Fatal("probeHealth succeeded against a closed port")
+		}
+	})
+
+	t.Run("wrong status", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusServiceUnavailable)
+		}))
+		defer srv.Close()
+		if err := probeHealth(hostPort(t, srv.URL)); err == nil {
+			t.Fatal("probeHealth succeeded against a 503")
+		}
+	})
+
+	t.Run("wrong body", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			if _, err := io.WriteString(w, `{"ok":false}`); err != nil {
+				t.Error(err)
+			}
+		}))
+		defer srv.Close()
+		if err := probeHealth(hostPort(t, srv.URL)); err == nil {
+			t.Fatal("probeHealth succeeded against a 200 that was not ours")
+		}
+	})
+
+	// The bind-address rewrite: 0.0.0.0 is not a destination, and the container
+	// listens on it. Without the rewrite the probe would fail on every healthy
+	// production container, which is the failure mode this case exists for.
+	t.Run("wildcard bind address probes loopback", func(t *testing.T) {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		srv := &http.Server{Handler: http.HandlerFunc(healthz)}
+		go func() { _ = srv.Serve(ln) }()
+		defer func() { _ = srv.Close() }()
+
+		_, port, err := net.SplitHostPort(ln.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := probeHealth(net.JoinHostPort("0.0.0.0", port)); err != nil {
+			t.Fatalf("probeHealth on 0.0.0.0: %v", err)
+		}
+	})
+}
+
+// hostPort strips the scheme from an httptest URL: probeHealth takes a listen
+// address, which is what the config holds, not a URL.
+func hostPort(t *testing.T, rawURL string) string {
+	t.Helper()
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return u.Host
 }

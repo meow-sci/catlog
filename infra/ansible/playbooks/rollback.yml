@@ -1,0 +1,45 @@
+# make rollback — go back to the digests recorded in /opt/catlog/deployed.json.
+#
+# `make deploy` already rolls back automatically when the health gate fails.
+# This is for the other case: the deploy came up healthy and then you noticed
+# something wrong.
+- name: Roll back catlog
+  hosts: catlog
+  become: true
+  tasks:
+    - name: Read the deployment record
+      ansible.builtin.slurp:
+        src: /opt/catlog/deployed.json
+      register: rb_raw
+
+    - name: Parse it
+      ansible.builtin.set_fact:
+        rb: "{{ rb_raw.content | b64decode | from_json }}"
+
+    - name: Refuse to roll back to nothing
+      ansible.builtin.assert:
+        that:
+          - rb.previous is defined
+          - rb.previous.catlogd is defined
+        fail_msg: >-
+          /opt/catlog/deployed.json records no previous deployment — this host
+          has only ever run {{ rb.catlogd | default('an unrecorded image') }}.
+          There is nothing to roll back to.
+        quiet: true
+
+    - name: Say what is about to happen
+      ansible.builtin.debug:
+        msg: |
+          rolling back
+            catlogd  {{ rb.catlogd }}
+                  →  {{ rb.previous.catlogd }}
+            nginx    {{ rb.nginx }}
+                  →  {{ rb.previous.nginx }}
+
+    - name: Deploy the previous images
+      ansible.builtin.include_role:
+        name: catlog_app
+        tasks_from: deploy
+      vars:
+        catlog_image: "{{ rb.previous.catlogd }}"
+        catlog_nginx_image: "{{ rb.previous.nginx }}"

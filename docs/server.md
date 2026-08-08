@@ -84,6 +84,21 @@ Two package-level rules worth knowing before adding code:
 `server/catlogd.dev.toml` is committed and documented in place; production supplies the same keys
 from the environment. Any value is overridable as `CATLOG_<SECTION>_<KEY>`.
 
+`catlogd` takes four flags: `-config`, `-listen`, `-admin-listen`, `-version`, and one more that
+exists for the container:
+
+**`catlogd -healthcheck`** performs a single `GET /healthz` against this server's own listen address
+and exits 0 or 1. It is the image's `HEALTHCHECK`, because the production runtime is a Docker
+Hardened Image with no shell and no HTTP client — `HEALTHCHECK CMD curl …` is not available, and a
+second binary shipped to make one request would be a second thing to build, stamp and keep in sync.
+
+It **opens no database**, permanently and on purpose: tursogo's exclusive whole-file lock means a
+probe that opened `events.db` would fail exactly when the server was healthy and succeed only when it
+was not — an inversion that would restart a working server every fifteen seconds. It also rewrites a
+wildcard bind address (`0.0.0.0`, `::`) to loopback, because those are bind addresses rather than
+destinations and the container listens on one. The response body is compared byte for byte, not
+merely for a 2xx: a proxy answering 200 with something else is not this server.
+
 | Section | Key points |
 |---|---|
 | `[server]` | `listen`, `admin_listen`, `base_url` (the license `iss` **and** the proof `htu` base), `static_dir` (empty in prod — nginx serves it), `clock_control`, `max_stream_clients` |

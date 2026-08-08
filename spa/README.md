@@ -129,7 +129,7 @@ instead of a 404. Every static host supports this; each spells it differently:
 | Host                        | What it needs                                                                                                             |
 | --------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
 | GitHub Pages                | a `404.html` copy of `index.html` at the site root — **the build emits it**, see `deepLinkFallback()` in `vite.config.ts` |
-| nginx                       | `location / { try_files $uri $uri/ /index.html; }`                                                                        |
+| nginx                       | `location / { try_files $uri $uri/ /index.html; }` — **this is what catlog production does**, at `/app/`                    |
 | Netlify                     | `/*    /index.html   200` in `public/_redirects`                                                                          |
 | Cloudflare Pages            | the same `_redirects` line, or the "Single Page App" preset                                                               |
 | Vercel                      | `{ "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }] }`                                                   |
@@ -166,9 +166,33 @@ hashed assets — that can be served by anything. Set `VITE_CATLOG_API_BASE` at
 build time, `SPA_BASE` if it is not at the root, and give the host the fallback
 rule from the table above.
 
-`.github/workflows/spa-pages.yml` does this for GitHub Pages: pnpm install,
-typecheck, lint, format check, test, build, upload. It is inert until Pages is
-enabled for the repository.
+### How production actually serves it
+
+**Same origin, at `/app/`, by the nginx that fronts catlogd.** The
+`catlog-nginx` image builds this bundle in its own stage
+(`infra/docker/Dockerfile.nginx`) with:
+
+```
+SPA_BASE=/app/
+VITE_CATLOG_API_BASE=          # empty
+```
+
+An empty API base means `src/api/client.ts` keeps the empty string and every
+request comes out as a relative `/v1/…`, same-origin with the read API — so
+catlogd's `[cors] allowed_origins` is **empty** in production, which is strictly
+safer than any non-empty list. Deep links are handled by `try_files`, not by the
+`404.html` trick, so they return a real 200. The hashed `assets/` are served
+`immutable` for a year; the shell is not.
+
+That stage also runs `typecheck`, `lint`, `fmt:check` and `test` before it
+builds. A bundle that does not pass them does not reach an image.
+
+None of this couples the reader to the server. It still has its own lockfile,
+toolchain, build and `SPA_BASE`, and pointing it at a separate static host is
+still two build arguments — see [UI-056](../docs/DECISIONS.md#ui-056). What
+changed is the default host, not the independence.
+
+There is no longer a GitHub Pages workflow.
 
 ## House rules
 

@@ -1,0 +1,166 @@
+# catlog — every variable the production deployment takes.
+#
+# Secrets and host identity come from the environment, which `make` exports from
+# the gitignored infra/deploy.env (see infra/deploy.env.example for the full key
+# list). There is deliberately no second mechanism: no vault password file, no
+# `--extra-vars`, nothing secret in this file or any other file in git.
+#
+# Everything below that is NOT a lookup() is a real default you can override in
+# deploy.env or here.
+
+# --- identity ---------------------------------------------------------------
+
+# The public name, proxied by Cloudflare (orange cloud).
+catlog_domain: "{{ lookup('env', 'CATLOG_DOMAIN') }}"
+
+# The direct name, DNS-only (grey cloud), for bypassing Cloudflare when
+# isolating a fault. Optional — leave CATLOG_ORIGIN_DOMAIN unset to have no such
+# name at all. When set it is included in the certificate and restricted to
+# catlog_direct_allow_cidrs.
+catlog_origin_domain: "{{ lookup('env', 'CATLOG_ORIGIN_DOMAIN') | default('', true) }}"
+
+# Who may reach the direct name. A name that bypasses the DDoS front door must
+# not be open to the internet.
+catlog_direct_allow_cidrs: >-
+  {{ (lookup('env', 'CATLOG_DIRECT_ALLOW_CIDRS') | default('', true))
+     | split(',') | map('trim') | reject('equalto', '') | list }}
+
+# Who may reach port 22.
+catlog_admin_ssh_cidrs: >-
+  {{ (lookup('env', 'ADMIN_SSH_CIDR') | default('', true))
+     | split(',') | map('trim') | reject('equalto', '') | list }}
+
+# --- storage ----------------------------------------------------------------
+
+# Where the NVMe volume is mounted. Everything that must survive a rebuild of
+# the box lives under here.
+catlog_data_root: "{{ lookup('env', 'CATLOG_DATA_ROOT') | default('/mnt/catlog', true) }}"
+
+# The block device to mount there, e.g. /dev/disk/by-id/scsi-0DO_Volume_catlog.
+# Prefer a by-id or by-uuid path: /dev/sdb is not stable across reboots.
+# Leave unset if the volume is already mounted by the provider's own automation.
+catlog_device: "{{ lookup('env', 'CATLOG_NVME_DEVICE') | default('', true) }}"
+
+# Guard rail. Creating a filesystem is the one irreversible thing in these
+# playbooks, so it never happens unless you ask for it by name, once.
+catlog_format_device: "{{ (lookup('env', 'CATLOG_FORMAT_DEVICE') | default('0', true)) == '1' }}"
+catlog_filesystem: ext4
+
+# nosuid,nodev because nothing here should ever be setuid or a device node.
+# NOT noexec, and that is not an oversight: the Turso driver extracts a native
+# .so under catlog_data_root and dlopen()s it. The storage role proves the mount
+# is exec-capable by running a file from it, and fails the play if it is not.
+catlog_mount_opts: "defaults,nosuid,nodev,noatime"
+
+# --- the container user -----------------------------------------------------
+#
+# Must match the nonroot user baked into the Docker Hardened Image. Verify with:
+#   docker image inspect <catlogd image> --format '{% raw %}{{.Config.User}}{% endraw %}'
+# roles/catlog_app asserts the image agrees with this before deploying; a silent
+# mismatch is a permission-denied on data/keys/ at first boot.
+catlog_uid: "{{ lookup('env', 'CATLOG_UID') | default('65532', true) }}"
+catlog_gid: "{{ lookup('env', 'CATLOG_GID') | default('65532', true) }}"
+
+# --- images -----------------------------------------------------------------
+#
+# Digest-pinned. `make deploy` exports these from infra/.release.json, which
+# `make release` wrote when it pushed. A tag can be moved; a digest cannot, and
+# rollback depends on that.
+catlog_image: "{{ lookup('env', 'CATLOG_IMAGE') }}"
+catlog_nginx_image: "{{ lookup('env', 'NGINX_IMAGE') }}"
+catlog_registry: "{{ lookup('env', 'GHCR_REGISTRY') | default('ghcr.io', true) }}"
+catlog_registry_user: "{{ lookup('env', 'GHCR_USER') | default('', true) }}"
+catlog_registry_token: "{{ lookup('env', 'GHCR_TOKEN') | default('', true) }}"
+
+# --- catlogd ----------------------------------------------------------------
+
+catlog_base_url: "https://{{ catlog_domain }}"
+
+# Compared to the proof's `htu` by EXACT STRING EQUALITY, with no normalisation.
+# A trailing slash or an http:// here breaks every shipment in the world, so it
+# is derived rather than typed.
+catlog_accepted_htu:
+  - "{{ catlog_base_url }}/v1/ingest"
+
+# The SPA is served same-origin at /app/, so there is no cross-origin reader to
+# allow. An empty list is safer than any non-empty one.
+catlog_cors_allowed_origins: []
+
+# Sized to the box. GOMEMLIMIT is a soft ceiling for the Go heap; mem_limit is
+# the container's hard one and must sit above it so the runtime reacts first.
+catlog_gomemlimit: "{{ lookup('env', 'CATLOG_GOMEMLIMIT') | default('700MiB', true) }}"
+catlog_gogc: "{{ lookup('env', 'CATLOG_GOGC') | default('300', true) }}"
+catlog_mem_limit: "{{ lookup('env', 'CATLOG_MEM_LIMIT') | default('900m', true) }}"
+
+catlog_checkpoint_interval_s: 60
+catlog_projector_batch_size: 1000
+catlog_board_min_players: 2
+catlog_license_ttl_days: 180
+catlog_handle_quota: 5
+catlog_issuance_per_day: 3
+catlog_min_account_age_days: 30
+catlog_ratelimit_per_jkt_per_s: 0.5
+catlog_ratelimit_burst: 5
+catlog_max_stream_clients: 0
+
+# Identity providers. The client ids are not secret; the secrets come from the
+# environment and land only in catlogd.env, 0640 root:catlog.
+catlog_idp:
+  discord:
+    client_id: "{{ lookup('env', 'CATLOG_IDP_DISCORD_CLIENT_ID') | default('', true) }}"
+    client_secret: "{{ lookup('env', 'CATLOG_IDP_DISCORD_CLIENT_SECRET') | default('', true) }}"
+  google:
+    client_id: "{{ lookup('env', 'CATLOG_IDP_GOOGLE_CLIENT_ID') | default('', true) }}"
+    client_secret: "{{ lookup('env', 'CATLOG_IDP_GOOGLE_CLIENT_SECRET') | default('', true) }}"
+  github:
+    client_id: "{{ lookup('env', 'CATLOG_IDP_GITHUB_CLIENT_ID') | default('', true) }}"
+    client_secret: "{{ lookup('env', 'CATLOG_IDP_GITHUB_CLIENT_SECRET') | default('', true) }}"
+
+# --- nginx / TLS ------------------------------------------------------------
+
+catlog_conn_limit: 20
+
+# HSTS is a promise you cannot take back for max-age seconds. Start at 0 while
+# the certificate is being proved out, then raise it.
+catlog_hsts_max_age: "{{ lookup('env', 'CATLOG_HSTS_MAX_AGE') | default('0', true) }}"
+catlog_hsts_include_subdomains: false
+
+# --- ACME -------------------------------------------------------------------
+
+acme_email: "{{ lookup('env', 'ACME_EMAIL') }}"
+acme_cf_token: "{{ lookup('env', 'CF_API_TOKEN') }}"
+acme_cf_zone_id: "{{ lookup('env', 'CF_ZONE_ID') | default('', true) }}"
+# Let's Encrypt's staging CA issues untrusted certificates but has no rate
+# limits worth worrying about. Use it while the plumbing is new: five failed
+# issuances against production burns an hour-long lockout.
+acme_staging: "{{ (lookup('env', 'ACME_STAGING') | default('0', true)) == '1' }}"
+acme_image: "{{ lookup('env', 'ACME_IMAGE') | default('neilpang/acme.sh:latest', true) }}"
+# 03:17 rather than 03:00 — a renewal that shares a minute with every other
+# acme.sh install on the internet is a renewal that competes for the same rate
+# limit. acme.sh only acts when a certificate is within 30 days of expiry.
+acme_renew_oncalendar: "*-*-* 03:17:00 UTC"
+
+# --- host baseline ----------------------------------------------------------
+
+catlog_unattended_upgrades: true
+# Refuses to run unless the connecting user already has an authorized key, so
+# this cannot be the step that locks you out.
+catlog_harden_sshd: true
+catlog_journal_max_use: 500M
+
+# Refreshed from Cloudflare on every run; roles/cloudflare_firewall falls back
+# to the vendored copy if the fetch fails, and reports drift in --check mode.
+# The interface facing the internet. Taken from the default route, which is
+# right on every single-NIC cloud VM; override if the box is multi-homed.
+catlog_ext_if: "{{ ansible_facts.default_ipv4.interface | default('eth0') }}"
+
+cloudflare_ips_v4_url: https://www.cloudflare.com/ips-v4
+cloudflare_ips_v6_url: https://www.cloudflare.com/ips-v6
+
+# --- maintenance ------------------------------------------------------------
+
+# Installed but NOT enabled: the nightly runs rebuild → archive → backup, and
+# enabling it requires all three verbs to be live.
+catlog_nightly_enabled: false
+catlog_nightly_oncalendar: "*-*-* 04:30:00 UTC"
+catlog_backup_keep: 7

@@ -1,0 +1,152 @@
+# roles/cloudflare_firewall — who may reach this box.
+#
+# Two layers, because Docker makes them two:
+#
+#   1. The HOST firewall (nftables, table `inet catlog`) protects services the
+#      host itself listens on — sshd, and nothing else here.
+#
+#   2. The EDGE rules (iptables chain CATLOG-EDGE, jumped from DOCKER-USER)
+#      protect the container-published ports 80 and 443.
+#
+# The second is not optional and not a refinement of the first. Published
+# container ports are DNAT'd in nat/PREROUTING and filtered in FORWARD, so they
+# never traverse the INPUT chain at all — a host firewall that "blocks
+# everything but 22" leaves 443 wide open to the internet, silently. DOCKER-USER
+# is the chain Docker guarantees it will not overwrite, and it is the only
+# correct place for this.
+#
+# No package is installed: nftables is in the base system on Debian 12+ and
+# Ubuntu 22.04+, and iptables comes with Docker. ufw is not used — it would be a
+# second front-end fighting the same tables, and it has the same DOCKER-USER
+# blind spot.
+
+- name: Refuse to firewall without an admin CIDR
+  ansible.builtin.assert:
+    that: catlog_admin_ssh_cidrs | length > 0
+    fail_msg: >-
+      ADMIN_SSH_CIDR is empty. Applying a default-drop ruleset now would lock you
+      out of this host. Set it in infra/deploy.env — your current address is
+      {{ ansible_env.SSH_CLIENT.split() [0] | default('unknown') }}/32.
+    quiet: true
+
+# --- Cloudflare's ranges ----------------------------------------------------
+# Fetched every run. They change; a stale list means either legitimate edge
+# traffic is dropped, or an address Cloudflare has released is still trusted to
+# set CF-Connecting-IP. The vendored copy is a fallback for a run with no
+# outbound network, not a substitute.
+
+- name: Fetch the Cloudflare IPv4 ranges
+  ansible.builtin.uri:
+    url: "{{ cloudflare_ips_v4_url }}"
+    return_content: true
+    timeout: 15
+  register: cf_v4
+  failed_when: false
+  changed_when: false
+  check_mode: false
+
+- name: Fetch the Cloudflare IPv6 ranges
+  ansible.builtin.uri:
+    url: "{{ cloudflare_ips_v6_url }}"
+    return_content: true
+    timeout: 15
+  register: cf_v6
+  failed_when: false
+  changed_when: false
+  check_mode: false
+
+- name: Fall back to the vendored ranges
+  ansible.builtin.set_fact:
+    cloudflare_v4: >-
+      {{ (cf_v4.content | default('')).split('\n') | map('trim') | reject('equalto', '') | list
+         if cf_v4.status | default(0) == 200
+         else lookup('file', 'cloudflare-ips-v4.txt').splitlines() | map('trim') | reject('equalto', '') | list }}
+    cloudflare_v6: >-
+      {{ (cf_v6.content | default('')).split('\n') | map('trim') | reject('equalto', '') | list
+         if cf_v6.status | default(0) == 200
+         else lookup('file', 'cloudflare-ips-v6.txt').splitlines() | map('trim') | reject('equalto', '') | list }}
+
+- name: Say where the ranges came from
+  ansible.builtin.debug:
+    msg: >-
+      Cloudflare ranges: {{ cloudflare_v4 | length }} v4 + {{ cloudflare_v6 | length }} v6,
+      {{ 'fetched live' if cf_v4.status | default(0) == 200 else 'FROM THE VENDORED FALLBACK — refresh it' }}
+
+- name: Refuse to continue with an implausible range list
+  # A truncated or HTML-ified response would otherwise be applied as a firewall
+  # rule set that trusts almost nothing, taking the site off the internet.
+  ansible.builtin.assert:
+    that:
+      - cloudflare_v4 | length >= 10
+      - cloudflare_v6 | length >= 5
+      - cloudflare_v4 | select('search', '/') | list | length == cloudflare_v4 | length
+    fail_msg: "The Cloudflare range list does not look like a list of CIDRs. Refusing to apply it."
+    quiet: true
+
+# `cloudflare_ranges` is the single fact both consumers read: this role's edge
+# rules, and roles/catlog_nginx's set_real_ip_from. One list, applied in one
+# order, in one run — which is what makes real_ip safe to enable at all.
+- name: Publish the combined range list
+  ansible.builtin.set_fact:
+    cloudflare_ranges: "{{ cloudflare_v4 + cloudflare_v6 }}"
+
+# --- the rules --------------------------------------------------------------
+
+- name: Create the nftables include directory
+  ansible.builtin.file:
+    path: /etc/nftables.d
+    state: directory
+    mode: "0750"
+
+- name: Install the host ruleset
+  ansible.builtin.template:
+    src: catlog.nft.j2
+    dest: /etc/nftables.d/catlog.nft
+    mode: "0640"
+  notify: Reapply the firewall
+
+- name: Check the ruleset parses
+  ansible.builtin.command:
+    cmd: nft -c -f /etc/nftables.d/catlog.nft
+  changed_when: false
+
+- name: Install the edge rules script
+  ansible.builtin.template:
+    src: catlog-edge-rules.sh.j2
+    dest: /usr/local/sbin/catlog-edge-rules
+    mode: "0750"
+  notify: Reapply the firewall
+
+- name: Install the firewall unit
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/catlog-firewall.service
+    mode: "0644"
+    content: |
+      # Managed by Ansible (roles/cloudflare_firewall).
+      #
+      # PartOf=docker.service is load-bearing: restarting Docker re-creates and
+      # flushes DOCKER-USER, which would silently take the edge rules with it
+      # and leave 443 open to the internet until the next Ansible run.
+      [Unit]
+      Description=catlog firewall (host ruleset + Docker edge rules)
+      After=docker.service network-online.target
+      Wants=network-online.target
+      PartOf=docker.service
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=yes
+      ExecStart=/usr/sbin/nft -f /etc/nftables.d/catlog.nft
+      ExecStart=/usr/local/sbin/catlog-edge-rules
+
+      [Install]
+      WantedBy=multi-user.target docker.service
+  notify:
+    - Reload systemd
+    - Reapply the firewall
+
+- name: Enable the firewall at boot
+  ansible.builtin.systemd_service:
+    name: catlog-firewall
+    enabled: true
+    daemon_reload: true

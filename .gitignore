@@ -21,6 +21,18 @@ data-*/
 *.db-wal
 *.db-shm
 
+# --- deployment (BUILD_PACKAGE_DIST_PLAN.md §8.2) ---
+#
+# deploy.env holds every secret the deployment needs — IdP client secrets, the
+# Cloudflare API token, the GHCR PAT. It is the ONLY place they exist outside
+# the VM, and it must never become the second place they exist.
+infra/deploy.env
+# What `make release` pushed, by digest. Machine-written, per-machine.
+infra/.release.env
+# Diagnostics bundles and fetched backups. The bundles carry no secrets by
+# design, but a fetched backup carries player data.
+diagnostics/
+
 # --- scratch ---
 contracts/testdata/tmp/
 site/e2e/.report/

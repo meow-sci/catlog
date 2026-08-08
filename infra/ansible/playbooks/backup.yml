@@ -1,0 +1,26 @@
+# make ops-backup — one backup now, optionally fetched to your machine.
+- name: Back up
+  hosts: catlog
+  become: true
+  tasks:
+    - name: Take a backup
+      ansible.builtin.include_role:
+        name: maintenance
+        tasks_from: backup
+
+    - name: Fetch it
+      when: catlog_fetch_backup | default(false) | bool
+      block:
+        - name: Find the newest backup
+          ansible.builtin.command:
+            cmd: "sh -c 'ls -1t {{ catlog_data_root }}/backups/*.db | head -1'"
+          register: bk_newest
+          changed_when: false
+
+        - name: Copy it back
+          # This file holds player data. It is fetched only when you ask for it
+          # by name, and `make ops-backup FETCH=1` prompts before it does.
+          ansible.builtin.fetch:
+            src: "{{ bk_newest.stdout | trim }}"
+            dest: "{{ catlog_fetch_dest }}/"
+            flat: true

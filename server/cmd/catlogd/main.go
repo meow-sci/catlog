@@ -16,11 +16,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -46,7 +48,14 @@ import (
 
 // version is the catlogd build version. Kept in lockstep with the mod's
 // `mod_ver` (§4.2 session.started) once WP6 lands.
-const version = "0.1.0-dev"
+//
+// A `var`, not a `const`, so the container build can stamp the real thing:
+//
+//	go build -ldflags "-X main.version=$(git describe --tags --always --dirty)"
+//
+// That is what lets `make ops-status` say which build is actually running,
+// rather than which one somebody believes they deployed.
+var version = "0.1.0-dev"
 
 // shutdownGrace bounds the whole shutdown: HTTP drain, writer drain, then a
 // final WAL checkpoint per database.
@@ -58,6 +67,7 @@ func main() {
 		listen      = flag.String("listen", "", "public HTTP listen address, overriding the config (§3)")
 		adminListen = flag.String("admin-listen", "", "loopback admin listen address, overriding the config (§3)")
 		showVersion = flag.Bool("version", false, "print version and exit")
+		healthCheck = flag.Bool("healthcheck", false, "probe GET /healthz on this server's listen address; exit 0 if healthy")
 	)
 	flag.Parse()
 
@@ -79,6 +89,17 @@ func main() {
 	}
 	if *adminListen != "" {
 		cfg.Server.AdminListen = *adminListen
+	}
+
+	// -healthcheck runs *after* the config is resolved and before anything is
+	// opened. It is the container HEALTHCHECK: the runtime image has no shell
+	// and no curl, so the probe has to be the binary itself.
+	if *healthCheck {
+		if err := probeHealth(cfg.Server.Listen); err != nil {
+			fmt.Fprintln(os.Stderr, "catlogd healthcheck:", err)
+			os.Exit(1)
+		}
+		return
 	}
 
 	// Signals are trapped before anything is opened, so a Ctrl-C during a slow
@@ -456,4 +477,66 @@ func healthz(w http.ResponseWriter, _ *http.Request) {
 	if _, err := w.Write(healthzBody); err != nil {
 		slog.Warn("healthz write failed", "err", err)
 	}
+}
+
+// healthProbeTimeout bounds the -healthcheck request. Docker's own
+// --timeout kills the process on top of this; a shorter bound of our own means
+// the failure says which side gave up.
+const healthProbeTimeout = 2 * time.Second
+
+// probeHealth implements `catlogd -healthcheck` (§4.4): one GET /healthz
+// against this server's own listen address.
+//
+// It exists because the production runtime image is a Docker Hardened Image
+// with no shell and no HTTP client, so `HEALTHCHECK CMD curl …` is not
+// available — the probe must be a binary, and shipping a second one to make a
+// single request would be a second thing to build, stamp and keep in sync.
+//
+// It opens no database, on purpose and permanently. tursogo takes an exclusive
+// whole-file lock that excludes other processes, so a probe that opened
+// events.db would fail whenever the server was healthy and succeed only when it
+// was not — an inversion that would restart a working server every ten seconds.
+// Process liveness is exactly what /healthz reports, and exactly what this
+// checks.
+func probeHealth(listen string) error {
+	host, port, err := net.SplitHostPort(listen)
+	if err != nil {
+		return fmt.Errorf("listen address %q is unusable: %w", listen, err)
+	}
+	// 0.0.0.0 and :: are bind addresses, not destinations — dialling them is
+	// undefined on some platforms and wrong on all of them. The probe runs
+	// inside the same network namespace as the server, so loopback is both
+	// correct and the only address that cannot be firewalled away from it.
+	switch host {
+	case "", "0.0.0.0", "::", "[::]":
+		host = "127.0.0.1"
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), healthProbeTimeout)
+	defer cancel()
+
+	url := "http://" + net.JoinHostPort(host, port) + "/healthz"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+
+	body, err := io.ReadAll(io.LimitReader(res.Body, int64(len(healthzBody))+1))
+	if err != nil {
+		return fmt.Errorf("reading %s: %w", url, err)
+	}
+	if res.StatusCode != http.StatusOK {
+		return fmt.Errorf("%s answered %d", url, res.StatusCode)
+	}
+	// Compared to the exact body the endpoint serves, not merely "2xx": a proxy
+	// or a stray handler answering 200 with something else is not this server.
+	if !bytes.Equal(bytes.TrimSpace(body), healthzBody) {
+		return fmt.Errorf("%s answered 200 with an unexpected body: %q", url, body)
+	}
+	return nil
 }

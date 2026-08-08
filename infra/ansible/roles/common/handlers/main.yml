@@ -1,0 +1,12 @@
+- name: Restart journald
+  ansible.builtin.systemd_service:
+    name: systemd-journald
+    state: restarted
+
+- name: Reload sshd
+  # `reload`, never `restart`: a restart drops the connection this play is
+  # running over, and if the new config is bad you find out by not being able to
+  # come back. A reload keeps the existing session alive either way.
+  ansible.builtin.systemd_service:
+    name: ssh
+    state: reloaded

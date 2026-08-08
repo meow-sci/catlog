@@ -78,10 +78,15 @@ runs **same-origin** in development and does not depend on the server's CORS all
 That is the point — but it also means `make dev` cannot catch a CORS mistake.
 
 `make spa-preview` is the other half: a built bundle on a different origin, cross-origin against
-catlogd, which is the shape a real deployment has. Both ports are already in `catlogd.dev.toml`'s
-`[cors] allowed_origins`. A deployed reader needs its real origin added there
-(`CATLOG_CORS_ALLOWED_ORIGINS=https://…`), and exact `scheme://host[:port]` strings only — catlogd
-refuses to start on a wildcard or a trailing slash, because a malformed entry silently never matches.
+catlogd, which is the shape a *separately hosted* reader has. Both ports are already in
+`catlogd.dev.toml`'s `[cors] allowed_origins`.
+
+**Production is not that shape.** nginx serves the reader at `/app/` on the same origin as the read
+API, built with an empty `VITE_CATLOG_API_BASE`, so `[cors] allowed_origins` is **empty** there
+([UI-056](docs/DECISIONS.md#ui-056)). `make spa-preview` remains the only local target that exercises
+the allow-list, and the allow-list remains live code for anyone hosting the reader elsewhere — exact
+`scheme://host[:port]` strings only, because catlogd refuses to start on a wildcard or a trailing
+slash and a malformed entry silently never matches.
 
 ### Configuration
 
@@ -314,10 +319,38 @@ nothing in `make test` touches docker.
 | Push one event and watch the feed | `POST :6060/admin/events` |
 | Move the server's clock (dev only) | `POST :6060/admin/clock` |
 | Remove build output | `make clean` (keeps `data/` and `node_modules/`) |
+| Inspect the brotli/gzip ratios | `make precompress` (`CHECK=1` writes nothing) |
 
 `POST /admin/clock` is what makes a rolling *yearly* leaderboard testable without waiting a year. It
 is mounted only when `[server] clock_control = true`, catlogd refuses to start with it on an `https`
 base URL, and the route lives on the loopback-only admin mux.
+
+---
+
+## Deploying
+
+The production deployment is containers, and it is driven from here rather than from CI. The full
+runbook — DNS, certificates, the firewall, triage — is [docs/operations.md](docs/operations.md).
+What you type:
+
+```sh
+make deploy-env      # once: copy infra/deploy.env.example → infra/deploy.env and fill it in
+make preflight       # read-only: local tools, secrets, the VM
+make provision       # one-time and re-runnable: baseline, storage, docker, firewall, certs
+make release         # build both images, smoke-test the stack, push to GHCR, record the digests
+make deploy          # pull those digests, stop→start catlogd, health-gate, recreate nginx
+```
+
+Steady state is `make release && make deploy`. `make ops-status` and `make ops-logs` are the two you
+will use when something is wrong; `make ops-logs` fetches a diagnostics bundle into `./diagnostics/`.
+
+`make images-smoke` (run inside `make release`) is worth knowing about on its own: it brings the real
+compose project up on a throwaway volume and proves the hardened base can actually run catlogd —
+the glibc loader, the dlopen'd Turso engine, the key set, both migrations. Nothing about building the
+image proves any of that.
+
+`infra/deploy.env` is gitignored and is the only place a deployment secret exists outside the VM.
+There is no vault and no `--extra-vars`.
 
 ---
 

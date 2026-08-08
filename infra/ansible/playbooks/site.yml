@@ -1,0 +1,26 @@
+# make provision — the whole box, from a fresh VM to one ready for `make deploy`.
+#
+# Idempotent and re-runnable: running it against a healthy host changes nothing.
+# The role ORDER is load-bearing in one place — cloudflare_firewall must run
+# before catlog_nginx, because real_ip must not be configured until 443 is
+# restricted to the ranges it trusts. Both read the same fact.
+- name: Provision the catlog host
+  hosts: catlog
+  become: true
+  roles:
+    - role: common
+      tags: [common, baseline]
+    - role: storage
+      tags: [storage, baseline]
+    - role: docker
+      tags: [docker, baseline]
+    - role: cloudflare_firewall
+      tags: [firewall]
+    - role: catlog_app
+      tags: [app]
+    - role: acme
+      tags: [certs]
+    - role: catlog_nginx
+      tags: [nginx]
+    - role: maintenance
+      tags: [maintenance]

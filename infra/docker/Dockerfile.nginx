@@ -1,0 +1,179 @@
+# catlog-nginx — production reverse proxy + static host (BUILD_PACKAGE_DIST_PLAN.md §5).
+#
+#   docker build -f infra/docker/Dockerfile.nginx -t catlog-nginx .
+#
+# Build context is the REPOSITORY ROOT: this image builds both frontends.
+#
+# What it contains, and why each part is here:
+#   * nginx + ngx_brotli, built from source against the SAME nginx version, so
+#     `brotli_static` can serve the .br files the asset stages produce.
+#   * site/dist  → /usr/share/nginx/catlog/site  (served at /static/)
+#   * spa/dist   → /usr/share/nginx/catlog/spa   (served at /app/)
+#     both pre-compressed: every compressible file has a .br and a .gz sibling,
+#     so the origin never compresses a static asset at request time.
+#   * /etc/nginx/nginx.conf — the http-level configuration, which is
+#     domain-independent and therefore baked.
+#
+# What it does NOT contain: the server blocks. Certificates, `server_name` and
+# the Cloudflare real_ip ranges are host-specific, so Ansible renders them into
+# /etc/nginx/catlog.d/ and this image includes that directory from `http {}`.
+# An image that knew the domain could not be promoted between environments.
+
+# syntax=docker/dockerfile:1.10
+
+ARG NGINX_VERSION=1.29.4
+ARG NODE_IMAGE=node:24-trixie
+
+# ---------------------------------------------------------------------------
+# ngx_brotli, built against this exact nginx
+# ---------------------------------------------------------------------------
+# `--with-compat` is what makes a dynamic module loadable by the stock binary in
+# the official image. The nginx VERSION must match: a module built against a
+# different one refuses to load, and it refuses at start — loudly, which is the
+# good failure.
+FROM debian:trixie-slim AS nginx-modules
+ARG NGINX_VERSION
+# Pin the module source. `master` would make two builds of the same catlog
+# commit produce different images, which is the thing digests are supposed to
+# prevent.
+ARG NGX_BROTLI_REF=a71f9312c2deb28875acc7bacfdd5695a111aa53
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential ca-certificates cmake curl git \
+        libpcre2-dev libssl-dev zlib1g-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /usr/src
+RUN curl -fsSL "https://nginx.org/download/nginx-${NGINX_VERSION}.tar.gz" | tar xz
+RUN git clone https://github.com/google/ngx_brotli.git \
+    && git -C ngx_brotli checkout "${NGX_BROTLI_REF}" \
+    && git -C ngx_brotli submodule update --init --recursive
+
+# Build the bundled brotli library STATICALLY first.
+#
+# ngx_brotli's own link line is `-L deps/brotli/c/../out -lbrotlienc
+# -lbrotlicommon`, and nothing in its config script creates that directory — so
+# without this step `make modules` compiles both modules and then fails at the
+# link with "cannot find -lbrotlienc".
+#
+# Static (BUILD_SHARED_LIBS=OFF) rather than linking the system libbrotli,
+# because a shared link would put `libbrotli1` into the runtime nginx image as a
+# new package and a new thing to patch. -fPIC because the result is linked into
+# a shared object.
+RUN cd /usr/src/ngx_brotli/deps/brotli \
+    && cmake -B out -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
+             -DCMAKE_C_FLAGS="-O2 -fPIC" . \
+    && cmake --build out --config Release --target brotlienc brotlidec brotlicommon \
+    && ls -l out/libbrotli*.a
+
+WORKDIR /usr/src/nginx-${NGINX_VERSION}
+RUN ./configure --with-compat --add-dynamic-module=/usr/src/ngx_brotli \
+    && make -j"$(nproc)" modules \
+    && mkdir -p /modules \
+    && cp objs/ngx_http_brotli_filter_module.so objs/ngx_http_brotli_static_module.so /modules/
+
+# Neither module may depend on a library the runtime image does not have. If
+# this ever prints libbrotli*.so, the static link above stopped working and the
+# runtime image would fail at `load_module` — which is a startup failure for the
+# whole proxy, so it is asserted here instead.
+RUN if readelf -d /modules/*.so | grep -q 'NEEDED.*libbrotli'; then \
+      echo "the brotli modules link against a shared libbrotli — the runtime image does not have it" >&2; \
+      readelf -d /modules/*.so | grep NEEDED >&2; exit 1; \
+    fi; \
+    echo "brotli modules link only against:"; readelf -d /modules/*.so | grep NEEDED
+
+# ---------------------------------------------------------------------------
+# The datastar site's assets (esbuild)
+# ---------------------------------------------------------------------------
+FROM ${NODE_IMAGE} AS site-build
+# pnpm exclusively, at the version each package pins in `packageManager`.
+# corepack reads that field, so there is no second place to bump it.
+RUN corepack enable
+WORKDIR /src/site
+COPY site/package.json site/pnpm-lock.yaml site/pnpm-workspace.yaml ./
+RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
+    pnpm install --frozen-lockfile
+COPY site/ ./
+RUN pnpm build
+
+# ---------------------------------------------------------------------------
+# The React reader (vite)
+# ---------------------------------------------------------------------------
+FROM ${NODE_IMAGE} AS spa-build
+RUN corepack enable
+WORKDIR /src/spa
+
+# SPA_BASE=/app/ — nginx serves the bundle at https://<host>/app/ and
+# src/state/router.ts reads the same value back out of import.meta.env.BASE_URL.
+#
+# VITE_CATLOG_API_BASE= (empty) — src/api/client.ts keeps an empty string, so
+# every request comes out as a relative /v1/…, same-origin with the read API.
+# This is what lets [cors] allowed_origins be EMPTY in production.
+ARG SPA_BASE=/app/
+ARG VITE_CATLOG_API_BASE=
+# Set to 0 for a fast local iteration; 1 in every release build.
+ARG SPA_CHECKS=1
+
+COPY spa/package.json spa/pnpm-lock.yaml spa/pnpm-workspace.yaml ./
+RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
+    pnpm install --frozen-lockfile
+COPY spa/ ./
+
+# The same four gates CI runs. A bundle that does not typecheck, lint, match the
+# formatter or pass its tests must not reach an image either.
+RUN if [ "${SPA_CHECKS}" = "1" ]; then \
+      pnpm typecheck && pnpm lint && pnpm fmt:check && pnpm test; \
+    else echo "SPA_CHECKS=0 — skipping typecheck/lint/fmt/test"; fi
+
+RUN SPA_BASE="${SPA_BASE}" VITE_CATLOG_API_BASE="${VITE_CATLOG_API_BASE}" pnpm build
+# The deep-link fallback. nginx uses try_files rather than 404.html, but a build
+# that stopped emitting it has changed in a way this image should notice.
+RUN test -f dist/404.html
+
+# ---------------------------------------------------------------------------
+# Pre-compression: one .br and one .gz beside every compressible asset
+# ---------------------------------------------------------------------------
+FROM ${NODE_IMAGE} AS precompress
+WORKDIR /assets
+COPY --from=site-build /src/site/dist ./site
+COPY --from=spa-build  /src/spa/dist  ./spa
+COPY scripts/precompress.mjs /precompress.mjs
+RUN node /precompress.mjs ./site ./spa
+
+# ---------------------------------------------------------------------------
+# Runtime
+# ---------------------------------------------------------------------------
+FROM nginx:${NGINX_VERSION} AS runtime
+
+ARG VERSION=dev
+ARG COMMIT=unknown
+LABEL org.opencontainers.image.title="catlog-nginx" \
+      org.opencontainers.image.description="catlog reverse proxy, TLS terminator and static host" \
+      org.opencontainers.image.source="https://github.com/meow-sci/catlog" \
+      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.revision="${COMMIT}"
+
+COPY --from=nginx-modules /modules/*.so /usr/lib/nginx/modules/
+COPY --from=precompress /assets/site /usr/share/nginx/catlog/site
+COPY --from=precompress /assets/spa  /usr/share/nginx/catlog/spa
+COPY infra/nginx/nginx.conf /etc/nginx/nginx.conf
+COPY infra/nginx/maintenance.html /usr/share/nginx/catlog/error/maintenance.html
+
+# Where Ansible mounts its rendered server blocks (10-catlog.conf,
+# 20-realip.conf). Individual FILES are mounted, not the directory, so the
+# baked default below survives.
+RUN mkdir -p /etc/nginx/catlog.d /etc/nginx/certs /var/www/certbot
+
+# A trivially-correct default_server that answers 503 with a reason. Without it
+# the image would serve nothing at all until Ansible has run, and "nothing at
+# all" is indistinguishable from a broken config mount.
+COPY infra/nginx/bootstrap.conf /etc/nginx/catlog.d/00-bootstrap.conf
+
+# Validates everything baked in — including that both brotli modules actually
+# load into this nginx binary. A version mismatch between the module build and
+# the runtime base fails HERE, in the build, rather than on the VM at 3am.
+RUN nginx -t
+
+EXPOSE 80 443
+STOPSIGNAL SIGQUIT

@@ -1,0 +1,15 @@
+- name: Reload nginx
+  # Reload, not restart: an in-place reload keeps every open SSE stream alive,
+  # and there are always some. It is also a no-op if the container is not up,
+  # which is the state a first run is in.
+  ansible.builtin.shell:
+    cmd: |
+      set -e
+      cd /opt/catlog
+      if [ -n "$(docker compose ps -q --status running nginx)" ]; then
+        docker compose exec -T nginx nginx -t
+        docker compose exec -T nginx nginx -s reload
+      else
+        echo "nginx is not running — nothing to reload"
+      fi
+  changed_when: true

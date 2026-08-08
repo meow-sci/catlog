@@ -1,0 +1,65 @@
+# roles/catlog_nginx — the server blocks and the real_ip configuration.
+#
+# The http-level half — compression, the rate-limit zones, the catlogd upstream,
+# the log format — is baked into the image at /etc/nginx/nginx.conf, because it
+# is domain-independent and can therefore be validated by `nginx -t` at build
+# time. Only what depends on this host is rendered here.
+
+- name: Refuse to render without the Cloudflare ranges
+  # This role must never run before roles/cloudflare_firewall has published the
+  # fact. Enabling real_ip while the origin is still reachable directly lets any
+  # client choose its own rate-limit bucket by sending CF-Connecting-IP — which
+  # is strictly worse than having no rate limiting at all. The firewall runs
+  # first, from the same list, in the same play.
+  ansible.builtin.assert:
+    that: cloudflare_ranges is defined and cloudflare_ranges | length > 10
+    fail_msg: >-
+      cloudflare_ranges is not set. Run roles/cloudflare_firewall first —
+      real_ip must not be configured before 443 is restricted to those ranges.
+    quiet: true
+
+- name: Render the server blocks
+  ansible.builtin.template:
+    src: "{{ playbook_dir }}/../../nginx/site.conf.j2"
+    dest: "{{ catlog_data_root }}/nginx/conf/10-catlog.conf"
+    mode: "0644"
+  notify: Reload nginx
+
+- name: Render the real_ip and direct-access rules
+  ansible.builtin.template:
+    src: "{{ playbook_dir }}/../../nginx/realip.conf.j2"
+    dest: "{{ catlog_data_root }}/nginx/conf/20-realip.conf"
+    mode: "0644"
+  notify: Reload nginx
+
+- name: Look for a certificate
+  ansible.builtin.stat:
+    path: "{{ catlog_data_root }}/acme/live/fullchain.pem"
+  register: catlog_cert
+
+- name: Say that nginx cannot start yet
+  # nginx refuses to start at all when ssl_certificate names a file that is not
+  # there, so this is the difference between "certificates not issued yet" and
+  # "the proxy is broken".
+  ansible.builtin.debug:
+    msg: >-
+      No certificate at {{ catlog_data_root }}/acme/live/fullchain.pem yet.
+      nginx will not start until roles/acme has issued one — run `make certs`.
+  when: not catlog_cert.stat.exists
+
+- name: Check the rendered configuration
+  # Validated inside a throwaway container against the real image, so a broken
+  # server block is caught before it is loaded rather than after nginx has
+  # refused to come back.
+  ansible.builtin.command:
+    cmd: docker compose run --rm --no-deps --entrypoint nginx nginx -t
+    chdir: /opt/catlog
+  changed_when: false
+  when: catlog_cert.stat.exists
+
+- name: Start nginx
+  ansible.builtin.command:
+    cmd: docker compose up -d nginx
+    chdir: /opt/catlog
+  changed_when: true
+  when: catlog_cert.stat.exists

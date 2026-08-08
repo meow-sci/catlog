@@ -1,0 +1,12 @@
+# Collections these playbooks need beyond ansible-core.
+#
+#   ansible-galaxy collection install -r infra/ansible/requirements.yml
+#
+# `make preflight` checks they are present and tells you this command if not.
+collections:
+  - name: community.docker
+    version: ">=4.0.0"
+  - name: community.general
+    version: ">=10.0.0"
+  - name: ansible.posix
+    version: ">=1.6.0"

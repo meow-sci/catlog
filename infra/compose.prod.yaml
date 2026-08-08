@@ -1,0 +1,191 @@
+# catlog — the production compose project (BUILD_PACKAGE_DIST_PLAN.md §6.2).
+#
+# Installed by roles/catlog_app at /opt/catlog/compose.yaml, beside a /opt/catlog/.env
+# that Ansible renders with the image digests, the uid/gid and the data root.
+# This file is committed and identical on every host; only the .env differs,
+# which is what makes `git diff` a real review of what production runs.
+#
+# By hand on the box (everything the make targets do, if you ever need to):
+#   cd /opt/catlog && docker compose ps
+#   docker compose exec catlogd catlogctl <verb>
+#   docker compose --profile acme run --rm acme --cron
+#
+# ---------------------------------------------------------------------------
+# ONE catlogd, FOREVER
+# ---------------------------------------------------------------------------
+# tursogo holds an exclusive whole-file lock on events.db/projections.db that
+# excludes other PROCESSES entirely, readers included. So: no `--scale`, no
+# rolling restart, no blue/green, no sidecar that opens a database. A deploy
+# stops the old container, waits for it to EXIT (the lock is released by process
+# exit, not by the stop request), and only then starts the new one.
+
+name: catlog
+
+services:
+  catlogd:
+    image: ${CATLOG_IMAGE:?set CATLOG_IMAGE to a digest-pinned reference}
+    container_name: catlog-catlogd
+    restart: unless-stopped
+
+    # Pinned rather than inherited: the bind mounts below are chowned to this
+    # uid by roles/storage, and a silent mismatch is a permission-denied on
+    # data/keys/ at first boot. roles/catlog_app asserts the image's configured
+    # user matches this value before it deploys.
+    user: "${CATLOG_UID}:${CATLOG_GID}"
+
+    # The image has no shell and no package manager; this removes the rest.
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=16m
+
+    # MemoryDenyWriteExecute has no compose equivalent and that is just as well:
+    # purego's FFI shim and the dlopen'd Turso engine need executable mappings.
+    # Do not add a seccomp profile that forbids them.
+
+    environment:
+      # A soft ceiling for the Go heap: as it is approached the GC runs harder
+      # instead of letting RSS wander into the OOM killer. Sized to the box.
+      GOMEMLIMIT: ${CATLOG_GOMEMLIMIT:-700MiB}
+      # Free once GOMEMLIMIT is set — the collector runs less often when idle
+      # and the limit still caps the worst case.
+      GOGC: ${CATLOG_GOGC:-300}
+    env_file:
+      # IdP client secrets, the CORS origin list, anything else that is a secret
+      # or host-specific. Rendered by Ansible, 0640 root:catlog, never in git.
+      - ${CATLOG_DATA_ROOT}/config/catlogd.env
+
+    volumes:
+      - ${CATLOG_DATA_ROOT}/config/catlogd.toml:/etc/catlog/catlogd.toml:ro
+      - ${CATLOG_DATA_ROOT}/data:/var/lib/catlog/data
+      # The driver extracts a 19 MB native .so here and dlopen()s it at first
+      # database open. This mount must be writable AND exec-capable — the
+      # storage role refuses to continue if the filesystem is mounted noexec,
+      # because the failure would otherwise surface as an unexplained startup
+      # crash. See TURSO_GO_CACHE_DIR in Dockerfile.catlogd.
+      - ${CATLOG_DATA_ROOT}/turso-cache:/var/lib/catlog/turso-cache
+      # `catlogctl backup` runs INSIDE this process: a live Turso file cannot be
+      # copied by another process, so the writer is quiesced and the copy is
+      # made from in here.
+      - ${CATLOG_DATA_ROOT}/backups:/var/lib/catlog/backups
+
+    networks: [catlog_net]
+
+    # Not published. 8080 is reachable only from nginx on catlog_net; the admin
+    # mux on 127.0.0.1:6060 is reachable only from inside this container's own
+    # network namespace, which is what `docker compose exec` joins.
+    expose: ["8080"]
+
+    healthcheck:
+      # `catlogd -healthcheck` — the image has no shell and no HTTP client, so
+      # the probe is the binary. It opens no database (an exclusive lock makes
+      # a database-touching probe fail exactly when the server is healthy).
+      test: ["CMD", "/usr/local/bin/catlogd", "-healthcheck"]
+      interval: 15s
+      timeout: 5s
+      start_period: 60s
+      retries: 3
+
+    # Shutdown drains the ingest write queue, checkpoints both WALs and closes
+    # the databases. This must be >= that, or Docker SIGKILLs a checkpoint in
+    # progress — recoverable, but pointless.
+    stop_grace_period: 90s
+
+    mem_limit: ${CATLOG_MEM_LIMIT:-900m}
+
+    logging:
+      driver: json-file
+      options: {max-size: "50m", max-file: "5"}
+
+  nginx:
+    image: ${NGINX_IMAGE:?set NGINX_IMAGE to a digest-pinned reference}
+    container_name: catlog-nginx
+    restart: unless-stopped
+
+    ports:
+      - "80:80"
+      - "443:443"
+
+    read_only: true
+    cap_drop: [ALL]
+    cap_add:
+      - NET_BIND_SERVICE   # 80 and 443
+      - CHOWN              # the temp-path directories at startup
+      - SETGID             # master drops workers to the nginx user
+      - SETUID
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /var/cache/nginx:rw,nosuid,nodev,size=64m
+      - /var/run:rw,nosuid,nodev,size=8m
+      - /tmp:rw,nosuid,nodev,size=16m
+
+    volumes:
+      # Individual FILES, not the directory: /etc/nginx/catlog.d/00-bootstrap.conf
+      # is baked into the image and mounting over the directory would hide it.
+      - ${CATLOG_DATA_ROOT}/nginx/conf/10-catlog.conf:/etc/nginx/catlog.d/10-catlog.conf:ro
+      - ${CATLOG_DATA_ROOT}/nginx/conf/20-realip.conf:/etc/nginx/catlog.d/20-realip.conf:ro
+      - ${CATLOG_DATA_ROOT}/acme/live:/etc/nginx/certs:ro
+
+    depends_on:
+      # service_started, NOT service_healthy. nginx must come up even when
+      # catlogd will not: it is what serves the maintenance page, and
+      # "connection refused" is a worse answer to a broken deploy than a page
+      # that says what is happening. It also has to be running for
+      # `make ops-logs` to reach it at all.
+      catlogd:
+        condition: service_started
+
+    networks: [catlog_net]
+
+    healthcheck:
+      # No curl and no wget in the nginx image, and adding one would be a
+      # package installed to answer a question a TCP connect already answers.
+      # bash is part of the Debian base, so /dev/tcp is available.
+      test: ["CMD", "bash", "-c", "printf 'HEAD / HTTP/1.0\\r\\n\\r\\n' > /dev/tcp/127.0.0.1/80"]
+      interval: 15s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+    stop_grace_period: 30s
+
+    logging:
+      driver: json-file
+      options: {max-size: "50m", max-file: "5"}
+
+  # --- certificates -------------------------------------------------------
+  # Behind a profile, so `docker compose up -d` never starts it: this is a
+  # one-shot, run by a host timer.
+  #
+  #   docker compose --profile acme run --rm acme --cron
+  #
+  # It is NOT a long-running sidecar and it does NOT get the Docker socket. A
+  # permanently-running container with the socket mounted so it could reload
+  # nginx would be a larger hole than the hardened base closes on the other side
+  # of the diagram. The timer reloads nginx itself, from the host, afterwards.
+  acme:
+    image: ${ACME_IMAGE:-neilpang/acme.sh:latest}
+    container_name: catlog-acme
+    profiles: [acme]
+    environment:
+      # DNS-01 against Cloudflare: no inbound port, no challenge file, and it
+      # works through an orange-clouded record, which HTTP-01 does not (CF's
+      # "Always Use HTTPS" redirects the challenge path).
+      CF_Token: ${CF_API_TOKEN:?set CF_API_TOKEN}
+      CF_Zone_ID: ${CF_ZONE_ID:-}
+    volumes:
+      - ${CATLOG_DATA_ROOT}/acme/data:/acme.sh
+      - ${CATLOG_DATA_ROOT}/acme/live:/certs
+    # Outbound only: the Cloudflare API and Let's Encrypt. It listens on
+    # nothing, publishes nothing, and joins no network the other services are
+    # on — DNS-01 needs no inbound path, which is most of why it was chosen.
+    networks: [acme_net]
+
+networks:
+  catlog_net:
+    driver: bridge
+  acme_net:
+    driver: bridge

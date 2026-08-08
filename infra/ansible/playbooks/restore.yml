@@ -1,0 +1,123 @@
+# Disaster recovery. Deliberately NOT wired to a make target: every step here
+# replaces live state, and the sequence has to be understood before it is run.
+#
+#   ansible-playbook playbooks/restore.yml -e catlog_restore_file=events-2026-08-01.db
+#
+# THE ORDER IS THE WHOLE PROCEDURE:
+#   1. stop catlogd            — the database lock is held until the process exits
+#   2. restore events.db       — the backup carries the -wal too
+#   3. start catlogd
+#   4. replay any archive newer than the backup
+#   5. rebuild projections     — projections.db is never backed up, by design
+#
+# The archive holds the raw event log and the `player` rows and nothing else.
+# Handles, credentials, bans and tombstones are identity state and live only in
+# events.db, which is why the backup comes first and the archive second.
+- name: Restore catlog
+  hosts: catlog
+  become: true
+  vars_prompt:
+    - name: confirm
+      prompt: "This REPLACES the live events database. Type the hostname to continue"
+      private: false
+
+  tasks:
+    - name: Check you meant it
+      ansible.builtin.assert:
+        that: confirm == inventory_hostname
+        fail_msg: "Aborted."
+        quiet: true
+
+    - name: Check the backup exists
+      ansible.builtin.stat:
+        path: "{{ catlog_data_root }}/backups/{{ catlog_restore_file }}"
+      register: restore_src
+
+    - name: Refuse to restore from nothing
+      ansible.builtin.assert:
+        that: restore_src.stat.exists
+        fail_msg: "{{ catlog_restore_file }} is not in {{ catlog_data_root }}/backups."
+        quiet: true
+
+    - name: Stop catlogd
+      ansible.builtin.command:
+        cmd: docker compose stop -t 90 catlogd
+        chdir: /opt/catlog
+      changed_when: true
+
+    - name: Wait for the lock to be released
+      ansible.builtin.command:
+        cmd: docker compose ps -q --status running catlogd
+        chdir: /opt/catlog
+      register: restore_running
+      until: restore_running.stdout | trim | length == 0
+      retries: 30
+      delay: 2
+      changed_when: false
+
+    - name: Set the current databases aside
+      # Moved, never deleted. If the restore turns out to be the wrong backup,
+      # the thing you replaced is still on disk.
+      ansible.builtin.command:
+        cmd: >-
+          sh -c 'for f in events.db events.db-wal events.db-shm projections.db projections.db-wal projections.db-shm; do
+                   [ -f "{{ catlog_data_root }}/data/$f" ] &&
+                   mv "{{ catlog_data_root }}/data/$f" "{{ catlog_data_root }}/data/$f.pre-restore";
+                 done; true'
+      changed_when: true
+
+    - name: Put the backup in place
+      ansible.builtin.copy:
+        src: "{{ catlog_data_root }}/backups/{{ catlog_restore_file }}"
+        dest: "{{ catlog_data_root }}/data/events.db"
+        remote_src: true
+        owner: "{{ catlog_uid }}"
+        group: "{{ catlog_gid }}"
+        mode: "0640"
+
+    - name: Put its WAL in place
+      ansible.builtin.copy:
+        src: "{{ catlog_data_root }}/backups/{{ catlog_restore_file }}-wal"
+        dest: "{{ catlog_data_root }}/data/events.db-wal"
+        remote_src: true
+        owner: "{{ catlog_uid }}"
+        group: "{{ catlog_gid }}"
+        mode: "0640"
+      failed_when: false
+
+    - name: Start catlogd
+      ansible.builtin.command:
+        cmd: docker compose up -d --no-deps catlogd
+        chdir: /opt/catlog
+      changed_when: true
+
+    - name: Wait for it to become healthy
+      ansible.builtin.command:
+        cmd: docker compose exec -T catlogd catlogd -healthcheck
+        chdir: /opt/catlog
+      register: restore_health
+      until: restore_health.rc == 0
+      retries: 40
+      delay: 3
+      changed_when: false
+
+    - name: Replay the archive
+      # A restored server whose archive holds nothing newer does no work here,
+      # and that is correct rather than a sign the step failed.
+      ansible.builtin.command:
+        cmd: docker compose exec -T catlogd catlogctl archive restore
+        chdir: /opt/catlog
+      register: restore_archive
+      changed_when: true
+
+    - name: Rebuild projections
+      ansible.builtin.command:
+        cmd: docker compose exec -T catlogd catlogctl projections rebuild
+        chdir: /opt/catlog
+      changed_when: true
+
+    - name: Report
+      ansible.builtin.debug:
+        msg: >-
+          Restored from {{ catlog_restore_file }}. The replaced files are beside
+          the new ones as *.pre-restore — delete them once you are satisfied.

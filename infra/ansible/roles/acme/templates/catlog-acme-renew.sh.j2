@@ -1,0 +1,32 @@
+#!/bin/sh
+{{ ansible_managed | comment }}
+#
+# Run daily by catlog-acme.timer. acme.sh decides whether anything is actually
+# due; this script decides whether nginx needs to be told.
+#
+# The reload happens HERE, on the host, rather than inside the acme container —
+# which is what lets that container run without the Docker socket.
+
+set -eu
+cd /opt/catlog
+
+before=""
+[ -f "{{ catlog_data_root }}/acme/live/fullchain.pem" ] &&
+    before="$(sha256sum "{{ catlog_data_root }}/acme/live/fullchain.pem" | cut -d' ' -f1)"
+
+docker compose --profile acme run --rm acme --cron
+
+after=""
+[ -f "{{ catlog_data_root }}/acme/live/fullchain.pem" ] &&
+    after="$(sha256sum "{{ catlog_data_root }}/acme/live/fullchain.pem" | cut -d' ' -f1)"
+
+if [ "$before" != "$after" ]; then
+    echo "catlog-acme-renew: certificate changed — reloading nginx"
+    # Validate before reloading. A reload with a bad config leaves the running
+    # nginx alone, but the error belongs in this log rather than in a mystery
+    # three weeks later.
+    docker compose exec -T nginx nginx -t
+    docker compose exec -T nginx nginx -s reload
+else
+    echo "catlog-acme-renew: nothing was due"
+fi

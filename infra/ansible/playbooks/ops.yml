@@ -1,0 +1,213 @@
+# Triage. Three entry points, selected by tag:
+#
+#   make ops-status              --tags status   one screen, nothing written
+#   make ops-logs                --tags logs     a bundle fetched to ./diagnostics/
+#   make ops-exec CMD='…'        --tags exec     catlogctl against the live admin mux
+#
+# NOTHING HERE COLLECTS A SECRET. Not catlogd.env, not data/keys/, not the
+# databases. A diagnostics bundle containing the session key or the pepper is a
+# bundle you have to treat as a secret forever, and you will not. Pulling data
+# is a separate, deliberate action — `make ops-backup FETCH=1`, which prompts.
+- name: Operate
+  hosts: catlog
+  become: true
+  gather_facts: true
+  vars:
+    catlog_log_since: "{{ lookup('env', 'SINCE') | default('2h', true) }}"
+
+  tasks:
+    # --- status -------------------------------------------------------------
+    - name: Status
+      tags: [status]
+      block:
+        - name: Read the container states
+          ansible.builtin.command:
+            cmd: docker compose ps --format json
+            chdir: /opt/catlog
+          register: st_ps
+          changed_when: false
+          failed_when: false
+
+        - name: Read the deployment record
+          ansible.builtin.slurp:
+            src: /opt/catlog/deployed.json
+          register: st_deployed
+          failed_when: false
+
+        - name: Ask catlogd what it is
+          ansible.builtin.command:
+            cmd: docker compose exec -T catlogd catlogd -version
+            chdir: /opt/catlog
+          register: st_version
+          changed_when: false
+          failed_when: false
+
+        - name: Probe /healthz through nginx, from the host
+          # Through the proxy, so a green answer covers both containers, the
+          # network between them and the server block. `docker compose exec`
+          # into catlogd is how the direct probe is done, below.
+          ansible.builtin.command:
+            cmd: docker compose exec -T catlogd catlogd -healthcheck
+            chdir: /opt/catlog
+          register: st_health
+          changed_when: false
+          failed_when: false
+
+        - name: Read the certificate's expiry
+          ansible.builtin.command:
+            cmd: "openssl x509 -noout -enddate -subject -in {{ catlog_data_root }}/acme/live/fullchain.pem"
+          register: st_cert
+          changed_when: false
+          failed_when: false
+
+        - name: Read the database sizes
+          ansible.builtin.command:
+            cmd: "du -sh {{ catlog_data_root }}/data {{ catlog_data_root }}/backups"
+          register: st_du
+          changed_when: false
+          failed_when: false
+
+        - name: Read disk and memory
+          ansible.builtin.command:
+            cmd: "sh -c 'df -h {{ catlog_data_root }} /; free -m'"
+          register: st_capacity
+          changed_when: false
+          failed_when: false
+
+        - name: Check the edge firewall is actually in place
+          # PartOf=docker.service should keep it, but a Docker restart flushing
+          # DOCKER-USER is exactly the kind of thing that goes unnoticed until
+          # it matters — and it would leave 443 open to the whole internet.
+          ansible.builtin.command:
+            cmd: iptables -S CATLOG-EDGE
+          register: st_fw
+          changed_when: false
+          failed_when: false
+
+        - name: Report
+          ansible.builtin.debug:
+            msg: |
+              ── catlog @ {{ inventory_hostname }} ──────────────────────────────
+              deployed   {{ (st_deployed.content | b64decode | from_json).version | default('unknown')
+                             if st_deployed.content is defined else 'never deployed' }}
+              catlogd    {{ st_version.stdout | default('unreachable') | trim }}
+              health     {{ 'OK' if st_health.rc | default(1) == 0 else 'FAILING — run: make ops-logs' }}
+              images     {{ (st_deployed.content | b64decode | from_json).catlogd | default('?')
+                             if st_deployed.content is defined else '?' }}
+                         {{ (st_deployed.content | b64decode | from_json).nginx | default('?')
+                             if st_deployed.content is defined else '?' }}
+              cert       {{ st_cert.stdout | default('NONE — run: make certs') | replace('\n', ' | ') }}
+              edge rules {{ (st_fw.stdout_lines | default([]) | length) }} iptables rules on CATLOG-EDGE
+                         {{ 'WARNING: none — 80/443 are open to the internet. Run: make provision --tags firewall'
+                            if (st_fw.rc | default(1)) != 0 else '' }}
+              data       {{ st_du.stdout | default('') | replace('\n', ' | ') }}
+              ─────────────────────────────────────────────────────────────────
+              {{ st_capacity.stdout | default('') }}
+
+        - name: Report the containers
+          ansible.builtin.debug:
+            var: st_ps.stdout_lines
+
+    # --- diagnostics bundle -------------------------------------------------
+    - name: Collect diagnostics
+      tags: [logs]
+      block:
+        - name: Make a collection directory
+          ansible.builtin.tempfile:
+            state: directory
+            prefix: catlog-diag-
+          register: diag_dir
+
+        - name: Collect everything
+          # One shell script rather than twenty tasks: it is a single round trip,
+          # it is readable as a whole, and every line is a command you could have
+          # typed yourself over ssh.
+          ansible.builtin.shell:
+            cmd: |
+              set -u
+              D="{{ diag_dir.path }}"
+              cd /opt/catlog
+              run() { echo "\$ $*" > "$D/$1"; shift; "$@" >> "$D/${1:-out}" 2>&1 || true; }
+
+              docker compose ps -a            > "$D/compose-ps.txt"            2>&1 || true
+              docker compose config           > "$D/compose-config.txt"        2>&1 || true
+              docker compose logs --since {{ catlog_log_since }} --no-color catlogd \
+                                              > "$D/catlogd.log"               2>&1 || true
+              docker compose logs --since {{ catlog_log_since }} --no-color nginx \
+                                              > "$D/nginx.log"                 2>&1 || true
+              docker inspect catlog-catlogd   > "$D/inspect-catlogd.json"      2>&1 || true
+              docker inspect catlog-nginx     > "$D/inspect-nginx.json"        2>&1 || true
+              docker compose exec -T catlogd catlogctl stats \
+                                              > "$D/admin-stats.json"          2>&1 || true
+              docker compose exec -T catlogd catlogd -version \
+                                              > "$D/versions.txt"              2>&1 || true
+              { docker version; docker compose version; uname -a; } \
+                                             >> "$D/versions.txt"              2>&1 || true
+              cp /opt/catlog/deployed.json    "$D/deployed.json"                     2>/dev/null || true
+
+              findmnt -no SOURCE,FSTYPE,OPTIONS --target {{ catlog_data_root }} \
+                                              > "$D/mounts.txt"                2>&1 || true
+              df -h                           > "$D/disk.txt"                  2>&1 || true
+              du -sh {{ catlog_data_root }}/* >> "$D/disk.txt"                  2>&1 || true
+              free -m                         > "$D/mem.txt"                   2>&1 || true
+              dmesg -T 2>/dev/null | grep -iE 'oom|killed process' | tail -50 \
+                                              > "$D/dmesg-oom.txt"             2>&1 || true
+
+              openssl x509 -noout -dates -subject -issuer -ext subjectAltName \
+                -in {{ catlog_data_root }}/acme/live/fullchain.pem \
+                                              > "$D/cert.txt"                  2>&1 || true
+              { nft list ruleset; echo; iptables -S; echo; ip6tables -S; } \
+                                              > "$D/firewall.txt"              2>&1 || true
+              systemctl status --no-pager docker catlog-firewall catlog-acme.timer catlog-nightly.timer \
+                                              > "$D/units.txt"                 2>&1 || true
+
+              # The rendered nginx configuration, which is not a secret and is
+              # the file most worth reading when routing misbehaves. catlogd.env
+              # is deliberately NOT here.
+              cp {{ catlog_data_root }}/nginx/conf/*.conf "$D/" 2>/dev/null || true
+              cp {{ catlog_data_root }}/config/catlogd.toml "$D/" 2>/dev/null || true
+
+              tar -czf "$D.tar.gz" -C "$(dirname "$D")" "$(basename "$D")"
+              echo "$D.tar.gz"
+          register: diag_result
+          changed_when: false
+
+        - name: Fetch the bundle
+          ansible.builtin.fetch:
+            # Over the existing SSH connection (sftp). No rsync on the VM.
+            src: "{{ diag_dir.path }}.tar.gz"
+            dest: "{{ catlog_fetch_dest }}/diagnostics.tar.gz"
+            flat: true
+
+        - name: Remove it from the host
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: absent
+          loop:
+            - "{{ diag_dir.path }}"
+            - "{{ diag_dir.path }}.tar.gz"
+
+    # --- catlogctl ----------------------------------------------------------
+    - name: Run a catlogctl verb
+      tags: [exec]
+      block:
+        - name: Refuse to run nothing
+          ansible.builtin.assert:
+            that: catlog_ctl_cmd | default('') | length > 0
+            fail_msg: "Nothing to run. Usage: make ops-exec CMD='projections rebuild'"
+            quiet: true
+
+        - name: Run it
+          # `docker compose exec` joins the container's network namespace, which
+          # is the only way to reach the admin mux on 127.0.0.1:6060 — it is
+          # published nowhere and joined to no network. The image has no shell,
+          # which is not an obstacle: exec runs the binary directly.
+          ansible.builtin.command:
+            cmd: "docker compose exec -T catlogd catlogctl {{ catlog_ctl_cmd }}"
+            chdir: /opt/catlog
+          register: ctl
+          changed_when: true
+
+        - name: Report
+          ansible.builtin.debug:
+            var: ctl.stdout_lines

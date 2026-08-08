@@ -1,0 +1,95 @@
+# roles/catlog_app — the compose project, the configuration and the secrets.
+#
+# Provisioning only. The stop→start dance lives in tasks/deploy.yml, so a
+# configuration change can be applied without restarting catlogd and taking the
+# database lock with it.
+
+- name: Refuse to continue without the images
+  ansible.builtin.assert:
+    that:
+      - catlog_image | length > 0
+      - catlog_nginx_image | length > 0
+    fail_msg: >-
+      CATLOG_IMAGE and NGINX_IMAGE are unset. `make deploy` exports them from
+      infra/.release.json — run `make release` first, or export them by hand.
+    quiet: true
+
+- name: Warn if the images are not digest-pinned
+  # A tag can be moved under you; a digest cannot, and rollback depends on
+  # being able to name the exact thing that was running before.
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: {{ item }} is not digest-pinned. Rollback will be approximate and
+      two deploys of the same tag may not be the same bytes.
+  when: "'@sha256:' not in item"
+  loop:
+    - "{{ catlog_image }}"
+    - "{{ catlog_nginx_image }}"
+
+- name: Create the project directory
+  ansible.builtin.file:
+    path: /opt/catlog
+    state: directory
+    mode: "0750"
+
+- name: Install the compose project
+  # Copied, not templated: the file is identical on every host and is reviewed
+  # in git. Only the .env below differs between environments.
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../../compose.prod.yaml"
+    dest: /opt/catlog/compose.yaml
+    mode: "0640"
+
+- name: Install the compose environment
+  ansible.builtin.template:
+    src: compose.env.j2
+    dest: /opt/catlog/.env
+    mode: "0640"
+  no_log: true
+
+- name: Install catlogd.toml
+  ansible.builtin.template:
+    src: catlogd.toml.j2
+    dest: "{{ catlog_data_root }}/config/catlogd.toml"
+    owner: root
+    group: catlog
+    mode: "0640"
+  notify: Restart catlogd
+
+- name: Install catlogd.env
+  # The only place a secret lands on this host. root:catlog 0640: catlogd can
+  # read it, catlogd cannot rewrite it, and nothing else can do either.
+  ansible.builtin.template:
+    src: catlogd.env.j2
+    dest: "{{ catlog_data_root }}/config/catlogd.env"
+    owner: root
+    group: catlog
+    mode: "0640"
+  no_log: true
+  notify: Restart catlogd
+
+- name: Pull the images
+  community.docker.docker_image_pull:
+    name: "{{ item }}"
+  loop:
+    - "{{ catlog_image }}"
+    - "{{ catlog_nginx_image }}"
+
+- name: Read the image's configured user
+  ansible.builtin.command:
+    cmd: "docker image inspect {{ catlog_image }} --format {% raw %}'{{.Config.User}}'{% endraw %}"
+  register: catlog_image_user
+  changed_when: false
+
+- name: Check the image user matches the volume owner
+  # The failure this prevents: the container starts, cannot write data/keys/,
+  # and reports a permission error on a directory the play just created —
+  # which reads like a bug in catlogd rather than a uid mismatch.
+  ansible.builtin.assert:
+    that: catlog_image_user.stdout | trim in ['', 'nonroot', catlog_uid | string, catlog_uid | string ~ ':' ~ catlog_gid | string]
+    fail_msg: >-
+      {{ catlog_image }} runs as '{{ catlog_image_user.stdout | trim }}' but
+      {{ catlog_data_root }}/data is owned by {{ catlog_uid }}:{{ catlog_gid }}.
+      Set CATLOG_UID/CATLOG_GID in infra/deploy.env to the image's numeric uid —
+      `docker image inspect` on the build machine reports it.
+    quiet: true

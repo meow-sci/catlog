@@ -1,0 +1,25 @@
+# make certs — issue or renew, then reload nginx if anything changed.
+- name: Certificates
+  hosts: catlog
+  become: true
+  roles:
+    - role: acme
+  post_tasks:
+    - name: Force a renewal check now
+      ansible.builtin.command: /usr/local/sbin/catlog-acme-renew
+      register: certs_renew
+      changed_when: "'certificate changed' in certs_renew.stdout"
+
+    - name: Report
+      ansible.builtin.debug:
+        var: certs_renew.stdout_lines
+
+    - name: Read the certificate's dates and names
+      ansible.builtin.command:
+        cmd: "openssl x509 -noout -dates -subject -ext subjectAltName -in {{ catlog_data_root }}/acme/live/fullchain.pem"
+      register: certs_info
+      changed_when: false
+
+    - name: Report the certificate
+      ansible.builtin.debug:
+        var: certs_info.stdout_lines

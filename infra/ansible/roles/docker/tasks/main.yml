@@ -1,0 +1,86 @@
+# roles/docker — Docker CE from the official repository, and nothing else.
+#
+# Debian's own docker.io package lags and does not ship the compose v2 plugin,
+# which every playbook and every documented by-hand command here uses.
+
+- name: Create the apt keyring directory
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: "0755"
+
+- name: Install the Docker repository key
+  ansible.builtin.get_url:
+    url: "https://download.docker.com/linux/{{ ansible_facts.distribution | lower }}/gpg"
+    dest: /etc/apt/keyrings/docker.asc
+    mode: "0644"
+
+- name: Add the Docker repository
+  # Written as a deb822 .sources file directly rather than through
+  # apt_repository (deprecated) or deb822_repository (which would need
+  # python3-debian installed on the box). A five-line file needs neither.
+  ansible.builtin.copy:
+    dest: /etc/apt/sources.list.d/docker.sources
+    mode: "0644"
+    content: |
+      # Managed by Ansible (roles/docker).
+      Types: deb
+      URIs: https://download.docker.com/linux/{{ ansible_facts.distribution | lower }}
+      Suites: {{ ansible_facts.distribution_release }}
+      Components: stable
+      Architectures: {{ 'amd64' if ansible_facts.architecture == 'x86_64' else ansible_facts.architecture }}
+      Signed-By: /etc/apt/keyrings/docker.asc
+  register: catlog_docker_repo
+
+- name: Install Docker CE and the compose plugin
+  ansible.builtin.apt:
+    name:
+      - docker-ce
+      - docker-ce-cli
+      - containerd.io
+      - docker-compose-plugin
+      # The Python bindings community.docker's modules use. Installed from apt
+      # rather than pip so there is no toolchain on the box.
+      - python3-docker
+    state: present
+    update_cache: "{{ catlog_docker_repo.changed }}"
+
+- name: Configure the daemon
+  # Log rotation is load-bearing, not hygiene. Both containers log to stdout so
+  # that `docker logs` is the single source and the VM needs no logrotate — which
+  # means an unrotated json-file driver would fill the NVMe volume instead.
+  #
+  # live-restore keeps containers running across a daemon restart, so a Docker
+  # upgrade does not stop catlogd and take the database lock with it.
+  ansible.builtin.copy:
+    dest: /etc/docker/daemon.json
+    mode: "0644"
+    content: |
+      {
+        "log-driver": "json-file",
+        "log-opts": {"max-size": "50m", "max-file": "5"},
+        "live-restore": true,
+        "userland-proxy": false
+      }
+  notify: Restart docker
+
+- name: Start Docker at boot
+  ansible.builtin.systemd_service:
+    name: docker
+    state: started
+    enabled: true
+
+- name: Flush handlers so the daemon is reconfigured before anything uses it
+  ansible.builtin.meta: flush_handlers
+
+- name: Log in to the image registry
+  # The VM pulls our finished images from GHCR. It never authenticates to
+  # dhi.io: the hardened base layers are already inside the images we push, so
+  # that credential stays on the build machine.
+  community.docker.docker_login:
+    registry_url: "{{ catlog_registry }}"
+    username: "{{ catlog_registry_user }}"
+    password: "{{ catlog_registry_token }}"
+    reauthorize: true
+  when: catlog_registry_token | length > 0
+  no_log: true

@@ -1,0 +1,92 @@
+# make preflight — read-only. Changes nothing, anywhere.
+#
+# Everything it checks is something that, if wrong, produces a confusing failure
+# much later: a missing secret surfaces as an empty OAuth client id at first
+# login, a noexec mount surfaces as a permission error on a file catlogd just
+# wrote, a uid mismatch surfaces as a broken key directory.
+- name: Preflight
+  hosts: catlog
+  gather_facts: true
+  become: true
+  tasks:
+    - name: Check every required setting is present
+      # All of them at once. A preflight you have to run six times to learn six
+      # things is not a preflight.
+      ansible.builtin.assert:
+        that:
+          - catlog_domain | length > 0
+          - acme_email | length > 0
+          - acme_cf_token | length > 0
+          - catlog_admin_ssh_cidrs | length > 0
+          - catlog_data_root | length > 1
+        fail_msg: |
+          infra/deploy.env is incomplete. Missing:
+          {% if catlog_domain | length == 0 %}  CATLOG_DOMAIN
+          {% endif %}{% if acme_email | length == 0 %}  ACME_EMAIL
+          {% endif %}{% if acme_cf_token | length == 0 %}  CF_API_TOKEN
+          {% endif %}{% if catlog_admin_ssh_cidrs | length == 0 %}  ADMIN_SSH_CIDR
+          {% endif %}{% if catlog_data_root | length <= 1 %}  CATLOG_DATA_ROOT
+          {% endif %}
+          Start from infra/deploy.env.example, which documents every key.
+        quiet: true
+
+    - name: Note which optional settings are unset
+      ansible.builtin.debug:
+        msg: >-
+          {{ 'CATLOG_ORIGIN_DOMAIN is unset — there will be no Cloudflare-bypassing name to test with.'
+             if catlog_origin_domain | length == 0 else
+             'Direct name: ' ~ catlog_origin_domain ~ ' (allowed from ' ~ (catlog_direct_allow_cidrs | join(', ')) ~ ')' }}
+
+    - name: Check the host is Debian or Ubuntu
+      ansible.builtin.assert:
+        that: ansible_facts.os_family == "Debian"
+        fail_msg: "{{ ansible_facts.os_family }} is not supported — see roles/common."
+        quiet: true
+
+    - name: Look for Docker
+      ansible.builtin.command: docker --version
+      register: pf_docker
+      changed_when: false
+      failed_when: false
+
+    - name: Look for the compose plugin
+      ansible.builtin.command: docker compose version
+      register: pf_compose
+      changed_when: false
+      failed_when: false
+
+    - name: Look at the data root
+      ansible.builtin.command: "findmnt -no SOURCE,FSTYPE,OPTIONS --target {{ catlog_data_root }}"
+      register: pf_mount
+      changed_when: false
+      failed_when: false
+
+    - name: Look at free space
+      ansible.builtin.command: "df -h {{ catlog_data_root }}"
+      register: pf_df
+      changed_when: false
+      failed_when: false
+
+    - name: Report
+      ansible.builtin.debug:
+        msg: |
+          host        {{ inventory_hostname }} ({{ ansible_facts.distribution }} {{ ansible_facts.distribution_version }})
+          ssh as      {{ ansible_user_id }}
+          external if {{ catlog_ext_if }}
+          docker      {{ pf_docker.stdout | default('NOT INSTALLED — `make provision` will install it') }}
+          compose     {{ pf_compose.stdout | default('NOT INSTALLED — `make provision` will install it') }}
+          data root   {{ catlog_data_root }}
+          mount       {{ pf_mount.stdout | default('not a separate mount yet') }}
+          {{ pf_df.stdout | default('') }}
+
+    - name: Warn about a noexec data root
+      # The single most confusing failure in this system, so it is checked here
+      # as well as enforced in roles/storage: the Turso driver extracts a native
+      # .so under this root and dlopen()s it.
+      ansible.builtin.assert:
+        that: "'noexec' not in (pf_mount.stdout | default(''))"
+        fail_msg: >-
+          {{ catlog_data_root }} is mounted noexec. catlogd will fail at startup
+          when the Turso driver tries to dlopen the shared object it extracts
+          there. Remount without noexec before provisioning.
+        quiet: true

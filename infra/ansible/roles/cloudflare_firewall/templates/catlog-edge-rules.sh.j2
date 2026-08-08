@@ -1,0 +1,61 @@
+#!/bin/sh
+{{ ansible_managed | comment }}
+#
+# The rules that actually protect ports 80 and 443.
+#
+# Published container ports are DNAT'd in nat/PREROUTING and filtered in
+# FORWARD, so a host INPUT ruleset never sees them. DOCKER-USER is the chain
+# Docker documents as ours and promises not to rewrite; everything below hangs
+# off a private chain jumped from it, so re-running this is a clean replace.
+#
+# Scoped to the external interface ({{ catlog_ext_if }}) and to NEW inbound
+# connections. Without that scoping the final DROP would also match a CONTAINER
+# making an outbound request to someone else's port 443 — which would break
+# ACME, the IdP calls and image pulls, in a way that looks like DNS failing.
+
+set -eu
+
+EXT="{{ catlog_ext_if }}"
+
+install_chain() {
+    # $1 = iptables | ip6tables
+    ipt="$1"
+
+    "$ipt" -N CATLOG-EDGE 2>/dev/null || "$ipt" -F CATLOG-EDGE
+    "$ipt" -C DOCKER-USER -j CATLOG-EDGE 2>/dev/null || "$ipt" -I DOCKER-USER 1 -j CATLOG-EDGE
+
+    # Replies to connections we already accepted, and anything not arriving from
+    # the outside world, leave immediately.
+    "$ipt" -A CATLOG-EDGE -m conntrack --ctstate RELATED,ESTABLISHED -j RETURN
+    "$ipt" -A CATLOG-EDGE ! -i "$EXT" -j RETURN
+    "$ipt" -A CATLOG-EDGE -p tcp -m multiport ! --dports 80,443 -j RETURN
+}
+
+# --- IPv4 -------------------------------------------------------------------
+install_chain iptables
+{% for cidr in cloudflare_v4 %}
+iptables -A CATLOG-EDGE -s {{ cidr }} -p tcp -m multiport --dports 80,443 -j RETURN
+{% endfor %}
+{% for cidr in catlog_direct_allow_cidrs %}
+{% if ':' not in cidr %}
+# the operator's own address, for the Cloudflare-bypassing name
+iptables -A CATLOG-EDGE -s {{ cidr }} -p tcp -m multiport --dports 80,443 -j RETURN
+{% endif %}
+{% endfor %}
+iptables -A CATLOG-EDGE -i "$EXT" -p tcp -m multiport --dports 80,443 \
+    -m limit --limit 6/min -j LOG --log-prefix "catlog-edge-drop: "
+iptables -A CATLOG-EDGE -i "$EXT" -p tcp -m multiport --dports 80,443 -j DROP
+
+# --- IPv6 -------------------------------------------------------------------
+install_chain ip6tables
+{% for cidr in cloudflare_v6 %}
+ip6tables -A CATLOG-EDGE -s {{ cidr }} -p tcp -m multiport --dports 80,443 -j RETURN
+{% endfor %}
+{% for cidr in catlog_direct_allow_cidrs %}
+{% if ':' in cidr %}
+ip6tables -A CATLOG-EDGE -s {{ cidr }} -p tcp -m multiport --dports 80,443 -j RETURN
+{% endif %}
+{% endfor %}
+ip6tables -A CATLOG-EDGE -i "$EXT" -p tcp -m multiport --dports 80,443 -j DROP
+
+echo "catlog-edge-rules: {{ cloudflare_v4 | length }} v4 + {{ cloudflare_v6 | length }} v6 Cloudflare ranges allowed on $EXT"

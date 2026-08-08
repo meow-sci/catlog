@@ -1,0 +1,18 @@
+# make deploy — pull the pinned digests, replace catlogd, health-gate, recreate
+# nginx. Auto-rolls-back on a failed health gate.
+- name: Deploy catlog
+  hosts: catlog
+  become: true
+  tasks:
+    - name: Refresh the configuration
+      # A deploy also carries whatever changed in catlogd.toml or the compose
+      # file. `notify` on those templates would restart catlogd twice; the
+      # handler is deliberately not flushed here, because tasks/deploy.yml is
+      # about to do the same stop→start anyway.
+      ansible.builtin.include_role:
+        name: catlog_app
+
+    - name: Release
+      ansible.builtin.include_role:
+        name: catlog_app
+        tasks_from: deploy

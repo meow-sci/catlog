@@ -263,13 +263,14 @@ if [ "$ok" != true ]; then
 fi
 say "healthy"
 
-# The nginx configuration is deliberately NOT installed: prod.conf.example
-# carries <PLACEHOLDER>s and TLS is owner-managed (D1).
-if [ -f /etc/nginx/sites-available/catlog ] &&
-   ! diff -q "$STAGE/nginx/prod.conf.example" /etc/nginx/sites-available/catlog >/dev/null 2>&1; then
-    say "note: /etc/nginx/sites-available/catlog differs from the shipped example —"
-    say "      diff $STAGE/nginx/prod.conf.example /etc/nginx/sites-available/catlog"
-fi
+# The nginx configuration is deliberately NOT installed here: TLS and the
+# server block are owner-managed on this path (D1).
+#
+# There is no longer a prod.conf.example to diff against. The production nginx
+# configuration now lives in the container path — infra/nginx/nginx.conf is
+# baked into the catlog-nginx image and infra/nginx/site.conf.j2 is rendered by
+# Ansible (BUILD_PACKAGE_DIST_PLAN.md §5). A host still running this script
+# keeps whatever it was given by hand.
 REMOTE
 }
 

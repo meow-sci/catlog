@@ -1,0 +1,26 @@
+#!/bin/sh
+{{ ansible_managed | comment }}
+#
+# rebuild → archive → backup, in that order, then prune old backups.
+#
+# The order is not arbitrary. A rebuild makes projections consistent with the
+# log; the archive advances its cursor past events that are now definitely
+# folded; the backup then captures a database that is internally agreed with
+# itself. Backing up first would capture a state the archive is about to move.
+
+set -eu
+cd /opt/catlog
+
+run() {
+    echo "catlog-nightly: $*"
+    docker compose exec -T catlogd catlogctl "$@"
+}
+
+run projections rebuild
+run archive run
+run backup
+
+# `projections.db` is never backed up — it is rebuildable by design, and a copy
+# of it would be the largest and least useful file in the set.
+find "{{ catlog_data_root }}/backups" -maxdepth 1 -name 'events-*.db' -mtime +{{ catlog_backup_keep }} -print -delete
+echo "catlog-nightly: done"

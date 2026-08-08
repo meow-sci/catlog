@@ -1,0 +1,73 @@
+#!/usr/sbin/nft -f
+{{ ansible_managed | comment('c') }}
+#
+# The HOST firewall. It protects what the host itself listens on.
+#
+# It does NOT protect the container-published ports 80 and 443 — those are
+# DNAT'd and forwarded, so they never reach an input hook. /usr/local/sbin/catlog-edge-rules
+# is what guards them, and the two are applied by the same systemd unit so
+# neither can be present without the other.
+#
+# NOTE THE ABSENCE OF `flush ruleset`. Docker writes its own rules through
+# iptables-nft into the `ip filter` and `ip nat` tables; flushing everything
+# would delete them and break every container's networking until Docker was
+# restarted. Only this table is replaced, using the declare-then-delete idiom so
+# a first run and a re-run behave identically.
+
+table inet catlog
+delete table inet catlog
+
+table inet catlog {
+    set admin_v4 {
+        type ipv4_addr
+        flags interval
+{% set admin4 = catlog_admin_ssh_cidrs | select('search', '^[0-9.]+/') | list %}
+{% if admin4 %}
+        elements = { {{ admin4 | join(', ') }} }
+{% endif %}
+    }
+
+    set admin_v6 {
+        type ipv6_addr
+        flags interval
+{% set admin6 = catlog_admin_ssh_cidrs | reject('search', '^[0-9.]+/') | list %}
+{% if admin6 %}
+        elements = { {{ admin6 | join(', ') }} }
+{% endif %}
+    }
+
+    chain input {
+        type filter hook input priority filter; policy drop;
+
+        iif lo accept
+        ct state established,related accept
+        ct state invalid drop
+
+        # ICMP is not optional. Dropping it breaks path-MTU discovery on v4 and
+        # breaks neighbour discovery — that is, all of IPv6 — on v6.
+        ip protocol icmp accept
+        meta l4proto ipv6-icmp accept
+
+        # DHCP client, for providers that lease the address rather than fixing it.
+        udp sport 67 udp dport 68 accept
+        udp sport 547 udp dport 546 accept
+
+        tcp dport 22 ip  saddr @admin_v4 accept
+        tcp dport 22 ip6 saddr @admin_v6 accept
+
+        # Everything else is dropped by policy. 80 and 443 are deliberately
+        # absent: they belong to containers, and appear in catlog-edge-rules.
+        counter comment "catlog input drop"
+    }
+
+    chain forward {
+        # Docker owns forwarding. Ours exists only to be visible in `nft list
+        # ruleset` next to the input chain, so a reader is not left wondering
+        # where the container rules went.
+        type filter hook forward priority filter; policy accept;
+    }
+
+    chain output {
+        type filter hook output priority filter; policy accept;
+    }
+}

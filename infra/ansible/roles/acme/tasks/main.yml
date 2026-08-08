@@ -1,0 +1,138 @@
+# roles/acme — Let's Encrypt certificates via acme.sh, DNS-01 against Cloudflare.
+#
+# WHY DNS-01 AND NOT HTTP-01
+# The public record is orange-clouded, and Cloudflare's "Always Use HTTPS"
+# redirects /.well-known/acme-challenge/ before it reaches this box. DNS-01
+# needs no inbound path at all, which also means the certificate can be issued
+# and renewed before the DNS record points anywhere near here.
+#
+# WHY NOT A SIDECAR
+# The container is a one-shot, run by a host timer. A permanently-running
+# container holding the Docker socket so it could reload nginx itself would be a
+# larger hole than the hardened base closes on the other side of the diagram.
+# The timer reloads nginx from the host, afterwards.
+
+- name: Refuse to continue without a Cloudflare token
+  ansible.builtin.assert:
+    that:
+      - acme_cf_token | length > 0
+      - acme_email | length > 0
+    fail_msg: >-
+      CF_API_TOKEN and ACME_EMAIL must be set in infra/deploy.env. The token
+      needs exactly two permissions on the one zone: Zone:DNS:Edit and
+      Zone:Zone:Read. A Global API Key would work and must not be used — it can
+      do everything to every zone on the account.
+    quiet: true
+
+- name: Build the certificate's name list
+  ansible.builtin.set_fact:
+    acme_domains: >-
+      {{ [catlog_domain] + ([catlog_origin_domain] if catlog_origin_domain | length > 0 else []) }}
+
+- name: Register the ACME account
+  # Idempotent: acme.sh skips an account it already has. `|| true` is avoided on
+  # purpose — a registration that genuinely fails should stop the play here,
+  # not at the more confusing issuance step.
+  ansible.builtin.command:
+    cmd: >-
+      docker compose --profile acme run --rm acme
+      --register-account -m {{ acme_email }}
+      --server {{ 'letsencrypt_test' if acme_staging | bool else 'letsencrypt' }}
+    chdir: /opt/catlog
+  register: acme_register
+  changed_when: "'Already registered' not in acme_register.stdout"
+
+- name: Look for an existing certificate
+  ansible.builtin.stat:
+    path: "{{ catlog_data_root }}/acme/live/fullchain.pem"
+  register: acme_existing
+
+- name: Read the names on the existing certificate
+  # A certificate that does not cover catlog_origin_domain has to be reissued,
+  # and "it exists" is not the same question as "it covers what we serve".
+  ansible.builtin.command:
+    cmd: >-
+      openssl x509 -noout -ext subjectAltName
+      -in {{ catlog_data_root }}/acme/live/fullchain.pem
+  register: acme_existing_sans
+  changed_when: false
+  failed_when: false
+  when: acme_existing.stat.exists
+
+- name: Work out whether every name we serve is on it
+  # Matched as `DNS:<name>,` so that `example.com` cannot be judged present
+  # merely because `origin.example.com` is.
+  ansible.builtin.set_fact:
+    acme_covers_all: >-
+      {{ acme_existing.stat.exists and
+         acme_domains
+         | map('regex_replace', '^(.*)$', 'DNS:\\1')
+         | reject('in', (acme_existing_sans.stdout | default('')) ~ ',')
+         | list | length == 0 }}
+
+- name: Issue the certificate
+  ansible.builtin.command:
+    cmd: >-
+      docker compose --profile acme run --rm acme
+      --issue --dns dns_cf
+      {% for d in acme_domains %}-d {{ d }} {% endfor %}
+      --server {{ 'letsencrypt_test' if acme_staging | bool else 'letsencrypt' }}
+      --keylength ec-256
+      --key-file /certs/privkey.pem
+      --fullchain-file /certs/fullchain.pem
+      --cert-file /certs/cert.pem
+      --ca-file /certs/chain.pem
+    chdir: /opt/catlog
+  register: acme_issue
+  changed_when: "'Cert success' in acme_issue.stdout or 'Certificate has been issued' in acme_issue.stdout"
+  when: not acme_covers_all | bool
+  notify: Reload nginx after renewal
+
+- name: Install the renewal script
+  ansible.builtin.template:
+    src: catlog-acme-renew.sh.j2
+    dest: /usr/local/sbin/catlog-acme-renew
+    mode: "0750"
+
+- name: Install the renewal unit
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/catlog-acme.service
+    mode: "0644"
+    content: |
+      # Managed by Ansible (roles/acme).
+      [Unit]
+      Description=catlog certificate renewal (acme.sh, DNS-01)
+      After=docker.service
+      Requires=docker.service
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/sbin/catlog-acme-renew
+
+- name: Install the renewal timer
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/catlog-acme.timer
+    mode: "0644"
+    content: |
+      # Managed by Ansible (roles/acme).
+      #
+      # Daily. acme.sh only acts when a certificate is within 30 days of expiry,
+      # so this is a no-op on 335 days out of 365 — which is what you want from
+      # something that must never be the reason a renewal was missed.
+      [Unit]
+      Description=catlog certificate renewal
+
+      [Timer]
+      OnCalendar={{ acme_renew_oncalendar }}
+      RandomizedDelaySec=1800
+      Persistent=true
+
+      [Install]
+      WantedBy=timers.target
+
+- name: Enable the renewal timer
+  ansible.builtin.systemd_service:
+    name: catlog-acme.timer
+    enabled: true
+    state: started
+    daemon_reload: true

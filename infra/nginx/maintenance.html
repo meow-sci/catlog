@@ -1,0 +1,38 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>catlog is restarting</title>
+<!--
+  Served by nginx for a 502/503/504 on the HTML surface only, which in practice
+  means the few seconds of a deploy. catlogd cannot be restarted without a gap:
+  the database takes an exclusive whole-file lock that excludes other processes,
+  so the old one has to exit before the new one can start.
+
+  Deliberately: no external anything, no JavaScript, no auto-refresh loop that
+  would turn a restart into a thundering herd. One page, one manual reload.
+
+  Telemetry is unaffected. /v1/ingest is NOT covered by this error_page — the
+  mod's shipper needs the real 5xx to know the batch is worth retrying, and it
+  spools locally until it gets a 2xx.
+-->
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    margin: 0; min-height: 100dvh; display: grid; place-items: center;
+    font: 16px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    background: Canvas; color: CanvasText;
+  }
+  main { max-width: 34rem; padding: 2rem; text-align: center; }
+  h1 { font-size: 1.5rem; margin: 0 0 .75rem; }
+  p { margin: 0 0 .75rem; opacity: .85; }
+  .muted { font-size: .875rem; opacity: .6; }
+</style>
+<main>
+  <h1>catlog is restarting</h1>
+  <p>A deploy is in progress. This takes a few seconds.</p>
+  <p class="muted">
+    Telemetry already sent is safe, and anything your game is holding will be
+    delivered on its next attempt — nothing is lost by waiting.
+  </p>
+  <p><a href="/">Reload</a></p>
+</main>

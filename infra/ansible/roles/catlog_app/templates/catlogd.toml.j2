@@ -1,0 +1,91 @@
+{{ ansible_managed | comment }}
+# catlogd — production configuration.
+#
+# NO SECRETS ARE IN THIS FILE. The IdP client secrets arrive as
+# CATLOG_IDP_*_CLIENT_SECRET from catlogd.env, which the config loader reads as
+# CATLOG_<SECTION>_<KEY> overrides. That mechanism is why this file can be
+# world-readable-in-principle and version-controlled-in-shape.
+
+[server]
+listen       = "0.0.0.0:8080"
+# Loopback inside this container's own network namespace. Never published,
+# never joined to the proxy network — `docker compose exec` is the only way in.
+admin_listen = "127.0.0.1:6060"
+# The license `iss` claim AND the base for the ingest proof's `htu`.
+base_url     = "{{ catlog_base_url }}"
+# Empty: nginx serves the assets from its own image, so this route does not
+# exist here at all.
+static_dir   = ""
+# Refused outright on an https base_url by Config.Validate, and named here so
+# nobody wonders whether it was forgotten.
+clock_control = false
+max_stream_clients = {{ catlog_max_stream_clients }}
+
+[data]
+dir = "/var/lib/catlog/data"
+# The Turso WAL never auto-checkpoints; without this the -wal file grows for the
+# life of the process.
+checkpoint_interval_s = {{ catlog_checkpoint_interval_s }}
+compress_payloads = true
+
+[ingest]
+# Compared to the proof's `htu` by EXACT STRING EQUALITY — no normalisation. A
+# trailing slash, a missing /v1/ingest or an http:// scheme here rejects every
+# batch in the world with a message about a mismatched htu.
+accepted_htu   = [{% for htu in catlog_accepted_htu %}"{{ htu }}"{{ ", " if not loop.last }}{% endfor %}]
+max_body_bytes = 1048576
+max_events     = 2000
+max_inflight   = 0
+
+[auth]
+license_ttl_days     = {{ catlog_license_ttl_days }}
+handle_quota         = {{ catlog_handle_quota }}
+issuance_per_day     = {{ catlog_issuance_per_day }}
+min_account_age_days = {{ catlog_min_account_age_days }}
+reserved_handles     = []
+
+# --- identity providers -----------------------------------------------------
+# The client ids are not secret. The secrets are not here — see catlogd.env.
+
+[idp.discord]
+auth_url  = "https://discord.com/oauth2/authorize"
+token_url = "https://discord.com/api/oauth2/token"
+api_base  = "https://discord.com/api"
+client_id = "{{ catlog_idp.discord.client_id }}"
+
+[idp.google]
+issuer    = "https://accounts.google.com"
+auth_url  = "https://accounts.google.com/o/oauth2/v2/auth"
+token_url = "https://oauth2.googleapis.com/token"
+jwks_url  = "https://www.googleapis.com/oauth2/v3/certs"
+client_id = "{{ catlog_idp.google.client_id }}"
+
+[idp.github]
+auth_url  = "https://github.com/login/oauth/authorize"
+token_url = "https://github.com/login/oauth/access_token"
+api_base  = "https://api.github.com"
+client_id = "{{ catlog_idp.github.client_id }}"
+
+[limits]
+ratelimit_per_jkt_per_s = {{ catlog_ratelimit_per_jkt_per_s }}
+ratelimit_burst         = {{ catlog_ratelimit_burst }}
+# Refused on an https base_url. Load testing only, and there is no load testing
+# against production.
+ratelimit_disabled      = false
+
+[boards]
+min_players = {{ catlog_board_min_players }}
+
+[projector]
+batch_size = {{ catlog_projector_batch_size }}
+flush_rows = 500
+tick_s     = 0
+decoders   = 0
+
+# --- cross-origin reads -----------------------------------------------------
+# EMPTY, and that is the point. The React reader is served from this same origin
+# at /app/, built with an empty VITE_CATLOG_API_BASE so its requests come out as
+# relative /v1/… paths. There is no cross-origin frontend to allow, and an empty
+# allow-list is safer than any non-empty one.
+[cors]
+allowed_origins = [{% for o in catlog_cors_allowed_origins %}"{{ o }}"{{ ", " if not loop.last }}{% endfor %}]

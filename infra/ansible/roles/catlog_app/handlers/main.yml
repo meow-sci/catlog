@@ -1,0 +1,33 @@
+# A configuration change still costs the full stop → wait-for-exit → start: the
+# database lock does not care why the process is being replaced.
+#
+# Written out rather than delegated to tasks/restart.yml because `include_role`
+# and `include_tasks` are not supported as handlers. `listen` keeps the three
+# steps addressable as one notification.
+
+- name: Stop catlogd for a configuration change
+  listen: Restart catlogd
+  ansible.builtin.command:
+    cmd: docker compose stop -t 90 catlogd
+    chdir: /opt/catlog
+  changed_when: true
+
+- name: Wait for the database lock to be released
+  listen: Restart catlogd
+  # The lock is released by process EXIT, not by the stop request, and the new
+  # container would fail to open its databases if it started first.
+  ansible.builtin.command:
+    cmd: docker compose ps -q --status running catlogd
+    chdir: /opt/catlog
+  register: catlog_restart_running
+  until: catlog_restart_running.stdout | trim | length == 0
+  retries: 30
+  delay: 2
+  changed_when: false
+
+- name: Start catlogd
+  listen: Restart catlogd
+  ansible.builtin.command:
+    cmd: docker compose up -d --no-deps catlogd
+    chdir: /opt/catlog
+  changed_when: true

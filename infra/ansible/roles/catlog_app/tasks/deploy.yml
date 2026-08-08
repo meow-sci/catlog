@@ -1,0 +1,141 @@
+# roles/catlog_app, tasks/deploy.yml — the release.
+#
+# STOP, WAIT FOR EXIT, START. Not a restart, not a rolling update.
+#
+# tursogo holds an exclusive whole-file lock that excludes other processes, so
+# two catlogd containers cannot share the data directory — and the lock is
+# released by process EXIT, not by the stop request. A `docker compose up -d`
+# that recreated the container would briefly have both, and the new one would
+# fail to open its databases.
+#
+# Expect a few seconds of 502 on the ingest path. The mod's shipper treats 5xx
+# as retryable with backoff and spools locally, so no telemetry is lost. nginx
+# serves a maintenance page for the HTML surface during the window — and
+# deliberately not for /v1/, where a 200 would make the shipper discard a batch
+# it should have retried.
+
+- name: Read the previous deployment record
+  ansible.builtin.slurp:
+    src: /opt/catlog/deployed.json
+  register: catlog_deployed_raw
+  failed_when: false
+
+- name: Remember the digests we are replacing
+  ansible.builtin.set_fact:
+    catlog_rollback: >-
+      {{ (catlog_deployed_raw.content | b64decode | from_json)
+         if catlog_deployed_raw.content is defined else {} }}
+
+- name: Pull the new images before stopping anything
+  # Order matters. A failed pull must cost nothing; a failed pull after the stop
+  # costs the whole outage.
+  community.docker.docker_image_pull:
+    name: "{{ item }}"
+  loop:
+    - "{{ catlog_image }}"
+    - "{{ catlog_nginx_image }}"
+
+- name: Stop catlogd
+  ansible.builtin.command:
+    cmd: docker compose stop -t 90 catlogd
+    chdir: /opt/catlog
+  changed_when: true
+
+- name: Wait for the process to exit and release the database lock
+  ansible.builtin.command:
+    cmd: docker compose ps -q --status running catlogd
+    chdir: /opt/catlog
+  register: catlog_still_running
+  until: catlog_still_running.stdout | trim | length == 0
+  retries: 30
+  delay: 2
+  changed_when: false
+
+- name: Start the new catlogd
+  ansible.builtin.command:
+    cmd: docker compose up -d --no-deps catlogd
+    chdir: /opt/catlog
+  changed_when: true
+
+- name: Wait for it to become healthy
+  ansible.builtin.command:
+    cmd: >-
+      docker inspect --format {% raw %}'{{.State.Health.Status}}'{% endraw %} catlog-catlogd
+  register: catlog_health
+  until: catlog_health.stdout | trim == 'healthy'
+  retries: 40
+  delay: 3
+  changed_when: false
+  failed_when: false
+
+- name: Roll back a failed deploy
+  when: catlog_health.stdout | default('') | trim != 'healthy'
+  block:
+    - name: Show why it failed
+      ansible.builtin.command:
+        cmd: docker compose logs --tail 80 catlogd
+        chdir: /opt/catlog
+      register: catlog_failure_logs
+      changed_when: false
+
+    - name: Print the failure
+      ansible.builtin.debug:
+        var: catlog_failure_logs.stdout_lines
+
+    - name: Restore the previous images
+      ansible.builtin.template:
+        src: compose.env.j2
+        dest: /opt/catlog/.env
+        mode: "0640"
+      vars:
+        catlog_image: "{{ catlog_rollback.catlogd | default(catlog_image) }}"
+        catlog_nginx_image: "{{ catlog_rollback.nginx | default(catlog_nginx_image) }}"
+      no_log: true
+      when: catlog_rollback.catlogd is defined
+
+    - name: Start the previous catlogd
+      ansible.builtin.command:
+        cmd: docker compose up -d --no-deps catlogd
+        chdir: /opt/catlog
+      changed_when: true
+      when: catlog_rollback.catlogd is defined
+
+    - name: Fail the play
+      ansible.builtin.fail:
+        msg: >-
+          catlogd did not become healthy within 120 s.
+          {{ 'Rolled back to ' ~ catlog_rollback.catlogd if catlog_rollback.catlogd is defined
+             else 'There was no previous deployment to roll back to.' }}
+          The last 80 log lines are above; `make ops-logs` collects the rest.
+
+- name: Recreate nginx
+  # Safe to do plainly: nginx holds no lock and serves the maintenance page
+  # while catlogd is away.
+  ansible.builtin.command:
+    cmd: docker compose up -d nginx
+    chdir: /opt/catlog
+  changed_when: true
+
+- name: Read the deployed version
+  ansible.builtin.command:
+    cmd: docker compose exec -T catlogd catlogd -version
+    chdir: /opt/catlog
+  register: catlog_deployed_version
+  changed_when: false
+
+- name: Record what is deployed
+  ansible.builtin.copy:
+    dest: /opt/catlog/deployed.json
+    mode: "0640"
+    content: |
+      {
+        "catlogd": "{{ catlog_image }}",
+        "nginx": "{{ catlog_nginx_image }}",
+        "version": "{{ catlog_deployed_version.stdout | trim }}",
+        "deployed_at": "{{ ansible_date_time.iso8601 }}",
+        "previous": {{ catlog_rollback | to_json }}
+      }
+
+- name: Report
+  ansible.builtin.debug:
+    msg: "deployed {{ catlog_deployed_version.stdout | trim }} — {{ catlog_image }}"

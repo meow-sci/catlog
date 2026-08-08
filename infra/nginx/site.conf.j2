@@ -1,0 +1,191 @@
+{{ ansible_managed | comment }}
+# catlog — the server blocks. Rendered by roles/catlog_nginx into
+# /mnt/catlog/nginx/conf/10-catlog.conf and mounted at
+# /etc/nginx/catlog.d/10-catlog.conf.
+#
+# The http-level half (compression, zones, the catlogd upstream, logging) is
+# baked into the image at /etc/nginx/nginx.conf. This file is only what depends
+# on the host: names, certificates, and which locations exist.
+#
+# TWO NAMES, ONE CERTIFICATE:
+#   {{ catlog_domain }}
+#       the public name, PROXIED by Cloudflare (orange cloud).
+{% if catlog_origin_domain %}
+#   {{ catlog_origin_domain }}
+#       the direct name, DNS-only (grey cloud). It resolves straight to this
+#       box, bypassing Cloudflare, and exists so a fault can be isolated to
+#       "us" or "the edge" in one curl. It is reachable only from
+#       catlog_direct_allow_cidrs — see the geo/allow rules below — because a
+#       name that bypasses the DDoS front door must not be open to everyone.
+{% endif %}
+
+# --- HTTP: redirect to HTTPS ------------------------------------------------
+server {
+    listen      80;
+    listen [::]:80;
+    server_name {{ catlog_domain }}{% if catlog_origin_domain %} {{ catlog_origin_domain }}{% endif %};
+
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+        default_type "text/plain";
+    }
+
+    location / { return 301 https://$host$request_uri; }
+}
+
+# --- HTTPS ------------------------------------------------------------------
+server {
+    listen      443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name {{ catlog_domain }}{% if catlog_origin_domain %} {{ catlog_origin_domain }}{% endif %};
+
+    ssl_certificate     /etc/nginx/certs/fullchain.pem;
+    ssl_certificate_key /etc/nginx/certs/privkey.pem;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;
+    ssl_ciphers         ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305;
+    ssl_session_cache   shared:catlog_ssl:10m;
+    ssl_session_timeout 1d;
+    ssl_session_tickets off;
+    ssl_stapling        on;
+    ssl_stapling_verify on;
+    # OCSP stapling needs a resolver; the one in nginx.conf's http{} covers it.
+
+    # HSTS applies to the public name. It is a promise you cannot take back for
+    # max-age seconds, so it is a variable rather than a constant: set
+    # catlog_hsts_max_age to 0 while a certificate is still being proved out.
+{% if catlog_hsts_max_age | int > 0 %}
+    add_header Strict-Transport-Security "max-age={{ catlog_hsts_max_age }}{% if catlog_hsts_include_subdomains %}; includeSubDomains{% endif %}" always;
+{% endif %}
+    add_header X-Content-Type-Options nosniff always;
+    add_header Referrer-Policy strict-origin-when-cross-origin always;
+    add_header X-Frame-Options DENY always;
+
+    limit_conn catlog_conn {{ catlog_conn_limit }};
+
+{% if catlog_origin_domain %}
+    # The direct name bypasses Cloudflare — and with it the DDoS front door, the
+    # WAF and every edge rule. So it is restricted to the operator's addresses.
+    #
+    # $catlog_block_direct is computed by a `map` in 20-realip.conf, keyed on
+    # $realip_remote_addr: the PEER address, before real_ip rewrote
+    # $remote_addr from CF-Connecting-IP. That is the only address a client
+    # cannot choose for itself, which is exactly the property an access rule
+    # needs. One `if` with a bare `return` — the single form of `if` that is
+    # documented as safe in a server block.
+    if ($catlog_block_direct) {
+        return 403;
+    }
+{% endif %}
+
+    # --- maintenance page ---------------------------------------------------
+    # Deploys stop catlogd before starting it (the database lock forbids
+    # anything else), so there is a short window of 502. This turns it into a
+    # page for the HTML surface — and ONLY the HTML surface. Turning a 502 into
+    # a 200 on /v1/ would make the mod's shipper discard a batch it should have
+    # retried, and would hand the JSON API a body no client can parse.
+    location = /maintenance.html {
+        root /usr/share/nginx/catlog/error;
+        internal;
+    }
+
+    # --- ingest (§4.4) ------------------------------------------------------
+    # The body is brotli-compressed application/x-ndjson and its SHA-256 is
+    # covered by the proof JWS (`bh`), so nginx must pass it through BYTE FOR
+    # BYTE. Never add gunzip, brotli or sub_filter here, in any direction.
+    location = /v1/ingest {
+        limit_req zone=catlog_ingest burst=10 nodelay;
+        proxy_pass http://$catlogd_upstream;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Host $host;
+        proxy_request_buffering on;
+        proxy_read_timeout 60s;
+        brotli off;
+        gzip off;
+        # No error_page: the shipper needs the real 5xx to know to retry.
+    }
+
+    # --- SSE streams --------------------------------------------------------
+    # The datastar feed, the JSON feed stream, the raw event stream and its
+    # datastar twin. One regex rather than four blocks, so a stream route added
+    # to catlogd fails loudly here (buffered chunks) instead of working by
+    # accident under the buffered `location /` defaults.
+    location ~ ^/v1/(feed/(sse|stream)|events/(sse|stream))$ {
+        proxy_pass http://$catlogd_upstream;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Host $host;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 1h;
+        add_header X-Accel-Buffering no;
+        brotli off;
+        gzip off;
+        # Cloudflare buffers SSE unless the response is excluded from its cache
+        # AND its compression. If frames arrive late once CF is in front, check
+        # the zone's Cache Rules and Compression before suspecting nginx.
+    }
+
+    # --- static assets, baked into this image -------------------------------
+    # Pre-compressed at build time; brotli_static/gzip_static (http{}) pick the
+    # sibling. `Vary` is added by hand because the static handlers do not add it
+    # for us, and a shared cache without it will hand a brotli body to a client
+    # that cannot read one.
+    location /static/ {
+        alias /usr/share/nginx/catlog/site/;
+        add_header Vary Accept-Encoding;
+        add_header X-Content-Type-Options nosniff always;
+        # One hour, not one year: there is NO content hashing in the site build
+        # (site/scripts/build.mjs emits fixed names), so a long max-age would
+        # strand a CSS change behind a browser cache.
+        expires 1h;
+        access_log off;
+    }
+
+    # --- the React reader at /app/ ------------------------------------------
+    # vite DOES content-hash, so its assets are immutable and can be cached for
+    # a year. The shell that names them cannot, which is why these are two
+    # locations and not one.
+    location /app/assets/ {
+        alias /usr/share/nginx/catlog/spa/assets/;
+        add_header Vary Accept-Encoding;
+        add_header Cache-Control "public, max-age=31536000, immutable";
+        access_log off;
+    }
+
+    location /app/ {
+        alias /usr/share/nginx/catlog/spa/;
+        # HTML5 deep links: /app/boards/rud_total is a route, not a file.
+        try_files $uri $uri/ /app/index.html;
+        add_header Vary Accept-Encoding;
+        expires 5m;
+    }
+
+    # --- the admin mux is never proxied -------------------------------------
+    # catlogd binds it to 127.0.0.1:6060 inside its own network namespace and
+    # refuses non-loopback peers, so this is belt and braces — but it is the
+    # belt that survives a typo in catlogd.toml.
+    location /admin/ { return 403; }
+
+    # --- everything else: the datastar site + the read API ------------------
+    location / {
+        limit_req zone=catlog_web burst=40 nodelay;
+        proxy_pass http://$catlogd_upstream;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Host $host;
+        proxy_read_timeout 60s;
+
+        # The deploy window (§6.4). Only here — see the note on /v1/ingest.
+        proxy_intercept_errors on;
+        error_page 502 503 504 /maintenance.html;
+    }
+}

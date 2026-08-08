@@ -1,0 +1,11 @@
+- name: Reload nginx after renewal
+  ansible.builtin.shell:
+    cmd: |
+      set -e
+      cd /opt/catlog
+      if [ -n "$(docker compose ps -q --status running nginx)" ]; then
+        docker compose exec -T nginx nginx -t && docker compose exec -T nginx nginx -s reload
+      else
+        docker compose up -d nginx
+      fi
+  changed_when: true

@@ -1,0 +1,153 @@
+# roles/storage — the NVMe volume and the directory tree on it.
+#
+# Everything catlog must not lose lives under catlog_data_root: the databases,
+# the key set, the archive, the config, the certificates and the backups. This
+# role owns the mount and the permissions, and it owns the one check that is
+# genuinely load-bearing — that the filesystem can execute a file.
+
+- name: Refuse to continue without a data root
+  ansible.builtin.assert:
+    that: catlog_data_root | length > 1
+    fail_msg: "catlog_data_root is unset. Set CATLOG_DATA_ROOT in infra/deploy.env."
+    quiet: true
+
+- name: Create the mount point
+  ansible.builtin.file:
+    path: "{{ catlog_data_root }}"
+    state: directory
+    mode: "0755"
+
+- name: Look at the device
+  ansible.builtin.stat:
+    path: "{{ catlog_device }}"
+  register: catlog_device_stat
+  when: catlog_device | length > 0
+
+- name: Refuse to continue if the named device does not exist
+  ansible.builtin.assert:
+    that: catlog_device_stat.stat.exists
+    fail_msg: >-
+      CATLOG_NVME_DEVICE={{ catlog_device }} does not exist on this host.
+      Prefer a stable path — /dev/disk/by-id/… or /dev/disk/by-uuid/… — because
+      /dev/sdb is not the same disk after every reboot.
+    quiet: true
+  when: catlog_device | length > 0
+
+- name: Read the device's current filesystem
+  ansible.builtin.command:
+    cmd: "blkid -o value -s TYPE {{ catlog_device }}"
+  register: catlog_blkid
+  changed_when: false
+  failed_when: false
+  when: catlog_device | length > 0
+
+# The only irreversible step in these playbooks, and it is gated twice: the
+# device must be genuinely blank, AND you must have asked for it by setting
+# CATLOG_FORMAT_DEVICE=1 for this one run.
+- name: Refuse to format a device that already holds a filesystem
+  ansible.builtin.assert:
+    that: catlog_blkid.stdout | length == 0
+    fail_msg: >-
+      CATLOG_FORMAT_DEVICE=1 but {{ catlog_device }} already holds a
+      {{ catlog_blkid.stdout }} filesystem. Refusing: this is how a database is
+      lost. Unset CATLOG_FORMAT_DEVICE to mount it as it is.
+    quiet: true
+  when:
+    - catlog_device | length > 0
+    - catlog_format_device | bool
+
+- name: Create the filesystem
+  community.general.filesystem:
+    fstype: "{{ catlog_filesystem }}"
+    dev: "{{ catlog_device }}"
+  when:
+    - catlog_device | length > 0
+    - catlog_format_device | bool
+
+- name: Mount the volume and record it in fstab
+  ansible.posix.mount:
+    path: "{{ catlog_data_root }}"
+    src: "{{ catlog_device }}"
+    fstype: "{{ catlog_filesystem }}"
+    opts: "{{ catlog_mount_opts }}"
+    state: mounted
+  when: catlog_device | length > 0
+
+# --- the check that matters -------------------------------------------------
+#
+# The Turso driver extracts a 19 MB native .so under this root and dlopen()s it.
+# A noexec mount turns that into a startup crash whose message names a
+# permission error on a file it just successfully wrote — one of the least
+# obvious failures in this system. Two checks, because they catch different
+# things: the flags nginx would report, and whether execution actually works
+# (which also catches noexec inherited from a parent mount, or a hardened
+# kernel module).
+
+- name: Read the mount options in force
+  ansible.builtin.command:
+    cmd: "findmnt -no OPTIONS --target {{ catlog_data_root }}"
+  register: catlog_mount_flags
+  changed_when: false
+
+- name: Refuse to continue on a noexec mount
+  ansible.builtin.assert:
+    that: "'noexec' not in catlog_mount_flags.stdout"
+    fail_msg: >-
+      {{ catlog_data_root }} is mounted noexec ({{ catlog_mount_flags.stdout }}).
+      The Turso driver extracts a native shared object here and dlopen()s it at
+      startup, so catlogd would fail to start with a message about a file it had
+      just written successfully. Remount without noexec and fix /etc/fstab.
+    quiet: true
+
+- name: Prove the filesystem can execute a file
+  # The empirical version of the check above. It is not redundant: findmnt
+  # reports this mount's flags, and this reports whether execve actually works.
+  ansible.builtin.shell:
+    cmd: |
+      set -e
+      probe="{{ catlog_data_root }}/.catlog-exec-probe"
+      printf '#!/bin/sh\nexit 0\n' > "$probe"
+      chmod 0755 "$probe"
+      "$probe"
+      rm -f "$probe"
+  changed_when: false
+  check_mode: false
+
+# --- the directory tree -----------------------------------------------------
+#
+# config/ and nginx/ are root-owned: catlogd reads them and must never be able
+# to rewrite its own configuration. Everything catlogd writes is owned by the
+# container's nonroot uid.
+
+- name: Create the directory tree
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner | default('root') }}"
+    group: "{{ item.group | default('root') }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ catlog_data_root }}/config", mode: "0750", group: catlog}
+    - {path: "{{ catlog_data_root }}/data", mode: "0750", owner: "{{ catlog_uid }}", group: "{{ catlog_gid }}"}
+    # The extracted .so. 0700 and its own directory so a stale copy can be
+    # deleted without touching anything else.
+    - {path: "{{ catlog_data_root }}/turso-cache", mode: "0700", owner: "{{ catlog_uid }}", group: "{{ catlog_gid }}"}
+    # Written by catlogd itself: `catlogctl backup` is an admin API call, so the
+    # process that quiesces the writer and copies the database is catlogd.
+    - {path: "{{ catlog_data_root }}/backups", mode: "0750", owner: "{{ catlog_uid }}", group: "{{ catlog_gid }}"}
+    - {path: "{{ catlog_data_root }}/acme", mode: "0700"}
+    - {path: "{{ catlog_data_root }}/acme/data", mode: "0700"}
+    # Mounted read-only into nginx. 0755 because nginx's workers read it as a
+    # different user than the one acme.sh writes it as.
+    - {path: "{{ catlog_data_root }}/acme/live", mode: "0755"}
+    - {path: "{{ catlog_data_root }}/nginx", mode: "0755"}
+    - {path: "{{ catlog_data_root }}/nginx/conf", mode: "0755"}
+  loop_control:
+    label: "{{ item.path }}"
+
+- name: Report the layout
+  ansible.builtin.debug:
+    msg: >-
+      {{ catlog_data_root }} ready on
+      {{ catlog_device if catlog_device | length > 0 else 'the root filesystem' }}
+      ({{ catlog_mount_flags.stdout }})

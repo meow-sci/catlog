@@ -1,0 +1,57 @@
+# What must never enter a build context.
+#
+# THIS FILE IS A SECURITY CONTROL, not an optimisation. Without it, `docker
+# build .` uploads `data/` — which holds the license signing key, the session
+# key and the pepper — into the daemon, where one careless `COPY . .` in any
+# future Dockerfile stage would bake it into a published image layer.
+#
+# It is also what makes the frontend builds correct at all: `COPY site/ ./`
+# would otherwise overwrite the container's freshly-installed `node_modules`
+# with the host's (built for a different platform), and pnpm aborts with
+# ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY rather than silently using them.
+#
+# Measured on this repo the day it was added: 726 MB of `data/`, 384 MB of
+# `node_modules/`, 53 MB of `server/bin/`.
+
+# --- runtime state: KEY MATERIAL. Never in a build context. ---
+# The same pattern .gitignore uses, and for the same reason: every tool that
+# takes a --data-dir invents another one of these.
+data/
+data-*/
+*.db
+*.db-wal
+*.db-shm
+diagnostics/
+
+# --- deployment secrets ---
+infra/deploy.env
+infra/.release.env
+
+# --- dependencies: installed inside the image, per platform ---
+node_modules/
+**/node_modules/
+
+# --- build output: rebuilt inside the image ---
+server/bin/
+site/dist/
+spa/dist/
+**/bin/
+**/obj/
+
+# --- things no stage reads ---
+.git/
+.github/
+.claude/
+mod/
+docs/
+plans/
+site/e2e/
+**/.DS_Store
+*.md
+!scripts/*.md
+
+# NOT ignored, and each is needed by a stage:
+#   server/          Dockerfile.catlogd
+#   site/ spa/       Dockerfile.nginx (minus the exclusions above)
+#   scripts/precompress.mjs
+#   infra/nginx/*    Dockerfile.nginx

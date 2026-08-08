@@ -1,0 +1,192 @@
+# catlogd — production image (BUILD_PACKAGE_DIST_PLAN.md §4).
+#
+#   docker build -f infra/docker/Dockerfile.catlogd -t catlogd .
+#
+# Build context is the REPOSITORY ROOT, not server/: the build needs go.mod and
+# the whole module tree, and a context rooted at server/ would silently exclude
+# anything a future package embeds from outside it.
+#
+# ---------------------------------------------------------------------------
+# WHY THE RUNTIME BASE IS `dhi.io/static:…-glibc-debian13`
+# ---------------------------------------------------------------------------
+# It needs glibc, and it must have as little else as possible.
+#
+# GLIBC, because tursogo is CGO-free but purego's shim still emits a
+# dynamically-linked ELF even at CGO_ENABLED=0. Measured, by the readelf step
+# below, on the binary this file produces:
+#
+#     interpreter  /lib64/ld-linux-x86-64.so.2
+#     DT_NEEDED    libdl.so.2  libpthread.so.0  libc.so.6
+#
+# The driver ALSO extracts a 19 MB native .so to disk and dlopen()s it at first
+# database open, so the runtime needs a writable directory and that directory
+# must be exec-capable. `scratch` and `distroless/static` have no loader at all.
+# Alpine would need `-tags musl` and a different embedded .so.
+#
+# AS LITTLE ELSE AS POSSIBLE, because the reason for a hardened base is what an
+# attacker finds after an RCE. The two candidates were measured, not assumed:
+#
+#   dhi.io/golang:1.26-debian13   18,764 files   81 MB   bash, sh, AND /usr/local/go/bin/go
+#   dhi.io/static:…-glibc-debian13 1,148 files   21 MB   no shell, no package manager, no compiler
+#
+# The golang non-dev variant is a Go RUNTIME image — it carries the toolchain.
+# Landing an RCE in an image with a shell and a compiler is most of what this
+# was supposed to prevent. The static variant carries ld-linux, libc/libdl/
+# libpthread/libm, ca-certificates, tzdata and a nonroot user, which is exactly
+# the set catlogd needs and nothing more.
+#
+# Verified end to end: on the static base, with a read-only rootfs and
+# --user 65532, catlogd creates its key set, migrates both databases, extracts
+# and dlopen()s the Turso engine, and reports healthy. `make images-smoke` is
+# the repeatable version of that check.
+
+# syntax=docker/dockerfile:1.10
+
+# Pin these by digest in a release build. A floating tag on a hardened base
+# throws away most of the reason to have one.
+#   --build-arg GO_DEV_IMAGE=dhi.io/golang:1.26-debian13-dev@sha256:…
+#   --build-arg RUNTIME_IMAGE=dhi.io/static:20250419-glibc-debian13@sha256:…
+#
+# The `20250419` in the static tag is a VERSION label, not a build date — DHI
+# rebuilds it (this one was built two months before it was adopted here). There
+# is no `latest`; the date-shaped tag is the stable name.
+ARG GO_DEV_IMAGE=dhi.io/golang:1.26-debian13-dev
+ARG RUNTIME_IMAGE=dhi.io/static:20250419-glibc-debian13
+
+# --- deps: module download, cached on go.mod/go.sum alone -------------------
+#
+# `--platform=$BUILDPLATFORM` pins the builder to the machine doing the
+# building, NOT to the machine being built for. Go cross-compiles natively at
+# CGO_ENABLED=0, so on an Apple Silicon laptop targeting linux/amd64 the
+# toolchain runs as arm64 at full speed and emits an amd64 binary. Without this
+# line the whole Go build runs under emulation for no benefit.
+#
+# Its own stage so a source edit does not re-download ~60 modules, one of which
+# carries the 19 MB platform library.
+FROM --platform=$BUILDPLATFORM ${GO_DEV_IMAGE} AS deps
+WORKDIR /src
+COPY server/go.mod server/go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go mod download
+
+# --- build -----------------------------------------------------------------
+FROM deps AS build
+
+# Stamped into the binary so `catlogd -version` reports what is actually
+# running, which is what `make ops-status` reads back.
+ARG VERSION=dev
+ARG COMMIT=unknown
+ARG BUILD_DATE=unknown
+
+# Supplied by BuildKit from --platform. Explicit rather than relying on the Go
+# defaults, which would follow the BUILDER's architecture now that the stage is
+# pinned to it.
+ARG TARGETOS
+ARG TARGETARCH
+
+COPY server/ ./
+
+# CGO_ENABLED=0 is honest but does not make this static (see the header).
+# -trimpath keeps the build reproducible; -s -w drops the symbol table and DWARF.
+#
+# mockidp is deliberately NOT built. It is a stand-in identity provider for
+# development, and shipping it to production would be a credential-issuing
+# service nobody asked for.
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build,id=gobuild-$TARGETARCH \
+    CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
+    go build -trimpath \
+      -ldflags "-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.buildDate=${BUILD_DATE}" \
+      -o /out/ ./cmd/catlogd ./cmd/catlogctl
+
+# Fails the build rather than the deploy if the binary is not what we think it
+# is — and what we think it is, is the whole argument for the runtime base.
+#
+# `readelf` rather than `file` (which the DHI dev image does not carry), and it
+# is the better check anyway: it asserts the *surprising* property directly.
+# CGO_ENABLED=0 usually means a static binary; here purego's shim leaves a
+# program interpreter and three DT_NEEDED entries behind, which is precisely why
+# `scratch` and `distroless/static` cannot run this.
+#
+# If a future toolchain or driver version makes this binary static, THIS STEP
+# FAILS — and that failure is good news worth acting on: the runtime base could
+# then be reconsidered. Do not "fix" it by deleting the check.
+# readelf, not `./catlogd -version`: this stage runs on the BUILD machine, so on
+# an arm64 laptop the amd64 binary it just produced cannot be executed here.
+# Static analysis is the right tool anyway — and it lets the check assert the
+# cross-compile actually hit the target, which running the binary never could.
+RUN set -eu; \
+    machine=$(readelf -h /out/catlogd | sed -n 's/.*Machine: *//p'); \
+    interp=$(readelf -l /out/catlogd | sed -n 's/.*program interpreter: \(.*\)\]/\1/p'); \
+    needed=$(readelf -d /out/catlogd | grep NEEDED | sed 's/.*\[\(.*\)\]/\1/' | tr '\n' ' '); \
+    echo "catlogd machine:     $machine"; \
+    echo "catlogd interpreter: $interp"; \
+    echo "catlogd DT_NEEDED:   $needed"; \
+    test -n "$interp" || { \
+      echo "catlogd is statically linked — the runtime base can be reconsidered; see the header" >&2; \
+      exit 1; }; \
+    case "${TARGETARCH:-amd64}" in \
+      amd64) echo "$machine" | grep -q 'X86-64' || { echo "wanted an x86-64 binary, got: $machine" >&2; exit 1; };; \
+      arm64) echo "$machine" | grep -q 'AArch64' || { echo "wanted an AArch64 binary, got: $machine" >&2; exit 1; };; \
+    esac
+
+# --- runtime ---------------------------------------------------------------
+FROM ${RUNTIME_IMAGE} AS runtime
+
+ARG VERSION=dev
+ARG COMMIT=unknown
+LABEL org.opencontainers.image.title="catlogd" \
+      org.opencontainers.image.description="catlog telemetry server" \
+      org.opencontainers.image.source="https://github.com/meow-sci/catlog" \
+      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.revision="${COMMIT}"
+
+COPY --from=build /out/catlogd   /usr/local/bin/catlogd
+COPY --from=build /out/catlogctl /usr/local/bin/catlogctl
+
+# --- environment: every one of these is load-bearing ------------------------
+#
+# TURSO_GO_CACHE_DIR — the driver extracts its native .so here and dlopen()s it.
+#   The default would be os.UserCacheDir() → $HOME/.cache, which does not exist
+#   for the nonroot user in a read-only rootfs. This path is a bind mount from
+#   the NVMe volume (compose.prod.yaml) and the mount MUST NOT be noexec.
+#
+# CATLOG_SERVER_LISTEN — the dev default is 127.0.0.1:8080, which inside a
+#   container means "unreachable from nginx". 8080 is above 1024, so nonroot
+#   binds it without NET_BIND_SERVICE.
+#
+# CATLOG_SERVER_ADMIN_LISTEN — loopback INSIDE this container's own network
+#   namespace. It is never published and never joined to the proxy network, so
+#   the only way to reach it is `docker compose exec` (which shares the
+#   namespace). That is how catlogctl is run.
+#
+# CATLOG_SERVER_STATIC_DIR — empty disables the /static/ route entirely. nginx
+#   serves those assets from its own image; a route that does not exist cannot
+#   be misconfigured.
+ENV TURSO_GO_CACHE_DIR=/var/lib/catlog/turso-cache \
+    CATLOG_SERVER_LISTEN=0.0.0.0:8080 \
+    CATLOG_SERVER_ADMIN_LISTEN=127.0.0.1:6060 \
+    CATLOG_SERVER_STATIC_DIR= \
+    CATLOG_DATA_DIR=/var/lib/catlog/data
+
+WORKDIR /var/lib/catlog
+EXPOSE 8080
+
+# The static base does NOT set a user (the golang variant does), so this is
+# load-bearing rather than decorative: without it the container would run as
+# root. `nonroot` is uid/gid 65532 in the image's /etc/passwd, which is what
+# CATLOG_UID/CATLOG_GID and the storage role's directory ownership must match.
+USER nonroot
+
+# No shell and no curl in this image, so the probe is the binary itself
+# (`catlogd -healthcheck`, cmd/catlogd/main.go). Exec form — there is no shell
+# to parse a string form.
+#
+# start-period is generous on purpose: a first boot creates the key set, opens
+# and migrates both databases, and extracts a 19 MB shared object.
+HEALTHCHECK --interval=15s --timeout=5s --start-period=60s --retries=3 \
+    CMD ["/usr/local/bin/catlogd", "-healthcheck"]
+
+ENTRYPOINT ["/usr/local/bin/catlogd"]
+CMD ["-config", "/etc/catlog/catlogd.toml"]

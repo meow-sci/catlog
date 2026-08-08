@@ -1,0 +1,120 @@
+# roles/common — the host baseline.
+#
+# Small on purpose. Every package installed here is a package that has to be
+# patched, and the container path exists precisely so the VM does not need Go,
+# Node, .NET, git, nginx, certbot or a language runtime.
+
+- name: Refuse to run on a non-Debian host
+  ansible.builtin.assert:
+    that: ansible_facts.os_family == "Debian"
+    fail_msg: >-
+      These playbooks target Debian or Ubuntu ({{ ansible_facts.os_family }} found).
+      The container path needs Docker CE from the official repository and nftables
+      from the base system; neither assumption survives a different family.
+    quiet: true
+
+- name: Install the baseline packages
+  ansible.builtin.apt:
+    name:
+      - ca-certificates   # outbound TLS, and the Docker repository key
+      - gnupg             # apt keyring for the Docker repository
+      - nftables          # already present on Debian 12+/Ubuntu 22.04+; named so a
+                          # minimal cloud image without it still works
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Install unattended-upgrades
+  ansible.builtin.apt:
+    name: unattended-upgrades
+    state: present
+  when: catlog_unattended_upgrades | bool
+
+- name: Enable unattended security upgrades
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/20auto-upgrades
+    mode: "0644"
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+  when: catlog_unattended_upgrades | bool
+
+- name: Run in UTC
+  # Not cosmetic. Every authoritative catlog timestamp is server-generated and
+  # UTC, and a host clock in a local zone makes every log line in the
+  # diagnostics bundle need translating before it can be compared.
+  community.general.timezone:
+    name: Etc/UTC
+
+# --- the container user -----------------------------------------------------
+# The uid/gid must match the nonroot user inside the hardened image, because the
+# bind-mounted data directory is owned by it on the host side. A group and user
+# exist here only so `ls -l` and the diagnostics bundle show a name rather than a
+# bare number — nothing on the host ever logs in as this account.
+
+- name: Create the catlog group
+  ansible.builtin.group:
+    name: catlog
+    gid: "{{ catlog_gid }}"
+    system: true
+
+- name: Create the catlog user
+  ansible.builtin.user:
+    name: catlog
+    uid: "{{ catlog_uid }}"
+    group: catlog
+    system: true
+    create_home: false
+    home: "{{ catlog_data_root }}"
+    shell: /usr/sbin/nologin
+
+# --- journald ---------------------------------------------------------------
+# Container logs go to Docker's json-file driver (rotated in daemon.json), not
+# to the journal. This bounds what the rest of the system can accumulate.
+
+- name: Bound the journal
+  ansible.builtin.copy:
+    dest: /etc/systemd/journald.conf.d/catlog.conf
+    mode: "0644"
+    content: |
+      # Managed by Ansible (roles/common).
+      [Journal]
+      SystemMaxUse={{ catlog_journal_max_use }}
+  notify: Restart journald
+
+# --- sshd -------------------------------------------------------------------
+
+- name: Check the connecting user has an authorized key
+  # The guard that makes the next task safe. Disabling password authentication
+  # on a box you are reaching by password is the classic way to lock yourself
+  # out of it, and it happens after the play has already reported "changed".
+  ansible.builtin.stat:
+    path: "{{ '/root/.ssh/authorized_keys' if ansible_user_id == 'root' else '/home/' ~ ansible_user_id ~ '/.ssh/authorized_keys' }}"
+  register: catlog_authorized_keys
+  when: catlog_harden_sshd | bool
+
+- name: Refuse to harden sshd without a key already in place
+  ansible.builtin.assert:
+    that:
+      - catlog_authorized_keys.stat.exists
+      - catlog_authorized_keys.stat.size > 0
+    fail_msg: >-
+      catlog_harden_sshd is on but {{ ansible_user_id }} has no authorized_keys on
+      this host. Disabling password authentication now would lock you out. Install
+      your key first (ssh-copy-id), or set catlog_harden_sshd=false.
+    quiet: true
+  when: catlog_harden_sshd | bool
+
+- name: Harden sshd
+  ansible.builtin.copy:
+    dest: /etc/ssh/sshd_config.d/10-catlog.conf
+    mode: "0644"
+    content: |
+      # Managed by Ansible (roles/common).
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      PermitRootLogin prohibit-password
+      X11Forwarding no
+      AllowAgentForwarding no
+  when: catlog_harden_sshd | bool
+  notify: Reload sshd

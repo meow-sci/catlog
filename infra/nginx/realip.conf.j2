@@ -1,0 +1,76 @@
+{{ ansible_managed | comment }}
+# catlog — who the client is. Rendered by roles/catlog_nginx into
+# /mnt/catlog/nginx/conf/20-realip.conf and mounted at
+# /etc/nginx/catlog.d/20-realip.conf. Included from `http {}`.
+#
+# ---------------------------------------------------------------------------
+# WHY THIS FILE IS SAFE HERE AND WAS NOT SAFE BEFORE
+# ---------------------------------------------------------------------------
+# The rate-limit zones in the baked nginx.conf key on $binary_remote_addr. Once
+# Cloudflare fronts the origin, $remote_addr is a CLOUDFLARE EDGE address, so
+# every visitor collapses into a handful of buckets: the limits then throttle
+# legitimate traffic in aggregate and stop isolating an abusive client. The fix
+# is real_ip — trust Cloudflare's ranges, take the client from CF-Connecting-IP.
+#
+# Enabling that while the origin is ALSO reachable directly is strictly worse
+# than not rate limiting at all: any client can then send its own
+# CF-Connecting-IP and choose its bucket — a fresh random value per request
+# makes the limiter unreachable, and a victim's address makes it a weapon.
+# nginx would also write the spoofed value to the access log and to any rule
+# below.
+#
+# `set_real_ip_from` is what removes that: only a peer inside these CIDRs may
+# set the header. The required order is (1) Cloudflare in front, (2) 443
+# firewalled to Cloudflare's ranges, (3) this file. Ansible applies all three
+# from the SAME `cloudflare_ranges` fact, in that order, in one run — which is
+# the whole reason this is generated rather than hand-edited.
+#
+# The ranges change. roles/cloudflare_firewall refreshes them from
+# https://www.cloudflare.com/ips-v4 and /ips-v6 on every run and reports drift
+# in --check mode.
+
+{% for cidr in cloudflare_ranges %}
+set_real_ip_from {{ cidr }};
+{% endfor %}
+real_ip_header CF-Connecting-IP;
+# CF-Connecting-IP is a single address, never a list — recursion would be
+# looking for a comma that is not there.
+real_ip_recursive off;
+
+{% if catlog_origin_domain %}
+# ---------------------------------------------------------------------------
+# The direct (Cloudflare-bypassing) name
+# ---------------------------------------------------------------------------
+# $realip_remote_addr, not $remote_addr: it is the PEER address, before the
+# rewrite above. A client can influence $remote_addr by sending a header (if it
+# is inside a trusted range); it cannot influence which socket it connected
+# from. An access rule must be built on the second kind of fact.
+geo $realip_remote_addr $catlog_direct_allowed {
+    default 0;
+{% for cidr in catlog_direct_allow_cidrs %}
+    {{ cidr }} 1;
+{% endfor %}
+}
+
+# Exact string comparison rather than a regex — $host is already lowercased and
+# port-stripped by nginx, and a regex here would be a second place for the
+# hostname to be spelled slightly differently.
+map $host $catlog_is_direct {
+    default 0;
+    "{{ catlog_origin_domain }}" 1;
+}
+
+# 1 only for "the direct name, from an address not on the allow-list".
+map "$catlog_is_direct$catlog_direct_allowed" $catlog_block_direct {
+    default 0;
+    "10"    1;
+}
+{% else %}
+# No direct name configured, so nothing can be blocked for being one. The
+# server block still references $catlog_block_direct only when
+# catlog_origin_domain is set, but define it anyway: an undefined variable is a
+# startup failure, and this file and site.conf.j2 must not be able to disagree.
+map $host $catlog_block_direct {
+    default 0;
+}
+{% endif %}

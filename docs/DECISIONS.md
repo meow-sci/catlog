@@ -26,10 +26,10 @@ commit. See [ARCHITECTURE.md](ARCHITECTURE.md#7-keeping-the-documentation-true) 
 - **[Identity, handles & moderation](#identity-handles--moderation)** — `IDENT-*`, 15 entries
 - **[Projector, boards & the read API](#projector-boards--the-read-api)** — `PROJ-*`, 84 entries
 - **[Archive & restore](#archive--restore)** — `ARCH-*`, 13 entries
-- **[The two frontends](#the-two-frontends)** — `UI-*`, 55 entries
+- **[The two frontends](#the-two-frontends)** — `UI-*`, 56 entries
 - **[The mod and its KSA-free core](#the-mod-and-its-ksa-free-core)** — `MOD-*`, 69 entries
 - **[The load harness](#the-load-harness)** — `LOAD-*`, 26 entries
-- **[nginx, systemd & deployment](#nginx-systemd--deployment)** — `OPS-*`, 17 entries
+- **[Containers, nginx & deployment](#containers-nginx--deployment)** — `OPS-*`, 31 entries
 - **[Documentation](#documentation)** — `DOCS-*`, 2 entries
 
 ---
@@ -1522,6 +1522,21 @@ The lesson worth keeping: **a test double that quietly ignores a parameter does 
 
 **The comment in `client.ts` asserted that these headers were "ignored by browsers", and that false premise is the whole reason this survived.** It is corrected in place, because a wrong explanation is worse than none — it stops the next reader looking. Pinned by `client.test.ts`, so dropping the option is a failing test rather than a silent regression.
 
+### UI-056 — The React reader moves to `/app/` on the origin, which retires the CORS allow-list in production
+
+*Accepted · 2026-08-08 · WP-CONTAINER.*
+
+[UI-017](#ui-017) chose GitHub Pages for `spa/`. The container deployment serves it from the same nginx that fronts catlogd, at `/app/`, built with `SPA_BASE=/app/` and an **empty** `VITE_CATLOG_API_BASE` — so `src/api/client.ts` keeps the empty string and every request comes out as a relative `/v1/…`.
+
+UI-017's actual argument survives untouched: the reader is still independently deployable, with its own lockfile, toolchain, build stage and `SPA_BASE`, and can still be pointed at any static host by changing two build arguments. What changes is the default host.
+
+What that buys: `[cors] allowed_origins` is **empty** in production, which is strictly safer than any non-empty list; deep links work through `try_files` rather than the `404.html` trick, so they return 200 rather than a 404 browsers happen to render; and the hashed `assets/` can be served `immutable` for a year from the same origin as everything else.
+
+`make spa-preview` stays. It is the only local target that runs the bundle cross-origin, and the allow-list remains live code for any other deployment of the reader — deleting the target because production stopped needing it would remove the only test of a path that still exists.
+
+`.github/workflows/spa-pages.yml` is deleted.
+
+
 ---
 
 ## The mod and its KSA-free core
@@ -2106,7 +2121,7 @@ Its comment says players are network-bound "waiting out the server's per-credent
 
 ---
 
-## nginx, systemd & deployment
+## Containers, nginx & deployment
 
 The reverse proxy, the hardened unit, and why a deploy must fully stop the old process.
 
@@ -2211,6 +2226,174 @@ MVS, not a choice: `tursogo`/`turso-go-platform-libs` v0.7.2 require purego v0.9
 *Accepted · 2026-08-07 · WP9.*
 
 Because the only importer of testcontainers-go and moby/moby/client sits behind `//go:build docker`, `go get` recorded both as `// indirect`; `go mod tidy` (which considers all build tags) promotes them to direct requires. Anyone editing `server/go.mod` by hand should tidy afterwards rather than trust an untagged `go build`.
+
+### OPS-018 — Production is two containers on a Docker Hardened Image, and the reason is the blast radius of an RCE
+
+*Accepted · 2026-08-08 · WP-CONTAINER.*
+
+`ghcr.io/meow-sci/catlogd` (the Go server) and `ghcr.io/meow-sci/catlog-nginx` (the proxy plus both frontends' assets), built by `infra/docker/Dockerfile.*` and run by `infra/compose.prod.yaml`.
+
+**Why a hardened base at all.** catlogd parses attacker-supplied input on every request — a brotli-compressed batch body, a JWS proof, an OAuth callback. If any of that ever yields code execution, what the attacker finds next is the whole question, and a DHI non-dev variant answers it with: no shell, no package manager, no interpreter, nonroot by default. The image is a loader, a libc, catlogd and catlogctl.
+
+**Why two images, not one.** A single image would need a supervisor to run two processes in a base with no shell to run one. Splitting them also means a CSS change redeploys nginx alone — a plain restart, costing zero ingest downtime, which matters because [OPS-020](#ops-020) makes every catlogd restart an outage.
+
+**Why the assets live in the nginx image.** `[server] static_dir` stays empty in production, so catlogd mounts no `/static/` route at all: a route that does not exist cannot be misconfigured. The alternative — a shared volume — creates a second copy that can drift from the one nginx reads.
+
+### OPS-019 — The runtime base is `dhi.io/static:…-glibc-debian13`, because the *golang* runtime variant ships bash and a Go compiler
+
+*Accepted · 2026-08-08 · WP-CONTAINER.*
+
+Not `scratch`, not `distroless/static`, not Alpine — and, after measuring, **not `dhi.io/golang:1.26-debian13` either**.
+
+**Glibc is mandatory.** tursogo is CGO-free but purego's shim emits a dynamically-linked ELF even at `CGO_ENABLED=0`. Read off the binary the build actually produces, by the `readelf` step in `Dockerfile.catlogd`:
+
+```
+interpreter  /lib64/ld-linux-x86-64.so.2
+DT_NEEDED    libdl.so.2  libpthread.so.0  libc.so.6
+```
+
+The driver also extracts a 19 MB native `.so` and `dlopen`s it at first database open, so the runtime needs a writable, **exec-capable** directory too — `roles/storage` proves the filesystem can execute a file rather than trusting `findmnt`.
+
+**The golang non-dev variant was the plan, and measuring it changed the decision.** It is a Go *runtime* image, which means it carries the toolchain:
+
+| Base | Files | Image | Contains |
+|---|---|---|---|
+| `dhi.io/golang:1.26-debian13` | 18,764 | 81 MB | `bash`, `sh`, **`/usr/local/go/bin/go`** |
+| `dhi.io/static:20250419-glibc-debian13` | 1,148 | 21 MB | no shell, no package manager, no compiler |
+
+The entire reason for a hardened base is what an attacker finds after an RCE. Landing in an image with a shell *and* a compiler gives most of that back. The static variant carries `ld-linux`, `libc`/`libdl`/`libpthread`/`libm`, `ca-certificates`, `tzdata` and a `nonroot` user — exactly what catlogd needs and nothing else.
+
+**Verified end to end, not reasoned:** on the static base, with a read-only rootfs and `--user 65532`, catlogd creates its key set, migrates both databases, extracts and `dlopen`s the Turso engine, and reports healthy. `scripts/container-smoke.sh` is the repeatable form of that check and is a hard gate inside `make release`.
+
+Two consequences worth carrying: the static base sets **no** default user (the golang one sets `65532`), so `USER nonroot` in the Dockerfile is load-bearing rather than decorative; and the `20250419` in the tag is a version label, not a build date — DHI rebuilds it, and there is no `latest`.
+
+Alpine would still work with `-tags musl` and a different embedded `.so`. That remains a second binary shape with no evidence behind it.
+
+### OPS-020 — Deploy is stop → wait-for-exit → start, with automatic rollback, and no orchestrator will ever change that
+
+*Accepted · 2026-08-08 · WP-CONTAINER.*
+
+Turso holds an exclusive whole-file lock that excludes other **processes**, readers included, and the lock is released by process **exit**, not by the stop request. So `docker compose up -d` recreating the container is wrong: it would briefly have two, and the new one would fail to open its databases.
+
+`roles/catlog_app/tasks/deploy.yml` therefore pulls first (a failed pull must cost nothing), stops, polls until the container has actually exited, starts, and gates on the healthcheck — restoring the previous digests and failing loudly if that gate does not pass within 120 s. Expect a few seconds of 502; the mod's shipper treats 5xx as retryable and spools locally.
+
+nginx serves a maintenance page during the window **for the HTML surface only**. Not for `/v1/ingest` and not for `/v1/`: turning a 502 into a 200 would make the shipper discard a batch it should have retried, and would hand the JSON API a body no client can parse.
+
+### OPS-021 — Static assets are pre-compressed at build time; nginx never compresses a file at request time
+
+*Accepted · 2026-08-08 · WP-CONTAINER.*
+
+`scripts/precompress.mjs` writes a `.br` (quality 11) and a `.gz` (level 9) beside every compressible asset in `site/dist` and `spa/dist`, and the nginx image serves them with `brotli_static on; gzip_static on;`. Measured on `site/dist`: 132 kB → 40 kB brotli, 70% saved, at a quality no on-the-fly setting could afford — it happens once, in a build stage that is thrown away.
+
+Dynamic `brotli`/`gzip` at level 5 stays on for **proxied** responses only, because catlogd's server-rendered HTML and its JSON have no file to pre-compress and [catlogd has no compression middleware and will not gain one](#ops-004). `text/event-stream` is in neither type list and both are explicitly `off` on the SSE and ingest locations.
+
+No new dependency: node's own `zlib` has brotli, and both frontends are hermetic by design.
+
+The one non-obvious property — that `brotli_static` wins over the built-in `gzip_static` for a client advertising both — is asserted in `scripts/container-smoke.sh` rather than believed.
+
+### OPS-022 — nginx's configuration is split between the image and the host, along the line of what depends on the domain
+
+*Accepted · 2026-08-08 · WP-CONTAINER.*
+
+`infra/nginx/nginx.conf` (compression, the rate-limit zones, the catlogd upstream, the JSON log format) is **baked** into the image and validated by `nginx -t` **at build time**, which is what catches a brotli module built against the wrong nginx version. `site.conf.j2` and `realip.conf.j2` (names, certificates, Cloudflare ranges) are rendered by Ansible into `/etc/nginx/catlog.d/`.
+
+An image that knew the domain could not be promoted between environments, and a config with a `<PLACEHOLDER>` in it cannot be validated at all — which is why `prod.conf.example` is gone rather than moved.
+
+Individual **files** are bind-mounted, not the directory, so the baked `00-bootstrap.conf` survives: a `default_server` answering 503 with a reason, because "connection refused" and "the config mount is wrong" look identical from outside.
+
+### OPS-023 — Ansible provisions the container host, and D1 is superseded for that target only
+
+*Accepted · 2026-08-08 · WP-CONTAINER.*
+
+[D1](#d1) says catlog produces deploy assets and provisions nothing. `infra/ansible/` provisions: packages, the NVMe mount, users, the firewall, certificates.
+
+D1's reasoning is that a hand-managed VPS's state belongs to its owner, and that a deploy script straying into provisioning eventually strands the owner between the script's model and the box's reality. **A container host has no such divergence to protect: its entire state *is* the playbook.** The failure D1 guards against is prevented here by having exactly one authority rather than by having none. D1 stands for `infra/deploy/deploy.sh` and the systemd path; it is superseded for the container target.
+
+### OPS-024 — The Cloudflare `real_ip` hazard is resolved by making one fact drive both the firewall and nginx
+
+*Accepted · 2026-08-08 · WP-CONTAINER.*
+
+The old `prod.conf.example` shipped `set_real_ip_from` commented out with a correct warning: enabling it before Cloudflare is in front and 443 is CF-only lets any client choose its own rate-limit bucket by sending `CF-Connecting-IP`.
+
+`roles/cloudflare_firewall` fetches the ranges, publishes them as `cloudflare_ranges`, and `roles/catlog_nginx` renders `set_real_ip_from` from that same fact — in that order, in one play, with an assertion in the nginx role that refuses to render if the firewall has not run. The required ordering is now enforced rather than remembered.
+
+**The rules that actually protect 80/443 are in `DOCKER-USER`, not in the host input chain.** Published container ports are DNAT'd and forwarded, so they never traverse INPUT: an nftables ruleset that "blocks everything but 22" leaves 443 open to the internet, silently. `catlog-firewall.service` is `PartOf=docker.service` because restarting Docker re-creates and flushes `DOCKER-USER`, which would take those rules with it.
+
+### OPS-025 — TLS is Let's Encrypt via DNS-01, run by a host timer rather than a sidecar
+
+*Accepted · 2026-08-08 · WP-CONTAINER.*
+
+DNS-01 and not HTTP-01 because the public record is orange-clouded and Cloudflare's "Always Use HTTPS" redirects `/.well-known/acme-challenge/` before it reaches the origin. DNS-01 also issues before the record points anywhere near the box, which is what makes a clean first bring-up possible.
+
+acme.sh runs as a **one-shot container** started by `catlog-acme.timer`, and the timer reloads nginx from the host afterwards. A long-running sidecar holding the Docker socket so it could reload nginx itself would be a larger hole than the hardened base closes on the other side of the diagram.
+
+The Cloudflare token needs exactly `Zone:DNS:Edit` + `Zone:Zone:Read` on the one zone. A Global API Key would work and must not be used: it can do anything to every zone on the account, and this credential lives on a public-facing VM.
+
+### OPS-026 — One gitignored `deploy.env` is the only secret mechanism, and there is deliberately no second one
+
+*Accepted · 2026-08-08 · WP-CONTAINER.*
+
+`infra/deploy.env` (from the committed `.example`) holds every secret. `make` exports it; Ansible reads it with `lookup('env', …)`; it reaches the VM only as `/mnt/catlog/config/catlogd.env`, `0640 root:catlog`, rendered `no_log`.
+
+No `ansible-vault` by default — for a single operator it is a password to manage protecting a file that is already gitignored and already only on one disk. No `--extra-vars` for secrets, ever: that puts them in shell history and in the VM's process table. Vault is a one-file swap if a second operator appears.
+
+The whole operator surface is `make preflight / provision / release / deploy / rollback / certs / ops-*`. Two commands for a normal release, four for a first bring-up.
+
+### OPS-027 — Both containers log to stdout, which is what removes logrotate from the VM
+
+*Accepted · 2026-08-08 · WP-CONTAINER.*
+
+catlogd already logged JSON to stdout; the nginx image is configured with `access_log /dev/stdout` (a JSON log format, so both are readable with one tool) and `error_log /dev/stderr`. Docker's `json-file` driver rotates at 50 MB × 5, set in `daemon.json`.
+
+Three consequences, all of them the point: no log files on the NVMe volume and so no disk-fill failure mode there, no `logrotate` on the box, and `docker logs` as the single source — which is what makes `make ops-logs` one command instead of a scavenger hunt.
+
+`make ops-logs` never collects `catlogd.env`, `data/keys/` or the databases. A diagnostics bundle containing the session key or the pepper is one you would have to treat as a secret forever, and you would not.
+
+
+### OPS-028 — `.dockerignore` is a security control here, not an optimisation
+
+*Accepted · 2026-08-08 · WP-CONTAINER.*
+
+Without it, `docker build .` uploads **`data/`** into the daemon — the license signing key, the session key and the pepper — where one careless `COPY . .` in any future stage bakes them into a published layer. Measured when it was added: 726 MB of `data/`, 384 MB of `node_modules/`, 53 MB of `server/bin/`.
+
+It is also what makes the frontend stages correct. `COPY site/ ./` was overwriting the container's freshly-installed `node_modules` with the host's (built for a different platform), and pnpm refused with `ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY` rather than silently using them — a good failure, and one that only surfaced because the image was actually built.
+
+The `data/` entry is a **pattern**, `data*/`, for the same reason `.gitignore` uses one: every tool that takes a `--data-dir` invents another directory, and enumerating them had already missed one.
+
+### OPS-029 — nginx resolves catlogd per request, so a stopped catlogd cannot stop nginx from starting
+
+*Accepted · 2026-08-08 · WP-CONTAINER.*
+
+An `upstream {}` block resolves its server names when the configuration is **read**. Two consequences, both discovered by building the image:
+
+1. `nginx -t` fails inside the build — there is no `catlogd` host in a build stage — so the config could not be validated where it is cheapest to fix.
+2. Worse: a deploy **stops** catlogd before starting it ([OPS-020](#ops-020)). While it is stopped, Docker's DNS does not resolve the name at all, so an nginx that happened to restart in that window would fail to start **and stay down** — turning a few seconds of 502 into an outage outliving the deploy.
+
+`proxy_pass http://$catlogd_upstream;` with `resolver 127.0.0.11` defers resolution to each request. nginx always starts; while catlogd is away it answers 502, which `location /` turns into the maintenance page.
+
+The cost is the upstream keepalive pool. In front of an origin that sits behind a CDN and emits `s-maxage=30`, a TCP handshake per proxied request on a bridge network is not a number anybody will measure.
+
+### OPS-030 — `readelf`, not `file`, and the assertion is that the binary is *dynamic*
+
+*Accepted · 2026-08-08 · WP-CONTAINER.*
+
+The DHI dev image has no `file`(1) — it has `readelf`, `ldd`, `objdump` and `strings`. That forced a better check than the one originally written.
+
+`Dockerfile.catlogd` now asserts the binary **has a program interpreter**, and prints it along with the `DT_NEEDED` list. That is the surprising property — `CGO_ENABLED=0` usually means static — and it is precisely the one the runtime base is chosen for. If a future toolchain or driver version makes catlogd static, **the build fails**, and that failure is good news worth acting on: the base could then be reconsidered. Do not "fix" it by deleting the check.
+
+
+### OPS-031 — The Go stage builds natively and cross-compiles; only the C stages are emulated
+
+*Accepted · 2026-08-08 · WP-CONTAINER.*
+
+The development machine is macOS/arm64 and the target is linux/amd64, so every image build is a cross build.
+
+`Dockerfile.catlogd`'s builder is `FROM --platform=$BUILDPLATFORM`, with `GOOS`/`GOARCH` taken from BuildKit's `TARGETOS`/`TARGETARCH`. Go cross-compiles natively at `CGO_ENABLED=0`, so the toolchain runs as arm64 at full speed and emits an amd64 binary. Pinning the builder to the *target* platform instead would run the entire Go build under emulation for no benefit whatsoever.
+
+The consequence is that the build stage **cannot execute what it produced** — an amd64 binary on an arm64 builder — so the post-build check is `readelf`, not `./catlogd -version`. That is the better tool regardless, and it made a stronger assertion possible: the check now verifies the ELF machine type matches `TARGETARCH`, which running the binary never could. A cross-compile that silently targeted the wrong architecture now fails the build.
+
+`Dockerfile.nginx`'s `nginx-modules` stage is **not** cross-compiled and runs emulated. It builds C — nginx plus ngx_brotli plus a static libbrotli — and a cross-toolchain for that is a large amount of machinery to save about a minute on a stage that is cached anyway.
+
 
 ---
 

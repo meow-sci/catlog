@@ -1,0 +1,53 @@
+# roles/maintenance — the nightly timer, and the operator verbs it wraps.
+#
+# `catlogctl` is an HTTP client for catlogd's loopback admin mux; it never opens
+# a database. That is why every stateful verb here is `docker compose exec` into
+# the running container rather than a second process with its own data
+# directory — a second process could not open the files at all.
+
+- name: Install the nightly script
+  ansible.builtin.template:
+    src: catlog-nightly.sh.j2
+    dest: /usr/local/sbin/catlog-nightly
+    mode: "0750"
+
+- name: Install the nightly unit
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/catlog-nightly.service
+    mode: "0644"
+    content: |
+      # Managed by Ansible (roles/maintenance).
+      [Unit]
+      Description=catlog nightly maintenance (rebuild, archive, backup)
+      After=docker.service
+      Requires=docker.service
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/sbin/catlog-nightly
+
+- name: Install the nightly timer
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/catlog-nightly.timer
+    mode: "0644"
+    content: |
+      # Managed by Ansible (roles/maintenance).
+      [Unit]
+      Description=catlog nightly maintenance
+
+      [Timer]
+      OnCalendar={{ catlog_nightly_oncalendar }}
+      Persistent=true
+
+      [Install]
+      WantedBy=timers.target
+
+- name: Set the nightly timer's state
+  # Installed but DISABLED by default, and honestly so: the script runs
+  # rebuild → archive → backup, and enabling it needs all three verbs to be
+  # live. A timer that fails every night at 04:30 trains you to ignore it.
+  ansible.builtin.systemd_service:
+    name: catlog-nightly.timer
+    enabled: "{{ catlog_nightly_enabled | bool }}"
+    state: "{{ 'started' if catlog_nightly_enabled | bool else 'stopped' }}"
+    daemon_reload: true

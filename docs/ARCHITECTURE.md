@@ -63,8 +63,8 @@ enums are allow-lists (Constitution §6).
 | `spa/` | The React reader: a standalone Vite app over the public read API. Own lockfile, own toolchain, own deployment. | [ui-design.md](ui-design.md), `spa/README.md` |
 | `contracts/` | Cross-language conformance vectors, generated deterministically and consumed by **both** the Go and C# suites. This is what guarantees mod↔server interop without the game. | [ingest-api.md](ingest-api.md) |
 | `docs/` | This directory. The specification, the decisions, the design record. | — |
-| `infra/` | nginx configs, systemd units, the deploy script, an optional compose file. | [operations.md](operations.md) |
-| `scripts/` | `e2e-full.sh` (the whole-stack proof) and `db-snapshot.sh`. | [../DEVELOPMENT.md](../DEVELOPMENT.md) |
+| `infra/` | The production deployment: two Dockerfiles, the compose project, the nginx configuration, and the Ansible roles and playbooks that own the VM. Plus the systemd/deploy.sh path being retired. | [operations.md](operations.md) |
+| `scripts/` | `e2e-full.sh` (the whole-stack proof), `db-snapshot.sh`, `precompress.mjs` (build-time brotli/gzip siblings), `container-smoke.sh` (the release gate). | [../DEVELOPMENT.md](../DEVELOPMENT.md) |
 | `data/` | Runtime state, git-ignored: `events.db`, `projections.db`, `keys/`, `archive/`. | — |
 
 Four toolchains: **Go 1.26**, **.NET SDK 10**, **Node 24 + pnpm 11**. `pnpm` only — never `npm`,
@@ -79,12 +79,14 @@ so they can be compared:
 |---|---|---|
 | Rendering | Server-rendered Go templates, datastar for interactivity | React 19, client-rendered, React Compiler on |
 | Auth | Sessions, the dashboard, credential issuance | **None.** Anonymous, read-only |
-| Hosting | Served by `catlogd` (nginx serves `/static/` in prod) | Any static host; GitHub Pages workflow included |
-| Talks to | Everything | Seven `GET /v1/…` endpoints, cross-origin |
+| Hosting | Rendered by `catlogd`; nginx serves `/static/` in prod | nginx serves it at `/app/` in prod; any static host otherwise |
+| Talks to | Everything | Seven `GET /v1/…` endpoints, **same-origin** in prod |
 | Build | `make site-build` (esbuild) | `make spa-build` (vite) |
 
-Neither requires the other to be running, and they can live on different domains. The only thing
-tying them together is the read API and the CORS allow-list that lets a browser reach it. The design
+Neither requires the other to be running, and they can still live on different domains — the reader
+keeps its own lockfile, toolchain and build. But in production they do not: nginx serves the reader
+at `/app/` on the same origin, so `[cors] allowed_origins` is **empty** there and the CORS
+allow-list is live code only for a deployment that puts them apart ([UI-056](DECISIONS.md#ui-056)). The design
 contract they both implement is [ui-design.md](ui-design.md).
 
 ---
@@ -207,7 +209,7 @@ These are the stand-ins, and this list is exhaustive — anything else must be r
 | Cloudflare R2 | `archive/fsStore`, using an identical key layout so the migration is `rclone copy` |
 | The KSA game runtime | `catlog.sim` scenarios and `catlog.loadgen` careers, feeding the **real** lib pipeline |
 | Cloudflare CDN | nothing — Go sets correct `Cache-Control` and a CDN is transparent |
-| The VPS and its TLS | `infra/nginx/dev.conf` over HTTP; `prod.conf.example` is documented, not run |
+| The VPS and its TLS | `infra/nginx/dev.conf` over HTTP; the production proxy is a real image, exercised by `scripts/container-smoke.sh` |
 
 The point of the list is what it forbids. `mockidp` is not a shortcut around the identity stack —
 catlogd runs its real code exchange, real `id_token` verification, real `user_key` derivation and
