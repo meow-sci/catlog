@@ -155,7 +155,7 @@ internal static class Program
         try
         {
             // --- baseline -------------------------------------------------------------
-            api.WaitForProjector(TimeSpan.FromSeconds(60));
+            await ProjectorWait.ForHeadAsync(options.Admin, transport, TimeSpan.Zero, ct).ConfigureAwait(false);
             report.BaselineEvents = api.TotalEvents();
             report.BaselineVars = api.Vars();
 
@@ -183,9 +183,14 @@ internal static class Program
             report.FeedConnected = readLoad.FeedConnected;
 
             // --- projector ------------------------------------------------------------
-            long projectorStarted = Stopwatch.GetTimestamp();
-            api.WaitForProjector(TimeSpan.FromSeconds(300));
-            report.ProjectorCatchUp = Stopwatch.GetElapsedTime(projectorStarted);
+            //
+            // No fixed deadline: the fold is the slowest thing in the system and its cost is
+            // proportional to the run, so the wait is bounded by *progress* and by the run's own
+            // --timeout. See ProjectorWait.
+            ProjectorProgress folded =
+                await ProjectorWait.ForHeadAsync(options.Admin, transport, TimeSpan.Zero, ct).ConfigureAwait(false);
+            report.ProjectorCatchUp = folded.Elapsed;
+            Console.Error.WriteLine("  projector " + folded);
 
             report.FinalEvents = api.TotalEvents();
             report.FinalVars = api.Vars();
@@ -207,7 +212,7 @@ internal static class Program
             CheckVisibility(api, accounts, report);
 
             // --- moderation -----------------------------------------------------------
-            await ModerateAsync(provisioner, api, accounts, report, captures, ct).ConfigureAwait(false);
+            await ModerateAsync(provisioner, api, options.Admin, transport, accounts, report, captures, ct).ConfigureAwait(false);
 
             if (options.Assert)
                 Invariants.Check(options, report, api, accounts);
@@ -437,7 +442,7 @@ internal static class Program
         Frames: 0, Events: 0, Batches: 0, ServerAccepted: 0, ServerDeduped: 0,
         ClockResyncs: 0, StreamForks: 0, Oversize: 0, RateLimited: 0, Busy: 0,
         EventsByType: new Dictionary<string, int>(StringComparer.Ordinal),
-        Digest: string.Empty, Elapsed: TimeSpan.Zero, Reissued: false,
+        Digest: string.Empty, Elapsed: TimeSpan.Zero, Timing: default, Reissued: false,
         Error: ex.GetType().Name + ": " + Text.Clip(ex.Message, 100));
 
     private static async Task DedupProbeAsync(
@@ -524,6 +529,8 @@ internal static class Program
     private static async Task ModerateAsync(
         Provisioner provisioner,
         ReadApiClient api,
+        string admin,
+        HttpMessageHandler transport,
         List<PlayerAccount> accounts,
         RunReport report,
         CaptureStore captures,
@@ -590,7 +597,7 @@ internal static class Program
         }
 
         if (report.Moderation.Count > 0)
-            api.WaitForProjector(TimeSpan.FromSeconds(120));
+            await ProjectorWait.ForHeadAsync(admin, transport, TimeSpan.Zero, ct).ConfigureAwait(false);
     }
 
     // --- small helpers ---------------------------------------------------------------

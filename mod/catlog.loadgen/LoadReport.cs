@@ -256,6 +256,38 @@ internal sealed class RunReport
     /// <summary>503 responses absorbed — the server's write channel pushing back.</summary>
     internal long Busy => Sum(static p => p.Busy);
 
+    /// <summary>
+    /// Where the players' wall clock went, summed across every player.
+    /// </summary>
+    /// <remarks>
+    /// These are <b>player-seconds</b>, not wall seconds: players run <c>--concurrency</c> at a
+    /// time, so the run's ingest phase costs roughly <c>total / concurrency</c> of wall clock. That
+    /// is the arithmetic that turns "885 rate-limit waits × 2 s" into "seventy of the eighty-three
+    /// seconds this run took", and it is why the table prints both.
+    /// </remarks>
+    internal PlayerTiming Timing
+    {
+        get
+        {
+            var total = default(PlayerTiming);
+            foreach (PlayerResult player in Players)
+                total += player.Timing;
+            return total;
+        }
+    }
+
+    /// <summary>Total player-seconds the ingest phase accounted for.</summary>
+    internal double PlayerSeconds
+    {
+        get
+        {
+            double total = 0;
+            foreach (PlayerResult player in Players)
+                total += player.Elapsed.TotalSeconds;
+            return total;
+        }
+    }
+
     /// <summary>Players that stopped early.</summary>
     internal int PlayersWithErrors
     {
@@ -385,8 +417,12 @@ internal sealed class RunReport
         if (RateLimited > Batches * 0.15)
         {
             return $"the server's per-credential token bucket: {RateLimited} × 429 against "
-                   + $"{Batches} accepted batches (1 batch / 2 s, burst 5, per jkt). "
-                   + "More players raises aggregate throughput; a bigger --batch lowers the request rate.";
+                   + $"{Batches} accepted batches (1 batch / 2 s, burst 5, per jkt), costing "
+                   + $"{Fmt(Timing.RateLimitWait.TotalSeconds)} player-seconds of Retry-After waiting. "
+                   + "It is a per-credential limit, so more players raise aggregate throughput and a "
+                   + "bigger --ship-age lowers the request rate. To take it out of the measurement "
+                   + "entirely, start catlogd with CATLOG_LIMITS_RATELIMIT_DISABLED=1 (see --help, "
+                   + "\"going fast\").";
         }
         if (Options.Clock == ShipClock.Real)
         {
@@ -397,6 +433,27 @@ internal sealed class RunReport
         {
             return $"mixed: {RateLimited} × 429 from the per-credential bucket, but under the "
                    + "threshold where it dominates. The remaining time is generation plus ingest latency.";
+        }
+
+        // Nothing pushed back, so the interesting question is which phase spent the run. The
+        // projector is the usual answer at volume: it folds one event at a time on one goroutine
+        // and is comfortably an order of magnitude slower than ingest, so a run big enough to be
+        // worth doing spends most of its wall clock waiting for the head rather than reaching it.
+        if (ProjectorCatchUp > IngestElapsed && ProjectorCatchUp.TotalSeconds > 1)
+        {
+            double rate = EventsStored / Math.Max(0.001, ProjectorCatchUp.TotalSeconds);
+            return $"the projector, not ingest: {Fmt(IngestElapsed.TotalSeconds)} s to store "
+                   + $"{EventsStored} events and {Fmt(ProjectorCatchUp.TotalSeconds)} s to fold them "
+                   + $"(~{Fmt(rate)} events/s). Nothing pushed back on the write path. The wait is "
+                   + "real work — --assert and every leaderboard read need the head — but it is what "
+                   + "sets the ceiling on a run of this size.";
+        }
+        if (Timing.Generate > Timing.Ship && Options.Concurrency > Environment.ProcessorCount)
+        {
+            return "the harness itself: more player-seconds went into generating events than into "
+                   + $"shipping them, at concurrency {Options.Concurrency} on {Environment.ProcessorCount} "
+                   + "cores. With no server-side throttle to absorb, players are CPU-bound and "
+                   + $"oversubscription costs throughput — try -c {Environment.ProcessorCount}.";
         }
 
         return "neither the token bucket nor the write channel ever pushed back — the run was "
@@ -474,6 +531,7 @@ internal sealed class RunReport
             }
         }
 
+        WriteWhereTheTimeWent();
         WriteCareers();
 
         Console.WriteLine();
@@ -565,6 +623,63 @@ internal sealed class RunReport
 
         Console.Error.WriteLine($"FAILED — {failed} of {Checks.Count} invariants broke");
     }
+
+    /// <summary>
+    /// Writes the wall-clock accounting: where the run's seconds actually went.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This section exists because every plausible explanation for a slow run — the client's hard
+    /// 30-second ship floor, the server's token bucket, the bounded write channel, ECDSA, the
+    /// projector — produces the same symptom, and arguing about which one it is from a throughput
+    /// number is guesswork. Each is timed, and the largest number wins the argument.
+    /// </para>
+    /// <para>
+    /// The two halves measure different things and are printed separately on purpose. The
+    /// <b>phases</b> are wall clock, in sequence, and they sum to the run. The <b>player time</b> is
+    /// player-seconds spent concurrently inside the ingest phase; divide by <c>--concurrency</c> to
+    /// turn it back into wall clock.
+    /// </para>
+    /// </remarks>
+    private void WriteWhereTheTimeWent()
+    {
+        if (Players.Count == 0)
+            return;
+
+        PlayerTiming t = Timing;
+        double players = Math.Max(1.0, PlayerSeconds);
+        double run = Math.Max(0.001, Elapsed.TotalSeconds);
+
+        Console.WriteLine();
+        Console.WriteLine("═══ where the time went ═════════════════════════════════════════");
+        Row("phases", $"provision {Fmt(ProvisionElapsed.TotalSeconds)} s"
+                      + $"   ingest {Fmt(IngestElapsed.TotalSeconds)} s"
+                      + $"   projector {Fmt(ProjectorCatchUp.TotalSeconds)} s"
+                      + $"   other {Fmt(Math.Max(0, run - ProvisionElapsed.TotalSeconds - IngestElapsed.TotalSeconds - ProjectorCatchUp.TotalSeconds))} s");
+        Row("player time", $"{Fmt(players)} player-seconds across {Players.Count} players "
+                           + $"at concurrency {Options.Concurrency}");
+        Bucket("  generating", t.Generate, players);
+        Bucket("  shipping", t.Ship, players);
+        Bucket("  rate-limit wait", t.RateLimitWait, players);
+        Bucket("  ship-floor wait", t.FloorWait, players);
+        Bucket("  retry backoff", t.RetryWait, players);
+
+        // The one line that answers the question everybody actually asks first.
+        Row("ship floor", Options.Clock == ShipClock.Virtual
+            ? $"{Fmt(t.FloorWait.TotalSeconds)} s of real waiting — the hard "
+              + $"{Fmt(MeowSci.Catlog.Lib.Wire.MinShipIntervalSeconds)} s floor is enforced against the "
+              + "injected clock, which is wound forward rather than slept through. It costs "
+              + $"{ClockResyncs} clock resync(s), not wall time."
+            : $"{Fmt(t.FloorWait.TotalSeconds)} player-seconds of real waiting — this is "
+              + "--clock real, so the floor is the point of the run.");
+    }
+
+    /// <summary>Writes one timing bucket as seconds and as a share of the player time.</summary>
+    /// <param name="label">The row label.</param>
+    /// <param name="value">The bucket.</param>
+    /// <param name="total">Total player-seconds.</param>
+    private static void Bucket(string label, TimeSpan value, double total)
+        => Row(label, $"{Fmt(value.TotalSeconds),10} s   {value.TotalSeconds / total * 100,5:0.0}%");
 
     /// <summary>
     /// Writes the careers section: what the population looked like and how it failed.
@@ -704,6 +819,18 @@ internal sealed class RunReport
                 ["max"] = Math.Round(Ingest.Percentile(100), 2),
             },
             ["ingest_status"] = status,
+            // Player-seconds, summed across players running --concurrency at a time; divide by the
+            // concurrency to read them as wall clock. See the "where the time went" table.
+            ["player_time_s"] = new Dictionary<string, double>(StringComparer.Ordinal)
+            {
+                ["total"] = Math.Round(PlayerSeconds, 3),
+                ["generate"] = Math.Round(Timing.Generate.TotalSeconds, 3),
+                ["ship"] = Math.Round(Timing.Ship.TotalSeconds, 3),
+                ["rate_limit_wait"] = Math.Round(Timing.RateLimitWait.TotalSeconds, 3),
+                ["ship_floor_wait"] = Math.Round(Timing.FloorWait.TotalSeconds, 3),
+                ["retry_wait"] = Math.Round(Timing.RetryWait.TotalSeconds, 3),
+            },
+            ["provision_elapsed_s"] = Math.Round(ProvisionElapsed.TotalSeconds, 3),
             ["read_requests"] = Read?.Requests ?? 0,
             ["read_latency_p99_ms"] = Math.Round(Read?.Percentile(99) ?? 0, 2),
             ["feed_frames"] = FeedFrames,

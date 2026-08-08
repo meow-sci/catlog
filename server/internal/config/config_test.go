@@ -241,6 +241,16 @@ func TestValidateRejectsBadConfigs(t *testing.T) {
 			c.Server.ClockControl = true
 			c.Ingest.AcceptedHTU = []string{"https://catlog.example/v1/ingest"}
 		},
+
+		// The token bucket is the only thing bounding what one stolen or
+		// modified credential can cost the server, and removing it is a
+		// load-testing affordance. Same reasoning, same hard refusal: a
+		// deployment reachable over TLS keeps its per-credential ceiling.
+		"rate limit disabled on https": func(c *Config) {
+			c.Server.BaseURL = "https://catlog.example"
+			c.Limits.RateLimitDisabled = true
+			c.Ingest.AcceptedHTU = []string{"https://catlog.example/v1/ingest"}
+		},
 	}
 	for name, mutate := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -301,5 +311,32 @@ func TestClockControlIsOffByDefaultAndAllowedOnlyLocally(t *testing.T) {
 	cfg.Server.ClockControl = true
 	if err := cfg.Validate(); err != nil {
 		t.Errorf("clock_control on the default http dev server was refused: %v", err)
+	}
+}
+
+// TestRateLimitDisabledIsOffByDefaultAndAllowedOnlyLocally is the same guard
+// for the same reason, one section down: catlog.loadgen needs the token bucket
+// out of the way to measure anything but the token bucket, and a real
+// deployment must not be able to inherit that by accident.
+func TestRateLimitDisabledIsOffByDefaultAndAllowedOnlyLocally(t *testing.T) {
+	cfg := Default()
+	if cfg.Limits.RateLimitDisabled {
+		t.Error("ratelimit_disabled defaults to true; it must default to off")
+	}
+
+	cfg.Limits.RateLimitDisabled = true
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("ratelimit_disabled on the default http dev server was refused: %v", err)
+	}
+
+	// Raising the rate is not the same kind of change and is not gated: the
+	// bucket is still there, so an https deployment may tune it freely.
+	fast := Default()
+	fast.Server.BaseURL = "https://catlog.example"
+	fast.Ingest.AcceptedHTU = []string{"https://catlog.example/v1/ingest"}
+	fast.Limits.RateLimitPerJKTPerS = 500
+	fast.Limits.RateLimitBurst = 1000
+	if err := fast.Validate(); err != nil {
+		t.Errorf("a raised (but present) rate limit on https was refused: %v", err)
 	}
 }

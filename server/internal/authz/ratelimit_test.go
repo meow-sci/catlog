@@ -110,3 +110,46 @@ func TestLicenseCacheEvictsLeastRecentlyUsed(t *testing.T) {
 		t.Errorf("cache holds %d entries, want 2", c.len())
 	}
 }
+
+// TestRateLimitDisabledRemovesStep9 pins the load-testing escape hatch's two
+// halves: with the bucket gone, no number of batches on one credential is ever
+// refused, and the verifier says so rather than leaving callers to guess.
+//
+// It is the *absence* that is tested, not permissiveness. A limiter configured
+// with an enormous rate would also let these through, and would still be a
+// limiter — a map that grows, a mutex on every request, and a step that can be
+// got wrong. `ratelimit_disabled` builds none of it, the same way
+// `clock_control = false` leaves POST /admin/clock unmounted rather than
+// mounting a handler that refuses.
+func TestRateLimitDisabledRemovesStep9(t *testing.T) {
+	f := newFixture(t)
+	if !f.v.RateLimited() {
+		t.Fatal("the fixture verifier reports no rate limiting; it configures 0.5/s burst 5")
+	}
+
+	off := New(Config{
+		Issuer:            testIssuer,
+		AcceptedHTU:       []string{testHTU},
+		RatePerSecond:     0.5,
+		Burst:             5,
+		RateLimitDisabled: true,
+	}, f.keys, f.events, NewDenyList())
+	off.SetClock(func() time.Time { return f.now })
+
+	if off.RateLimited() {
+		t.Error("RateLimited() is true with ratelimit_disabled set")
+	}
+	if off.Limiter() != nil {
+		t.Error("Limiter() returned a bucket map with ratelimit_disabled set")
+	}
+
+	// Far past burst 5, on one credential, with a clock that never advances:
+	// under §4.3 every attempt after the fifth is a 429.
+	for i := range 50 {
+		if _, aerr := off.Verify(t.Context(), Request{
+			License: f.cred.License, Proof: f.proof(t, nil),
+		}); aerr != nil {
+			t.Fatalf("attempt %d was refused with %s at step %d: %s", i+1, aerr.Code, aerr.Step, aerr.Detail)
+		}
+	}
+}

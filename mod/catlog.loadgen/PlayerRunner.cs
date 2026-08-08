@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Net.Http;
 using System.Security.Cryptography;
@@ -41,6 +42,7 @@ namespace MeowSci.Catlog.LoadGen;
 /// <param name="EventsByType">Envelope count per event type.</param>
 /// <param name="Digest">A hash of the event stream, for seed-to-seed comparison.</param>
 /// <param name="Elapsed">Wall-clock time this player took.</param>
+/// <param name="Timing">Where that wall clock went.</param>
 /// <param name="Reissued">True when the player swapped credentials mid-run.</param>
 /// <param name="Error">Why the player stopped early, or an empty string.</param>
 internal sealed record PlayerResult(
@@ -62,8 +64,69 @@ internal sealed record PlayerResult(
     IReadOnlyDictionary<string, int> EventsByType,
     string Digest,
     TimeSpan Elapsed,
+    PlayerTiming Timing,
     bool Reissued,
     string Error);
+
+/// <summary>Where one player's wall clock went.</summary>
+/// <remarks>
+/// <para>
+/// The point of this record is that "the load generator is slow" has several possible causes that
+/// look identical from outside, and the only way to tell them apart is to time them separately.
+/// Four of the five buckets are measured directly; the fifth is what is left.
+/// </para>
+/// <para>
+/// <b>The floor bucket is measured even under <c>--clock virtual</c>, where it is expected to be
+/// ~0.</b> That is not a wasted counter: the hard 30-second ship floor is the most natural thing to
+/// blame for a slow harness, and a run that prints <c>floor 0.0 s</c> next to <c>rate-limit wait
+/// 1770 s</c> has answered the question rather than argued about it. Winding an injected clock is a
+/// field assignment; sleeping is not.
+/// </para>
+/// </remarks>
+/// <param name="Ship">
+/// Inside <c>BatchShipper.ShipOnceAsync</c>: reading the outbox, brotli, the ES256 proof signature,
+/// the HTTP round trip and the server's whole §4.5.3 chain. Client compute and server time, not
+/// separable from here — the ingest latency histogram is the server's half of it.
+/// </param>
+/// <param name="RateLimitWait">
+/// Real <c>Task.Delay</c> honouring a <c>429</c>'s <c>Retry-After</c>. This is the server's
+/// per-credential token bucket being felt, and at the §4.3 default of 0.5/s it is two seconds per
+/// throttled batch.
+/// </param>
+/// <param name="FloorWait">
+/// Real <c>Task.Delay</c> waiting out the client's hard 30-second ship floor. Zero under
+/// <c>--clock virtual</c>, which winds the injected clock instead.
+/// </param>
+/// <param name="RetryWait">
+/// Real <c>Task.Delay</c> on the §4.5.3 backoff ladder, after a response that was neither accepted
+/// nor one of the named recoveries.
+/// </param>
+/// <param name="Generate">
+/// Everything else: the frame loop, the detector, the window accumulator, the impact correlator and
+/// the SQLite outbox writes. Derived as the remainder rather than measured, so the five buckets add
+/// up to the player's elapsed time exactly.
+/// </param>
+internal readonly record struct PlayerTiming(
+    TimeSpan Ship,
+    TimeSpan RateLimitWait,
+    TimeSpan FloorWait,
+    TimeSpan RetryWait,
+    TimeSpan Generate)
+{
+    /// <summary>Time this player spent waiting rather than computing or in flight.</summary>
+    internal TimeSpan Waiting => RateLimitWait + FloorWait + RetryWait;
+
+    /// <summary>Adds two breakdowns, for the run-level roll-up.</summary>
+    /// <param name="a">One.</param>
+    /// <param name="b">The other.</param>
+    /// <returns>The sum, bucket by bucket.</returns>
+    public static PlayerTiming operator +(PlayerTiming a, PlayerTiming b) => new(
+        a.Ship + b.Ship,
+        a.RateLimitWait + b.RateLimitWait,
+        a.FloorWait + b.FloorWait,
+        a.RetryWait + b.RetryWait,
+        a.Generate + b.Generate);
+}
 
 /// <summary>
 /// Drives one player through the real client: <see cref="GameBridge"/> → <see cref="EventPipeline"/>
@@ -139,6 +202,14 @@ internal sealed class PlayerRunner : IDisposable
     private int _failures;
     private bool _reissued;
 
+    // Stopwatch ticks, not milliseconds: a ship that lands in 300 µs is the common case under
+    // --clock virtual with the token bucket out of the way, and Environment.TickCount64 would
+    // round every one of them to zero and report that the harness does no work at all.
+    private long _shipTicks;
+    private long _rateLimitTicks;
+    private long _floorTicks;
+    private long _retryTicks;
+
     // The sim instant of the last ship opportunity taken; the age trigger's anchor.
     private double _lastShipSimT;
 
@@ -190,7 +261,7 @@ internal sealed class PlayerRunner : IDisposable
     internal async Task<PlayerResult> RunAsync(
         PlayerScript script, Func<CancellationToken, Task<Credential?>>? reissue, CancellationToken ct)
     {
-        long started = Environment.TickCount64;
+        long started = Stopwatch.GetTimestamp();
         // sim_t is career time, so a player who arrives with three hundred in-game hours behind
         // them opens their session at 1.08e6 rather than at zero. Anchoring the frame loop, the
         // ship cadence and the session event anywhere else would emit a career that appears to
@@ -271,12 +342,24 @@ internal sealed class PlayerRunner : IDisposable
         if (error.Length == 0 && _outbox.PendingCount > 0)
             error = $"{_outbox.PendingCount} events never left the outbox";
 
+        TimeSpan elapsed = Stopwatch.GetElapsedTime(started);
+        TimeSpan ship = Stopwatch.GetElapsedTime(0, _shipTicks);
+        TimeSpan rateLimit = Stopwatch.GetElapsedTime(0, _rateLimitTicks);
+        TimeSpan floor = Stopwatch.GetElapsedTime(0, _floorTicks);
+        TimeSpan retry = Stopwatch.GetElapsedTime(0, _retryTicks);
+        // Generation is the remainder so the buckets total the elapsed time exactly. Clamped
+        // because a cancelled player can leave a partial ship timed against an elapsed that
+        // stopped earlier, and a negative bucket in a report is worse than a zero one.
+        TimeSpan generate = elapsed - ship - rateLimit - floor - retry;
+        if (generate < TimeSpan.Zero)
+            generate = TimeSpan.Zero;
+
         return new PlayerResult(
             _account.Index, _account.Handle, _account.IdP, script.Summary, script.Role,
             frames, _events, _batches, _serverAccepted, _serverDeduped,
             _clockResyncs, _streamForks, _oversize, _rateLimited, _busy,
-            _byType, _digest.Value(),
-            TimeSpan.FromMilliseconds(Environment.TickCount64 - started), _reissued, error);
+            _byType, _digest.Value(), elapsed,
+            new PlayerTiming(ship, rateLimit, floor, retry, generate), _reissued, error);
     }
 
     /// <summary>Closes the outbox and removes its directory.</summary>
@@ -350,7 +433,10 @@ internal sealed class PlayerRunner : IDisposable
     {
         for (int attempts = 0; attempts < MaxAttemptsPerBatch; attempts++)
         {
+            long shipStarted = Stopwatch.GetTimestamp();
             ShipAttempt attempt = await _shipper.ShipOnceAsync(ct).ConfigureAwait(false);
+            _shipTicks += Stopwatch.GetTimestamp() - shipStarted;
+
             switch (attempt.Outcome)
             {
                 case ShipOutcome.Accepted:
@@ -382,11 +468,18 @@ internal sealed class PlayerRunner : IDisposable
                     continue;
 
                 case ShipOutcome.RateLimited:
+                {
                     // The server's per-credential token bucket. Real seconds, on purpose: this is
-                    // the limit the run is supposed to feel.
+                    // the limit the run is supposed to feel. Timed separately because at the §4.3
+                    // default it is, by a wide margin, the largest number in the report — see
+                    // PlayerTiming.RateLimitWait, and `--help`'s "going fast" section for how to
+                    // take it out of the way when the point is to measure something else.
                     _rateLimited++;
+                    long waited = Stopwatch.GetTimestamp();
                     await Task.Delay(attempt.RetryAfter ?? TimeSpan.FromSeconds(2), ct).ConfigureAwait(false);
+                    _rateLimitTicks += Stopwatch.GetTimestamp() - waited;
                     continue;
+                }
 
                 case ShipOutcome.Fatal:
                     throw new SimException($"the shipper latched dead: {_shipper.DeadReason}");
@@ -404,7 +497,9 @@ internal sealed class PlayerRunner : IDisposable
                     }
 
                     TimeSpan delay = attempt.RetryAfter ?? BackoffPolicy.Delay(_failures - 1, _jitter.NextDouble());
+                    long waited = Stopwatch.GetTimestamp();
                     await Task.Delay(delay, ct).ConfigureAwait(false);
+                    _retryTicks += Stopwatch.GetTimestamp() - waited;
                     continue;
                 }
             }
@@ -427,16 +522,23 @@ internal sealed class PlayerRunner : IDisposable
     private async Task WaitOutTheFloorAsync(CancellationToken ct)
     {
         TimeSpan remaining = _shipper.ThrottleRemaining;
+        long waited = Stopwatch.GetTimestamp();
         if (_virtualClock is not null)
         {
             // Wound forward by the remainder and not one second more. Advancing further — by sim
             // time, say — would run the proof's `iat` out of §4.3's ±300 s window on every single
             // batch and turn the clock-skew recovery into the dominant cost of the run.
             _virtualClock.Advance(remaining + TimeSpan.FromMilliseconds(1));
-            return;
+        }
+        else
+        {
+            await Task.Delay(remaining + TimeSpan.FromMilliseconds(50), ct).ConfigureAwait(false);
         }
 
-        await Task.Delay(remaining + TimeSpan.FromMilliseconds(50), ct).ConfigureAwait(false);
+        // Timed on both paths, which is the point: the virtual branch is a field assignment and
+        // the report should be able to say so with a number rather than a claim. The floor is
+        // still enforced either way — on the timeline the shipper actually reads.
+        _floorTicks += Stopwatch.GetTimestamp() - waited;
     }
 
     private async Task SwapCredentialAsync(Func<CancellationToken, Task<Credential?>> reissue, CancellationToken ct)

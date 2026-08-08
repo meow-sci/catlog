@@ -150,9 +150,43 @@ type GitHub struct {
 }
 
 // Limits is the [limits] section: the per-credential token bucket (§4.3).
+//
+// # Two different knobs, on purpose
+//
+// RateLimitPerJKTPerS and RateLimitBurst *tune* the bucket. Whatever they are
+// set to, every credential still has a bucket and a flood still meets a 429, so
+// they are safe to change anywhere — including in production, where raising
+// them is how you accommodate a client that legitimately ships more often.
+//
+// RateLimitDisabled *removes* the bucket. That is a different kind of change
+// and it is gated like one; see its own comment.
 type Limits struct {
 	RateLimitPerJKTPerS float64 `toml:"ratelimit_per_jkt_per_s"`
 	RateLimitBurst      int     `toml:"ratelimit_burst"`
+	// RateLimitDisabled removes §4.5.3 step 9 from the verification chain
+	// altogether: no token bucket is built, no credential is ever answered 429,
+	// and a single client may ship as fast as it can sign.
+	//
+	// **Load testing only, and off by default.** The bucket is the one control
+	// that bounds what a single stolen or modified client can cost the server,
+	// and it is deliberately cheap to enforce — it sits after the two signature
+	// checks and before the body is read, so a flood costs two ECDSA
+	// verifications and nothing else. Turning it off means one client can fill
+	// the write queue on its own.
+	//
+	// It exists because catlog.loadgen cannot otherwise measure the server: at
+	// the §4.3 default of one batch per two seconds per credential, a harness
+	// run is a measurement of the token bucket and of nothing else.
+	//
+	// Three things keep it out of production, the same three that keep
+	// [Server.ClockControl] out: this defaults to false, [Config.Validate]
+	// refuses the combination of `ratelimit_disabled = true` with an https
+	// `base_url`, and catlogd logs a WARN naming the base URL for as long as
+	// it runs with it on.
+	//
+	// To go *faster* rather than *unlimited*, raise RateLimitPerJKTPerS
+	// instead. That keeps a real limit in the chain and needs no gate.
+	RateLimitDisabled bool `toml:"ratelimit_disabled"`
 }
 
 // Boards is the [boards] section: how the public board index is assembled.
@@ -232,6 +266,10 @@ func Default() Config {
 		Limits: Limits{
 			RateLimitPerJKTPerS: 0.5, // 1 batch / 2 s (§4.3)
 			RateLimitBurst:      5,
+			// Off unless a config says otherwise. A default that shipped without
+			// the token bucket would be a default that shipped a server one
+			// client can saturate.
+			RateLimitDisabled: false,
 		},
 		Boards: Boards{
 			// 2 == stats.DefaultMinPlayers; not imported, to keep config free of
@@ -340,6 +378,17 @@ func (c Config) Validate() error {
 	}
 	if c.Limits.RateLimitBurst <= 0 {
 		errs = append(errs, errors.New("limits.ratelimit_burst must be positive"))
+	}
+	if c.Limits.RateLimitDisabled && strings.HasPrefix(strings.ToLower(c.Server.BaseURL), "https://") {
+		// The other combination that must never exist (see clock_control
+		// above): a TLS deployment with no per-credential ceiling at all. The
+		// token bucket is what bounds one stolen credential's cost, so this is
+		// a hard refusal at start-up rather than a warning somebody scrolls
+		// past. Raising limits.ratelimit_per_jkt_per_s is the supported way to
+		// let a real deployment ship faster.
+		errs = append(errs, errors.New(
+			"limits.ratelimit_disabled must not be enabled on an https deployment: "+
+				"it is a load-testing-only control; raise limits.ratelimit_per_jkt_per_s instead"))
 	}
 	if c.Boards.MinPlayers < 1 {
 		errs = append(errs, errors.New("boards.min_players must be at least 1"))

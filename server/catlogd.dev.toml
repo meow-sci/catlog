@@ -82,6 +82,23 @@ client_secret = "dev"
 [limits]
 ratelimit_per_jkt_per_s = 0.5             # 1 batch / 2 s (§4.3)
 ratelimit_burst         = 5
+# Removes §4.5.3 step 9 from the chain: no token bucket, no 429, one credential
+# may ship as fast as it can sign. **Load testing only**, and left off here so
+# that `make dev`, `make e2e` and the integration suites all exercise the real
+# limit. catlogd refuses to start with it on an https base_url and logs a WARN
+# naming the base URL for as long as it runs with it on.
+#
+# The per-credential bucket is the ceiling on catlog.loadgen — at 0.5/s a
+# harness run measures the bucket and nothing else — so a throughput run turns
+# it off for one process rather than editing this file:
+#
+#   CATLOG_LIMITS_RATELIMIT_DISABLED=1 catlogd -config server/catlogd.dev.toml
+#
+# To go *faster* rather than *unlimited*, raise ratelimit_per_jkt_per_s above
+# instead. That keeps a real limit in the chain and needs no gate:
+#
+#   CATLOG_LIMITS_RATELIMIT_PER_JKT_PER_S=50 catlogd -config …
+ratelimit_disabled      = false
 
 [boards]
 # `fastest_to_<body>` and `rud_<cause>` take their keys from the event stream —

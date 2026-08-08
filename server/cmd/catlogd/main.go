@@ -143,11 +143,20 @@ func run(ctx context.Context, cfg config.Config, log *slog.Logger, ready func(pu
 		return fmt.Errorf("load deny-list: %w", err)
 	}
 
+	// The per-credential token bucket (§4.3, §4.5.3 step 9). `ratelimit_disabled`
+	// omits it entirely so catlog.loadgen can measure the server rather than the
+	// bucket; Validate refuses that combination on an https base_url, and it is
+	// announced here for as long as the process runs, the same as clock control.
+	if cfg.Limits.RateLimitDisabled {
+		log.Warn("per-credential rate limiting is DISABLED — one credential may ship as fast as it can sign",
+			"base_url", cfg.Server.BaseURL)
+	}
 	verifier := authz.New(authz.Config{
-		Issuer:        cfg.Server.BaseURL,
-		AcceptedHTU:   cfg.Ingest.AcceptedHTU,
-		RatePerSecond: cfg.Limits.RateLimitPerJKTPerS,
-		Burst:         cfg.Limits.RateLimitBurst,
+		Issuer:            cfg.Server.BaseURL,
+		AcceptedHTU:       cfg.Ingest.AcceptedHTU,
+		RatePerSecond:     cfg.Limits.RateLimitPerJKTPerS,
+		Burst:             cfg.Limits.RateLimitBurst,
+		RateLimitDisabled: cfg.Limits.RateLimitDisabled,
 	}, keySet, events, deny)
 	// Also re-points the rate limiter, so the token bucket and the skew window
 	// agree with the clock that stamps recv_time.

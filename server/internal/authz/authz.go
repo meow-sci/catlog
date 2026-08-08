@@ -60,6 +60,15 @@ type Config struct {
 	// RatePerSecond and Burst configure the per-jkt token bucket (§4.3).
 	RatePerSecond float64
 	Burst         int
+	// RateLimitDisabled omits the token bucket entirely: no limiter is built
+	// and step 9 is not part of the chain, so no credential can be answered
+	// 429. Load testing only — config.Limits.RateLimitDisabled documents the
+	// gate, and config.Validate refuses it on an https deployment.
+	//
+	// Omitted rather than made infinitely permissive, for the same reason
+	// `POST /admin/clock` is left unmounted rather than made a no-op: a control
+	// that is absent cannot be half-on.
+	RateLimitDisabled bool
 	// CacheSize overrides the license cache capacity. Zero means
 	// [LicenseCacheSize].
 	CacheSize int
@@ -77,11 +86,12 @@ type Stats struct {
 
 // Verifier runs the §4.5.3 chain. It is safe for concurrent use.
 type Verifier struct {
-	cfg     Config
-	keys    *keys.Set
-	events  *store.Events
-	deny    *DenyList
-	cache   *licenseCache
+	cfg    Config
+	keys   *keys.Set
+	events *store.Events
+	deny   *DenyList
+	cache  *licenseCache
+	// limiter is nil when cfg.RateLimitDisabled is set, and step 9 is skipped.
 	limiter *Limiter
 
 	// now is the clock, injectable so skew and rate-limit tests are
@@ -102,13 +112,17 @@ func New(cfg Config, ks *keys.Set, events *store.Events, deny *DenyList) *Verifi
 	if deny == nil {
 		deny = NewDenyList()
 	}
+	var limiter *Limiter
+	if !cfg.RateLimitDisabled {
+		limiter = NewLimiter(cfg.RatePerSecond, cfg.Burst)
+	}
 	return &Verifier{
 		cfg:     cfg,
 		keys:    ks,
 		events:  events,
 		deny:    deny,
 		cache:   newLicenseCache(cfg.CacheSize),
-		limiter: NewLimiter(cfg.RatePerSecond, cfg.Burst),
+		limiter: limiter,
 		now:     time.Now,
 	}
 }
@@ -122,7 +136,9 @@ func New(cfg Config, ks *keys.Set, events *store.Events, deny *DenyList) *Verifi
 // use it the same way.
 func (v *Verifier) SetClock(now func() time.Time) {
 	v.now = now
-	v.limiter.now = now
+	if v.limiter != nil {
+		v.limiter.now = now
+	}
 }
 
 // Now is the verifier's current time. Handlers use it for the `server_time`
@@ -132,8 +148,12 @@ func (v *Verifier) Now() time.Time { return v.now() }
 // DenyList exposes the set for WP3's mutation paths.
 func (v *Verifier) DenyList() *DenyList { return v.deny }
 
-// Limiter exposes the token buckets, for /admin/stats.
+// Limiter exposes the token buckets, for /admin/stats. It is nil when the
+// deployment set `[limits] ratelimit_disabled`, because then there are none.
 func (v *Verifier) Limiter() *Limiter { return v.limiter }
+
+// RateLimited reports whether step 9 is part of this verifier's chain.
+func (v *Verifier) RateLimited() bool { return v.limiter != nil }
 
 // Stats snapshots the counters.
 func (v *Verifier) Stats() Stats {
@@ -274,10 +294,15 @@ func (v *Verifier) verify(ctx context.Context, req Request) (*Result, *Error) {
 	}
 
 	// --- step 9: rate limit, before the body is read ------------------------
-	if ok, retry := v.limiter.Allow(license.Cnf.JKT); !ok {
-		e := fail(9, CodeRateLimited, "too many batches for this credential")
-		e.RetryAfter = int(retry / time.Second)
-		return nil, e
+	//
+	// Absent, not permissive, when `[limits] ratelimit_disabled` is set: there
+	// is no bucket to take a token from, so there is nothing here to get wrong.
+	if v.limiter != nil {
+		if ok, retry := v.limiter.Allow(license.Cnf.JKT); !ok {
+			e := fail(9, CodeRateLimited, "too many batches for this credential")
+			e.RetryAfter = int(retry / time.Second)
+			return nil, e
+		}
 	}
 
 	// Step 10 is the caller's: it reads the body under the §4.3 caps and calls
