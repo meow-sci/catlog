@@ -29,7 +29,7 @@
              boards rank the smallest value first, and a reader that assumed
              otherwise would present the fastest ascent as the worst one. */}}
       <td class="direction muted">{{if .Ascending}}&#8595; lowest wins{{else}}&#8593; highest wins{{end}}</td>
-      <td class="value" data-value="{{.Count}}">{{number .Count}}</td>
+      <td class="value" data-value="{{.Count}}">{{num .Count}}</td>
     </tr>
     {{- end}}
   </tbody>

@@ -83,6 +83,10 @@ type Batch struct {
 	// kind at a time — each kind's ON CONFLICT clause is a different statement.
 	stats   [numStatKinds]map[statKey]*pendingStat
 	periods [numStatKinds]map[periodKey]*pendingStat
+	// census is the event count per (type, period, bucket). One map rather than
+	// one per kind: there is only one rule — add — and the flush is one
+	// statement.
+	census map[censusKey]*pendingCensus
 
 	// bucketMS/bucketKeys memoise [Bucket] for one receive time. Every board
 	// write asks for the same four window keys, and a batch's events mostly
@@ -110,6 +114,7 @@ type Batch struct {
 	// that was not the driver's.
 	statKeys   []statKey
 	periodKeys []periodKey
+	censusKeys []censusKey
 	args       []any
 }
 
@@ -136,6 +141,7 @@ func NewBatch(tx *sql.Tx, opts BatchOptions) *Batch {
 		bodies:    map[int64]map[bodyKey]*bodyEntry{},
 		kittens:   map[int64]map[string]*kittenEntry{},
 		values:    map[statKey]float64{},
+		census:    map[censusKey]*pendingCensus{},
 	}
 	for k := range b.stats {
 		b.stats[k] = map[statKey]*pendingStat{}
@@ -860,6 +866,78 @@ func (b *Batch) flushPeriods(ctx context.Context) error {
 	return nil
 }
 
+// --- event_census -----------------------------------------------------------------
+
+type censusKey struct {
+	typ    string
+	period string
+	bucket string
+}
+
+// pendingCensus is one census row's contribution from this batch: a count, and
+// the ends of the seq/time range it covers.
+type pendingCensus struct {
+	n                 int64
+	firstSeq, lastSeq int64
+	firstAt, lastAt   int64
+}
+
+// countEvent records one event against one census row. See census.go.
+//
+// Events reach a batch in seq order, so the first one to touch a key sets the
+// range's lower end and every later one only moves the upper — but the
+// comparisons are written out rather than assumed, because `recv_time` is a
+// server clock and a clock is allowed to step backwards.
+func (b *Batch) countEvent(typ, period, bucket string, ev Event) {
+	k := censusKey{typ, period, bucket}
+	p, ok := b.census[k]
+	if !ok {
+		b.census[k] = &pendingCensus{
+			n:        1,
+			firstSeq: ev.Seq, lastSeq: ev.Seq,
+			firstAt: ev.RecvTime, lastAt: ev.RecvTime,
+		}
+		return
+	}
+	p.n++
+	p.firstSeq = min(p.firstSeq, ev.Seq)
+	p.lastSeq = max(p.lastSeq, ev.Seq)
+	p.firstAt = min(p.firstAt, ev.RecvTime)
+	p.lastAt = max(p.lastAt, ev.RecvTime)
+}
+
+// censusFlush accumulates the count and widens the range. The CASE expressions
+// are `min`/`max` spelled the long way: tursogo's scalar function set is not
+// something to bet a projection on, and this is the same arithmetic.
+const censusFlush = ` ON CONFLICT (type, period, bucket) DO UPDATE SET
+	   n = event_census.n + excluded.n,
+	   first_seq = CASE WHEN excluded.first_seq < event_census.first_seq THEN excluded.first_seq ELSE event_census.first_seq END,
+	   last_seq  = CASE WHEN excluded.last_seq  > event_census.last_seq  THEN excluded.last_seq  ELSE event_census.last_seq  END,
+	   first_at  = CASE WHEN excluded.first_at  < event_census.first_at  THEN excluded.first_at  ELSE event_census.first_at  END,
+	   last_at   = CASE WHEN excluded.last_at   > event_census.last_at   THEN excluded.last_at   ELSE event_census.last_at   END`
+
+func (b *Batch) flushCensus(ctx context.Context) error {
+	if len(b.census) == 0 {
+		return nil
+	}
+	keys := slices.AppendSeq(b.censusKeys[:0], maps.Keys(b.census))
+	slices.SortFunc(keys, compareCensusKey)
+	b.censusKeys = keys
+	err := b.write(ctx, len(keys), 8,
+		`INSERT INTO event_census (type, period, bucket, n, first_seq, last_seq, first_at, last_at) VALUES `,
+		censusFlush,
+		func(i int, args []any) []any {
+			k := keys[i]
+			p := b.census[k]
+			return append(args, k.typ, k.period, k.bucket, p.n, p.firstSeq, p.lastSeq, p.firstAt, p.lastAt)
+		})
+	if err != nil {
+		return fmt.Errorf("stats: flush event_census: %w", err)
+	}
+	clear(b.census)
+	return nil
+}
+
 // --- flush ------------------------------------------------------------------------
 
 // Flush writes everything the batch is holding. The projector calls it once at
@@ -872,7 +950,7 @@ func (b *Batch) flushPeriods(ctx context.Context) error {
 func (b *Batch) Flush(ctx context.Context) error {
 	for _, fn := range []func(context.Context) error{
 		b.flushFlights, b.flushCareers, b.flushBodies,
-		b.flushKittens, b.flushStats, b.flushPeriods,
+		b.flushKittens, b.flushStats, b.flushPeriods, b.flushCensus,
 	} {
 		if err := fn(ctx); err != nil {
 			return err
@@ -921,6 +999,16 @@ func (b *Batch) write(ctx context.Context, rows, cols int, prefix, suffix string
 }
 
 // --- key ordering -------------------------------------------------------------------
+
+func compareCensusKey(x, y censusKey) int {
+	if c := strings.Compare(x.typ, y.typ); c != 0 {
+		return c
+	}
+	if c := strings.Compare(x.period, y.period); c != 0 {
+		return c
+	}
+	return strings.Compare(x.bucket, y.bucket)
+}
 
 func compareStatKey(x, y statKey) int {
 	if c := cmpInt64(x.playerID, y.playerID); c != 0 {

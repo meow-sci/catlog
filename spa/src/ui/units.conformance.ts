@@ -15,8 +15,10 @@ import { GS, JOULES, METRES, METRES_SEC, MILLIS, PASCALS, SECONDS } from './unit
  * edits in one commit** — `units.go`, `units_test.go`'s table, and this file
  * plus `units.ts`.
  *
- * The separator in the expectations below is U+202F, not a space. It looks like
- * one. It is not one, and `units.test.ts` asserts that too.
+ * The grouping in the expectations below is **canonical** — `CANONICAL_LOCALE`,
+ * which is what `units.Format` bakes into the server-rendered fallback. Rule 2's
+ * separators are the reader's locale everywhere else, so `units.test.ts` passes
+ * that locale explicitly here and covers the localised cases separately.
  */
 export interface ConformanceRow {
   readonly value: number;
@@ -30,7 +32,7 @@ export const CONFORMANCE: readonly ConformanceRow[] = [
   // duration, an impact energy takes an SI prefix, a transfer becomes a
   // two-component duration.
   { value: 62, unit: METRES_SEC, want: '62 m/s' },
-  { value: 7799, unit: METRES_SEC, want: '7\u202F799 m/s' },
+  { value: 7799, unit: METRES_SEC, want: '7,799 m/s' },
   { value: 37500, unit: MILLIS, want: '37.5 s' },
   { value: 48000000, unit: JOULES, want: '48 MJ' },
   { value: 2.1e7, unit: SECONDS, want: '243d 01h' },
@@ -42,8 +44,8 @@ export const CONFORMANCE: readonly ConformanceRow[] = [
   { value: 4.25, unit: '', want: '4.25' },
   { value: 62, unit: '', want: '62' },
   { value: 214, unit: '', want: '214' },
-  { value: 7799, unit: '', want: '7\u202F799' },
-  { value: 1234567, unit: '', want: '1\u202F234\u202F567' },
+  { value: 7799, unit: '', want: '7,799' },
+  { value: 1234567, unit: '', want: '1,234,567' },
   { value: -214.4, unit: '', want: '-214' },
 
   // Length scales; speed does not.
@@ -53,7 +55,7 @@ export const CONFORMANCE: readonly ConformanceRow[] = [
   { value: 1.5e9, unit: METRES, want: '1.5 Gm' },
   { value: 4.2e12, unit: METRES, want: '4.2 Tm' },
   { value: 0.5, unit: METRES, want: '0.5 m' },
-  { value: 2410, unit: METRES_SEC, want: '2\u202F410 m/s' },
+  { value: 2410, unit: METRES_SEC, want: '2,410 m/s' },
 
   // Energy and pressure.
   { value: 9.9e9, unit: JOULES, want: '9.9 GJ' },

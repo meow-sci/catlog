@@ -33,7 +33,7 @@
       {{template "value-cell" (dict "Value" .Value "Unit" .Unit "Rewound" .Rewound)}}
       <td class="rank" data-players="{{.Players}}">
         <span class="rank-of">
-          <span>#{{.Rank}} <span class="of">of {{number .Players}}</span></span>
+          <span>#{{.Rank}} <span class="of">of {{num .Players}}</span></span>
           {{- /* Fuller is better, and clamped: rank is filtered of banned
                  players and the denominator is not, so the naive ratio can
                  leave the interval. */}}

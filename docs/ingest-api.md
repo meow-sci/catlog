@@ -1,6 +1,6 @@
 # catlog HTTP API — ingest, auth, read, errors, conformance vectors
 
-Origin: [INITIAL_IMPL_PLAN.md](../INITIAL_IMPL_PLAN.md) §4.3–§4.5 and §4.8–§4.10, extracted verbatim.
+Origin: [INITIAL_IMPL_PLAN.md](./INITIAL_IMPL_PLAN.md ) §4.3–§4.5 and §4.8–§4.10, extracted verbatim.
 
 > Everything in this document is the single source of truth for both the C# mod and the Go
 > server. Changing anything here requires bumping `ver` on the affected endpoint and a line in
@@ -221,11 +221,26 @@ All responses `Cache-Control: public, s-maxage=30, stale-while-revalidate=300` e
 - `GET /v1/players/{handle}/events?limit=50&before=<cursor>&type=<event type>` → `{"handle": s, "limit": n, "type"?: s, "next"?: <cursor>, "events": [{"seq": n, "id": ulid, "type": s, "ver": n, "session"?: ulid, "flight"?: ulid, "career"?: s, "sim_t"?: f, "recv": unix_ms, "payload": {…}}]}` (404 if unknown/banned)
 - `GET /v1/events?limit=50&before=<cursor>&type=<event type>&handle=<handle>` → the same envelope with every player's events mixed together, newest first; each row additionally carries `"handle": s`. `?handle=` narrows to one player (404 if unknown/banned, the same one answer); the unfiltered envelope omits `handle`.
 - `GET /v1/events/stream?type=<event type>&handle=<handle>` → live raw events as SSE (no cache)
+- `GET /v1/stats` → `{"generated": unix_ms, "events": {"total": n, "types": [{"type": s, "count": n, "share": f, "first"?: unix_ms, "last"?: unix_ms}], "windows": [{"period": s, "bucket": s, "count": n, "types": [...]}], "first"?: unix_ms, "last"?: unix_ms, "days": n, "per_day": f, "busiest"?: {"period": s, "bucket": s, "count": n}, "daily": [...]}, "collection": {"boards": n, "placements": n, "types": n, "handles": n, "scoring_players": n, "flights": n, "flagged_flights": n, "careers": n, "rewound_careers": n, "kittens": n, "bodies": n, "feed_rows": n, "log_head": n, "projected": n, "lag": n}}` — the collection census; see below
 - `GET /v1/feed?limit=30` → `{"limit": n, "rows": [{"id": n, "at": unix_ms, "handle": s, "type": s, "summary": s}]}` — the JSON activity feed, newest first; `limit` clamps to the feed table's cap (500)
 - `GET /v1/feed/stream` → the same rows live, as SSE (no cache)
 - `GET /v1/compare?handles=a,b,c` → `{"handles": [{"handle": s, "found": b, "since"?: unix_ms}], "boards": [{"stat": s, "title": s, "unit": s, "ascending": b, "players": n, "rows": [{"handle": s, "value": f, "rank": n, "context": {…}, "updated": unix_ms, "rewound"?: true}]}]}`
 
 `ascending` and `players` on a profile row are what a profile page needs to render "#3 of 41" without also fetching the board index; `players` is the board's row count, banned players included, exactly like `count` above — the rank is filtered, so a rank is never *worse* than that denominator implies.
+
+### The collection census — `GET /v1/stats`
+
+The only endpoint that describes **catlog** rather than its players: how many events are stored, of what kinds, arriving how fast, since when, and how much has been derived from them. No records, no ranking, nobody's handle.
+
+It is served from a projection (`event_census`, one row per `(type, period, bucket)`) rather than counted on demand, because `SELECT type, count(*) FROM event GROUP BY type` is a full scan of the largest table catlog has and the per-window breakdown is that scan again with a date function per row. The windows and buckets are exactly the ones `?period=`/`?at=` use on a leaderboard, computed from `recv_time` in UTC, so "this week" means the same week everywhere.
+
+Three things worth knowing before comparing numbers:
+
+- **`events.total` counts what the projector folded**, which is the whole log minus anything this server build could not decode (§4.1). `collection.log_head` is the newest seq in the log and `collection.lag` is the gap; publishing all three is how a figure here disagreeing with a figure elsewhere is diagnosable rather than mysterious.
+- **`events.days` is days that carried an event**, not days since the first one — so `per_day` is not diluted by a fortnight the service was switched off — and `daily` contains only those days, because a day with no events is not a zero anybody measured.
+- **The all-time total is a stored row, not a sum of the types.** A type this build cannot name is in the total and absent from the breakdown, which is the honest way round.
+
+`collection.bodies` is the one figure catlog could not have known in advance: bodies are opaque strings on the wire and the server keeps no list of them, so it counts the ones players actually reached.
 
 ### Handle search — `GET /v1/players?q=`
 

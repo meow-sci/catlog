@@ -98,6 +98,10 @@ type Projector struct {
 	tick      time.Duration
 	log       *slog.Logger
 
+	// folds is every fold, for the incremental loop. stateFolds and boardFolds
+	// are the rebuild's two passes; boardFolds is [stats.SecondPassFolds], which
+	// is the boards *and* the event census, so the second pass applies exactly
+	// what the incremental loop applies after the state folds.
 	folds      []stats.Fold
 	boardFolds []stats.Fold
 	stateFolds []stats.Fold
@@ -175,7 +179,7 @@ func New(opts Options) (*Projector, error) {
 		tick:       opts.Tick,
 		log:        opts.Log.With("component", "projector"),
 		folds:      stats.Folds(),
-		boardFolds: stats.BoardFolds(),
+		boardFolds: stats.SecondPassFolds(),
 		stateFolds: stats.StateFolds(),
 		skipped:    map[string]struct{}{},
 		done:       make(chan struct{}),

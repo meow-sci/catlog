@@ -25,8 +25,20 @@
 //  2. **Three significant figures, trailing zeros trimmed.** For a magnitude x,
 //     the number of decimals is `clamp(2 - floor(log10 |x|), 0, 6)`; the value
 //     is rounded to that many decimals, trailing zeros and any trailing "." are
-//     removed, and the integer part is grouped in threes with U+202F (narrow
-//     no-break space). Zero renders as "0".
+//     removed, and the integer part is grouped in threes. Zero renders as "0".
+//
+//     **Grouping is a rendering of the reader's locale, and this package cannot
+//     know it.** A Go process serves one HTML response to a shared cache
+//     (§4.8's `s-maxage=30`), so the separator baked in here is a *canonical*
+//     one — [GroupSeparator] and [DecimalSeparator], which are en-US's — and the
+//     browser re-renders it. Both frontends do that through `Intl.NumberFormat`:
+//     the SPA calls it directly, and the server-rendered site calls it over the
+//     number and precision this package publishes in [Split], which is why that
+//     function exists and why [Format] is only ever the fallback a reader with
+//     no JavaScript sees. Everything below therefore describes the canonical
+//     form; the *placement* of the groups is Intl's business, and it differs by
+//     more than a character — en-IN groups 12,34,567 and es-ES leaves 1234
+//     alone.
 //
 //     Rounding is defined on the magnitude — `round(|x| · 10^d) / 10^d` with
 //     halves going up — and the sign is re-applied afterwards. Go's math.Round
@@ -42,7 +54,7 @@
 //  4. **Speed (`m/s`) never scales.** The prompt for a KSA player is m/s: every
 //     speed board is in m/s, orbital velocity is a number this audience reads
 //     directly, and a per-value scale would put "7.8 km/s" and "998 m/s" in the
-//     same leaderboard column. So 7 799 m/s stays 7 799 m/s.
+//     same leaderboard column. So 7,799 m/s stays 7,799 m/s.
 //
 //  5. **Time (`s`, `ms`) becomes a human duration**, in the largest two units
 //     that fit. Under a second it is milliseconds; under a minute it is seconds
@@ -57,7 +69,7 @@
 //
 //  7. **A column header names the unit only when every cell in the column ends
 //     in it.** [Label] is that rule. Rules 3, 4 and 6 all render `value + symbol`
-//     — `1.82 Mm`, `7 799 m/s`, `6 RUDs` — so the symbol labels the column and
+//     — `1.82 Mm`, `7,799 m/s`, `6 RUDs` — so the symbol labels the column and
 //     the header shows it verbatim, in its own case. Rule 5 does not: a column of
 //     durations reads `37.5 s`, `10h 23m`, `243d 01h`, and no cell in it says
 //     "ms". Its header therefore names the **quantity** — `Time` — because a
@@ -69,7 +81,7 @@
 // # Worked examples
 //
 //	Format(62, "m/s")        →  "62 m/s"
-//	Format(7799, "m/s")      →  "7 799 m/s"      (U+202F between the groups)
+//	Format(7799, "m/s")      →  "7,799 m/s"      (canonical; the browser localises it)
 //	Format(37500, "ms")      →  "37.5 s"
 //	Format(48000000, "J")    →  "48 MJ"
 //	Format(2.1e7, "s")       →  "243d 01h"
@@ -100,17 +112,29 @@ import (
 // plus the two that only appear inside a fold's `context` blob (J, Pa), so a
 // caller never has to translate before calling [Format].
 const (
-	Metres      = "m"
-	MetresSec   = "m/s"
-	Seconds     = "s"
-	Millis      = "ms"
-	Joules      = "J"
-	Pascals     = "Pa"
-	Gs          = "g"
-	Kilograms   = "kg"
-	Degrees     = "deg"
-	MetresSec2  = "m/s2"
-	groupSep    = " " // narrow no-break space
+	Metres     = "m"
+	MetresSec  = "m/s"
+	Seconds    = "s"
+	Millis     = "ms"
+	Joules     = "J"
+	Pascals    = "Pa"
+	Gs         = "g"
+	Kilograms  = "kg"
+	Degrees    = "deg"
+	MetresSec2 = "m/s2"
+
+	// GroupSeparator and DecimalSeparator are the **canonical** separators —
+	// en-US's — that [Format] renders with.
+	//
+	// They are not a claim about how a reader writes numbers. They are what a
+	// cached, locale-blind HTML response can honestly say, and both frontends
+	// replace them with the reader's own through `Intl.NumberFormat`: the SPA
+	// formats from the JSON directly, the server-rendered site re-renders the
+	// element [Split] describes. A reader with JavaScript off keeps these, which
+	// is why they are the conventional pair and not a sentinel nobody writes.
+	GroupSeparator   = ","
+	DecimalSeparator = "."
+
 	notANumber  = "—"
 	maxDecimals = 6
 )
@@ -134,21 +158,82 @@ var siPrefixes = []struct {
 // unit is appended verbatim, which is what makes the counter boards work
 // without a table of their labels.
 func Format(v float64, unit string) string {
+	p := Split(v, unit)
+	return p.Head + p.Tail
+}
+
+// Parts is [Format]'s answer taken apart, so a browser can put it back together
+// in the reader's locale.
+//
+// It exists for exactly one caller — the server-rendered site's number element,
+// which ships `Head + Tail` as text for a reader with no JavaScript and
+// `Number`/`Decimals` as attributes for `Intl.NumberFormat` to re-render from.
+// Splitting rather than re-parsing is what keeps the browser from having to
+// know that "1.82 Mm" is a number and " Mm" is not, or that "243d 01h" is
+// neither.
+type Parts struct {
+	// Head is the canonical rendering of the number, grouped with
+	// [GroupSeparator] — "1.82", "7,799", "243d 01h", "—".
+	Head string
+	// Tail is what follows it, leading space included: " Mm", " m/s", " RUDs",
+	// or "" for a bare count.
+	Tail string
+	// Number is the value Head renders — the *scaled* one, so 1 820 000 m has a
+	// Number of 1.82 and a Tail of " Mm". Meaningless unless IsNumber.
+	Number float64
+	// Decimals is how many decimal places Head actually shows, after the
+	// trailing zeros of rule 2 came off. It is `maximumFractionDigits` for the
+	// browser, and passing the pre-trim count instead would put "1.820" back on
+	// the page.
+	Decimals int
+	// IsNumber reports that Head is a single number and may be re-rendered.
+	//
+	// False for "—" and for rule 5's two-component durations: "1h 01m" is two
+	// numbers and a layout, the zero-padding is load-bearing, and neither
+	// component can reach a thousand — so there is nothing there for a locale to
+	// have an opinion about.
+	IsNumber bool
+}
+
+// Split renders v in unit and reports the pieces; see [Parts].
+func Split(v float64, unit string) Parts {
 	if math.IsNaN(v) || math.IsInf(v, 0) {
-		return notANumber
+		return Parts{Head: notANumber}
 	}
 	switch unit {
 	case Metres, Joules, Pascals:
 		return scaleSI(v, unit)
 	case Seconds:
-		return Duration(v)
+		return durationParts(v)
 	case Millis:
-		return Duration(v / 1000)
+		return durationParts(v / 1000)
 	case "":
-		return Number(v)
+		return numberParts(v, "")
 	default:
-		return Number(v) + " " + unit
+		return numberParts(v, " "+unit)
 	}
+}
+
+// numberParts is rule 2, kept as pieces.
+//
+// The decimal count it reports is read back off the rendered string rather than
+// taken from [decimals], because [trimZeros] has already run: rule 2 renders
+// 1.8200 as "1.82", and telling a browser to show two decimals of 1.82 is the
+// same string while telling it to show four is not.
+func numberParts(v float64, tail string) Parts {
+	body := trimZeros(fixed(v, decimals(v)))
+	shown := 0
+	if dot := strings.IndexByte(body, '.'); dot >= 0 {
+		shown = len(body) - dot - 1
+	}
+	// Parsed back rather than carried through, so the attribute a browser
+	// re-renders from is exactly the number the fallback text says — never the
+	// unrounded input, which would let the two disagree in the last digit.
+	n, err := strconv.ParseFloat(body, 64)
+	if err != nil {
+		n = v
+	}
+	return Parts{Head: group(body), Tail: tail, Number: n, Decimals: shown, IsNumber: true}
 }
 
 // Label is rule 7: the column header for a column of values in unit.
@@ -202,55 +287,68 @@ func Number(v float64) string {
 	if math.IsNaN(v) || math.IsInf(v, 0) {
 		return notANumber
 	}
-	return group(trimZeros(fixed(v, decimals(v))))
+	return numberParts(v, "").Head
 }
 
 // scaleSI is rule 3: pick the largest prefix whose scaled magnitude is at
 // least 1, then render the scaled value with rule 2.
-func scaleSI(v float64, unit string) string {
+func scaleSI(v float64, unit string) Parts {
 	a := math.Abs(v)
 	for _, p := range siPrefixes {
 		if a >= p.step {
-			return Number(v/p.step) + " " + p.prefix + unit
+			return numberParts(v/p.step, " "+p.prefix+unit)
 		}
 	}
 	// Below the base unit: no sub-unit prefixes (rule 3).
-	return Number(v) + " " + unit
+	return numberParts(v, " "+unit)
 }
 
 // Duration is rule 5: seconds rendered as a human duration.
 func Duration(seconds float64) string {
+	p := durationParts(seconds)
+	return p.Head + p.Tail
+}
+
+// durationParts is [Duration] kept as pieces; see [Parts].
+func durationParts(seconds float64) Parts {
 	if math.IsNaN(seconds) || math.IsInf(seconds, 0) {
-		return notANumber
+		return Parts{Head: notANumber}
 	}
 	sign := ""
-	if seconds < 0 {
-		sign, seconds = "-", -seconds
+	magnitude := seconds
+	if magnitude < 0 {
+		sign, magnitude = "-", -magnitude
 	}
 	switch {
-	case seconds == 0:
-		return "0 s"
-	case seconds < 1:
-		return sign + Number(seconds*1000) + " ms"
-	case seconds < 60:
-		return sign + Number(seconds) + " s"
+	case magnitude == 0:
+		return numberParts(0, " s")
+	case magnitude < 1:
+		// The signed value goes in, so the minus is the number's rather than a
+		// prefix glued onto it — a browser re-rendering the attribute has to
+		// produce the whole string, and a locale may not write a minus the way
+		// this file does.
+		return numberParts(seconds*1000, " ms")
+	case magnitude < 60:
+		return numberParts(seconds, " s")
 	}
 
 	// Whole seconds from here down: a two-component duration has no use for a
 	// fraction of its smaller unit, and truncating (rather than rounding) keeps
 	// "1h 00m" from appearing for something that has not reached an hour.
-	total := int64(seconds)
+	total := int64(magnitude)
+	var head string
 	switch {
 	case total < 3600:
-		return sign + pair(total/60, "m", total%60, "s", true)
+		head = pair(total/60, "m", total%60, "s", true)
 	case total < 86400:
-		return sign + pair(total/3600, "h", total%3600/60, "m", true)
+		head = pair(total/3600, "h", total%3600/60, "m", true)
 	case total < 365*86400:
-		return sign + pair(total/86400, "d", total%86400/3600, "h", true)
+		head = pair(total/86400, "d", total%86400/3600, "h", true)
 	default:
 		days := total / 86400
-		return sign + pair(days/365, "y", days%365, "d", false)
+		head = pair(days/365, "y", days%365, "d", false)
 	}
+	return Parts{Head: sign + head}
 }
 
 // pair renders the two-component form. pad zero-fills the trailing component to
@@ -301,7 +399,8 @@ func trimZeros(s string) string {
 	return strings.TrimSuffix(s, ".")
 }
 
-// group inserts U+202F between thousands in the integer part.
+// group inserts [GroupSeparator] between thousands in the integer part. It is
+// the canonical grouping only — see the note on that constant.
 func group(s string) string {
 	sign := ""
 	if strings.HasPrefix(s, "-") {
@@ -311,13 +410,13 @@ func group(s string) string {
 	var b strings.Builder
 	for i, r := range intPart {
 		if i > 0 && (len(intPart)-i)%3 == 0 {
-			b.WriteString(groupSep)
+			b.WriteString(GroupSeparator)
 		}
 		b.WriteRune(r)
 	}
 	out := sign + b.String()
 	if hasFrac {
-		out += "." + frac
+		out += DecimalSeparator + frac
 	}
 	return out
 }
@@ -373,7 +472,7 @@ var Conformance = []struct {
 }{
 	// The five the read-API work package was asked to pin.
 	{62, MetresSec, "62 m/s"},
-	{7799, MetresSec, "7 799 m/s"},
+	{7799, MetresSec, "7,799 m/s"},
 	{37500, Millis, "37.5 s"},
 	{48000000, Joules, "48 MJ"},
 	{2.1e7, Seconds, "243d 01h"},
@@ -385,8 +484,8 @@ var Conformance = []struct {
 	{4.25, "", "4.25"},
 	{62, "", "62"},
 	{214, "", "214"},
-	{7799, "", "7 799"},
-	{1234567, "", "1 234 567"},
+	{7799, "", "7,799"},
+	{1234567, "", "1,234,567"},
 	{-214.4, "", "-214"},
 
 	// Length scales; speed does not.
@@ -396,7 +495,7 @@ var Conformance = []struct {
 	{1.5e9, Metres, "1.5 Gm"},
 	{4.2e12, Metres, "4.2 Tm"},
 	{0.5, Metres, "0.5 m"},
-	{2410, MetresSec, "2 410 m/s"},
+	{2410, MetresSec, "2,410 m/s"},
 
 	// Energy and pressure.
 	{9.9e9, Joules, "9.9 GJ"},

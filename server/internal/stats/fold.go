@@ -61,11 +61,28 @@ type FlightStateReader interface {
 const KIAWindowSeconds = 2.0
 
 // Folds returns every fold in application order: the state folds first (§5.6),
-// then the boards. The order of the boards among themselves does not matter — no
-// two write the same (player_id, stat).
+// then everything the second pass applies. The order of the boards among
+// themselves does not matter — no two write the same (player_id, stat).
 func Folds() []Fold {
-	return append(StateFolds(), BoardFolds()...)
+	return append(StateFolds(), SecondPassFolds()...)
 }
+
+// SecondPassFolds returns every fold that runs once flight_state and career are
+// complete: the boards, then the census.
+//
+// It exists so that "what a rebuild's second pass applies" and "what the
+// incremental loop applies after the state folds" are one list rather than two
+// that have to be kept level. A fold that ran in one and not the other would
+// make a rebuilt projections.db disagree with the incremental one, which is the
+// one property the rebuild exists to guarantee.
+func SecondPassFolds() []Fold { return append(BoardFolds(), LogFolds()...) }
+
+// LogFolds returns the folds that describe the log itself rather than the
+// players in it — currently just the event census behind `GET /v1/stats`.
+//
+// Separate from [BoardFolds] because it obeys none of the board rules: no flag
+// exclusion, no handle requirement, no tie-break. See census.go.
+func LogFolds() []Fold { return []Fold{censusFold{}} }
 
 // StateFolds returns the folds that maintain the tables the boards read:
 // `flight_state` (the flag exclusion) and `career` (the time-to-milestone

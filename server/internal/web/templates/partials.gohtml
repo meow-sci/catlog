@@ -12,8 +12,10 @@ One value cell, everywhere on the site.
 
 Three things travel together and none of them is decoration:
 
-  - the rendered string, from `units`, which is the same string the React reader
-    produces from the same JSON;
+  - the rendered number, from `units`, wrapped by `numUnit` in the element
+    intl.js re-renders in the reader's locale. The text it ships with is the
+    canonical grouping — what a reader with no JavaScript keeps — and the React
+    reader produces the same string from the same JSON for the same locale;
   - `title`, the undecorated figure and its unit, which is how a reader recovers
     the digits "48 MJ" hides;
   - `data-value`, the float exactly as the API sent it. That is what a test — or
@@ -25,7 +27,7 @@ Three things travel together and none of them is decoration:
 career-rewind qualification.
 */}}
 {{define "value-cell" -}}
-<td class="value" data-value="{{exact .Value}}" title="{{exactUnit .Value .Unit}}">{{value .Value .Unit}}
+<td class="value" data-value="{{exact .Value}}" title="{{exactUnit .Value .Unit}}">{{numUnit .Value .Unit}}
   {{- if .Rewound}}<abbr class="rewound" title="An earlier save of this career was loaded, so its clock did not only run forwards.">&dagger;</abbr><span class="sr-only"> (career rewound)</span>{{end -}}
 </td>
 {{- end}}
@@ -157,7 +159,7 @@ formatted form as a title — the inverse of the default tables, deliberately.
   <td class="handle"><a href="{{playerPath .Handle}}">{{.Handle}}</a></td>
   <td class="type"><code>{{.Type}}</code> <small class="muted">v{{.Ver}}</small></td>
   {{- /* sim_t is absent, not zero, when the event carried none. */}}
-  <td class="simt">{{if .SimT}}<span title="{{exactUnit .SimT "s"}}">{{value .SimT "s"}}</span>{{else}}&#8212;{{end}}</td>
+  <td class="simt">{{if .SimT}}<span title="{{exactUnit .SimT "s"}}">{{numUnit .SimT "s"}}</span>{{else}}&#8212;{{end}}</td>
   <td>
     <details class="details-blob">
       <summary>Payload</summary>

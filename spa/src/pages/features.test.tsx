@@ -222,9 +222,9 @@ describe('the raw event log', () => {
     await screen.findByText('vehicle.impact');
     await user.click(screen.getByRole('button', { name: 'Payload' }));
 
-    // This is the view where a reader wants `7799`, not `7 799 m/s`.
+    // This is the view where a reader wants `7799`, not `7,799 m/s`.
     expect(screen.getByText('7799')).toBeTruthy();
-    expect(screen.getByText('(7 799 m/s)')).toBeTruthy();
+    expect(screen.getByText('(7,799 m/s)')).toBeTruthy();
     // A key this build has never heard of is still rendered: catlog preserves
     // them, and a raw view that dropped them would be lying about what it
     // recorded.

@@ -45,6 +45,44 @@ test.describe("units and numerals", () => {
     }
   });
 
+  test("grouping is the reader's locale, finished in the browser", async ({ browser }) => {
+    // One cached HTML response, two readers, two conventions. The server has no
+    // locale to render in (§4.8 serves every public page to a shared cache), so
+    // it writes `units`' canonical grouping into the element and publishes the
+    // number itself in `data-n`; intl.js re-renders it on arrival.
+    const rendered = async (locale: string) => {
+      const context = await browser.newContext({ locale });
+      const page = await context.newPage();
+      await page.goto("/boards/fastest_orbital_speed");
+      const cell = page.locator("tr.board-row td.value span.n").first();
+      // Wait for the module to have claimed the element, so this cannot read
+      // the server's fallback text and call it a pass.
+      await expect(cell).toHaveAttribute("data-localized", "");
+      const out = {
+        text: (await cell.innerText()).trim(),
+        n: Number(await cell.getAttribute("data-n")),
+      };
+      await context.close();
+      return out;
+    };
+
+    const us = await rendered("en-US");
+    const de = await rendered("de-DE");
+    const fr = await rendered("fr-FR");
+
+    // The same number, read from an attribute rather than scraped back out of
+    // text that is deliberately not machine-readable.
+    expect(us.n).toBe(de.n);
+    expect(us.n).toBeGreaterThanOrEqual(1000);
+
+    // Written three ways. The last one is the joke this change exists for:
+    // U+202F is not a bad separator, it is fr-FR's — and it used to be what
+    // every other locale got too.
+    expect(us.text).toBe("9,450");
+    expect(de.text).toBe("9.450");
+    expect(fr.text).toBe("9\u202F450");
+  });
+
   test("a value column is headed by what it holds, not by the unit it is stored in", async ({
     page,
   }) => {

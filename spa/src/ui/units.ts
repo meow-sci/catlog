@@ -19,8 +19,23 @@
  *
  *  2. **Three significant figures, trailing zeros trimmed.** Decimals are
  *     `clamp(2 - floor(log10 |x|), 0, 6)`; the value is rounded to that many,
- *     trailing zeros and any trailing `.` are removed, and the integer part is
- *     grouped in threes with U+202F NARROW NO-BREAK SPACE. Zero renders `0`.
+ *     trailing zeros and any trailing `.` are removed, and the result is
+ *     grouped by `Intl.NumberFormat` **in the reader's locale**. Zero renders `0`.
+ *
+ *     Grouping is the one rule that is not a constant. A leaderboard is a shared
+ *     artefact and its *timestamps* are therefore fixed UTC (`ui/format.ts`) —
+ *     but a thousands separator is not a fact about the record, it is a fact
+ *     about the reader, and a U+202F between the groups was a third thing that
+ *     is nobody's convention. So the digits, the significant figures and the SI
+ *     prefix are decided here, and the *separators and group sizes* are decided
+ *     by Intl — which knows that en-IN writes `12,34,567` and that es-ES leaves
+ *     `1234` alone, neither of which swapping one character can produce.
+ *
+ *     `units.go` renders the same values with a **canonical** en-US grouping,
+ *     because a cached HTML response cannot know a locale; the server-rendered
+ *     site re-renders it in the browser from `units.Split`. So the conformance
+ *     table below is pinned to {@link CANONICAL_LOCALE}, and that is the locale
+ *     in which the two frontends must still agree character for character.
  *
  *     Rounding is defined **on the magnitude** — `round(|x| · 10^d) / 10^d`,
  *     halves up, sign re-applied afterwards. That is spelled out rather than
@@ -35,7 +50,7 @@
  *
  *  4. **Speed (`m/s`) never scales.** m/s is the prompt a KSA player reads
  *     directly, every speed board is in m/s, and a per-value scale would put
- *     `7.8 km/s` and `998 m/s` in the same column. `7 799 m/s` stays that.
+ *     `7.8 km/s` and `998 m/s` in the same column. `7,799 m/s` stays that.
  *
  *  5. **Time (`s`, `ms`) becomes a human duration**, largest two units that fit:
  *     under a second, milliseconds; under a minute, seconds at three significant
@@ -53,7 +68,7 @@
  *
  *  7. **A column header names the unit only when every cell in the column ends
  *     in it.** {@link unitLabel} is that rule. Rules 3, 4 and 6 all render
- *     `value + symbol` — `1.82 Mm`, `7 799 m/s`, `6 RUDs` — so the symbol labels
+ *     `value + symbol` — `1.82 Mm`, `7,799 m/s`, `6 RUDs` — so the symbol labels
  *     the column and the header shows it verbatim, in its own case. Rule 5 does
  *     not: a column of durations reads `37.5 s`, `10h 23m`, `243d 01h`, and no
  *     cell in it says `ms`. Its header therefore names the **quantity** —
@@ -74,12 +89,15 @@ export const DEGREES = 'deg';
 export const METRES_SEC2 = 'm/s2';
 
 /**
- * U+202F NARROW NO-BREAK SPACE.
+ * The locale the cross-frontend conformance table is written in.
  *
- * Not an ASCII space: it does not wrap and it does not widen the column. A plain
- * space here would be invisible in a diff and visible on every page.
+ * Every formatter below takes an optional `locale` and defaults it to
+ * `undefined`, which is Intl for "whatever this browser is" — and that default
+ * is the feature. This constant is what the tests pin instead, and it is the
+ * same grouping `units.Format` bakes into the server-rendered fallback, so
+ * "the two frontends agree" stays a statement somebody can check.
  */
-export const GROUP_SEPARATOR = ' ';
+export const CANONICAL_LOCALE = 'en-US';
 
 /** What a value that is not a number renders as. Never `NaN`, never `0`, never blank. */
 export const NOT_A_NUMBER = '—';
@@ -105,21 +123,21 @@ const SI_PREFIXES: readonly (readonly [step: number, prefix: string])[] = [
  * came off publishes. An unrecognised unit is appended verbatim, which is what
  * makes the counter boards work without a table of their labels.
  */
-export function formatValue(value: number, unit: string): string {
+export function formatValue(value: number, unit: string, locale?: string): string {
   if (!Number.isFinite(value)) return NOT_A_NUMBER;
   switch (unit) {
     case METRES:
     case JOULES:
     case PASCALS:
-      return scaleSI(value, unit);
+      return scaleSI(value, unit, locale);
     case SECONDS:
-      return formatDuration(value);
+      return formatDuration(value, locale);
     case MILLIS:
-      return formatDuration(value / 1000);
+      return formatDuration(value / 1000, locale);
     case '':
-      return formatNumber(value);
+      return formatNumber(value, locale);
     default:
-      return formatNumber(value) + ' ' + unit;
+      return formatNumber(value, locale) + ' ' + unit;
   }
 }
 
@@ -176,25 +194,40 @@ export function unitMeasured(unit: string): string {
 
 /**
  * Rule 2 on its own: three significant figures, trailing zeros trimmed,
- * thousands grouped. What a bare count renders as.
+ * thousands grouped in `locale`. What a bare count renders as.
+ *
+ * `locale` defaults to the reader's. Pass one only to pin the output — the
+ * conformance table does, with {@link CANONICAL_LOCALE}.
  */
-export function formatNumber(value: number): string {
+export function formatNumber(value: number, locale?: string): string {
   if (!Number.isFinite(value)) return NOT_A_NUMBER;
-  return group(trimZeros(fixed(value, decimals(value))));
+  // Two steps, and the order is the whole of rule 2: *this file* decides how
+  // many digits there are, and Intl decides how they are written. Handing the
+  // raw value to Intl with `maximumSignificantDigits: 3` would look equivalent
+  // and is not — it rounds on its own terms rather than on the magnitude, so Go
+  // and the browser would part company at a tie.
+  const body = trimZeros(fixed(value, decimals(value)));
+  return grouped(Number(body), fractionDigits(body), locale);
+}
+
+/** How many decimals a rendered body actually shows, after {@link trimZeros}. */
+function fractionDigits(body: string): number {
+  const dot = body.indexOf('.');
+  return dot === -1 ? 0 : body.length - dot - 1;
 }
 
 /** Rule 3: the largest prefix whose scaled magnitude is at least 1, then rule 2. */
-function scaleSI(value: number, unit: string): string {
+function scaleSI(value: number, unit: string, locale?: string): string {
   const magnitude = Math.abs(value);
   for (const [step, prefix] of SI_PREFIXES) {
-    if (magnitude >= step) return formatNumber(value / step) + ' ' + prefix + unit;
+    if (magnitude >= step) return formatNumber(value / step, locale) + ' ' + prefix + unit;
   }
   // Below the base unit: no sub-unit prefixes (rule 3).
-  return formatNumber(value) + ' ' + unit;
+  return formatNumber(value, locale) + ' ' + unit;
 }
 
 /** Rule 5: seconds rendered as a human duration. */
-export function formatDuration(seconds: number): string {
+export function formatDuration(seconds: number, locale?: string): string {
   if (!Number.isFinite(seconds)) return NOT_A_NUMBER;
   let sign = '';
   let magnitude = seconds;
@@ -202,9 +235,11 @@ export function formatDuration(seconds: number): string {
     sign = '-';
     magnitude = -magnitude;
   }
-  if (magnitude === 0) return '0 s';
-  if (magnitude < 1) return sign + formatNumber(magnitude * 1000) + ' ms';
-  if (magnitude < 60) return sign + formatNumber(magnitude) + ' s';
+  if (magnitude === 0) return formatNumber(0, locale) + ' s';
+  // The signed value goes to formatNumber rather than a '-' being glued on
+  // afterwards: a locale does not have to write a minus the way this file does.
+  if (magnitude < 1) return formatNumber(seconds * 1000, locale) + ' ms';
+  if (magnitude < 60) return formatNumber(seconds, locale) + ' s';
 
   // Whole seconds from here down: a two-component duration has no use for a
   // fraction of its smaller unit, and truncating (rather than rounding) is what
@@ -278,22 +313,37 @@ function trimZeros(s: string): string {
   return trimmed.endsWith('.') ? trimmed.slice(0, -1) : trimmed;
 }
 
-/** Inserts U+202F between thousands in the integer part. */
-function group(s: string): string {
-  let sign = '';
-  let body = s;
-  if (body.startsWith('-')) {
-    sign = '-';
-    body = body.slice(1);
+/**
+ * Rule 2's last step: `n`, shown to exactly `decimals` places, written the way
+ * `locale` writes numbers.
+ *
+ * `minimumFractionDigits: 0` is what stops the trim being undone — the caller
+ * has already decided that 1.8200 is `1.82`, and a minimum of two would put the
+ * zeros back on a value that happened to land on 1.8.
+ *
+ * Formatters are cached because constructing one is the expensive part of Intl
+ * — it resolves the locale and builds the pattern — and this is called once per
+ * table cell.
+ */
+const FORMATTERS = new Map<string, Intl.NumberFormat>();
+
+function grouped(n: number, decimals: number, locale: string | undefined): string {
+  const key = `${locale ?? ''}\u0000${String(decimals)}`;
+  let formatter = FORMATTERS.get(key);
+  if (formatter === undefined) {
+    // `useGrouping` is left at its default, which is `auto` — the locale's own
+    // `minimumGroupingDigits`. Forcing it on would render es-ES's 1234 as
+    // "1.234", which that locale deliberately does not write.
+    formatter = new Intl.NumberFormat(locale, {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: decimals,
+    });
+    FORMATTERS.set(key, formatter);
   }
-  const dot = body.indexOf('.');
-  const intPart = dot === -1 ? body : body.slice(0, dot);
-  let out = '';
-  for (let i = 0; i < intPart.length; i++) {
-    if (i > 0 && (intPart.length - i) % 3 === 0) out += GROUP_SEPARATOR;
-    out += intPart[i];
-  }
-  return sign + out + (dot === -1 ? '' : body.slice(dot));
+  // Negative zero is a rounding artefact, never a fact about a flight. `fixed`
+  // has already dropped the sign from the string; this stops a -0 arriving
+  // from a caller that did its own arithmetic.
+  return formatter.format(Object.is(n, -0) ? 0 : n);
 }
 
 /**

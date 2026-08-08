@@ -54,11 +54,11 @@
       {{- if .Present}}
       <td class="value{{if .Best}} best{{end}}" data-value="{{exact .Row.Value}}" data-handle="{{.Row.Handle}}"
           title="{{exactUnit .Row.Value $row.Unit}}"{{if .Best}} aria-label="{{value .Row.Value $row.Unit}}, best of these handles"{{end}}>
-        {{- value .Row.Value $row.Unit}}
+        {{- numUnit .Row.Value $row.Unit}}
         {{- if .Row.Rewound}}<abbr class="rewound" title="An earlier save of this career was loaded, so its clock did not only run forwards.">&dagger;</abbr><span class="sr-only"> (career rewound)</span>{{end}}
         {{- /* The world rank, not the rank among the compared handles: "3rd in
                the world", never "2nd of your friends". */}}
-        <span class="world-rank">#{{.Row.Rank}} of {{number $row.Players}} worldwide</span>
+        <span class="world-rank">#{{.Row.Rank}} of {{num $row.Players}} worldwide</span>
       </td>
       {{- else}}
       <td class="absent" title="not on this board">&#8212;</td>

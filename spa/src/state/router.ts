@@ -62,6 +62,7 @@ export type Route =
       /** The `?handle=` filter, `''` for everybody. */
       readonly handle: string;
     }
+  | { readonly name: 'stats' }
   | { readonly name: 'search'; readonly q: string }
   | { readonly name: 'compare'; readonly handles: readonly string[] }
   | { readonly name: 'notFound'; readonly path: string };
@@ -190,6 +191,7 @@ export function parseRoute(url: string, base: string = BASE_PATH): Route {
     // the shareable part of this page; the toggle is view state.
     return { name: 'events', type: params.get('type') ?? '', handle: params.get('handle') ?? '' };
   }
+  if (head === 'stats' && segments.length === 1) return { name: 'stats' };
   if (head === 'search' && segments.length === 1) {
     return { name: 'search', q: params.get('q') ?? '' };
   }
@@ -233,6 +235,8 @@ export function pathFor(route: Route): string {
       const suffix = query.size > 0 ? `?${query.toString()}` : '';
       return `/events${suffix}`;
     }
+    case 'stats':
+      return '/stats';
     case 'search':
       return route.q === '' ? '/search' : `/search?q=${encodeURIComponent(route.q)}`;
     case 'compare':

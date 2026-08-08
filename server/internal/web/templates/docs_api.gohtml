@@ -20,6 +20,7 @@
     <tr><td><code>GET /v1/events?type=…&amp;handle=…</code></td><td>the same raw log across every player, each row naming its handle; both filters optional</td></tr>
     <tr><td><code>GET /v1/events/stream?type=…&amp;handle=…</code></td><td>live raw events as server-sent events, filters applied server-side (never cached, never replays — re-read <code>/v1/events</code> on reconnect)</td></tr>
     <tr><td><code>GET /v1/compare?handles=a,b,c</code></td><td>up to eight players pivoted board-first, read against one view of the projections</td></tr>
+    <tr><td><code>GET /v1/stats</code></td><td>the collection census — how many events, by type, by day/week/month/year, and what has been derived from them. About catlog, not about any player</td></tr>
     <tr><td><code>GET /v1/feed?limit=30</code></td><td>the activity feed as JSON rows, newest first</td></tr>
     <tr><td><code>GET /v1/feed/stream</code></td><td>the same feed rows live, as server-sent events (never cached)</td></tr>
     <tr><td><code>GET /v1/feed/sse</code></td><td>the live activity stream as datastar HTML fragments — this site's own transport; API clients want <code>/v1/feed/stream</code></td></tr>

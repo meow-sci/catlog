@@ -1,6 +1,8 @@
 package units_test
 
 import (
+	"math"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -65,16 +67,94 @@ func TestLabelNamesOnlyAUnitEveryCellCarries(t *testing.T) {
 	}
 }
 
-// The separator is U+202F, not an ASCII space: it does not wrap and it does not
-// widen the column. A plain space here would be invisible in a diff and visible
-// on every page.
-func TestGroupSeparatorIsANarrowNoBreakSpace(t *testing.T) {
+// The canonical separators are en-US's, and they are the *fallback* — the form
+// a reader with no JavaScript keeps. Both frontends re-render them through
+// Intl.NumberFormat, so what this asserts is that the fallback is a pair of
+// characters people actually write, and not the U+202F narrow no-break space
+// this used to bake in for everybody.
+func TestCanonicalSeparators(t *testing.T) {
 	got := units.Format(1234567, "")
-	if !strings.Contains(got, " ") {
-		t.Errorf("Format(1234567) = %q, want U+202F between the groups", got)
+	if got != "1,234,567" {
+		t.Errorf("Format(1234567) = %q, want %q", got, "1,234,567")
 	}
-	if strings.Contains(got, " ") {
-		t.Errorf("Format(1234567) = %q, want no ASCII space", got)
+	if strings.ContainsAny(got, " \u00a0\u202f") {
+		t.Errorf("Format(1234567) = %q, want no space of any width between the groups", got)
+	}
+	if got := units.Format(48750, units.Pascals); got != "48.8 kPa" {
+		t.Errorf("Format(48750, Pa) = %q, want %q", got, "48.8 kPa")
+	}
+}
+
+// Split is what the server-rendered site hands Intl.NumberFormat, so every
+// invariant a browser relies on is asserted here rather than in JavaScript:
+// Head+Tail is Format exactly, Number is the *scaled* value the reader sees,
+// and Decimals is the post-trim count — a pre-trim count would put "1.820" back
+// on the page.
+func TestSplitDescribesWhatTheBrowserReRenders(t *testing.T) {
+	for _, tc := range []struct {
+		value    float64
+		unit     string
+		head     string
+		tail     string
+		number   float64
+		decimals int
+		isNumber bool
+	}{
+		{1820000, units.Metres, "1.82", " Mm", 1.82, 2, true},
+		{7799, units.MetresSec, "7,799", " m/s", 7799, 0, true},
+		{1234567, "", "1,234,567", "", 1234567, 0, true},
+		{48000000, units.Joules, "48", " MJ", 48, 0, true},
+		{6, "RUDs", "6", " RUDs", 6, 0, true},
+		{-214.4, "", "-214", "", -214, 0, true},
+		{0.002, "", "0.002", "", 0.002, 3, true},
+		// Rule 5 under a minute is still one number, so it localises.
+		{37500, units.Millis, "37.5", " s", 37.5, 1, true},
+		{450, units.Millis, "450", " ms", 450, 0, true},
+		{0, units.Seconds, "0", " s", 0, 0, true},
+		// A two-component duration is not: it is two numbers and a layout, and
+		// no component can reach a thousand.
+		{2.1e7, units.Seconds, "243d 01h", "", 0, 0, false},
+		{-3661, units.Seconds, "-1h 01m", "", 0, 0, false},
+		// Neither is the not-a-number.
+		{math.NaN(), units.Metres, "—", "", 0, 0, false},
+	} {
+		p := units.Split(tc.value, tc.unit)
+		if p.Head != tc.head || p.Tail != tc.tail {
+			t.Errorf("Split(%v, %q) = %q + %q, want %q + %q", tc.value, tc.unit, p.Head, p.Tail, tc.head, tc.tail)
+		}
+		if got := p.Head + p.Tail; got != units.Format(tc.value, tc.unit) {
+			t.Errorf("Split(%v, %q) reassembles to %q, but Format says %q", tc.value, tc.unit, got, units.Format(tc.value, tc.unit))
+		}
+		if p.IsNumber != tc.isNumber {
+			t.Errorf("Split(%v, %q).IsNumber = %v, want %v", tc.value, tc.unit, p.IsNumber, tc.isNumber)
+		}
+		if !tc.isNumber {
+			continue
+		}
+		if p.Number != tc.number {
+			t.Errorf("Split(%v, %q).Number = %v, want %v", tc.value, tc.unit, p.Number, tc.number)
+		}
+		if p.Decimals != tc.decimals {
+			t.Errorf("Split(%v, %q).Decimals = %d, want %d", tc.value, tc.unit, p.Decimals, tc.decimals)
+		}
+	}
+}
+
+// The number a browser re-renders from must round-trip to the text a reader
+// without one sees. If it did not, the two would disagree in the last digit
+// depending on whether a script ran.
+func TestSplitNumberRoundTripsToItsOwnText(t *testing.T) {
+	for _, tc := range units.Conformance {
+		p := units.Split(tc.Value, tc.Unit)
+		if !p.IsNumber {
+			continue
+		}
+		want := strings.ReplaceAll(p.Head, units.GroupSeparator, "")
+		got := strconv.FormatFloat(p.Number, 'f', p.Decimals, 64)
+		if got != want {
+			t.Errorf("Split(%v, %q): Number %v at %d decimals is %q, but Head is %q",
+				tc.Value, tc.Unit, p.Number, p.Decimals, got, want)
+		}
 	}
 }
 

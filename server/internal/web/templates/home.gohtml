@@ -26,16 +26,16 @@
   <section id="global-tiles" class="tiles">
     <div class="tile">
       <span class="label">Boards published</span>
-      <span class="stat-value" id="tile-boards" data-value="{{.Data.Tiles.Boards}}">{{number .Data.Tiles.Boards}}</span>
+      <span class="stat-value" id="tile-boards" data-value="{{.Data.Tiles.Boards}}">{{num .Data.Tiles.Boards}}</span>
     </div>
     <div class="tile">
       <span class="label">Placements held</span>
-      <span class="stat-value" id="tile-placements" data-value="{{.Data.Tiles.Placements}}">{{number .Data.Tiles.Placements}}</span>
+      <span class="stat-value" id="tile-placements" data-value="{{.Data.Tiles.Placements}}">{{num .Data.Tiles.Placements}}</span>
     </div>
     {{- if .Data.Tiles.BusiestStat}}
     <div class="tile">
       <span class="label">Busiest board</span>
-      <span class="stat-value" id="tile-busiest" data-value="{{.Data.Tiles.BusiestCount}}">{{number .Data.Tiles.BusiestCount}}</span>
+      <span class="stat-value" id="tile-busiest" data-value="{{.Data.Tiles.BusiestCount}}">{{num .Data.Tiles.BusiestCount}}</span>
       <small class="muted"><a href="{{statPath .Data.Tiles.BusiestStat}}">{{.Data.Tiles.BusiestTitle}}</a></small>
     </div>
     {{- end}}

@@ -29,6 +29,13 @@ Content-Security-Policy is ever added, this is the one thing needing a hash.
 })();
 </script>
 <script type="module" src="/static/vendor/datastar.js"></script>
+{{- /*
+Numbers arrive in `units`' canonical en-US grouping — a cached public response
+has no locale to render in — and intl.js re-renders them in the reader's. It
+observes the document, so the feed lines and event rows datastar patches in over
+SSE get the same treatment as the ones the page shipped with.
+*/}}
+<script type="module" src="/static/js/intl.js"></script>
 <script type="module" src="/static/js/me.js"></script>
 {{- range .Scripts}}
 <script type="module" src="{{.}}"></script>
@@ -42,6 +49,7 @@ Content-Security-Policy is ever added, this is the one thing needing a hash.
       <a href="/boards" id="nav-boards" {{if eq .Nav "boards"}}aria-current="page"{{end}}>Leaderboards</a>
       <a href="/compare" id="nav-compare" {{if eq .Nav "compare"}}aria-current="page"{{end}}>Compare</a>
       <a href="/events" id="nav-events" {{if eq .Nav "events"}}aria-current="page"{{end}}>Events</a>
+      <a href="/stats" id="nav-stats" {{if eq .Nav "stats"}}aria-current="page"{{end}}>Stats</a>
       <a href="/docs/install" id="nav-docs" {{if eq .Nav "docs"}}aria-current="page"{{end}}>Docs</a>
     </nav>
 

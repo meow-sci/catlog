@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/meow-sci/catlog/server/internal/ids"
@@ -527,6 +528,113 @@ func (p *Projections) RecentFeed(ctx context.Context, limit int) ([]FeedRow, err
 	return out, rows.Err()
 }
 
+// --- event_census --------------------------------------------------------------
+
+// CensusRow is one row of `event_census` — how many events of one type landed in
+// one window, and the ends of the range they landed across.
+//
+// Type is the empty string on the row that counts every type; see
+// stats.CensusAllTypes for why that total is stored rather than summed.
+type CensusRow struct {
+	Type   string `json:"type"`
+	Period string `json:"period,omitempty"`
+	Bucket string `json:"bucket,omitempty"`
+	// Count is how many events the row has counted.
+	Count int64 `json:"count"`
+	// FirstSeq/LastSeq and FirstAt/LastAt bound what went into it. The times are
+	// the **server's** receive stamps, unix ms, never a client clock.
+	FirstSeq int64 `json:"first_seq,omitempty"`
+	LastSeq  int64 `json:"last_seq,omitempty"`
+	FirstAt  int64 `json:"first_at,omitempty"`
+	LastAt   int64 `json:"last_at,omitempty"`
+}
+
+const censusColumns = `type, period, bucket, n, first_seq, last_seq, first_at, last_at`
+
+// CensusWindow is every type's count inside one window, largest first.
+//
+// bucket is "" for `alltime`, which is exactly what the fold wrote, so the
+// all-time totals and one week's breakdown are the same query. The
+// [stats.CensusAllTypes] row comes back with the others — the caller wants both
+// the total and the split, and separating them here would cost a second read.
+func (p *Projections) CensusWindow(ctx context.Context, period, bucket string) ([]CensusRow, error) {
+	rows, err := p.Reader().QueryContext(ctx,
+		`SELECT `+censusColumns+` FROM event_census
+		 WHERE period = ? AND bucket = ? ORDER BY n DESC, type ASC`, period, bucket)
+	if err != nil {
+		return nil, fmt.Errorf("store: read census window %s/%s: %w", period, bucket, err)
+	}
+	return scanCensusRows(rows)
+}
+
+// CensusSeries is the newest `limit` buckets of one period, oldest first — the
+// shape a sparkline wants.
+//
+// Totals only ([stats.CensusAllTypes]), because a series of every type over
+// ninety days is thousands of rows for a chart with one line in it. Read
+// newest-first off the index and reversed in Go: the alternative is a subquery
+// tursogo has no reason to plan well.
+func (p *Projections) CensusSeries(ctx context.Context, period, allTypes string, limit int) ([]CensusRow, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	rows, err := p.Reader().QueryContext(ctx,
+		`SELECT `+censusColumns+` FROM event_census
+		 WHERE period = ? AND type = ? ORDER BY bucket DESC LIMIT ?`, period, allTypes, limit)
+	if err != nil {
+		return nil, fmt.Errorf("store: read census series %s: %w", period, err)
+	}
+	out, err := scanCensusRows(rows)
+	if err != nil {
+		return nil, err
+	}
+	slices.Reverse(out)
+	return out, nil
+}
+
+// CensusBusiest is the fullest bucket of one period — "the busiest day catlog
+// has ever had". Totals only, and ok is false when the period has no buckets
+// yet.
+func (p *Projections) CensusBusiest(ctx context.Context, period, allTypes string) (CensusRow, bool, error) {
+	rows, err := p.Reader().QueryContext(ctx,
+		`SELECT `+censusColumns+` FROM event_census
+		 WHERE period = ? AND type = ? ORDER BY n DESC, bucket DESC LIMIT 1`, period, allTypes)
+	if err != nil {
+		return CensusRow{}, false, fmt.Errorf("store: read busiest %s: %w", period, err)
+	}
+	out, err := scanCensusRows(rows)
+	if err != nil || len(out) == 0 {
+		return CensusRow{}, false, err
+	}
+	return out[0], true, nil
+}
+
+// CensusBuckets is how many buckets of one period the census holds — how many
+// distinct days catlog has seen an event on, which is the denominator behind
+// "events per day".
+func (p *Projections) CensusBuckets(ctx context.Context, period, allTypes string) (int64, error) {
+	var n int64
+	if err := p.Reader().QueryRowContext(ctx,
+		`SELECT count(*) FROM event_census WHERE period = ? AND type = ?`, period, allTypes).Scan(&n); err != nil {
+		return 0, fmt.Errorf("store: count %s buckets: %w", period, err)
+	}
+	return n, nil
+}
+
+func scanCensusRows(rows *sql.Rows) ([]CensusRow, error) {
+	defer rows.Close()
+	var out []CensusRow
+	for rows.Next() {
+		var r CensusRow
+		if err := rows.Scan(&r.Type, &r.Period, &r.Bucket, &r.Count,
+			&r.FirstSeq, &r.LastSeq, &r.FirstAt, &r.LastAt); err != nil {
+			return nil, fmt.Errorf("store: scan event_census: %w", err)
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // --- counts ------------------------------------------------------------------
 
 // ProjectionCounts is the row census `GET /admin/stats` reports (§5.9).
@@ -543,6 +651,15 @@ type ProjectionCounts struct {
 	// RewoundCareers is how many careers have had an earlier save loaded. Not an
 	// anti-cheat number: it says how much of the career-time data is qualified.
 	RewoundCareers int64 `json:"rewound_careers"`
+	// ScoringPlayers is how many distinct players hold a value on any board, and
+	// Bodies is how many distinct celestial bodies anybody has reached.
+	//
+	// Both are the "how much is in here" half of `GET /v1/stats`. Bodies is the
+	// one number on that page catlog could not have known in advance: the server
+	// keeps no list of celestial bodies (§4.2 makes them opaque strings), so this
+	// counts the ones players went to.
+	ScoringPlayers int64 `json:"scoring_players"`
+	Bodies         int64 `json:"bodies"`
 }
 
 // Counts reads the row census.
@@ -560,6 +677,8 @@ func (p *Projections) Counts(ctx context.Context) (ProjectionCounts, error) {
 		{`SELECT count(*) FROM kitten`, &c.Kitten},
 		{`SELECT count(*) FROM feed`, &c.Feed},
 		{`SELECT count(*) FROM flight_state WHERE flags <> 0`, &c.FlaggedFlights},
+		{`SELECT count(DISTINCT player_id) FROM player_stat`, &c.ScoringPlayers},
+		{`SELECT count(DISTINCT body) FROM player_body`, &c.Bodies},
 	} {
 		if err := p.Reader().QueryRowContext(ctx, q.sql).Scan(q.dst); err != nil {
 			return ProjectionCounts{}, fmt.Errorf("store: projection census: %w", err)

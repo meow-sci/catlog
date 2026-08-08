@@ -1469,6 +1469,130 @@ tr.is-me:hover {
   content: ' \203A';
 }
 
+/* --- /stats: the stats of the stats -------------------------------------- */
+
+/* One window's per-type split: a label, a bar, a count and a share, on one
+   grid so the four columns line up across every row of every card. */
+.census-bars {
+  display: grid;
+  gap: var(--space-2);
+  list-style: none;
+  margin: var(--space-4) 0 0;
+  padding: 0;
+}
+
+.census-bars li {
+  align-items: center;
+  display: grid;
+  gap: var(--space-3);
+  grid-template-columns: minmax(6rem, 10rem) 1fr auto auto;
+}
+
+.census-type code {
+  font-size: var(--text-xs);
+}
+
+.census-n,
+.census-share {
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+/* The bar itself. A <span><i></i></span> rather than <meter>, because a meter
+   arrives with a UA appearance that differs per platform and a semantic this
+   is not: the row already states the number twice, and the bar is decoration
+   over it (hence aria-hidden in the template). */
+.census-bar {
+  background: var(--color-panel-sunken);
+  border-radius: var(--radius-sm);
+  display: block;
+  height: 0.5rem;
+  min-width: 3rem;
+  overflow: hidden;
+}
+
+.census-bar i {
+  background: var(--color-accent);
+  display: block;
+  height: 100%;
+}
+
+.window-card .window-bucket {
+  color: var(--color-fg-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.window-count {
+  font-size: var(--text-xl);
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--weight-semibold);
+  margin: 0;
+}
+
+/* The daily series. Columns are equal-width and the list scrolls rather than
+   compressing, so ninety days on a phone is a scroll and not ninety hairlines
+   — the whole point of the chart is being able to see one day. */
+.spark {
+  align-items: flex-end;
+  display: flex;
+  gap: 2px;
+  height: 6rem;
+  list-style: none;
+  margin: var(--space-4) 0 0;
+  overflow-x: auto;
+  padding: 0;
+}
+
+.spark li {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: flex-end;
+  height: 100%;
+  width: 0.5rem;
+}
+
+.spark li i {
+  background: var(--color-accent);
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  display: block;
+  min-height: 2px;
+  width: 100%;
+}
+
+/* The share column of the type table stacks its bar over its number, so the
+   table stays readable when the column is narrow. */
+#stats-types td.share {
+  min-width: 8rem;
+}
+
+#stats-types td.share .census-share {
+  display: block;
+  font-size: var(--text-xs);
+  text-align: left;
+}
+
+/* The collection census is a two-column definition list wearing a table: the
+   label is the row header, so it is left-aligned rather than uppercased like
+   a column header. */
+#stats-collection th[scope='row'] {
+  font-weight: var(--weight-medium);
+  letter-spacing: normal;
+  text-transform: none;
+  white-space: nowrap;
+}
+
+@media (max-width: 40rem) {
+  .census-bars li {
+    grid-template-columns: 1fr auto auto;
+  }
+
+  .census-bar {
+    display: none;
+  }
+}
+
 @media (max-width: 40rem) {
   #site-header .container {
     row-gap: var(--space-3);

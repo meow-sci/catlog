@@ -148,6 +148,7 @@ const anchorBoard = await apiGet(`/v1/leaderboards/${ANCHOR.stat}`);
 const acePlayer = await apiGet('/v1/players/demo_ace');
 const demoSearch = await apiGet('/v1/players?q=demo&limit=50');
 const aceEvents = await apiGet('/v1/players/demo_ace/events?limit=5');
+const collection = await apiGet('/v1/stats');
 
 {
   const top = anchorBoard.rows[0];
@@ -213,6 +214,20 @@ const SEEDED = [
       'ghost_of_a_handle',
       'no such player',
       'in the world',
+    ],
+  },
+  // The collection census — the one page that is about catlog rather than about
+  // a player. The type names come from the API, so a seed change moves both
+  // sides together.
+  {
+    path: '/stats',
+    expect: [
+      'Stats of stats',
+      'Events logged',
+      // Everything on that page is a projection, and this row is where a reader
+      // finds out how current it is.
+      'Projector lag',
+      ...collection.events.types.slice(0, 3).map((t) => t.type),
     ],
   },
   // The raw event log: the history every other endpoint has an opinion about.

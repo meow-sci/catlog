@@ -3,6 +3,7 @@ package web_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -148,6 +149,49 @@ func (f *fakeRead) Search(q string, limit int) readapi.SearchResponse {
 		}
 	}
 	return out
+}
+
+// Stats is the collection census. Hand-written rather than folded, for the same
+// reason every other answer here is: these tests are about what the page
+// renders, not about what the projector computes.
+func (f *fakeRead) Stats(context.Context) (readapi.StatsResponse, error) {
+	if f.err != nil {
+		return readapi.StatsResponse{}, f.err
+	}
+	return readapi.StatsResponse{
+		Generated: 1_800_000_500_000,
+		Events: readapi.EventStats{
+			Total: 1234567,
+			Types: []readapi.TypeCount{
+				{Type: "telemetry.window", Count: 1000000, Share: 0.81, First: 1_700_000_000_000, Last: 1_800_000_000_000},
+				{Type: "vehicle.rud", Count: 234567, Share: 0.19, First: 1_700_000_000_000, Last: 1_800_000_000_000},
+			},
+			Windows: []readapi.WindowStats{
+				{Period: stats.PeriodDaily, Bucket: "2026-08-08", Count: 4200, Types: []readapi.TypeCount{
+					{Type: "telemetry.window", Count: 4000, Share: 0.952},
+					{Type: "vehicle.rud", Count: 200, Share: 0.048},
+				}},
+				{Period: stats.PeriodWeekly, Bucket: "2026-W32", Count: 31000, Types: []readapi.TypeCount{}},
+				{Period: stats.PeriodMonthly, Bucket: "2026-08", Count: 120000, Types: []readapi.TypeCount{}},
+				{Period: stats.PeriodYearly, Bucket: "2026", Count: 900000, Types: []readapi.TypeCount{}},
+			},
+			First:   1_700_000_000_000,
+			Last:    1_800_000_000_000,
+			Days:    250,
+			PerDay:  4938.268,
+			Busiest: &readapi.WindowCount{Period: stats.PeriodDaily, Bucket: "2026-03-02", Count: 98765},
+			Daily: []readapi.WindowCount{
+				{Period: stats.PeriodDaily, Bucket: "2026-08-07", Count: 3100},
+				{Period: stats.PeriodDaily, Bucket: "2026-08-08", Count: 4200},
+			},
+		},
+		Collection: readapi.CollectionStats{
+			Boards: 27, Placements: 812, Types: 2, Handles: 41, ScoringPlayers: 38,
+			Flights: 5123, FlaggedFlights: 12, Careers: 88, RewoundCareers: 3,
+			Kittens: 240, Bodies: 9, FeedRows: 500,
+			LogHead: 1234570, Projected: 1234567, Lag: 3,
+		},
+	}, nil
 }
 
 func (f *fakeRead) Compare(ctx context.Context, handles []string) (readapi.CompareResponse, error) {
@@ -481,9 +525,10 @@ func TestBoardDetailShowsTheAllowListAndHidesTheRest(t *testing.T) {
 	f := newFixture(t)
 	body := f.get(t, "/p/demo_crasher").Body.String()
 
-	// `body` is on the list, and `energy_j` renders through the unit table.
+	// `body` is on the list, and `energy_j` renders through the unit table — as
+	// the localisable element, because a detail chip is a number like any other.
 	mustContain(t, body, `<span class="ctx-key">body</span> <span class="ctx-value">Duna</span>`, "profile")
-	mustContain(t, body, `<span class="ctx-key">energy j</span> <span class="ctx-value">48 MJ</span>`, "profile")
+	mustContain(t, body, `<span class="ctx-key">energy j</span> <span class="ctx-value"><span class="n" data-n="48" data-d="0">48</span> MJ</span>`, "profile")
 
 	// `flight` and `career` are not pairs. They are still inside the disclosure,
 	// which shows the blob as the API sent it — already post-redaction.
@@ -1104,4 +1149,69 @@ func TestEventsSSEIsNeverCached(t *testing.T) {
 	if got := w.Header().Get("Content-Type"); !strings.HasPrefix(got, "text/event-stream") {
 		t.Errorf("GET %s content-type = %q", web.EventsSSEPath, got)
 	}
+}
+
+// --- /stats ------------------------------------------------------------------
+
+// The stats page renders the collection census: the headline figures, the four
+// rolling windows, the per-type table and the projector's own cursor.
+func TestStatsPageRendersTheCollectionCensus(t *testing.T) {
+	f := newFixture(t)
+	body := f.get(t, "/stats").Body.String()
+
+	// The headline figure, and the raw integer beside it — `data-value` is what
+	// survives intl.js re-rendering the text in the reader's locale, so it is
+	// what a test reads.
+	mustContain(t, body, `id="tile-events" data-value="1234567"`, "stats")
+	// And the canonical text a reader with no JavaScript keeps: grouped, but no
+	// longer with a U+202F nobody writes.
+	mustContain(t, body, `>1,234,567</span>`, "stats")
+	mustContain(t, body, `id="tile-busiest-day" data-value="98765"`, "stats")
+
+	// One card per rolling window, each naming the bucket the server clock is
+	// in, with its own per-type breakdown.
+	for _, want := range []string{
+		`data-period="daily" data-bucket="2026-08-08"`,
+		`data-period="weekly" data-bucket="2026-W32"`,
+		`data-period="monthly" data-bucket="2026-08"`,
+		`data-period="yearly" data-bucket="2026"`,
+	} {
+		mustContain(t, body, want, "stats windows")
+	}
+	mustContain(t, body, "Today", "stats window label")
+	mustContain(t, body, "This week", "stats window label")
+
+	// The per-type table, and the share rendered as a localisable number like
+	// every other figure on the site.
+	mustContain(t, body, `<tr data-type="telemetry.window">`, "stats types")
+	mustContain(t, body, `data-n="81" data-d="0">81</span> %`, "stats share")
+
+	// Everything above is a projection, so the page has to publish how current
+	// it is.
+	mustContain(t, body, `data-census="Projector lag"`, "stats collection")
+	mustContain(t, body, `data-census="Bodies reached"`, "stats collection")
+
+	// It is a page about the collection, not a leaderboard: nobody is named.
+	mustNotContain(t, body, "whiskers", "stats")
+}
+
+// A stats page that cannot read its numbers is an error page, not a page of
+// zeroes: zeroes are a claim, and a failed read is not evidence for it.
+func TestStatsPageFailsRatherThanShowingZeroes(t *testing.T) {
+	f := newFixture(t)
+	f.read.err = errors.New("projections are unreadable")
+
+	rec := f.get(t, "/stats")
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500", rec.Code)
+	}
+	mustNotContain(t, rec.Body.String(), "Events logged", "stats error page")
+}
+
+// The navigation reaches it, which is the difference between a page and a URL
+// somebody has to know about.
+func TestStatsIsInTheNavigation(t *testing.T) {
+	f := newFixture(t)
+	body := f.get(t, "/stats").Body.String()
+	mustContain(t, body, `<a href="/stats" id="nav-stats" aria-current="page"`, "nav")
 }

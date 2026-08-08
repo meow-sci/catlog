@@ -29,6 +29,7 @@ describe('parseRoute', () => {
       { name: 'board', stat: 'rud_total', offset: 50, period: ALLTIME },
     ],
     ['/p/demo_ace', { name: 'player', handle: 'demo_ace' }],
+    ['/stats', { name: 'stats' }],
     ['/nope', { name: 'notFound', path: '/nope' }],
   ])('parses %s', (url, want) => {
     expect(parseRoute(url, '/')).toEqual(want);
@@ -63,6 +64,7 @@ describe('parseRoute', () => {
       { name: 'board', stat: 'kitten_tumbles', offset: 0, period: ALLTIME },
       { name: 'board', stat: 'kitten_tumbles', offset: 100, period: ALLTIME },
       { name: 'player', handle: 'demo_crasher' },
+      { name: 'stats' },
     ];
     for (const base of ['/', '/catlog/']) {
       for (const route of routes) {

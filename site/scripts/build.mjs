@@ -47,10 +47,15 @@ const vendorFiles = [{ from: path.join(assetsDir, "vendor", "datastar.js"), to: 
  * the build stays hermetic (D2) exactly as the vendored datastar bundle does. One
  * 48 kB woff2 covers every glyph catlog can render: handles, kitten names and body
  * names are ASCII by construction (docs/events.md), and the only non-ASCII
- * characters in our own copy — em dash, ×, †, ↑, ↓, · and the U+202F group
- * separator `units.Format` uses — all fall inside the latin `unicode-range`
- * (U+0000-00FF plus U+2000-206F plus U+2191/2193). Verified against the package's
- * own unicode.json rather than assumed.
+ * characters in our own copy — em dash, ×, †, ↑, ↓ and · — all fall inside the
+ * latin `unicode-range` (U+0000-00FF plus U+2000-206F plus U+2191/2193).
+ * Verified against the package's own unicode.json rather than assumed.
+ *
+ * Group separators are no longer in that list because they are no longer ours:
+ * intl.js re-renders every number in the reader's locale, so the separator can
+ * be a U+202F (fr-FR), a U+00A0 (many), a full stop (de-DE) or an apostrophe
+ * (de-CH). All four are inside the same two ranges, which is why this is a note
+ * rather than a second subset.
  *
  * `@font-face` is declared in catlog.css against /static/fonts/, not copied from
  * the package's CSS, so the `src:` URL matches where this script actually put the

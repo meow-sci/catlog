@@ -91,6 +91,10 @@ type Read interface {
 	Search(q string, limit int) readapi.SearchResponse
 	// Compare is the N-handle side-by-side behind `/compare?handles=`.
 	Compare(ctx context.Context, handles []string) (readapi.CompareResponse, error)
+	// Stats is the collection census behind `/stats` — the same body
+	// `GET /v1/stats` publishes, memoised in the read API so the page and the
+	// endpoint cannot disagree and neither pays twice.
+	Stats(ctx context.Context) (readapi.StatsResponse, error)
 }
 
 // Projections runs a query against the live projections handle while holding the
@@ -186,6 +190,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /p/{handle}", s.handleProfile)
 	mux.HandleFunc("GET /p/{handle}/events", s.handlePlayerEvents)
 	mux.HandleFunc("GET /events", s.handleEvents)
+	mux.HandleFunc("GET /stats", s.handleStats)
 	mux.HandleFunc("GET /search", s.handleSearch)
 	mux.HandleFunc("GET /search/suggest", s.handleSearchSuggest)
 	mux.HandleFunc("GET /compare", s.handleCompare)

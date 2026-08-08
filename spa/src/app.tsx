@@ -49,6 +49,12 @@ const EventsPage = lazy(async () => ({
 const SearchPage = lazy(async () => ({
   default: (await import('./pages/SearchPage.tsx')).SearchPage,
 }));
+// The stats page is a whole second screenful of tables nothing else renders,
+// and it is reached on purpose rather than landed on. Same bargain as the three
+// above: a deep link costs two chunks, the front page costs none of it.
+const StatsPage = lazy(async () => ({
+  default: (await import('./pages/StatsPage.tsx')).StatsPage,
+}));
 
 export function App() {
   const route = useStore($route);
@@ -139,6 +145,8 @@ function Screen(props: { readonly route: Route }) {
       return <PlayerEventsPage key={route.handle} handle={route.handle} type={route.type} />;
     case 'events':
       return <EventsPage type={route.type} handle={route.handle} />;
+    case 'stats':
+      return <StatsPage />;
     case 'search':
       return <SearchPage q={route.q} />;
     case 'compare':
@@ -193,6 +201,7 @@ function SiteHeader(props: { readonly route: Route }) {
             label="Compare"
             isActive={active === 'compare'}
           />
+          <NavLink route={{ name: 'stats' }} label="Stats" isActive={active === 'stats'} />
         </nav>
         {/* The search box is on every page, and it is also a real `/search?q=`
             route, so a search is a link rather than only an overlay. It starts

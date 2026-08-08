@@ -1,0 +1,162 @@
+{{define "content" -}}
+{{- $d := .Data -}}
+{{- $events := $d.Events -}}
+{{- $c := $d.Collection -}}
+<div class="stack" id="stats-page">
+  <div class="page-head">
+    <h1 id="stats-title">Stats of stats</h1>
+    <p>How much catlog is holding, what kind, and how fast it is arriving. Data for nerds, about the data collected by nerds — nothing here is a record and nobody is ranked.</p>
+  </div>
+
+  {{- /* The headline figures. `data-value` carries the raw integer for the same
+         reason every value cell does: it is what a test reads, and what survives
+         intl.js re-rendering the text in the reader's locale. */}}
+  <section id="stats-tiles" class="tiles">
+    <div class="tile">
+      <span class="label">Events logged</span>
+      <span class="stat-value" id="tile-events" data-value="{{$events.Total}}">{{num $events.Total}}</span>
+      <small class="muted">Across {{num $c.Types}} event types.</small>
+    </div>
+    <div class="tile">
+      <span class="label">Events per day</span>
+      <span class="stat-value" id="tile-per-day" data-value="{{$events.PerDay}}">{{num $events.PerDay}}</span>
+      <small class="muted">Over {{num $events.Days}} days that saw one.</small>
+    </div>
+    {{- if $events.Busiest}}
+    <div class="tile">
+      <span class="label">Busiest day</span>
+      <span class="stat-value" id="tile-busiest-day" data-value="{{$events.Busiest.Count}}">{{num $events.Busiest.Count}}</span>
+      <small class="muted"><time datetime="{{$events.Busiest.Bucket}}">{{$events.Busiest.Bucket}}</time></small>
+    </div>
+    {{- end}}
+    <div class="tile">
+      <span class="label">Watching since</span>
+      <span class="stat-value" id="tile-since">{{if $events.First}}{{date $events.First}}{{else}}&#8212;{{end}}</span>
+      <small class="muted">{{if $events.Last}}Newest {{datetime $events.Last}}.{{else}}Nothing has arrived yet.{{end}}</small>
+    </div>
+  </section>
+
+  {{- /* Four windows, each the one the *server* clock is in — the same buckets
+         the folds are writing to, named so a reader can tell which week they are
+         looking at. */}}
+  <section id="stats-windows">
+    <header><h2>Lately</h2></header>
+    <div class="grid">
+      {{- range $w := $events.Windows}}
+      <article class="panel window-card" data-period="{{$w.Period}}" data-bucket="{{$w.Bucket}}">
+        <header>
+          <h3 class="panel-title">{{periodLabel $w.Period}}</h3>
+          <span class="window-bucket">{{$w.Bucket}}</span>
+        </header>
+        <p class="window-count" data-value="{{$w.Count}}">{{num $w.Count}} <span class="muted">events</span></p>
+        {{- if $w.Types}}
+        <ul class="census-bars">
+          {{- range $w.Types}}
+          <li>
+            <span class="census-type"><code>{{.Type}}</code></span>
+            {{- /* aria-hidden: the bar is a second rendering of the two numbers
+                   beside it, and a screen reader announcing a meter as well
+                   would read the same fact three times. */}}
+            <span class="census-bar" aria-hidden="true"><i style="width: {{barWidth .Count $w.Count}}%"></i></span>
+            <span class="census-n">{{num .Count}}</span>
+            <span class="census-share muted">{{numUnit (percent .Share) "%"}}</span>
+          </li>
+          {{- end}}
+        </ul>
+        {{- else}}
+        <p class="muted">Nothing yet in this window.</p>
+        {{- end}}
+      </article>
+      {{- end}}
+    </div>
+  </section>
+
+  {{- /* Ninety daily buckets. Only the days that carry an event are here — a day
+         catlog was switched off is not a zero, and drawing it as one would be a
+         claim about a quiet day that nobody made. */}}
+  {{- if $events.Daily}}
+  <section id="stats-daily" class="panel">
+    <header>
+      <h2 class="panel-title">Events per day</h2>
+      <span class="muted">{{num (len $events.Daily)}} days</span>
+    </header>
+    <ol class="spark" role="img" aria-label="Daily event counts, oldest first">
+      {{- range $events.Daily}}
+      <li title="{{.Bucket}}: {{.Count}}" data-bucket="{{.Bucket}}" data-value="{{.Count}}"><i style="height: {{barWidth .Count $d.DailyMax}}%"></i></li>
+      {{- end}}
+    </ol>
+  </section>
+  {{- end}}
+
+  <section id="stats-types" class="panel">
+    <header><h2 class="panel-title">Every event type</h2></header>
+    <div class="table-wrap" role="region" tabindex="0" aria-label="Event types">
+      <table class="catlog-board">
+        <thead>
+          <tr>
+            <th scope="col">Type</th>
+            <th scope="col" class="value">Events</th>
+            <th scope="col">Share</th>
+            <th scope="col">First seen</th>
+            <th scope="col">Last seen</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{- range $events.Types}}
+          <tr data-type="{{.Type}}">
+            <td class="type"><code>{{.Type}}</code></td>
+            <td class="value" data-value="{{.Count}}">{{num .Count}}</td>
+            <td class="share">
+              <span class="census-bar" aria-hidden="true"><i style="width: {{barWidth .Count $d.TypeMax}}%"></i></span>
+              <span class="census-share">{{numUnit (percent .Share) "%"}}</span>
+            </td>
+            <td class="when">{{date .First}}</td>
+            <td class="when">{{date .Last}}</td>
+          </tr>
+          {{- else}}
+          <tr class="board-empty"><td colspan="5">Nothing has been logged yet.</td></tr>
+          {{- end}}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  {{- /* What has been derived from all of that. The last three are the reason
+         this section is honest: everything above is a projection, and a
+         projection is only as current as its cursor. */}}
+  <section id="stats-collection" class="panel">
+    <header><h2 class="panel-title">What catlog has made of it</h2></header>
+    <div class="table-wrap" role="region" tabindex="0" aria-label="Collection census">
+      <table class="catlog-board">
+        <tbody>
+          {{- template "census-row" (dict "Label" "Leaderboards published" "N" $c.Boards "Note" "Empty ones included.")}}
+          {{- template "census-row" (dict "Label" "Placements held" "N" $c.Placements "Note" "One player on one board, counted once per board.")}}
+          {{- template "census-row" (dict "Label" "Handles claimed" "N" $c.Handles "Note" "Retired and banned ones are not counted.")}}
+          {{- template "census-row" (dict "Label" "Players on a board" "N" $c.ScoringPlayers "Note" "Of those, the ones who have scored anywhere.")}}
+          {{- template "census-row" (dict "Label" "Flights" "N" $c.Flights "Note" "Every flight catlog has ever seen an event from.")}}
+          {{- template "census-row" (dict "Label" "Flagged flights" "N" $c.FlaggedFlights "Note" "Teleport, refuel, resource edit, console or tuning. Excluded from every board.")}}
+          {{- template "census-row" (dict "Label" "Careers" "N" $c.Careers "Note" "One KSA save, played over time.")}}
+          {{- template "census-row" (dict "Label" "Rewound careers" "N" $c.RewoundCareers "Note" "An earlier save was loaded. It qualifies a time and nothing else.")}}
+          {{- template "census-row" (dict "Label" "Kittens" "N" $c.Kittens "Note" "Every kitten anybody has flown.")}}
+          {{- template "census-row" (dict "Label" "Bodies reached" "N" $c.Bodies "Note" "catlog keeps no list of these. Players went there.")}}
+          {{- template "census-row" (dict "Label" "Feed lines held" "N" $c.FeedRows "Note" "Capped, so this is a fact about the cap once catlog is busy.")}}
+          {{- template "census-row" (dict "Label" "Log head" "N" $c.LogHead "Note" "The newest sequence number in the event log.")}}
+          {{- template "census-row" (dict "Label" "Projected through" "N" $c.Projected "Note" "How far the projector has folded.")}}
+          {{- template "census-row" (dict "Label" "Projector lag" "N" $c.Lag "Note" "Events the numbers above have not caught up with yet.")}}
+        </tbody>
+      </table>
+    </div>
+    <footer>
+      <span class="muted">Assembled {{datetime $d.Generated}}. Every figure here is also <a href="/v1/stats">JSON</a>.</span>
+    </footer>
+  </section>
+</div>
+{{- end}}
+
+{{define "census-row" -}}
+<tr data-census="{{.Label}}">
+  <th scope="row">{{.Label}}</th>
+  <td class="value" data-value="{{.N}}">{{num .N}}</td>
+  <td class="muted">{{.Note}}</td>
+</tr>
+{{- end}}

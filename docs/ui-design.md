@@ -636,6 +636,7 @@ Rule 7 was added this way and is the worked example.
 | `/events` | ● | **New.** The whole raw log, every player mixed together — same rows, same redaction, `?type=`/`?handle=` filters, live-tailed on page one |
 | `/compare?handles=a,b,c` | ● | **New.** Up to 8 players side by side across every board any of them is on |
 | `/search?q=` | ● | **New.** Handle search as a real, linkable page, not only an overlay |
+| `/stats` | ● | **New.** Stats of stats: how many events catlog is holding, of what kinds, per day/week/month/year, and what has been derived from them. About the collection, not about any player |
 | `/login` | ○ | Choose an IdP; understand what it hands over |
 | `/dashboard` | ○ | Handles, quotas, credentials, the wizard, account deletion |
 | `/docs/{install,privacy,api}` | ○ | How to install; what is stored; how to call the API |

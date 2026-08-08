@@ -116,7 +116,10 @@ func apply(t *testing.T, proj *store.Projections, in []input, base int64, refine
 		}
 	}
 	run(stats.StateFolds(), newBatch)
-	run(stats.BoardFolds(), func(tx *sql.Tx) *stats.Batch {
+	// SecondPassFolds, not BoardFolds: it is what the rebuild's second pass
+	// actually applies, so the census is folded here too and a refined run stays
+	// comparable to an incremental one row for row.
+	run(stats.SecondPassFolds(), func(tx *sql.Tx) *stats.Batch {
 		return stats.NewRefinedBatch(tx, kia, stats.BatchOptions{})
 	})
 }
@@ -819,9 +822,15 @@ func TestKnownServesABoardTheIndexIsStillHoldingBack(t *testing.T) {
 func TestFoldOrderPutsStateFoldsFirst(t *testing.T) {
 	all := stats.Folds()
 	state := stats.StateFolds()
-	if len(all) != len(stats.BoardFolds())+len(state) {
-		t.Fatalf("Folds() has %d entries, StateFolds() %d, BoardFolds() %d",
-			len(all), len(state), len(stats.BoardFolds()))
+	if len(all) != len(stats.SecondPassFolds())+len(state) {
+		t.Fatalf("Folds() has %d entries, StateFolds() %d, SecondPassFolds() %d",
+			len(all), len(state), len(stats.SecondPassFolds()))
+	}
+	// The rebuild's second pass and the incremental loop's tail must be the same
+	// list. If they drift, a rebuilt projections.db stops matching the
+	// incremental one — which is the one property the rebuild exists to give.
+	if len(stats.SecondPassFolds()) != len(stats.BoardFolds())+len(stats.LogFolds()) {
+		t.Errorf("SecondPassFolds() is not BoardFolds() plus LogFolds()")
 	}
 	// Every board fold reads flight_state for the flag exclusion, and the
 	// career-time boards need the career row to exist, so the state folds have

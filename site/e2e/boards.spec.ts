@@ -132,7 +132,9 @@ test.describe("boards", () => {
     // And the cells really are rendered as durations, which is the whole reason
     // the assertion above had to move.
     const rendered = await page.locator("tr.board-row td.value").first().innerText();
-    expect(rendered).toMatch(/^\d[\d .]*\s?(ms|s)$|^\d+[dhmy]\s\d+[dhms]$/);
+    // Grouping is the reader's locale (intl.js), so the separator here is
+    // whatever the browser writes rather than a character this file can name.
+    expect(rendered).toMatch(/^\d[\d\p{P}\p{Zs}]*\s?(ms|s)$|^\d+[dhmy]\s\d+[dhms]$/u);
 
     // The HTML agrees with the JSON, direction included.
     const json = (await (await page.request.get("/v1/leaderboards/fastest_to_luna")).json()) as {

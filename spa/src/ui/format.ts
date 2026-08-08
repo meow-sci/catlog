@@ -37,6 +37,19 @@ export function formatInstant(ms: number): string {
   return timestamp.format(new Date(ms)) + ' UTC';
 }
 
+/**
+ * A unix-ms instant as a fixed UTC calendar day — `2026-08-07`.
+ *
+ * The same string `web.formatDate` writes, and the same string a census bucket
+ * key already is, so a "first seen" column and a bucket label read identically.
+ * ISO rather than the viewer's date order for the reason at the top of this
+ * file: these are days of a shared log, not days in the reader's week.
+ */
+export function formatDay(ms: number): string {
+  if (!Number.isFinite(ms) || ms <= 0) return '—';
+  return new Date(ms).toISOString().slice(0, 10);
+}
+
 /** A unix-ms instant as an ISO string, for a `<time datetime>` attribute. */
 export function isoInstant(ms: number): string {
   if (!Number.isFinite(ms) || ms <= 0) return '';

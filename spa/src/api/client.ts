@@ -6,6 +6,7 @@ import type {
   FeedResponse,
   PlayerResponse,
   SearchResponse,
+  StatsResponse,
 } from './types.ts';
 
 /**
@@ -302,6 +303,18 @@ export function eventsStreamUrl(
   if (options.handle !== undefined && options.handle !== '') params.set('handle', options.handle);
   const query = params.size > 0 ? `?${params.toString()}` : '';
   return apiUrl('/v1/events/stream' + query);
+}
+
+/**
+ * The collection census — how much catlog is holding, of what kinds, since
+ * when.
+ *
+ * One request for the whole page, because the server assembles and memoises the
+ * whole answer: splitting it into "totals" and "windows" would be two round
+ * trips to two views of the same cache for no benefit.
+ */
+export function getStats(signal?: AbortSignal): Promise<StatsResponse> {
+  return apiGet<StatsResponse>('/v1/stats', signal);
 }
 
 export function getFeed(limit: number, signal?: AbortSignal): Promise<FeedResponse> {

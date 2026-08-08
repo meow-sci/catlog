@@ -302,6 +302,111 @@ export interface EventsResponse {
   events: EventRow[];
 }
 
+// --- GET /v1/stats -----------------------------------------------------------
+
+/**
+ * One event type's contribution to a total.
+ *
+ * `share` is published rather than computed here because both frontends want it
+ * and neither should have to decide what a share of zero events is.
+ */
+export interface TypeCount {
+  type: string;
+  count: number;
+  /** `count` as a fraction of the enclosing total, 0–1. */
+  share: number;
+  /** Receive time of the oldest and newest event of this type. Absent inside a window breakdown, where they would only repeat the window. */
+  first?: number;
+  last?: number;
+}
+
+/** One bucket of one period, with no breakdown. */
+export interface WindowCount {
+  period: string;
+  /** `2026-08-07`, `2026-W32`, `2026-08`, `2026`. */
+  bucket: string;
+  count: number;
+}
+
+/** One rolling window, broken down by type. */
+export interface WindowStats {
+  period: string;
+  bucket: string;
+  count: number;
+  /** Most-counted first. */
+  types: TypeCount[];
+}
+
+/** The log, counted. */
+export interface EventStats {
+  /**
+   * Every event the projector has folded — which is the whole log minus
+   * anything this server build could not decode. [CollectionStats.log_head] is
+   * the other number, and the two together are the honest answer.
+   */
+  total: number;
+  /** Every type, all time, most-counted first. */
+  types: TypeCount[];
+  /** Today, this week, this month and this year, each the window the *server* clock is in. */
+  windows: WindowStats[];
+  /** Receive time of the oldest and newest event, unix ms. */
+  first?: number;
+  last?: number;
+  /**
+   * How many distinct days carry an event, and the average over them.
+   *
+   * Days with an event rather than days since the first one: catlog being
+   * switched off for a fortnight is not the same fact as catlog being quiet for
+   * one, and only the first should dilute an average.
+   */
+  days: number;
+  per_day: number;
+  /** The fullest single day, ever. Absent before there is one. */
+  busiest?: WindowCount;
+  /** The newest daily totals, **oldest first** — the order a chart plots. */
+  daily: WindowCount[];
+}
+
+/** What catlog has derived from the log, and how far it has got. */
+export interface CollectionStats {
+  boards: number;
+  placements: number;
+  /** Distinct event types ever received — not a constant, since catlog stores a type it cannot fold. */
+  types: number;
+  /** Claimed and visible; retired and banned handles are not counted. */
+  handles: number;
+  scoring_players: number;
+  flights: number;
+  flagged_flights: number;
+  careers: number;
+  rewound_careers: number;
+  kittens: number;
+  /** Distinct celestial bodies anybody has reached. The server keeps no list of these — players went there. */
+  bodies: number;
+  feed_rows: number;
+  /**
+   * The newest seq in the log, how far the projector has folded, and the gap.
+   *
+   * The gap is why a number here can disagree with a number elsewhere:
+   * everything on this page is a projection, and a projection is only as
+   * current as its cursor.
+   */
+  log_head: number;
+  projected: number;
+  lag: number;
+}
+
+/**
+ * `GET /v1/stats` — the one endpoint that describes catlog rather than its
+ * players. No records, no ranking, nobody's handle.
+ */
+export interface StatsResponse {
+  /** When the server assembled this, unix ms. It is cached twice over, so a page showing "today" should be able to say how old "today" is. */
+  generated: number;
+  events: EventStats;
+  collection: CollectionStats;
+}
+
 // --- GET /v1/feed ------------------------------------------------------------
 
 /** One line of the activity feed. */

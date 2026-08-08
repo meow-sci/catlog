@@ -101,6 +101,8 @@ type Server struct {
 	minBoardPlayers int
 	// counts memoizes the board census; see [Server.statCounts] in query.go.
 	counts countsCache
+	// stats memoizes `GET /v1/stats`; see [Server.Stats] in stats.go.
+	stats statsCache
 	// feedHub fans one broadcaster subscription out to every stream client;
 	// see feed.go. Nil when no Feed was supplied.
 	feedHub *feedHub
@@ -163,6 +165,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	if s.deps.RawEvents != nil {
 		s.public(mux, "/v1/events/stream", s.handleEventsStream)
 	}
+	s.public(mux, "/v1/stats", s.handleStats)
 	s.public(mux, "/v1/feed", s.handleFeed)
 	if s.deps.Feed != nil {
 		s.public(mux, "/v1/feed/stream", s.handleFeedStream)

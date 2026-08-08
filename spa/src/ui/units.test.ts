@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { CONFORMANCE, LABEL_CONFORMANCE } from './units.conformance.ts';
 import {
+  CANONICAL_LOCALE,
   DEGREES,
   exactValue,
+  formatNumber,
   formatValue,
   GS,
-  GROUP_SEPARATOR,
   JOULES,
   KILOGRAMS,
   METRES,
@@ -32,7 +33,10 @@ describe('the shared conformance table', () => {
   it.each(CONFORMANCE.map((row) => [row.value, row.unit, row.want] as const))(
     'Format(%p, %p) = %p',
     (value, unit, want) => {
-      expect(formatValue(value, unit)).toBe(want);
+      // Pinned to the canonical locale: the table is the cross-language
+      // contract, and a table that read the machine's locale would pass or fail
+      // depending on whose machine ran it.
+      expect(formatValue(value, unit, CANONICAL_LOCALE)).toBe(want);
     },
   );
 
@@ -82,13 +86,54 @@ describe('the shared label table', () => {
   });
 });
 
-describe('the group separator', () => {
-  it('is U+202F and not an ASCII space', () => {
-    // A plain space would be invisible in a diff and visible on every page: it
-    // wraps, and it is wider.
-    expect(GROUP_SEPARATOR).toBe('\u202F');
-    expect(formatValue(1234567, '')).toContain('\u202F');
-    expect(formatValue(1234567, '')).not.toContain(' ');
+describe('grouping', () => {
+  it("is the reader's, not a separator catlog picked", () => {
+    // The defect this replaced: every reader on earth got a U+202F narrow
+    // no-break space between the groups. The joke is that U+202F is not a bad
+    // separator — it is fr-FR's, which is the last assertion here — it was just
+    // being shown to the other several hundred locales as well.
+    expect(formatValue(1234567, '', CANONICAL_LOCALE)).toBe('1,234,567');
+    expect(formatValue(1234567, '', 'de-DE')).toBe('1.234.567');
+    expect(formatValue(1234567, '', 'en-GB')).toBe('1,234,567');
+    expect(formatValue(1234567, '', 'fr-FR')).toBe('1\u202F234\u202F567');
+  });
+
+  it('is grouping, not a character swap', () => {
+    // Why this cannot be "replace one separator with another" on the rendered
+    // string: two locales below disagree about where the groups *are*, not
+    // about what goes between them.
+    expect(formatNumber(1234567, 'en-IN')).toBe('12,34,567');
+    // es-ES leaves a bare four-digit number ungrouped.
+    expect(formatNumber(1234, 'es-ES')).toBe('1234');
+    expect(formatNumber(1234, CANONICAL_LOCALE)).toBe('1,234');
+  });
+
+  it('localises the decimal separator with it', () => {
+    expect(formatValue(1820000, 'm', CANONICAL_LOCALE)).toBe('1.82 Mm');
+    expect(formatValue(1820000, 'm', 'de-DE')).toBe('1,82 Mm');
+    // Rule 5's sub-minute forms are still one number, so they localise too.
+    expect(formatValue(37500, 'ms', 'de-DE')).toBe('37,5 s');
+    // Its two-component forms are not, and must not acquire a separator.
+    expect(formatValue(2.1e7, 's', 'de-DE')).toBe('243d 01h');
+  });
+
+  it('keeps the trailing-zero trim that rule 2 asks for', () => {
+    // `minimumFractionDigits: 0`, checked: Intl's default of 3 maximum / 0
+    // minimum is not what this needs, and a minimum of two would render 1.8
+    // as "1.80".
+    expect(formatNumber(1.8, CANONICAL_LOCALE)).toBe('1.8');
+    expect(formatNumber(1.8, 'de-DE')).toBe('1,8');
+    expect(formatNumber(0.002, CANONICAL_LOCALE)).toBe('0.002');
+  });
+
+  it('never renders a negative zero', () => {
+    // A value that rounds away to nothing keeps no sign: negative zero is a
+    // rounding artefact, never a fact about a flight.
+    expect(formatNumber(-0, CANONICAL_LOCALE)).toBe('0');
+    expect(formatNumber(-1e-9, CANONICAL_LOCALE)).toBe('0');
+    expect(formatNumber(-1e-9, 'de-DE')).toBe('0');
+    // A value that survives the rounding keeps it.
+    expect(formatNumber(-0.004, CANONICAL_LOCALE)).toBe('-0.004');
   });
 });
 
@@ -127,8 +172,8 @@ describe('unitForKey', () => {
     // The bug this table exists to prevent, spelled out: 30 km/s is an ecliptic
     // -frame roster speed, and a renderer that read `_ms` as milliseconds would
     // print "30 s".
-    expect(formatValue(30000, unitForKey('fastest_ms'))).toBe('30\u202F000 m/s');
-    expect(formatValue(30000, 'ms')).toBe('30 s');
+    expect(formatValue(30000, unitForKey('fastest_ms'), CANONICAL_LOCALE)).toBe('30,000 m/s');
+    expect(formatValue(30000, 'ms', CANONICAL_LOCALE)).toBe('30 s');
   });
 });
 

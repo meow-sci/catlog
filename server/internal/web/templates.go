@@ -33,6 +33,7 @@ var pageTemplates = []string{
 	"profile",
 	"events",
 	"events_all",
+	"stats",
 	"search",
 	"compare",
 	"login",
@@ -156,6 +157,12 @@ var templateFuncs = template.FuncMap{
 	// "999 m" and "1.82 Mm" — and it buys column-independence on the profile,
 	// comparison and tile surfaces, where there is no header to carry the unit.
 	"value": units.Format,
+	// num and numUnit are `number` and `value` as the element `intl.js`
+	// re-renders in the reader's locale — see [numberHTML]. Every *text*
+	// position uses these; the plain string functions stay for the attribute
+	// positions (`title`, `aria-label`), where a span cannot go.
+	"num":     num,
+	"numUnit": numUnit,
 	// unitLabel is the column header for a value column (rule 7). It is the unit
 	// itself wherever a cell ends in that unit, and the name of the quantity
 	// where it does not — a career-time column reads "243d 01h", so its header
@@ -183,6 +190,8 @@ var templateFuncs = template.FuncMap{
 	"blob":        prettyJSON,
 	"standing":    standing,
 	"periodLabel": periodLabel,
+	"barWidth":    barWidth,
+	"percent":     percent,
 	"rankClass":   rankClass,
 	"pageOffset":  pageOffset,
 	"titleize":    titleize,
@@ -199,6 +208,83 @@ var templateFuncs = template.FuncMap{
 	"sub":         func(a, b int) int { return a - b },
 }
 
+// --- localisable numbers ---------------------------------------------------
+
+// numUnit renders a value and its unit as the element a browser re-renders.
+func numUnit(v float64, unit string) template.HTML { return numberHTML(units.Split(v, unit)) }
+
+// num is [number] as that same element.
+func num(v any) template.HTML {
+	f, ok := asFloat(v)
+	if !ok {
+		return template.HTML(notANumber)
+	}
+	return numberHTML(units.Split(f, ""))
+}
+
+// notANumber is what a value of a kind this build cannot widen renders as. It
+// matches units' own, because a hole in a column should look the same wherever
+// it came from.
+const notANumber = "&#8212;"
+
+// numberHTML wraps a rendered number in the element `intl.js` re-renders it
+// from (site/assets/js/intl.js).
+//
+// # Why a browser finishes a number the server started
+//
+// Every public page is served `s-maxage=30` to a shared cache (§4.8), so one
+// response goes to everybody: there is no locale available here to render in,
+// exactly as there is no handle available to personalise with (see me.js). The
+// separator a reader expects is nonetheless theirs — 1,234,567 in Cambridge MA,
+// 1.234.567 in Berlin, 12,34,567 in Bengaluru — and only the browser knows
+// which. So the server renders `units`' canonical form as the text, publishes
+// the number and its precision as attributes, and `Intl.NumberFormat` finishes
+// the job on arrival.
+//
+// Attributes rather than a re-parse of the text, because the text is not always
+// a number: "1.82 Mm" is a number and a suffix, "243d 01h" is neither, and a
+// browser given only the string would have to reimplement `units` to tell them
+// apart. [units.Split] has already done that, and a two-component duration
+// comes back with IsNumber false and is left exactly as it is.
+//
+// A reader with no JavaScript keeps the canonical form, which is a conventional
+// one rather than the U+202F this used to show everybody.
+func numberHTML(p units.Parts) template.HTML {
+	tail := template.HTMLEscapeString(p.Tail)
+	if !p.IsNumber {
+		return template.HTML(template.HTMLEscapeString(p.Head) + tail)
+	}
+	var b strings.Builder
+	b.WriteString(`<span class="n" data-n="`)
+	// 'f' with -1 precision: the shortest decimal that round-trips, never an
+	// exponent. `Number()` on the other side has to read this back as the same
+	// double the text was rendered from.
+	b.WriteString(strconv.FormatFloat(p.Number, 'f', -1, 64))
+	b.WriteString(`" data-d="`)
+	b.WriteString(strconv.Itoa(p.Decimals))
+	b.WriteString(`">`)
+	b.WriteString(template.HTMLEscapeString(p.Head))
+	b.WriteString(`</span>`)
+	b.WriteString(tail)
+	return template.HTML(b.String())
+}
+
+// asFloat widens the numeric kinds these pages carry. text/template does not
+// convert between them, and the counts on a page are variously `int` (how many
+// boards), `int64` (a board's population) and `float64` (a value off a row).
+func asFloat(v any) (float64, bool) {
+	switch t := v.(type) {
+	case int:
+		return float64(t), true
+	case int64:
+		return float64(t), true
+	case float64:
+		return t, true
+	default:
+		return 0, false
+	}
+}
+
 // number groups a count for display.
 //
 // It takes `any` because text/template does not convert between numeric kinds,
@@ -207,16 +293,11 @@ var templateFuncs = template.FuncMap{
 // widens them is less error-prone than three template functions that differ only
 // in a signature.
 func number(v any) string {
-	switch t := v.(type) {
-	case int:
-		return units.Number(float64(t))
-	case int64:
-		return units.Number(float64(t))
-	case float64:
-		return units.Number(t)
-	default:
+	f, ok := asFloat(v)
+	if !ok {
 		return "—"
 	}
+	return units.Number(f)
 }
 
 // exactValue renders a float the way the JSON API published it: no grouping, no
@@ -388,9 +469,15 @@ func standing(rank int, players int64) int {
 }
 
 // pair is one decoded entry of a board row's `context` blob.
+//
+// Value is pre-rendered HTML because a numeric entry is [numberHTML]'s element
+// rather than a string — the detail chips localise like every other number on
+// the page. Everything that is not a number goes through
+// [template.HTMLEscapeString] on the way in: these values come from event
+// payloads, which are player-supplied.
 type pair struct {
 	Key   string
-	Value string
+	Value template.HTML
 }
 
 // contextKeys is the display allow-list for the Detail column: the
@@ -438,25 +525,25 @@ func contextPairs(raw json.RawMessage) []pair {
 	return out
 }
 
-func scalar(key string, v any) string {
+func scalar(key string, v any) template.HTML {
 	switch t := v.(type) {
 	case nil:
-		return "—"
+		return template.HTML(notANumber)
 	case string:
 		// Body and vehicle names arrive lowercase from the game; the board
 		// titles the server generates are already title case, so the values
 		// beside them should read the same way.
-		return titleize(t)
+		return template.HTML(template.HTMLEscapeString(titleize(t)))
 	case bool:
-		return strconv.FormatBool(t)
+		return template.HTML(strconv.FormatBool(t))
 	case float64:
-		return units.Format(t, units.ForKey(key))
+		return numUnit(t, units.ForKey(key))
 	default:
 		b, err := json.Marshal(t)
 		if err != nil {
-			return "—"
+			return template.HTML(notANumber)
 		}
-		return string(b)
+		return template.HTML(template.HTMLEscapeString(string(b)))
 	}
 }
 
