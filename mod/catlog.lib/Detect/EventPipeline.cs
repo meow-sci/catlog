@@ -55,9 +55,28 @@ public sealed class EventPipeline
     private readonly HashSet<FlightFlag> _sessionFlags = [];
     private readonly HashSet<string> _liveVehicles = new(StringComparer.Ordinal);
 
+    // Kitten roster name -> the flight of the vehicle whose crew was just killed, captured while
+    // that flight was still open. Read by the kitten.kia attribution below; see CrewKilledSignal.
+    private readonly Dictionary<string, PendingCrewKill> _crewKills = new(StringComparer.Ordinal);
+
+    // Kitten roster name -> its EVA vehicle id, for the kittens currently outside. Only the
+    // eva_start/eva_end pair proves an id belongs to a KittenEva rather than to a rocket a player
+    // happened to name after a kitten, and a wrong flight attribution disqualifies an innocent
+    // record — so this map, not a bare lookup of the name in the tracker.
+    private readonly Dictionary<string, string> _evaVehicles = new(StringComparer.Ordinal);
+
     private EventDetector _detector = new();
     private WindowAccumulator _windows;
     private ImpactCorrelator _correlator = new();
+
+    /// <summary>
+    /// How long a <see cref="CrewKilledSignal"/> may be used to attribute a <c>kitten.kia</c>, in
+    /// sim seconds. The roster flag flips inside <c>KillCrew</c> and the diff that notices it runs
+    /// on the next sample tick, so the two are always within one poll interval of each other; the
+    /// window is the same 2.0 s the game-side context labelling uses (<c>PolledSignals</c>), and it
+    /// is short enough that an unrelated later death cannot borrow the record.
+    /// </summary>
+    private const double CrewKillWindowSeconds = 2.0;
 
     /// <summary>Creates a pipeline.</summary>
     /// <param name="options">Construction parameters.</param>
@@ -266,6 +285,8 @@ public sealed class EventPipeline
                 break;
 
             case EvaStartSignal eva:
+                if (eva.VehicleId is { } evaVehicleId)
+                    _evaVehicles[eva.KittenName] = evaVehicleId;
                 Add(ref envelopes, EventEnvelope.Create(
                     EventTypes.KittenEvaStart, Tracker.SessionId, Tracker.CareerId,
                     eva.VehicleId is null ? null : Tracker.FlightFor(eva.VehicleId),
@@ -274,6 +295,7 @@ public sealed class EventPipeline
                 break;
 
             case EvaEndSignal eva:
+                _evaVehicles.Remove(eva.KittenName);
                 Add(ref envelopes, EventEnvelope.Create(
                     EventTypes.KittenEvaEnd, Tracker.SessionId, Tracker.CareerId, flight: null, eva.SimT, eva.WallMs,
                     new KittenEvaEndPayload(
@@ -282,15 +304,33 @@ public sealed class EventPipeline
 
             case TumbleSignal tumble:
                 Add(ref envelopes, EventEnvelope.Create(
-                    EventTypes.KittenTumble, Tracker.SessionId, Tracker.CareerId, flight: null, tumble.SimT, tumble.WallMs,
+                    EventTypes.KittenTumble, Tracker.SessionId, Tracker.CareerId,
+                    // A tumbling kitten IS a vehicle — a KittenEva whose Vehicle.Id is her roster
+                    // name — so the tumble belongs to that EVA flight, and it has to: `tuning`
+                    // flags the flight, and a flag can only exclude events that name one. The
+                    // signal's source polls the vehicle it has already registered, so the flight is
+                    // open by the time this runs.
+                    //
+                    // Peek, not FlightFor: minting here would attach the tumble to a flight ULID
+                    // that has no flight.started and never will — the phantom flight Flush's peek
+                    // semantics exist to prevent — and a tumble is exactly the event a phantom
+                    // would be minted for, since it can arrive from a vehicle whose id could not be
+                    // read. A null flight scores as it always did; an invented one poisons a join.
+                    Tracker.PeekFlight(tumble.KittenName),
+                    tumble.SimT, tumble.WallMs,
                     new KittenTumblePayload(
                         Kid(tumble.KittenName), Ids.SanitizeName(tumble.KittenName),
                         tumble.SpeedMs, tumble.Body)));
                 break;
 
+            case CrewKilledSignal killed:
+                OnCrewKilled(killed);
+                break;
+
             case KiaSignal kia:
                 Add(ref envelopes, EventEnvelope.Create(
-                    EventTypes.KittenKia, Tracker.SessionId, Tracker.CareerId, flight: null, kia.SimT, kia.WallMs,
+                    EventTypes.KittenKia, Tracker.SessionId, Tracker.CareerId, FlightForKia(kia),
+                    kia.SimT, kia.WallMs,
                     new KittenKiaPayload(
                         Kid(kia.KittenName), Ids.SanitizeName(kia.KittenName),
                         EventTypes.ToWire(kia.Context))));
@@ -325,6 +365,8 @@ public sealed class EventPipeline
         _correlator = new ImpactCorrelator();
         _liveVehicles.Clear();
         _sessionFlags.Clear();
+        _crewKills.Clear();
+        _evaVehicles.Clear();
         Tracker.NewSession(loaded.CareerId);
 
         Add(ref envelopes, EventEnvelope.Create(
@@ -356,6 +398,75 @@ public sealed class EventPipeline
                     new FlightFlaggedPayload(EventTypes.ToWire(flag), "session-wide flag")));
             }
         }
+    }
+
+    private void OnCrewKilled(CrewKilledSignal killed)
+    {
+        // Nothing to remember if the vehicle has no open flight: a crew kill on a vehicle catlog
+        // never saw start would only let the KIA below name a flight the server cannot join.
+        if (Tracker.PeekFlight(killed.VehicleId) is not { } flight)
+            return;
+
+        // The map is keyed by kitten and only ever holds the crew of the last few kills, but a
+        // session that scuttles crewed vehicles all day would still grow it without this: an entry
+        // older than the window can never be used again.
+        if (_crewKills.Count > 0)
+        {
+            foreach (string name in new List<string>(_crewKills.Keys))
+            {
+                if (Math.Abs(killed.SimT - _crewKills[name].SimT) > CrewKillWindowSeconds)
+                    _crewKills.Remove(name);
+            }
+        }
+
+        foreach (string name in killed.KittenNames)
+            _crewKills[name] = new PendingCrewKill(flight, killed.SimT);
+    }
+
+    /// <summary>
+    /// The flight a <c>kitten.kia</c> belongs to, or null when the mod cannot name one honestly.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The KIA itself comes from a roster diff (MOD-046) and so knows a name and a time, nothing
+    /// else. Two things can turn that into a flight, and both are exact rather than inferred:
+    /// </para>
+    /// <list type="number">
+    /// <item>
+    /// A <see cref="CrewKilledSignal"/> for this kitten inside the window. <c>Vehicle.KillCrew</c>
+    /// is the only writer of the roster's <c>Kia</c> flag (D11, <c>docs/ksa-integration.md</c> §4)
+    /// and the patch reads the seats at that instant, so a kitten named there died aboard that
+    /// vehicle. This is the path that fires in a real game.
+    /// </item>
+    /// <item>
+    /// The kitten is outside right now, and a kitten outside is a vehicle of her own whose id is
+    /// her roster name — her EVA flight is hers and nobody else's. A fallback for a KIA that
+    /// reaches the roster by some route <c>KillCrew</c> does not cover.
+    /// </item>
+    /// </list>
+    /// <para>
+    /// Otherwise: null, deliberately. A kitten who died aboard a vehicle whose crew kill catlog did
+    /// not see — a future build that flags KIA some other way, a seat whose roster entry could not
+    /// be resolved, a crew kill more than <see cref="CrewKillWindowSeconds"/> before the diff — is
+    /// not attributable, and guessing at the flight would disqualify an innocent flight's impact
+    /// record under the ±2 s window. A missed disqualification is recoverable; a wrongly voided
+    /// record is not.
+    /// </para>
+    /// </remarks>
+    /// <param name="kia">The signal.</param>
+    /// <returns>The flight ULID, or null.</returns>
+    private string? FlightForKia(KiaSignal kia)
+    {
+        if (_crewKills.Remove(kia.KittenName, out PendingCrewKill pending))
+        {
+            if (Math.Abs(kia.SimT - pending.SimT) <= CrewKillWindowSeconds)
+                return pending.FlightId;
+        }
+
+        if (_evaVehicles.TryGetValue(kia.KittenName, out string? vehicleId))
+            return Tracker.PeekFlight(vehicleId);
+
+        return null;
     }
 
     private void OnFlagged(FlaggedSignal flagged, ref List<EventEnvelope>? envelopes)
@@ -473,4 +584,6 @@ public sealed class EventPipeline
 
         (envelopes ??= []).Add(envelope);
     }
+
+    private readonly record struct PendingCrewKill(string FlightId, double SimT);
 }

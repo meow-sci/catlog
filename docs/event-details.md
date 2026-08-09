@@ -127,6 +127,7 @@ Envelopes go to `OutboxDb.Append` in emission order (`:552-569`).
 | Orbit-achieved margin | **1000 m** above atmosphere top | `Wire.OrbitAchievedMarginM`, `Wire.cs:142` |
 | Roster poll interval | **600 sim seconds** | `PolledSignals.RosterIntervalSeconds`, `mod/catlog/PolledSignals.cs:30` |
 | Manual-destroy → KIA attribution window | **2.0 sim seconds** | `PolledSignals.ManualDestroyWindowSeconds`, `:36` |
+| Crew-kill → KIA *flight* attribution window | **2.0 sim seconds** | `EventPipeline.CrewKillWindowSeconds`, `mod/catlog.lib/Detect/EventPipeline.cs:79` |
 | Ship floor | **30 s**, enforced at three layers | `Wire.MinShipIntervalSeconds`, `Wire.cs:237` |
 
 `SampleClock` (`Telemetry/SampleClock.cs:47-60`) fires **at most once per `Tick`** and zeroes the
@@ -208,8 +209,8 @@ field on the wire; `kind` exists **only** as a local SQLite column in the mod's 
 |---|---|---|---|---|
 | `id` | string | required | `EventEnvelope.cs:14-15`, minted `:93` via `Ids.NewUlid()` (`Util/Ids.cs:21`) | 26-char ULID. Server: `ids.Parse` or `400 malformed_batch` (`ingest/decode.go:219-222`). Dedup key is `(player, event_id)` (D19). |
 | `type` | string | required | `:18-19`, set from the `EventTypes` constant at the call site | Namespaced lowercase `[a-z0-9_.]`. Must be one of the 22 registry names or the **whole batch** is rejected (`decode.go:223-227`, `ingest/types.go:16-39`). |
-| `ver` | int | always emitted | `:22-23`, from `EventTypes.VersionOf(type)` at `:95` | **All 22 types are `ver: 1`** (`EventTypes.cs:89-113`). Server requires present and ≥ 1 (`decode.go:228-233`); unknown-but-higher is accepted and stored. |
-| `flight` | string \| null | **key always present** | `:29-30`; no `JsonIgnore` (`Util/CatlogJson.cs:16-21`) | ULID when non-null; validated as a ULID when present (`decode.go:239-244`). Null on `session.started`, `roster.snapshot`, `kitten.eva_end`, `kitten.tumble`, `kitten.kia`. |
+| `ver` | int | always emitted | `:22-23`, from `EventTypes.VersionOf(type)` at `:95` | **20 of the 22 types are `ver: 1`; `kitten.tumble` and `kitten.kia` are `ver: 2`** (`EventTypes.cs:91-120`). Server requires present and ≥ 1 (`decode.go:228-233`); unknown-but-higher is accepted and stored. |
+| `flight` | string \| null | **key always present** | `:29-30`; no `JsonIgnore` (`Util/CatlogJson.cs:16-21`) | ULID when non-null; validated as a ULID when present (`decode.go:239-244`). Always null on `session.started`, `roster.snapshot` and `kitten.eva_end`; **conditionally** null on `kitten.tumble` and `kitten.kia`, which name a flight whenever the mod can resolve one (see those entries). |
 | `session` | string | required | `:33-34` | ULID. Minted by the `FlightTracker` ctor (`Detect/FlightTracker.cs:45`) and re-minted at every save-load boundary (`FlightTracker.NewSession`, `:71-78`). |
 | `career` | string | required | `:41-42` | Exactly **16 lowercase Crockford base32** chars (`0-9 a-z` minus `i l o u`). Alphabet `Ids.Crockford` (`Ids.cs:14`), validator `Ids.IsHash16` (`:71-82`), server `validCareer` (`decode.go:283+`). |
 | `sim_t` | number | optional server-side, always emitted | `:50-51` | Universe sim seconds since this career began, from `Universe.GetElapsedSeconds()` (`VehicleTelemetry.SimTimeSeconds`, `:478-488`, anchor `KSA/Universe.cs:2103`). Always finite (`Sanitize.Finite`). |
@@ -383,8 +384,9 @@ in `Events/GameSignal.cs`.
 | `EngineSignal` (`:299`) | `PolledSignals.PollVehicle` (`:174-190`) | `engine.ignition` / `engine.shutdown` / `engine.flameout` |
 | `EvaStartSignal` (`:312`) | `Patcher.CreateKittenEvaPostfix` (`:650`) | `kitten.eva_start` |
 | `EvaEndSignal` (`:320`) | `Patcher.DisposePrefix`, KittenEva branch (`:530-535`) | `kitten.eva_end` |
-| `TumbleSignal` (`:329`) | `PolledSignals.PollVehicle` (`:165-169`) | `kitten.tumble` |
-| `KiaSignal` (`:337`) | `PolledSignals.PollRoster` roster diff (`:269-273`) | `kitten.kia` |
+| `TumbleSignal` (`:329`) | `PolledSignals.PollVehicle` (`:168-172`) | `kitten.tumble`, on the tumbling kitten's own EVA flight |
+| `CrewKilledSignal` (`:347`) | `Patcher.KillCrewPrefix` (`:546-576`) | **no event** — it carries the seat read that lets the next `kitten.kia` name a flight |
+| `KiaSignal` (`:358`) | `PolledSignals.PollRoster` roster diff (`:277-281`) | `kitten.kia` |
 | `FlaggedSignal` (`:346`) | `Patcher.Flag` (`:754`), `Patcher.UniverseDestroyPrefix` (`:678-683`), `PolledSignals.CheckTuning` (`:242-248`) | `flight.flagged` (1..n) |
 | `RosterSampleSignal` (`:357`) | `PolledSignals.PollRoster` (`:282`), `PolledSignals.EmitRoster` (`:148`) | `roster.snapshot` |
 
@@ -400,9 +402,12 @@ patch bodies and must never kill the worker (`EventPipeline.cs:311-314`).
 
 ## The registry
 
-`mod/catlog.lib/Events/EventTypes.cs:18-81` (names), `:89-113` (versions). Server mirror
-`server/internal/ingest/types.go:16-39`. **The two lists agree exactly** — 22 names, same spelling,
-same order.
+`mod/catlog.lib/Events/EventTypes.cs:20-83` (names), `:91-120` (versions). Server mirror
+`server/internal/ingest/types.go:16-39` for the names, `projector/upcast.go`'s `CurrentVer` +
+`currentVer` for the versions. **The two lists agree exactly** — 22 names, same spelling, same
+order — and the two version maps must too: a type the mod stamps `ver` 2 while the server still
+folds `ver` 1 is skipped as a future version, which is silent data loss for that type until the
+server catches up and a rebuild runs.
 
 | # | `type` | `ver` | outbox kind | Disableable? | Trigger | Feeds |
 |---|---|---|---|---|---|---|
@@ -424,10 +429,15 @@ same order.
 | 16 | `engine.flameout` | 1 | 1 | yes | passive | `flameouts` |
 | 17 | `kitten.eva_start` | 1 | 1 | yes | event | `evas` |
 | 18 | `kitten.eva_end` | 1 | 1 | yes | event | `longest_eva` |
-| 19 | `kitten.tumble` | 1 | 1 | yes | passive | `kitten_tumbles`, feed |
-| 20 | `kitten.kia` | 1 | 1 | **no — locked** | passive | the impact-board KIA window (rebuild), feed |
+| 19 | `kitten.tumble` | **2** | 1 | yes | passive | `kitten_tumbles`, feed |
+| 20 | `kitten.kia` | **2** | 1 | **no — locked** | passive | the impact-board KIA window (rebuild), feed |
 | 21 | `roster.snapshot` | 1 | **1** | yes | passive (+1 event) | `distance_travelled`, `top_kitten_distance`, `top_kitten_missions`, `kitten` |
 | 22 | `telemetry.window` | 1 | **0** | yes | passive | `peak_g_survived`, `max_q_survived`, `fastest_surface_speed`, `fastest_orbital_speed`, `highest_altitude` |
+
+`kitten.tumble` and `kitten.kia` are at `ver` 2 because both gained a non-null `flight`; the
+payload bytes did not move, so the server registers an **identity upcaster** for `ver` 1 of each
+(`projector/upcast.go`) and old rows keep folding exactly as they did. The bump is not cosmetic —
+the two versions score differently, and the stored `ver` is the only field that tells them apart.
 
 Every event additionally lands in `event_census` (10 rows: own type + total, × 5 periods).
 
@@ -1093,7 +1103,8 @@ verdict is final. No debounce; the only rate limiting is the game's own inside
 **Server.** Two boards, one crash read two ways. `survivedImpact` (`stats/boards.go:389-403`) is the
 eligibility both share, and they share it because they must agree about which crashes count:
 `Survived && !LaunchPad && CrewCount >= 1`, then `scoreable`, then — **rebuild only** — no
-`kitten.kia` for the same flight within ±2.0 s of `ev.SimTime`.
+`kitten.kia` for the same flight within ±2.0 s of `ev.SimTime`. That last clause was inert until
+`kitten.kia` began naming a flight (`ver` 2, MOD-073).
 
 - `lithobrakeFold` (`:416-432`) → `biggest_lithobrake_survived`, max `speed_ms`, gated `> 0`.
 - `impactEnergyFold` (`:442-456`) → `biggest_impact_energy`, max `energy_j`, gated `> 0`.
@@ -1383,9 +1394,18 @@ missing one.
 
 ### `kitten.tumble`
 
-**Wire.** `"kitten.tumble"` (`EventTypes.cs:72`), `ver` 1, kind 1. `flight` = **null**
-(`EventPipeline.cs:286`), even though a tumble always belongs to a specific `KittenEva` vehicle that
-has an open flight.
+**Wire.** `"kitten.tumble"` (`EventTypes.cs:74`), `ver` **2**, kind 1. `flight` = **the tumbling
+kitten's own EVA flight** (`EventPipeline.cs:305-323`). A `KittenEva`'s `Vehicle.Id` *is* the roster
+name, so `tumble.KittenName` is already the vehicle id and `Tracker.PeekFlight(tumble.KittenName)`
+resolves it; `PolledSignals.Track` has registered that vehicle into the same `into` list ahead of the
+`TumbleSignal`, so the flight is open by the time the pipeline sees it.
+
+**Peek, not `FlightFor`.** Minting here would attach the tumble to a flight ULID that has no
+`flight.started` and never will — the phantom flight `Flush`'s peek semantics (MOD-059) exist to
+prevent — and a tumble is exactly the event a phantom would be minted for, since it can arrive from a
+vehicle whose id could not be read. So `flight` is still **null** when the kitten has no open flight.
+A null tumble scores exactly as every tumble did at `ver` 1; an invented flight poisons a join
+permanently.
 
 **Payload** — `KittenTumblePayload`, `Payloads.cs:173-177`
 
@@ -1429,8 +1449,12 @@ mutable public static the game's own debug window live-edits — which is why an
 baseline seed emits nothing.
 
 **Server.** `countFold{kitten_tumbles, "kitten.tumble"}` — +1 per event on an unflagged flight. **No
-payload field is read at all**; the event type alone is the signal. Feed: `"{h}'s kitten {name} took
-a tumble at {speed} m/s on {body}"`.
+payload field is read at all**; the event type alone is the signal. That "on an unflagged flight" is
+new with `ver` 2 and is the whole point of the bump: `scoreable` passes any event with no flight, so
+a `ver` 1 tumble could never inherit the `tuning` flag raised on its flight, and a player who lowered
+the tumble speed gate — the entire definition of a tumble, live-editable in the game's own debug
+window — scored normally. A `ver` 1 row still does; it names no flight to be excluded by.
+Feed: `"{h}'s kitten {name} took a tumble at {speed} m/s on {body}"`.
 
 **Vectors.** None.
 
@@ -1438,8 +1462,8 @@ a tumble at {speed} m/s on {body}"`.
 
 ### `kitten.kia`
 
-**Wire.** `"kitten.kia"` (`EventTypes.cs:75`), `ver` 1, kind 1. `flight` = **null**
-(`EventPipeline.cs:294`).
+**Wire.** `"kitten.kia"` (`EventTypes.cs:77`), `ver` **2**, kind 1. `flight` = the flight the
+kitten died on **when the mod can prove one**, else null (`EventPipeline.FlightForKia`, `:458-470`).
 
 **Payload** — `KittenKiaPayload`, `Payloads.cs:183-186`
 
@@ -1474,9 +1498,10 @@ at every save-load boundary.
 - `Kia` flag: `KittenRosterEntryData.Kia` (`KSA/KittenRosterEntryData.cs:29`, `[XmlAttribute("KIA")]`).
   Written in **exactly one place**: `Kia = true` at `:108` inside `Kill(bool hasLaunched)` (`:96`).
   **Never reset to false.**
-- Context: a **prefix** on `Vehicle.KillCrew()` — `KSA/Vehicle.cs:2796`, installed `Patcher.cs:180-182`,
-  body `:546-565`, calling `runtime.NoteManualDestroy(simT)`. `KillCrew` has **exactly one caller**,
-  `KSA/InputEvents.cs:515`, guarded by `if (!Recovered)` — i.e. exclusively the player-initiated
+- Context **and flight**: a **prefix** on `Vehicle.KillCrew()` — `KSA/Vehicle.cs:2796`, installed
+  `Patcher.cs:180-182`, body `:546-576`, calling `runtime.NoteManualDestroy(simT)` for the context
+  and raising a `CrewKilledSignal` with the seat read for the flight (see below). `KillCrew` has
+  **exactly one caller**, `KSA/InputEvents.cs:515`, guarded by `if (!Recovered)` — i.e. exclusively the player-initiated
   destroy path. It is therefore a **player-intent marker, not a fatality signal**. The physics RUD
   path calls `EndAllCrewMissions` and never touches `Kia`.
 - Polled at **2 Hz**.
@@ -1487,10 +1512,41 @@ a 2.0 sim-second proximity window decides `context`.
 **Dedup.** The `_kia` dictionary keyed by roster name is the latch; since `Kia` is never reset by the
 game, the rising edge can fire at most once per kitten per session.
 
+**Flight attribution — exact or absent, never inferred** (`EventPipeline.cs:403-470`). Two paths
+produce a flight:
+
+1. **A `CrewKilledSignal` for that kitten within `CrewKillWindowSeconds` (2.0 sim seconds).**
+   `Patcher.KillCrewPrefix` (`:546-576`) raises it from `Vehicle.KillCrew` — the only writer of the
+   roster's `Kia` flag in the whole build (D11, [ksa-integration.md](ksa-integration.md) §4) — after
+   registering the vehicle through `Track`, carrying `VehicleTelemetry.CrewNames(__instance)`
+   (`:412`). That is the last moment the seats are readable and the flight is still open;
+   `Vehicle.Dispose` follows in the same frame and the roster diff a tick later sees a name and
+   nothing else. `OnCrewKilled` remembers `(kitten → flight, simT)` and evicts entries older than the
+   window. **This is the path that fires in a real game**, because every KIA the current build can
+   produce comes through `KillCrew`.
+2. **The kitten is outside right now** — `_evaVehicles` (built from the `eva_start`/`eva_end` pair,
+   not by matching the name against the tracker, because a player can name a *rocket* after a kitten
+   and that lookup would then void the rocket's flight) says she is on EVA, and her EVA vehicle's
+   flight is open.
+
+It stays **null**, deliberately, when: no `KillCrew` was seen and she was not outside (a future build
+that sets `Kia` by some other route); the seat read yielded no name for her (`CrewNames` swallows an
+unreadable roster and skips a seat whose `AssignedKittenHash` does not resolve); the crew kill
+happened on a vehicle with no open flight, which would otherwise name a flight the server has no
+`flight.started` for; more than 2.0 sim seconds separate the crew kill from the diff that noticed the
+death (the poll runs at 2 Hz, so this needs a stall or a time-warp jump); or the session was reloaded
+between the two (`_crewKills` and `_evaVehicles` are cleared at the save-load boundary). A wrong
+attribution would disqualify an innocent flight's impact record and cannot be appealed; a null costs
+one disqualification that should have happened. See MOD-073.
+
 **Server.** No board counts it directly. It feeds **rebuild pass 1**, which builds
 `kia map[flightID][]simT` from `kitten.kia` events that carry a flight and a sim time
-(`projector/rebuild.go:155-157`) — and that map is what disqualifies a
-`biggest_lithobrake_survived` claim within ±2.0 s. Feed: `"{h} said goodbye to kitten {name}"`.
+(`projector/rebuild.go:163-165`) — and that map is what disqualifies a
+`biggest_lithobrake_survived` **and** a `biggest_impact_energy` claim within ±2.0 s. Before `ver` 2
+the event never carried a flight, so that map was always empty on shipped data and the window fired
+only in tests, which constructed the event with a flight (PROJ-092). The rebuild condition is
+**unchanged** and deliberately so: there is no key a null-flight KIA could be indexed under that is
+not a guess. Feed: `"{h} said goodbye to kitten {name}"`.
 
 **Vectors.** None.
 
@@ -2188,12 +2244,13 @@ fold writes. Surfaced as `collection.projected` / `collection.lag` and `projecto
 | A flagged flight scores nothing — every board, including counters | `scoreable` → `flight_state.flags == 0` | `stats/fold.go:205-220`; PROJ-001 |
 | The `roster.snapshot` and flightless-`kitten.*` boards are exempt — `distance_travelled`, `top_kitten_distance`, `top_kitten_missions`, `longest_eva`, and `evas` whenever the EVA signal carried no vehicle id | `!ev.HasFlight()` → true | `stats/fold.go:226-228` |
 | An **unknown** flag value still excludes | `FlagOther`, bit 5 | `stats/flight.go:29,34-48`; PROJ-002 |
+| A `tuning`-flagged flight's tumbles do not count — the exclusion the flag exists for, live only since `kitten.tumble` gained a flight at `ver` 2 | `scoreable` on a flight-bearing tumble | `stats/fold.go:120,205-228`; MOD-073 |
 | Launch-pad impacts never score — on **both** impact boards | `!LaunchPad` | `stats/boards.go:390` |
 | Crewless impacts never score — on **both** impact boards | `CrewCount >= 1` | `stats/boards.go:390` |
 | An impact within 5 s of a teleport is not recorded at all | `Vehicle.IsImpactFxSuppressed()` | `Patcher.cs:423-424,455-456` |
 | An impact whose vehicle died in frame *N* or *N+1* is `survived: false` | `ImpactCorrelator` | `ImpactCorrelator.cs:24-29` |
 | A manual destroy also flips `survived` | `EndFlight` tells the correlator first | `EventPipeline.cs:398-399` |
-| An impact within ±2 s of a `kitten.kia` (rebuild only) — on **both** impact boards | `b.KIANear`, via the shared `survivedImpact` | `stats/boards.go:397-401` |
+| An impact within ±2 s of a `kitten.kia` **that named a flight** (rebuild only) — on **both** impact boards | `b.KIANear`, via the shared `survivedImpact`; the index is fed only by flight-bearing KIAs, and the mod attributes one only when it can prove it | `stats/boards.go:397-401`; `projector/rebuild.go:163`; MOD-073 |
 | `peak_g_survived` **and** `max_q_survived` require the flight ended `recovered` (rebuild only) | `st.Recovered()`, via the shared `survivedLoad` | `stats/boards.go:485-487` |
 | Absent `peak_g` / `max_q_pa` ≠ 0 | `*float64` + omit-don't-zero on the wire | `stats/payload.go:209-210`; `Payloads.cs:238,241` |
 | An unwritten orbit figure does not count — `ap_m == 0` (conic not `Bound`), `ecc == 0` or `inc_deg == 0` (unread) | `value > 0` on all four shape boards | `stats/boards.go:663-665` |
@@ -2220,7 +2277,9 @@ fold writes. Surfaced as `collection.projected` / `collection.lag` and `projecto
 swaps (the old file is kept as `<path>.old` until reopen succeeds — PROJ-012).
 
 - **Pass 1** (`:139`) applies `StateFolds()` only (`flight_state`, `career`) over the whole log and
-  builds `kia map[flightID][]simT` from `kitten.kia` events carrying a flight and a sim time.
+  builds `kia map[flightID][]simT` from `kitten.kia` events carrying a flight and a sim time (`:163`).
+  A KIA the mod could not attribute carries no flight and is **not** indexed — there is no key for it
+  that is not a guess, and a guess voids an innocent flight's impact record.
 - **Pass 2** (`:170`) uses `stats.NewRefinedBatch(tx, kia, …)`, applies `SecondPassFolds()` (boards +
   census) against a `flight_state` already complete for all history, and re-renders feed rows.
 - Nothing is broadcast from a rebuild.
@@ -2232,7 +2291,11 @@ always answers false then. **This is D22, not a bug.** The divergences, exhausti
    a rebuild sees the completed `flight_state` on pass 2 and drops them all (PROJ-004).
 2. **The ±2.0 s KIA window on the two impact boards** — `biggest_lithobrake_survived` and
    `biggest_impact_energy`, which share `survivedImpact` and therefore share the divergence. Applied
-   only when `b.Refined()`.
+   only when `b.Refined()`. **This one only became a real divergence when `kitten.kia` gained a
+   flight** (`ver` 2): until then the pass-1 index was always empty on shipped data, the rebuild
+   agreed with the incremental path by accident, and the tests that "covered" it built the event with
+   a flight the mod never sent. It now fires on a scuttle with crew aboard, on the attributable
+   deaths only.
 3. **`ended_reason == 'recovered'` on the two structural-load boards** — `peak_g_survived` and
    `max_q_survived`, which share `survivedLoad`. Applied only when `b.Refined()`. This is still the
    **broadest** divergence, and it is now twice as broad: every `destroyed` / `despawned` /
@@ -2302,8 +2365,11 @@ that the code is wrong.**
    correctly.
 2. **`docs/events.md:83` — `other_flight` is typed as a ULID.** It is nullable and `"other_flight":null`
    is a legal emitted shape. The Go struct is a plain `string`, so null silently decodes to `""`.
-3. **`docs/events.md:18` — `flight` is "null for session/roster events".** `kitten.eva_end`,
-   `kitten.tumble` and `kitten.kia` also emit null, while `kitten.eva_start` emits non-null.
+3. **Fixed.** `docs/events.md`'s envelope comment said `flight` is "null for session/roster
+   events"; `kitten.eva_end` also emits null, `kitten.eva_start` emits non-null, and `kitten.tumble`
+   / `kitten.kia` emit null only when the mod cannot resolve a flight (MOD-073). The comment now
+   reads "null when the event names no flight" and the two conditional cases are spelled out in both
+   documents.
 4. **`docs/events.md:89` — `roster.snapshot` "every 10 min of play".** The 600-second interval is
    compared against **sim** time, so under time warp snapshots come far more often in wall time. And
    "on session end" means **process unload only**; a save-load boundary emits no closing roster.
@@ -2366,13 +2432,14 @@ that the code is wrong.**
     whatever bytes are actually sent, but nothing says so.
 25. **`Board.Career` carries a `json:"career"` tag but is exposed in no response struct.** Clients
     infer "career board" from `ascending` + `unit == "ms"` + the presence of `rewound`.
-26. **The ±2 s KIA window and the `tuning` flag are inert on data the shipped mod produces.**
-    `EventPipeline` emits `kitten.kia` with `flight: null`, and `rebuild.go` builds its
-    `kia map[flightID][]simT` only from `kitten.kia` events that *carry* a flight — so on shipped
-    data that map is always empty and the crew-survival window never fires, on either impact board.
-    It fires in the tests, which construct the event with a flight. Likewise `kitten.tumble` is
-    `flight: null`, so `kitten_tumbles` can never see a flagged flight and the `tuning` flag —
-    which `stats/flight.go` documents as existing *specifically* to protect that counter — protects
-    nothing in practice. `kittens_recovered` is fine: `flight.ended` does carry a flight. The fix is
-    on the mod side (attribute those events to their flight), not the server's; recorded here rather
-    than quietly dropping two rows of the suppression matrix.
+26. **Fixed (2026-08-09).** The ±2 s KIA window and the `tuning` flag were both inert on data the
+    shipped mod produced, because `kitten.tumble` and `kitten.kia` were emitted with `flight: null`
+    and neither the rebuild's KIA index nor `scoreable`'s flag gate can act on an event that names no
+    flight. Both mechanisms passed their tests, which constructed the events *with* a flight the mod
+    never sent — **a guard whose test data is shaped differently from real data is not a guard.** The
+    fix was on the mod side, as predicted: both events now attribute a flight and are `ver` 2. See
+    MOD-073, MOD-074 and PROJ-092.
+
+    **The residual, smaller:** `contracts/testdata/` still contains no `kitten.tumble` or
+    `kitten.kia` line, so nothing pins the new envelope shape cross-language — the same coverage gap
+    the "Uncovered: 17" list above records, now load-bearing for two events instead of none.

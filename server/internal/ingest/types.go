@@ -2,7 +2,11 @@ package ingest
 
 import "slices"
 
-// knownTypes is the §4.2 event taxonomy — the launch set, all `ver: 1`.
+// knownTypes is the §4.2 event taxonomy — the launch set, `ver: 1` except for
+// `kitten.tumble` and `kitten.kia`, which are at `ver: 2` since they began
+// carrying a flight (projector.currentVer holds the per-type versions; ingest
+// validates only that `ver` is ≥ 1, because §4.1 accepts and stores an
+// unknown-but-higher version rather than rejecting the batch).
 //
 // This registry is a contract, not a convenience: §4.1 rejects a whole batch
 // carrying an unknown `type`, on the grounds that the mod and the server ship

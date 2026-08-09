@@ -57,7 +57,7 @@ document as a to-do list.
 | S4 | `seq` is a server-local rowid; `wall_t` is untrusted and the feed uses `recv_time` | `server/internal/stats/event.go:15` | **In scope** | Keep |
 | S5 | Rebuild pass 1/2 — a late `flight.flagged` retroactively unscoring its flight | `server/internal/projector/rebuild.go:71`, `:139`, `:169` | **In scope** | Keep |
 | S6 | `/admin/stats` reports `flagged_flights` | `server/internal/store/projections.go:280` | **In scope** | Keep |
-| S7 | Rebuild refinement — ±2 s `kitten.kia` window on `biggest_lithobrake_survived` | `server/internal/stats/fold.go:44`, `flight.go:183`, `boards.go:139` | **Borderline** | Keep as-is; see F2 |
+| S7 | Rebuild refinement — ±2 s `kitten.kia` window on **both** impact boards | `server/internal/stats/fold.go:44`, `flight.go:183`, `boards.go:139`, `projector/rebuild.go:163` | **Borderline** | Keep; **live since 2026-08-09** — see F2 |
 | S8 | Rebuild refinement — `peak_g_survived` requires `ended_reason == 'recovered'` | `server/internal/stats/boards.go:181` | **Borderline** | Keep; document the overnight change; see F3 |
 | S9 | Stream hash chain `sid`/`seq`/`ph`, `409 stream_fork`, sticky `gap` | `server/internal/authz/authz.go:425`, `server/internal/ingest/writer.go:174`, `server/internal/store/events.go:559` | **Borderline** | Keep the code, fix the claim; see F1 |
 
@@ -81,7 +81,9 @@ producers and both are player commands.
 **The `tuning` flag (M4).** Confirming the owner's prior: **in scope**, unambiguously. It is one
 float equality against `6.5f`, held in one named constant with a `[KsaAnchor]` on the reader, and
 it exists because the game itself ships a debug window that live-edits the sole classifier for
-`kitten.tumble`. "Assume KSA game default settings" is precisely what this is; without it the
+`kitten.tumble`. (**2026-08-09:** it *protects* `kitten_tumbles` only as of that date. Until
+`kitten.tumble` gained a flight the flag was raised, stored and correctly excluded everything on the
+flight — except the tumbles, which named no flight to be excluded from. MOD-073.) "Assume KSA game default settings" is precisely what this is; without it the
 tumble board is not hard to forge, it is trivial. The session-wide taint (M5) is the correct scope
 for it, since the edited value is a process-global.
 
@@ -219,6 +221,14 @@ to pick from, both optional:
   the column at the next schema change. A column nothing reads is a promise nothing keeps.
 
 ### F2 — The ±2 s KIA window is nearly a no-op, and now overlaps a mod-side check (S7) · **Borderline**
+
+> **2026-08-09 update.** Everything below was written about a check that could not fire *at all*:
+> `kitten.kia` carried no flight, so pass 1's index was always empty on shipped data (MOD-073,
+> PROJ-092). It now fires, on scuttles with crew aboard where the mod could attribute the death. The
+> cost/benefit verdict — **keep** — is unchanged, and so is the residual-gap analysis, because the
+> impact correlator (M8) still catches the same-frame and next-frame case earlier and better. What
+> changes is that "nearly a no-op" is now a statement about frequency rather than about a mechanism
+> that never ran.
 
 **What it does.** During a rebuild, pass 1 indexes every `kitten.kia` by `(flight, sim_t)`; pass 2
 refuses a `biggest_lithobrake_survived` record if a KIA landed within ±2 s of the impact. It is

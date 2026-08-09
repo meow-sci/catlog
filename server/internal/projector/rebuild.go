@@ -152,6 +152,14 @@ func (p *Projector) rebuildPass1(ctx context.Context, proj *store.Projections, h
 				if err := p.applyFolds(ctx, b, folds, d.ev); err != nil {
 					return err
 				}
+				// Only a KIA that names a flight goes in the index, and that
+				// is not a formality: the mod attributes a death to a flight
+				// only when it can prove one (the crew read taken inside
+				// KillCrew, or the kitten's own EVA vehicle), and leaves
+				// `flight` null otherwise. A null one indexed against anything
+				// would void an impact record on a flight that had nothing to
+				// do with the death — the one outcome worse than missing a
+				// disqualification, since it cannot be appealed.
 				if d.ev.Type == "kitten.kia" && d.ev.HasFlight() && d.ev.HasSimTime {
 					kia[d.ev.FlightID] = append(kia[d.ev.FlightID], d.ev.SimTime)
 				}

@@ -221,7 +221,7 @@ The only code that touches KSA, and deliberately thin: everything else is a call
 | `StatusWindow.cs` | Read-only ImGui rows: patches, vehicles, session, install, **event types**, recorded/queued counts, last ship, health. The *Event types* row reads `all reported`, or `N off in catlog.toml: <names>` in the warning colour — a player who switched something off months ago and forgot is otherwise looking at an empty board with no visible cause. It reports; it does not edit ([ROADMAP.md](ROADMAP.md)) |
 | `Patcher.cs` | The Harmony patches, each carrying its `ksa-integration.md` table row as a comment |
 | `VehicleTelemetry.cs` | **Every** KSA read, each with a `[KsaAnchor]` |
-| `PolledSignals.cs` | The 2 Hz poll, vehicle tracking, and the roster read at **two cadences** — an allocation-free KIA scan every tick, the `roster.snapshot` payload only when one is due |
+| `PolledSignals.cs` | The 2 Hz poll, vehicle tracking, and the roster read at **two cadences** — an allocation-free KIA scan every tick, the `roster.snapshot` payload only when one is due. It raises the tumble signal on the kitten's own EVA vehicle, which is what gives `kitten.tumble` its flight; the `KillCrew` patch in `Patcher.cs` raises the crew-kill signal that gives `kitten.kia` its own |
 | `CatlogRuntime.cs`, `ModPaths.cs`, `KsaAnchor.cs` | Wiring, paths, the anchor attribute |
 
 **Every KSA read carries a `[KsaAnchor]`** naming the `file:line` it was verified against and the
@@ -243,10 +243,15 @@ Patch points that were chosen carefully, because the obvious target was wrong:
 - **`flight.ended` has one emitter**, the true removal choke point, with the *reason* decided by
   intent flags the earlier patches set. A silent-removal safety net closes any tracked vehicle that
   vanished without one, so a flight never leaks open.
-- **`kitten.kia` is emitted by roster diff**, with the manual-destroy patch only supplying context.
-  One emit path means no dedup problem, and it still catches a KIA arriving by a route a future build
-  adds. The first roster read is a baseline that emits nothing, so loading a save full of dead kittens
-  does not replay their deaths.
+- **`kitten.kia` is emitted by roster diff**, with the `Vehicle.KillCrew` patch supplying both the
+  context *and* the flight attribution. One emit path means no dedup problem, and it still catches a
+  KIA arriving by a route a future build adds. The first roster read is a baseline that emits nothing,
+  so loading a save full of dead kittens does not replay their deaths. The patch raises a
+  `CrewKilledSignal` carrying the seats read at the one instant they are still readable — the vehicle
+  is disposed in the same frame, and the diff a tick later knows a name and nothing else — and the
+  pipeline joins the next KIA for that kitten to that flight within 2.0 sim seconds. **When it cannot
+  prove a flight it emits none**, because a guessed one would void an innocent flight's impact record
+  (MOD-073).
 - **Engine events are whole-vehicle, not per-engine**, using the two globals the game already
   publishes. The consequence is recorded rather than hidden: a vehicle that shuts down one of two
   engine groups reports nothing until the last one stops.

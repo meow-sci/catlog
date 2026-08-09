@@ -12,10 +12,21 @@ import (
 // an entry in currentVer below.
 const CurrentVer = 1
 
-// currentVer overrides [CurrentVer] per type. Empty at launch; adding a key here
-// is half of a payload version bump, the other half being an [Upcaster] for
-// every version between the old one and the new.
-var currentVer = map[string]int{}
+// currentVer overrides [CurrentVer] per type. Adding a key here is half of a
+// version bump, the other half being an [Upcaster] for every version between the
+// old one and the new. It must equal the mod's EventTypes.Versions exactly: a
+// type the mod stamps ver 2 while this map still says 1 is skipped here as a
+// future version, which is silent data loss for that type until a rebuild.
+var currentVer = map[string]int{
+	// Both gained a non-null `flight` in ver 2 (mod: EventPipeline's tumble and
+	// KIA attribution). The payload did not change — see the identity upcasters
+	// in [NewUpcasters] — but what the server does with the event did: at ver 1
+	// neither could name a flight, so `kitten.tumble` could not inherit its
+	// flight's `tuning` flag and `kitten.kia` could not disqualify an impact
+	// under the ±2 s window. The stored `ver` is what tells those rows apart.
+	"kitten.tumble": 2,
+	"kitten.kia":    2,
+}
 
 // Errors the version resolution can produce. Neither is fatal to the projector:
 // §4.1 says an event it cannot decode is skipped and logged once, because the
@@ -51,9 +62,26 @@ type Upcasters struct {
 	m map[upcastKey]Upcaster
 }
 
-// NewUpcasters returns the launch registry, which is empty: every §4.2 type is
-// at ver 1 and needs no conversion.
-func NewUpcasters() *Upcasters { return &Upcasters{m: map[upcastKey]Upcaster{}} }
+// NewUpcasters returns the registry this build folds with.
+//
+// `kitten.tumble` and `kitten.kia` are at ver 2 and their transforms are the
+// identity: the bump was an envelope change (those events now carry a flight),
+// and a ver 1 row's payload is already exactly what the ver 2 folds read. The
+// entries are still required — [Apply] refuses to fold a row it cannot bring to
+// the current version — and they are what keeps the old rows scoring as they
+// always did: a flightless `kitten.tumble` still counts, it simply cannot be
+// excluded by a flag it never named.
+func NewUpcasters() *Upcasters {
+	u := &Upcasters{m: map[upcastKey]Upcaster{}}
+	u.Register("kitten.tumble", 1, identityUpcast)
+	u.Register("kitten.kia", 1, identityUpcast)
+	return u
+}
+
+// identityUpcast is the transform for a version bump that did not touch the
+// payload. It returns the stored bytes untouched, which also preserves the
+// unknown keys §4.1 promises survive.
+func identityUpcast(raw json.RawMessage) (json.RawMessage, error) { return raw, nil }
 
 // Register adds the transform from version ver to ver+1 for one event type.
 func (u *Upcasters) Register(typ string, ver int, fn Upcaster) {

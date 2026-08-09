@@ -35,7 +35,9 @@ public sealed class SoakScenario : IScenario
     private const int MissionCrew = 2;
     private const int StagingsPerMission = 4;
     private const string EvaBaseId = "mun-base-1";
-    private const string EvaId = "eva-bill";
+    // The EVA vehicle's id is the kitten's roster name, exactly as in game (§2): that identity is
+    // what lets the pipeline put a tumble on the EVA flight.
+    private const string EvaId = EvaKitten;
     private const string EvaKitten = "Bill Kerman";
 
     private static readonly double[] TumbleSpeeds = [7.4, 8.9, 6.8, 11.2];

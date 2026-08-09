@@ -69,6 +69,9 @@ Three details:
   rule applies when catlog could tell which vehicle the kitten stepped out of, and
   not when it could not. Fixing any of these would mean the mod attaching those
   moments to a flight, which is not something the server can do for it.
+  **Kitten Tumbles was one of these and no longer is**: a tumble now belongs to the
+  kitten's own spacewalk flight, so changing the tumble tuning excludes those
+  tumbles, which is exactly what that mark was always for.
 
 ## Impact rules
 
@@ -134,6 +137,9 @@ and the events are still arriving one at a time:
 
 1. **An impact within 2 seconds of a kitten being lost is dropped.** Live, catlog
    cannot know a kitten is about to be lost. This applies to both impact boards.
+   The rule needs to know _whose flight_ the kitten died on, and losses only began
+   carrying that — so a crash that killed a kitten now stops being a survived
+   landing, which is what this rule always said it did.
 2. **A peak-g or max-q reading only counts if the flight ended recovered.** Live,
    the flight may still be in progress. This is the widest of them — every flight
    that ended destroyed or despawned loses both rows on a rebuild.

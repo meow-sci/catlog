@@ -229,7 +229,7 @@ InputEvents.VehicleDestroyData.Apply()      KSA/InputEvents.cs:493
 
 ### Practical consequence for catlog
 
-`Vehicle.KillCrew` is a **player-intent** signal, not a fatality signal. Patch it if you want to log deliberate scuttling, but **never treat a `VehicleDestructionEvent` as a crew fatality**. If catlog wants a "crew survived the RUD" statistic, the game gives it for free — everyone always survives. If catlog wants a *real* fatality metric it must define one itself (e.g. "crewed vehicle destroyed by `VehicleDestructionCause.GroundImpact`"), and label it as a catlog-defined metric rather than a game-reported KIA. Roster-diffing `Kia` will only ever fire on manual destroys.
+`Vehicle.KillCrew` is a **player-intent** signal, not a fatality signal. catlog patches it for two things: the intent timestamp that labels the resulting `kitten.kia` as `manual_destroy`, and — since 2026-08-09 — the **crew read that attributes the death to a flight** (MOD-073). It is the last point at which the seats are readable and the flight is still open: `Vehicle.Dispose` follows in the same frame, and the roster diff that notices the death a tick later has only a name. But **never treat a `VehicleDestructionEvent` as a crew fatality**. If catlog wants a "crew survived the RUD" statistic, the game gives it for free — everyone always survives. If catlog wants a *real* fatality metric it must define one itself (e.g. "crewed vehicle destroyed by `VehicleDestructionCause.GroundImpact`"), and label it as a catlog-defined metric rather than a game-reported KIA. Roster-diffing `Kia` will only ever fire on manual destroys.
 
 ### Does the 2.5× kitten g-load change affect this?
 

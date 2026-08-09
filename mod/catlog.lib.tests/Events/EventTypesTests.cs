@@ -13,7 +13,16 @@ public sealed partial class EventTypesTests
     {
         // 22 rows: the §4.2 table, counting each of the docked/undocked and engine.* variants.
         Assert.Equal(22, EventTypes.All.Count);
-        Assert.All(EventTypes.All, static type => Assert.Equal(1, EventTypes.VersionOf(type)));
+
+        // Everything is still at the launch version except the two that began carrying a flight.
+        // The server mirrors these numbers in projector.currentVer; a type this side calls ver 2
+        // and that side still folds at ver 1 is skipped there as a future version, so the pair is
+        // pinned here rather than left to a blanket "all ver 1".
+        Assert.Equal(2, EventTypes.VersionOf(EventTypes.KittenTumble));
+        Assert.Equal(2, EventTypes.VersionOf(EventTypes.KittenKia));
+        Assert.All(
+            EventTypes.All.Where(static type => type is not (EventTypes.KittenTumble or EventTypes.KittenKia)),
+            static type => Assert.Equal(1, EventTypes.VersionOf(type)));
     }
 
     [Fact]

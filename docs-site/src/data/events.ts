@@ -453,14 +453,14 @@ export const EVENTS: CatlogEvent[] = [
   {
     type: "kitten.tumble",
     family: "kitten",
-    ver: 1,
+    ver: 2,
     summary: "A kitten went over.",
     trigger: "passive",
     cause:
       "Sampled twice a second. Recorded when a kitten's movement state changes into tumbling. Only transitions *into* tumbling count — a tumble ends by righting itself, and counting that too would double every fall.",
     source:
-      "The game decides a kitten is tumbling when it is touching the ground and moving faster than a tuning value that is 6.5 m/s in a stock game. Changing that value flags the flight.",
-    gate: "One event per fall. The speed reported is the kitten's ground speed at the moment it went over.",
+      "The game decides a kitten is tumbling when it is touching the ground and moving faster than a tuning value that is 6.5 m/s in a stock game. Changing that value marks the flight — and a tumble belongs to the kitten's own spacewalk flight, so a marked flight's tumbles do not count. Before version 2 a tumble belonged to no flight at all, and the mark could not reach it.",
+    gate: "One event per fall. The speed reported is the kitten's ground speed at the moment it went over. If catlog cannot tell which flight the kitten was on, the tumble is recorded without one and counts as it always did.",
     fields: [
       { key: "kid", unit: "", what: "The per-kitten identifier." },
       { key: "name", unit: "", what: "The kitten's name." },
@@ -474,14 +474,14 @@ export const EVENTS: CatlogEvent[] = [
     type: "kitten.kia",
     alwaysOn: true,
     family: "kitten",
-    ver: 1,
+    ver: 2,
     summary: "A kitten was lost.",
     trigger: "passive",
     cause:
       "Catlog compares the roster against its last reading twice a second and notices a kitten newly marked as lost. Loading a save that already contains losses does not replay them.",
     source:
-      "The roster's own killed-in-action flag, which the game sets in exactly one place and never clears. Whether you did it deliberately is decided by whether the game's kill-the-crew path ran in the previous 2 seconds — that path only runs when a player asks for it.",
-    gate: "Once per kitten. The flag is never reset, so a kitten cannot be lost twice.",
+      "The roster's own killed-in-action flag, which the game sets in exactly one place and never clears. Whether you did it deliberately is decided by whether the game's kill-the-crew path ran in the previous 2 seconds — that path only runs when a player asks for it. The same moment is what tells catlog which flight she was on: it reads the seats while the vehicle still exists, because a moment later the roster knows only a name.",
+    gate: "Once per kitten. The flag is never reset, so a kitten cannot be lost twice. The loss names a flight only when catlog can prove which one — otherwise it is recorded without one, deliberately, because a wrong flight would strike a record off somebody else's landing. Before version 2 it never named one, and the rule that drops a crash which killed a kitten could not fire at all.",
     fields: [
       { key: "kid", unit: "", what: "The per-kitten identifier." },
       { key: "name", unit: "", what: "The kitten's name." },

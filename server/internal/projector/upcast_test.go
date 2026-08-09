@@ -9,8 +9,8 @@ import (
 
 func TestUpcastPassesThroughTheCurrentVersion(t *testing.T) {
 	u := NewUpcasters()
-	if u.Len() != 0 {
-		t.Fatalf("the launch registry has %d entries, want 0 — every §4.2 type is ver 1", u.Len())
+	if u.Len() != 2 {
+		t.Fatalf("the registry has %d entries, want 2 — kitten.tumble and kitten.kia are at ver 2", u.Len())
 	}
 	raw := json.RawMessage(`{"speed_ms":214}`)
 	got, err := u.Apply("vehicle.impact", 1, raw)
@@ -19,6 +19,29 @@ func TestUpcastPassesThroughTheCurrentVersion(t *testing.T) {
 	}
 	if string(got) != string(raw) {
 		t.Errorf("payload was rewritten: %s", got)
+	}
+}
+
+func TestUpcastLeavesTheFlightBumpedPayloadsAlone(t *testing.T) {
+	// `kitten.tumble` and `kitten.kia` went to ver 2 when they began carrying a
+	// flight. Nothing in the payload moved, so a stored ver 1 row has to reach
+	// the folds byte for byte — including keys this build does not know (§4.1).
+	u := NewUpcasters()
+	for _, typ := range []string{"kitten.tumble", "kitten.kia"} {
+		raw := json.RawMessage(`{"kid":"k1","name":"Comet","future_key":7}`)
+		got, err := u.Apply(typ, 1, raw)
+		if err != nil {
+			t.Fatalf("%s ver 1: %v", typ, err)
+		}
+		if string(got) != string(raw) {
+			t.Errorf("%s ver 1 payload was rewritten: %s", typ, got)
+		}
+		if got, err = u.Apply(typ, 2, raw); err != nil || string(got) != string(raw) {
+			t.Errorf("%s ver 2 = (%s, %v), want the payload untouched and no error", got, err, raw)
+		}
+		if _, err := u.Apply(typ, 3, raw); !errors.Is(err, ErrFutureVersion) {
+			t.Errorf("%s ver 3 error = %v, want ErrFutureVersion", typ, err)
+		}
 	}
 }
 

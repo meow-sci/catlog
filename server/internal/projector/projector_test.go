@@ -565,6 +565,88 @@ func TestRebuildAppliesTheKIAWindow(t *testing.T) {
 	}
 }
 
+func TestRebuildAppliesTheKIAWindowToAScuttleShapedHistory(t *testing.T) {
+	// The shape the mod actually ships now, which is not the shape the test
+	// above builds: the death is noticed by a roster diff a tick after the
+	// vehicle is gone, so `kitten.kia` arrives *after* `flight.ended` and
+	// carries the flight the crew kill named. The mod can only name one when it
+	// saw the crew kill (or the kitten was outside), so the second flight here
+	// is the other half of the contract — an unattributable death, `flight`
+	// null, which must void nothing.
+	r := newRig(t)
+	p := r.player("whiskers")
+	scuttled, innocent := flight(700), flight(701)
+
+	r.ship(p,
+		ev(scuttled, "flight.started", stats.FlightStarted{VehicleName: "Scuttled", Body: "duna", CrewCount: 1}, 100),
+		ev(scuttled, "vehicle.impact", stats.VehicleImpact{SpeedMs: 640, EnergyJ: 9e9, Survived: true, Body: "duna", CrewCount: 1}, 200),
+		ev(scuttled, "flight.ended", stats.FlightEnded{Reason: "destroyed", CrewCount: 1}, 201.2),
+		ev(scuttled, "kitten.kia", stats.KittenKIA{Kid: "k1", Name: "Comet", Context: "manual_destroy"}, 201.4),
+
+		ev(innocent, "flight.started", stats.FlightStarted{VehicleName: "Innocent", Body: "duna", CrewCount: 1}, 300),
+		ev(innocent, "vehicle.impact", stats.VehicleImpact{SpeedMs: 300, EnergyJ: 4e9, Survived: true, Body: "duna", CrewCount: 1}, 400),
+		ev(innocent, "flight.ended", stats.FlightEnded{Reason: "destroyed", CrewCount: 1}, 401.2),
+		// A death the mod could not attribute: no crew kill it saw, no EVA.
+		// Indexing it against anything would void the record above.
+		ev(ids.Zero, "kitten.kia", stats.KittenKIA{Kid: "k2", Name: "Nimbus", Context: "unknown"}, 401.4),
+	)
+	r.drain()
+
+	if got := statMap(t, r.snapshot())["1/biggest_lithobrake_survived"]; got != 640 {
+		t.Fatalf("incremental lithobrake = %v, want 640 — the fixture must score first", got)
+	}
+
+	res := r.rebuild()
+	if res.KIAFlights != 1 {
+		t.Errorf("rebuild indexed %d kia flights, want 1 — only the attributed death names a flight", res.KIAFlights)
+	}
+
+	after := statMap(t, r.snapshot())
+	if got := after["1/biggest_lithobrake_survived"]; got != 300 {
+		t.Errorf("lithobrake = %v after rebuild, want 300: the 640 m/s arrival killed its crew 1.4 s later, "+
+			"and the flightless death must not have voided the innocent flight", got)
+	}
+	if got := after["1/biggest_impact_energy"]; got != 4e9 {
+		t.Errorf("impact energy = %v after rebuild, want 4e9 — both impact boards share the eligibility rule", got)
+	}
+}
+
+// A tumble is only a tumble because of KittenLocomotionTuning.Current.TumbleSpeedGate,
+// a mutable public static the game's own debug window live-edits — which is
+// what the `tuning` flag is for. The flag can only exclude events that name a
+// flight, so this is the end of the chain that begins with the mod attributing
+// a tumble to the tumbling kitten's own EVA flight.
+func TestTuningFlagExcludesTheTumblesItWasBuiltFor(t *testing.T) {
+	r := newRig(t)
+	p := r.player("whiskers")
+	eva, honest := flight(800), flight(801)
+
+	r.ship(p,
+		ev(eva, "flight.started", stats.FlightStarted{VehicleName: "Comet", Body: "mun", CrewCount: 1}, 10),
+		ev(eva, "flight.flagged", stats.FlightFlagged{Flag: "tuning", Detail: "TumbleSpeedGate is 0.5, stock is 6.5"}, 11),
+		ev(eva, "kitten.tumble", stats.KittenTumble{Kid: "k1", Name: "Comet", SpeedMs: 0.6, Body: "mun"}, 12),
+		ev(eva, "kitten.tumble", stats.KittenTumble{Kid: "k1", Name: "Comet", SpeedMs: 0.7, Body: "mun"}, 13),
+		ev(eva, "flight.ended", stats.FlightEnded{Reason: "recovered", CrewCount: 1}, 20),
+
+		ev(honest, "flight.started", stats.FlightStarted{VehicleName: "Nimbus", Body: "mun", CrewCount: 1}, 30),
+		ev(honest, "kitten.tumble", stats.KittenTumble{Kid: "k2", Name: "Nimbus", SpeedMs: 8.1, Body: "mun"}, 31),
+		ev(honest, "flight.ended", stats.FlightEnded{Reason: "recovered", CrewCount: 1}, 40),
+	)
+	r.drain()
+
+	// Incremental: the flag is already on the flight when the tumbles fold, so
+	// only the honest one counts.
+	if got := statMap(t, r.snapshot())["1/kitten_tumbles"]; got != 1 {
+		t.Errorf("kitten_tumbles = %v incrementally, want 1 — the two tumbles on the tuned flight must not score", got)
+	}
+
+	// And a rebuild, which re-derives everything, agrees.
+	r.rebuild()
+	if got := statMap(t, r.snapshot())["1/kitten_tumbles"]; got != 1 {
+		t.Errorf("kitten_tumbles = %v after rebuild, want 1", got)
+	}
+}
+
 func TestRebuildSwapsTheFileAndLeavesNoScratch(t *testing.T) {
 	r := newRig(t)
 	p := r.player("whiskers")

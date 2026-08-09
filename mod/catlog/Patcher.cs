@@ -550,13 +550,24 @@ public static class Patcher
 
         try
         {
-            string id = VehicleTelemetry.IdOf(__instance);
+            // Register first, like every other vehicle-scoped patch body: a vehicle created and
+            // destroyed inside one sample interval still owes a flight.started ahead of anything
+            // that names its flight.
+            string id = Track(runtime, __instance, out double simT, out long wallMs);
             if (id.Length > 0)
+            {
                 Destroying.Add(id);
+
+                // The seats are readable here and nowhere afterwards — Vehicle.Dispose follows in
+                // the same frame, and the roster diff that raises kitten.kia a tick later sees a
+                // name and nothing else. Reading them now is what lets those deaths be attributed
+                // to this flight, which is what the §4.2 ±2 s window needs to disqualify anything.
+                runtime.Signal(new CrewKilledSignal(simT, wallMs, id, VehicleTelemetry.CrewNames(__instance)));
+            }
 
             // The roster rows flip to Kia inside this call; timestamping it lets the next poll
             // label the resulting kitten.kia as manual_destroy rather than unknown.
-            runtime.NoteManualDestroy(VehicleTelemetry.SimTimeSeconds());
+            runtime.NoteManualDestroy(simT);
         }
         catch (Exception ex)
         {

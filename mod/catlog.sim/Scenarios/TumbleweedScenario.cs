@@ -23,7 +23,10 @@ namespace MeowSci.Catlog.Sim.Scenarios;
 public sealed class TumbleweedScenario : IScenario
 {
     private const string LanderId = "mun-lander-3";
-    private const string EvaId = "eva-valentina";
+    // A KittenEva's Vehicle.Id IS the kitten's roster name (docs/ksa-integration.md §2), and the
+    // pipeline relies on it to attribute a tumble to the EVA flight — a scenario with a made-up
+    // id would quietly produce flightless tumbles the game never emits.
+    private const string EvaId = KittenName;
     private const string KittenName = "Valentina Kerman";
 
     /// <summary>The game's stock tumble gate; every speed below is above it.</summary>

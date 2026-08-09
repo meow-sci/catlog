@@ -10,7 +10,9 @@ namespace MeowSci.Catlog.Lib.Events;
 /// <remarks>
 /// The server rejects the whole batch with <c>400 malformed_batch</c> on an unknown type, so this
 /// list and the Go registry ship together. Adding a type here without adding it there breaks
-/// ingestion loudly, by design.
+/// ingestion loudly, by design. The versions below must equal the server's
+/// <c>projector.currentVer</c> exactly: a type this side calls <c>ver</c> 2 and that side still
+/// folds at <c>ver</c> 1 is skipped by the projector as a future version.
 /// </remarks>
 public static class EventTypes
 {
@@ -106,8 +108,13 @@ public static class EventTypes
         [EngineFlameout] = 1,
         [KittenEvaStart] = 1,
         [KittenEvaEnd] = 1,
-        [KittenTumble] = 1,
-        [KittenKia] = 1,
+        // ver 2: both gained a non-null `flight`. The payload bytes are unchanged, but the
+        // envelope contract is not, and the change is one a reader of the immutable log has to be
+        // able to see — a ver 1 kitten.tumble can never be excluded by its flight's `tuning` flag
+        // (it names no flight), and a ver 1 kitten.kia can never disqualify an impact under the
+        // ±2 s window, so the two versions score differently and the log has to say which is which.
+        [KittenTumble] = 2,
+        [KittenKia] = 2,
         [RosterSnapshot] = 1,
         [TelemetryWindow] = 1,
     };

@@ -14,8 +14,8 @@ One event = one JSON object (one NDJSON line). snake_case keys. Unknown envelope
 {
   "id":      "01J9V5M3E8Z0FAKEULID26CHR",  // ULID, client-minted, dedup key
   "type":    "vehicle.rud",                 // namespaced, lowercase, [a-z0-9_.]
-  "ver":     1,                             // payload schema version, int ≥1
-  "flight":  "01J9V5M3E8...",               // flight_id ULID; null for session/roster events
+  "ver":     1,                             // event schema version, int ≥1 — see the taxonomy below
+  "flight":  "01J9V5M3E8...",               // flight_id ULID; null when the event names no flight
   "session": "01J9V5M3E8...",               // session_id ULID, never null
   "career":  "b7k2q9x4m0nrt3vz",            // career id, 16 chars, never null — see below
   "sim_t":   12345.678,                     // seconds since this career's game started (float)
@@ -58,7 +58,7 @@ The mark **excludes nothing and scores nothing**. The row is ranked normally and
 - a career that has never been saved gets a fresh id at every game start, and its events are unlinked from the save it is later written to only for the part before that first save;
 - if the mod cannot read the save name at all, the career stays whatever it was and the mark simply never fires.
 
-## Event taxonomy (launch set, all `ver: 1`)
+## Event taxonomy (launch set `ver: 1`, except `kitten.tumble` and `kitten.kia` at `ver: 2`)
 
 Aggregate object `agg` = `{"min": f, "max": f, "mean": f, "last": f}`.
 `body` = lowercase celestial body name string (opaque to server). `situation` = lowercased KSA enum name, opaque to server (known values incl. `landed`, `rolling`, `floating`, `sailing`, `dragging`, `bottomed`, plus airborne states — treat as open set).
@@ -90,9 +90,16 @@ Kitten identity: `kid` = lowercase Crockford base32 of the first 10 bytes of `SH
 | `flight.flagged` | `{"flag": "teleport"\|"refuel"\|"resource_edit"\|"console"\|"tuning", "detail": s}` |
 | `telemetry.window` | `{"t0_sim": f, "t1_sim": f, "n": i, "body": s, "alt_m": agg, "surface_speed_ms": agg, "orbital_speed_ms": agg, "accel_ms2": agg, "peak_g": f, "max_q_pa": f, "mass_kg_last": f}` — one per vehicle per 30 s sim-time of active flight |
 
+**`flight` on the two kitten scoring events — `ver: 2` (2026-08-09).** `kitten.tumble` and `kitten.kia` were emitted at `ver: 1` with `flight: null`; both now name the flight they belong to, and are `ver: 2`. **The payload bytes did not change** — the bump records that the two versions *score differently*, which is the only thing that tells the rows apart in a log that is immutable forever:
+
+- **`kitten.tumble`** carries the tumbling kitten's own EVA flight (a kitten outside *is* a vehicle whose id is her roster name). Only a flight-bearing event can inherit its flight's flags, so at `ver: 1` a `tuning`-flagged session's tumbles scored anyway; at `ver: 2` they are excluded, which is what the flag was built for. It is still `null` when the kitten has no open flight — the mod resolves an existing flight and never mints one, because a minted flight would have no `flight.started` and would poison the join permanently.
+- **`kitten.kia`** carries the flight the kitten died on, and **only when the mod can prove one**: a crew read taken inside the game's kill-the-crew call within 2.0 sim seconds of the roster diff, or the kitten's own EVA flight if she was outside. Otherwise it stays `null`, deliberately — a guessed flight would disqualify an innocent flight's `biggest_lithobrake_survived` / `biggest_impact_energy` record under the ±2 s rule below, and that is the one outcome the rule must never produce. See [event-details.md](event-details.md#kittenkia) for the exhaustive null cases.
+
+A server that folds `ver: 1` for either type **skips** a `ver: 2` row until it catches up and rebuilds, so the mod's registry and the server's `currentVer` ship in one commit. Old `ver: 1` rows keep folding exactly as before, through an identity upcaster.
+
 `BEST-GUESS (D11)` crew-survival semantics used by projections: a lithobrake counts as *survived with crew* iff `vehicle.impact.survived == true && crew_count ≥ 1 && launch_pad == false` and no `kitten.kia` event exists for the same flight with `sim_t` within ±2.0 s of the impact. Revisit after in-game verification of `KillCrew` behavior.
 
-> **Decomp verification (2026-08-06, build 2026.8.5.5168).** The D11 guess is **confirmed at source level**: `Kia = true` is written in exactly one place, reachable only from `Vehicle.KillCrew()`, whose only caller is the player-initiated destroy path (guarded by `if (!Recovered)`). The physics RUD path calls `EndAllCrewMissions` and never touches it. A `kitten.kia` event therefore signals *deliberate scuttling*, not a fatality from an impact. The rule above stays as written — the `kitten.kia` proximity check simply almost never fires. Full evidence, with file:line citations, in [ksa-integration.md](ksa-integration.md) §4. In-game confirmation is still required before the rule is treated as settled (WP8).
+> **Decomp verification (2026-08-06, build 2026.8.5.5168).** The D11 guess is **confirmed at source level**: `Kia = true` is written in exactly one place, reachable only from `Vehicle.KillCrew()`, whose only caller is the player-initiated destroy path (guarded by `if (!Recovered)`). The physics RUD path calls `EndAllCrewMissions` and never touches it. A `kitten.kia` event therefore signals *deliberate scuttling*, not a fatality from an impact. The rule above stays as written — the `kitten.kia` proximity check simply fires rarely, on scuttles with crew aboard rather than on every fatal crash. (It fired *never* until `kitten.kia` gained a flight at `ver: 2`; a check whose input can never carry the key it is indexed by is not a check.) Full evidence, with file:line citations, in [ksa-integration.md](ksa-integration.md) §4. In-game confirmation is still required before the rule is treated as settled (WP8).
 
 **Payload caveats established by the same verification** (see [ksa-integration.md](ksa-integration.md)):
 

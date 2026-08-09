@@ -24,10 +24,10 @@ commit. See [ARCHITECTURE.md](ARCHITECTURE.md#7-keeping-the-documentation-true) 
 - **[Storage — Turso, schema & compression](#storage--turso-schema--compression)** — `STORE-*`, 16 entries
 - **[Ingest, auth & the conformance vectors](#ingest-auth--the-conformance-vectors)** — `INGEST-*`, 24 entries
 - **[Identity, handles & moderation](#identity-handles--moderation)** — `IDENT-*`, 15 entries
-- **[Projector, boards & the read API](#projector-boards--the-read-api)** — `PROJ-*`, 91 entries
+- **[Projector, boards & the read API](#projector-boards--the-read-api)** — `PROJ-*`, 92 entries
 - **[Archive & restore](#archive--restore)** — `ARCH-*`, 13 entries
 - **[The two frontends](#the-two-frontends)** — `UI-*`, 56 entries
-- **[The mod and its KSA-free core](#the-mod-and-its-ksa-free-core)** — `MOD-*`, 72 entries
+- **[The mod and its KSA-free core](#the-mod-and-its-ksa-free-core)** — `MOD-*`, 74 entries
 - **[The load harness](#the-load-harness)** — `LOAD-*`, 26 entries
 - **[Containers, nginx & deployment](#containers-nginx--deployment)** — `OPS-*`, 25 entries
 - **[Documentation](#documentation)** — `DOCS-*`, 4 entries
@@ -162,7 +162,7 @@ KSA detection surfaces re-verified against build `2026.8.5.5168`; result committ
 
 *Accepted · 2026-08-06 · orchestrator.*
 
-D11 (crew survival) is confirmed at source level, and stays `BEST-GUESS` pending in-game proof. `Kia = true` is written in exactly one place, reachable only from `Vehicle.KillCrew()`, whose sole caller is the player-initiated destroy path; the physics RUD path calls `EndAllCrewMissions` and never touches it. Consequence: `kitten.kia` is a *deliberate scuttling* signal, not an impact fatality signal. The §4.2 rule is unchanged — its `kitten.kia` proximity check simply almost never fires. WP8 must still verify in-game (§13.4).
+D11 (crew survival) is confirmed at source level, and stays `BEST-GUESS` pending in-game proof. `Kia = true` is written in exactly one place, reachable only from `Vehicle.KillCrew()`, whose sole caller is the player-initiated destroy path; the physics RUD path calls `EndAllCrewMissions` and never touches it. Consequence: `kitten.kia` is a *deliberate scuttling* signal, not an impact fatality signal. The §4.2 rule is unchanged — its `kitten.kia` proximity check simply fires rarely. WP8 must still verify in-game (§13.4). (**2026-08-09:** "rarely" was "never" in practice until `kitten.kia` gained a flight — MOD-073. The frequency claim was right; the check it described could not run at all.)
 
 ### REPO-017 — Contract amendment (no `ver` bump): `flight.flagged.flag` gains the value `"tuning"`
 
@@ -682,6 +682,8 @@ An event the projector cannot decode is skipped and the checkpoint still advance
 
 Every §4.2 type is `ver: 1`, so there is nothing to upcast; the registry exists now so the first payload version bump is a registration rather than a migration, because stored events are immutable forever and nothing may rewrite events.db. `ver > current` is `ErrFutureVersion` (skip + log), and a declared bump with no upcaster is `ErrNoUpcaster` — a loud programming error rather than silent data loss.
 
+**No longer empty (2026-08-09).** `kitten.tumble` and `kitten.kia` are at `ver` 2 and each carries an identity upcaster — the bump was to the envelope, not the payload. The registration-not-migration prediction held exactly: two `Register` lines. See PROJ-092.
+
 ### PROJ-016 — expvar counters beyond §5.9's `projector_lag_seq` and `sse_clients`
 
 *Accepted · 2026-08-07 · WP4.*
@@ -1165,6 +1167,22 @@ Two divergences also widened rather than appeared, and both because the shared e
 This was not a decision about those boards — it is a property of their source events — and there were two ways to hide it. **Refusing to build the boards** costs three genuinely good boards to avoid an edge case that requires the player to have been flagged, which the flag machinery already reports on every other board. **Faking an attribution server-side** — guessing which open flight a roster total belongs to — is exactly the kind of inference `CONSTITUTION.md` §8 rules out, and it would be wrong most of the time. So the boards ship, the gap is stated in the fold's own comment, in `event-details.md`'s board table, in the suppression matrix and on the player-facing site, and the fix is named: the mod attributing those events to the flights that earned them.
 
 The same audit turned up something worse and unrelated to this change, recorded in `event-details.md`'s known drift: `kitten.kia` and `kitten.tumble` are *also* `flight: null`, so the rebuild's KIA index is always empty on shipped data and the `tuning` flag — which `stats/flight.go` documents as existing specifically to protect `kitten_tumbles` — protects nothing in practice. Both fire only in tests, which construct the events with a flight. Recorded rather than quietly dropping two rows of the suppression matrix; the fix is on the mod side.
+
+**That last paragraph is superseded (2026-08-09):** both events now name a flight and are `ver` 2 — MOD-073, MOD-074, PROJ-092. The four boards this entry is actually about are unchanged, and so is its reasoning: `roster.snapshot` and `kitten.eva_end` still carry no flight, and server-side attribution is still the thing that will not be faked.
+
+### PROJ-092 — The two identity upcasters, and why the rebuild's KIA condition did not change
+
+*Accepted · 2026-08-09 · WP-BOARDS.*
+
+The mod attributing `kitten.tumble` and `kitten.kia` to a flight (MOD-073) and bumping both to `ver` 2 (MOD-074) needs three things on this side, and the third is a decision not to write code.
+
+**`currentVer` gains both types.** `CurrentVer` stays 1 for the other twenty; the per-type override map is the mechanism PROJ-015 said the registry existed for, and this is its first use. It must equal the mod's `EventTypes.Versions` exactly — a type the mod stamps 2 while this build still folds 1 is skipped as a future version, which is silent data loss for that type until the server catches up and a rebuild runs.
+
+**`NewUpcasters` registers `identityUpcast` for `ver` 1 of each.** The payload did not move, so the transform returns its input, unknown keys and all (§4.1 promises those survive). The entries are not optional: `Apply` refuses to fold a row it cannot bring to the current version, so without them every stored `kitten.tumble` and `kitten.kia` would start failing with `ErrNoUpcaster`. They are also what keeps old rows scoring as they always did — a flightless `ver` 1 tumble still counts, it simply cannot be excluded by a flag it never named.
+
+**`rebuild.go`'s condition is unchanged, deliberately.** Pass 1 still indexes only a `kitten.kia` that has a flight and a sim time. A null-flight KIA is one the mod could not attribute, and there is no key it could be indexed under that is not a guess: session-wide or career-wide would void impact records on flights that had nothing to do with the death. **A missed disqualification costs one record that should not stand; a wrong one voids an innocent player's record and cannot be appealed.** The window now fires because the *attributable* KIAs finally carry a flight, which was the broken half all along. A comment in pass 1 says so, because the condition reads like an incidental guard and is not one.
+
+**What this fixes, and why it went unnoticed.** `event-details.md`'s known drift item 26 and the tail of PROJ-091 recorded both mechanisms as inert on shipped data. They had passing tests the whole time — `TestRebuildAppliesTheKIAWindow` built the event with a flight the mod never sent. The replacements are shaped like real history instead: `TestRebuildAppliesTheKIAWindowToAScuttleShapedHistory` puts the KIA *after* `flight.ended` with `reason: destroyed` and asserts that the attributed flight loses both impact rows while a second flight, whose death is flightless, keeps its record; `TestTuningFlagExcludesTheTumblesItWasBuiltFor` asserts a flagged flight's tumbles do not score incrementally *or* after a rebuild, while an unflagged flight's does. **A guard whose test data is shaped differently from real data is not a guard**, and the only defence against the next one is fixtures built the way the producer builds them.
 
 ---
 
@@ -2105,6 +2123,32 @@ A `false` on any of the five is **dropped with a warning naming the key**, not r
 
 **One residual gap, named rather than hidden.** The board attributions in the header comment are hand-maintained strings naming Go constants in `server/internal/stats/boards.go` from a C# string literal, and no test can check them. The header test proves every *type* is listed; nothing proves the *boards* stay true. Closing it means a cross-language conformance vector under `contracts/testdata/` — a type → boards map consumed by both suites — and that was not built here.
 
+
+### MOD-073 — `kitten.tumble` and `kitten.kia` name a flight; the tumble peeks rather than mints, and the KIA is attributed exactly or not at all
+
+*Accepted · 2026-08-09 · mod.*
+
+Both events were emitted with `flight: null`, and two anti-cheat mechanisms were therefore dead on arrival. `scoreable` passes any event that carries no flight, so `kitten_tumbles` could not inherit the `tuning` flag — the flag that exists *specifically* to protect it, because the tumble speed gate is one float in the game's own debug window with a drag handle on it, and lowering it makes every step a tumble. And the rebuild's ±2 s KIA window indexes only flight-bearing `kitten.kia` events, so the map was always empty and a crash that killed the crew scored as a survived landing on both impact boards. Neither was a subtle bug: neither mechanism had ever fired on real data.
+
+**Both mechanisms had passing tests.** The tests constructed the events *with* a flight, which the mod has never sent. That is the lesson worth keeping: **a guard whose test data is shaped differently from real data is not a guard**, and a green suite says nothing about it. Every new test here builds the event the way the pipeline does — crew kill, then removal, then the KIA a tick later, i.e. the real ordering in which the flight has already ended before the death is noticed.
+
+**The tumble peeks; it does not mint.** A tumbling kitten *is* a vehicle — a `KittenEva` whose `Vehicle.Id` is her roster name — so `Tracker.PeekFlight(tumble.KittenName)` resolves the flight the poll has already registered. `FlightFor` would have been the shorter call and the wrong one: it *mints* for the one case where nothing resolves, and a minted flight has no `flight.started` and never will. That is the phantom flight MOD-059's peek semantics in `Flush` exist to prevent, and a tumble is exactly the event a phantom would be minted for, since it can arrive from a vehicle whose id could not be read. A tumble with a null flight scores precisely as every tumble did before; a tumble on an invented flight poisons a join on the server permanently, and events are immutable.
+
+**The KIA is attributed from the last moment the truth is readable.** The roster diff that raises `kitten.kia` knows a name and a time and nothing else — by the time it runs the vehicle is gone. So a new `CrewKilledSignal` is raised from the `Vehicle.KillCrew` prefix — the only writer of the roster's `Kia` flag in the entire build (D11), running before `Vehicle.Dispose` in the same frame — carrying `VehicleTelemetry.CrewNames`, a helper that already existed, is correct for both seated crew and a `KittenEva`, and until now had no caller. The pipeline remembers `(kitten → flight, sim time)` for 2.0 sim seconds and joins the next KIA to it. The patch registers the vehicle through `Track` first, so a vehicle created and destroyed inside one sample interval still owes its `flight.started` ahead of anything naming its flight. A second path covers a kitten who is outside: her EVA vehicle's flight, looked up through the `eva_start`/`eva_end` pair rather than by matching her name against the tracker — a player can name a *rocket* after a kitten, and that lookup would then void the rocket's flight.
+
+**`kitten.kia.flight` is still null in several cases, and that is the decision, not an omission.** No `KillCrew` seen and she was not outside; the seat read yielded no name; the crew kill was on a vehicle with no open flight; more than 2 sim seconds between the kill and the diff; a save load in between. The alternative to a null is a guess, and a guessed flight does not merely fail to disqualify — it **disqualifies an innocent flight's** `biggest_lithobrake_survived` / `biggest_impact_energy` **record**, which is the single outcome the ±2 s rule must never produce and the one a player cannot appeal. A missed disqualification costs one record that should not stand; the asymmetry is the whole argument. The same reasoning keeps the server's rebuild condition unchanged (PROJ-092).
+
+**Left deliberately undone.** `catlog.loadgen`'s EVA episodes still use a synthetic vehicle id rather than the kitten's roster name, so generated tumbles carry no flight. Making it faithful requires the same kitten never to hold two overlapping EVA episodes — otherwise two live vehicles share an id and the second `flight.started` retires the first flight, which is the phantom-flight failure again — and the rule needed for that perturbs the generator's draw sequence, which `--seed` reproducibility and the calibration entry's coverage guarantees are pinned to. The `catlog.sim` scenarios, which carry no such guarantee, were fixed: their EVA vehicle ids are now the kitten's roster name, which is what the game does.
+
+### MOD-074 — Both events bump to `ver` 2 although the payload bytes are identical
+
+*Accepted · 2026-08-09 · mod.*
+
+`EventTypes.Versions` puts `kitten.tumble` and `kitten.kia` at 2, mirrored by the server's `projector.currentVer`, with identity upcasters for `ver` 1 (PROJ-092). Nothing in either payload moved.
+
+**Why bump anyway.** The two versions **score differently**, and that is the only kind of difference a version is for. A `ver` 1 `kitten.tumble` can never be excluded by its flight's `tuning` flag, because it names no flight; a `ver` 2 one can. A `ver` 1 `kitten.kia` can never disqualify an impact; a `ver` 2 one can. Events are immutable forever, so a reader who asks "why did this flagged flight's tumbles score" needs the answer to be *in the row* — and no other field carries it. [events.md](events.md) states the rule as changing an **event**, not only a payload field, and this changed the envelope contract of both.
+
+**The honest argument against, recorded so it is not rediscovered as a mistake.** `ver` has also been described as the *payload* schema version, and `projector/upcast.go` is strictly a payload-conversion mechanism — so the bump forces an upcaster that converts nothing. There is a real deployment cost too: a `ver` 2 event reaching a server built before this change is `ErrFutureVersion` and is **skipped** until that server catches up and rebuilds. That is tolerable only because "the mod and the server ship together" is a stated invariant of the wire contract, and it is precisely why the two registries have to move in one commit. Amending in place — as REPO-017 did for `flight.flagged: "tuning"` — was available there because no such event had ever been stored. Here, every tumble and every KIA ever shipped is a `ver` 1 row. That is the difference.
 
 ## The load harness
 

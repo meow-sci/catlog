@@ -191,7 +191,149 @@ public sealed class EventPipelineTests
         Assert.Equal(Ids.KittenId(TestData.InstallId, "Whiskers"), payload.Kid);
         Assert.Equal("Whiskers", payload.Name);
         Assert.Equal(16, payload.Kid.Length);
+    }
+
+    /// <summary>
+    /// A tumbling kitten is a KittenEva, and a KittenEva's vehicle id IS her roster name. The
+    /// tumble has to name that flight: <c>tuning</c> flags the flight, and the server can only
+    /// exclude events that name one, so a flightless tumble scores however far the gate was moved.
+    /// </summary>
+    [Fact]
+    public void Tumble_IsAttributedToTheKittensEvaFlight()
+    {
+        EventPipeline pipeline = TestData.Pipeline();
+        EventEnvelope started = Assert.Single(pipeline.ProcessSignal(
+            TestData.Created(vehicleId: "Whiskers", vehicleName: "Whiskers", crewCount: 1)));
+
+        EventEnvelope tumble = Assert.Single(pipeline.ProcessSignal(
+            new TumbleSignal(10, TestData.WallMs, "Whiskers", 7.2, "earth")));
+
+        Assert.NotNull(tumble.Flight);
+        Assert.Equal(started.Flight, tumble.Flight);
+    }
+
+    /// <summary>
+    /// The end-to-end shape the <c>tuning</c> flag needs: the flag is session-wide and lands on the
+    /// EVA flight, and the tumbles that follow name that same flight — which is the join the
+    /// server's exclusion is made of.
+    /// </summary>
+    [Fact]
+    public void Tumble_NamesTheFlightTheTuningFlagWasRaisedOn()
+    {
+        EventPipeline pipeline = TestData.Pipeline();
+        pipeline.ProcessSignal(TestData.Created(vehicleId: "Whiskers", vehicleName: "Whiskers", crewCount: 1));
+
+        EventEnvelope flagged = Assert.Single(pipeline.ProcessSignal(
+            new FlaggedSignal(5, TestData.WallMs, null, FlightFlag.Tuning, "TumbleSpeedGate=0.5")));
+        EventEnvelope tumble = Assert.Single(pipeline.ProcessSignal(
+            new TumbleSignal(6, TestData.WallMs, "Whiskers", 0.7, "earth")));
+
+        Assert.Equal(EventTypes.FlightFlagged, flagged.Type);
+        Assert.Equal(flagged.Flight, tumble.Flight);
+    }
+
+    /// <summary>
+    /// No open flight for the tumbling kitten means no flight on the event — the tumble is peeked,
+    /// not minted, because a minted flight would have no <c>flight.started</c> for the server to
+    /// join against and would put a phantom on the board.
+    /// </summary>
+    [Fact]
+    public void Tumble_WithNoOpenFlight_StaysNullRatherThanMintingAPhantom()
+    {
+        EventPipeline pipeline = TestData.Pipeline();
+
+        EventEnvelope tumble = Assert.Single(pipeline.ProcessSignal(
+            new TumbleSignal(10, TestData.WallMs, "Whiskers", 7.2, "earth")));
+
         Assert.Null(tumble.Flight);
+        Assert.Empty(pipeline.Tracker.ActiveVehicleIds);
+    }
+
+    /// <summary>
+    /// The real KIA shape: <c>KillCrew</c> reads the seats while the flight is still open, the
+    /// vehicle is disposed in the same frame, and the roster diff notices the death a tick later —
+    /// by which time the flight has ended. The event must still name it, or the ±2 s window that
+    /// disqualifies a fatal crash from the impact boards has nothing to match on.
+    /// </summary>
+    [Fact]
+    public void Kia_IsAttributedToTheFlightWhoseCrewWasKilled()
+    {
+        EventPipeline pipeline = TestData.Pipeline();
+        EventEnvelope started = Assert.Single(pipeline.ProcessSignal(TestData.Created(crewCount: 2)));
+
+        Assert.Empty(pipeline.ProcessSignal(
+            new CrewKilledSignal(30, TestData.WallMs, "v1", ["Whiskers", "Mittens"])));
+        pipeline.ProcessSignal(new VehicleRemovedSignal(30, TestData.WallMs, "v1", FlightEndReason.Destroyed, 2));
+
+        EventEnvelope kia = Assert.Single(pipeline.ProcessSignal(
+            new KiaSignal(30.5, TestData.WallMs, "Whiskers", KiaContext.ManualDestroy)));
+
+        Assert.Equal(EventTypes.KittenKia, kia.Type);
+        Assert.Equal(started.Flight, kia.Flight);
+        Assert.Equal("manual_destroy", ((KittenKiaPayload)kia.Payload).Context);
+    }
+
+    /// <summary>
+    /// A kitten who died outside is attributable too: her EVA vehicle is a flight of her own, and
+    /// only the <c>eva_start</c>/<c>eva_end</c> pair proves an id belongs to a KittenEva rather
+    /// than to a rocket a player named after her.
+    /// </summary>
+    [Fact]
+    public void Kia_ForAKittenOnEva_UsesHerEvaFlight()
+    {
+        EventPipeline pipeline = TestData.Pipeline();
+        pipeline.ProcessSignal(TestData.Created(vehicleId: "Whiskers", vehicleName: "Whiskers", crewCount: 1));
+        EventEnvelope eva = Assert.Single(pipeline.ProcessSignal(
+            new EvaStartSignal(5, TestData.WallMs, "Whiskers", "Whiskers")));
+
+        EventEnvelope kia = Assert.Single(pipeline.ProcessSignal(
+            new KiaSignal(9, TestData.WallMs, "Whiskers", KiaContext.Unknown)));
+
+        Assert.Equal(eva.Flight, kia.Flight);
+        Assert.NotNull(kia.Flight);
+    }
+
+    /// <summary>
+    /// Everything the mod cannot prove stays null. A death with no crew kill behind it, one whose
+    /// crew kill named somebody else, and one that arrived too late to belong to it are all
+    /// unattributable — and a guess there would void an innocent flight's impact record, which is
+    /// the one failure the ±2 s window must never produce.
+    /// </summary>
+    [Theory]
+    [InlineData("Whiskers", false, 30.5)] // no crew kill at all
+    [InlineData("Mittens", true, 30.5)]   // the crew kill named another kitten
+    [InlineData("Whiskers", true, 40.0)]  // long past the window
+    public void Kia_WithNothingToProveAFlight_IsNull(string name, bool crewKilled, double kiaSimT)
+    {
+        EventPipeline pipeline = TestData.Pipeline();
+        pipeline.ProcessSignal(TestData.Created(crewCount: 2));
+        if (crewKilled)
+        {
+            pipeline.ProcessSignal(new CrewKilledSignal(30, TestData.WallMs, "v1", ["Whiskers"]));
+            pipeline.ProcessSignal(
+                new VehicleRemovedSignal(30, TestData.WallMs, "v1", FlightEndReason.Destroyed, 2));
+        }
+
+        EventEnvelope kia = Assert.Single(pipeline.ProcessSignal(
+            new KiaSignal(kiaSimT, TestData.WallMs, name, KiaContext.ManualDestroy)));
+
+        Assert.Null(kia.Flight);
+    }
+
+    /// <summary>
+    /// A crew kill on a vehicle catlog never saw start is remembered as nothing: naming a flight
+    /// the server has no <c>flight.started</c> for is the phantom hazard again, one step removed.
+    /// </summary>
+    [Fact]
+    public void Kia_FromACrewKillOnAnUnknownVehicle_IsNull()
+    {
+        EventPipeline pipeline = TestData.Pipeline();
+
+        pipeline.ProcessSignal(new CrewKilledSignal(30, TestData.WallMs, "ghost", ["Whiskers"]));
+        EventEnvelope kia = Assert.Single(pipeline.ProcessSignal(
+            new KiaSignal(30.5, TestData.WallMs, "Whiskers", KiaContext.ManualDestroy)));
+
+        Assert.Null(kia.Flight);
     }
 
     [Fact]
@@ -328,7 +470,9 @@ public sealed class EventPipelineTests
             Assert.True(Ids.IsUlid(root.GetProperty("id").GetString()), "id must be a ULID");
             Assert.True(EventTypes.IsKnown(root.GetProperty("type").GetString()),
                 $"'{root.GetProperty("type").GetString()}' must be in the launch-set registry");
-            Assert.Equal(1, root.GetProperty("ver").GetInt32());
+            Assert.Equal(
+                EventTypes.VersionOf(root.GetProperty("type").GetString()!),
+                root.GetProperty("ver").GetInt32());
             Assert.True(root.TryGetProperty("flight", out _), "the flight key is always present, even when null");
             Assert.Equal(JsonValueKind.Object, root.GetProperty("payload").ValueKind);
         }

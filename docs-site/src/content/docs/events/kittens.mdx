@@ -40,9 +40,14 @@ That 6.5 m/s figure is a single number sitting in a debug window with a drag
 handle on it, and it is the entire definition of a tumble. Lower it and every step
 becomes a tumble; raise it and nothing does.
 
-catlog checks it against stock twice a second and flags the session the moment it
+catlog checks it against stock twice a second and marks the session the moment it
 differs. Without that check, the tumbles board would be a number anybody could set
 to anything.
+
+For that mark to mean anything, a tumble has to belong to a flight — a mark is
+attached to flights, and until version 2 a tumble was attached to none, so a
+lowered gate was recorded and the tumbles counted anyway. A tumble now belongs to
+the kitten's own spacewalk flight, so a marked flight's tumbles do not count.
 
 </Aside>
 
@@ -55,6 +60,15 @@ roster reading after a load establishes a baseline and reports nothing.
 
 **A loss cannot be recorded twice.** The game sets the flag in exactly one place
 and never clears it.
+
+**A loss belongs to the flight it happened on — when catlog can prove which one.**
+It reads the seats at the moment the game kills the crew, which is the last instant
+the vehicle still exists; a moment later the roster knows a name and nothing else.
+That link is what stops a crash that killed a kitten counting as a landing you
+walked away from. When there is no proof — a death by some route the game does not
+take today, a seat catlog could not read, a save loaded in between — the loss is
+recorded without a flight on purpose. Guessing would strike a record off a flight
+that had nothing to do with it, and that is worse than missing one.
 
 Note also that a vehicle coming apart does **not** kill its crew — the game ends
 their missions instead. That is why a RUD records the crew who were aboard and

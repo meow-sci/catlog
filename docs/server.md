@@ -299,8 +299,13 @@ rename live to `.old` → rename the rebuild in → reopen → delete `.old`, re
 **An event the projector cannot decode is skipped and the checkpoint still advances** — one event
 from a newer mod must never wedge every projection behind it. The skip log is deduplicated per
 `(type, ver)` and carries no payload, because payloads are player-supplied and unbounded.
-`projector.Upcasters` ships empty and is exercised only by tests: every type is `ver: 1`, so the
-registry exists now so that the first version bump is a registration rather than a migration.
+`projector.Upcasters` holds exactly two entries: `kitten.tumble` and `kitten.kia` are `ver: 2`
+(both gained a non-null `flight`) and each registers an **identity** transform, because the bump was
+to the envelope and the payload bytes did not move. The prediction the empty registry was built on
+held — the first version bump was two `Register` lines, not a migration — and the entries are still
+required, since `Apply` refuses to fold a row it cannot bring to the current version. Every other
+type is `ver: 1`. `currentVer` must equal the mod's `EventTypes.Versions` exactly, or a newer mod's
+events are skipped as a future version until this build catches up and a rebuild runs (PROJ-092).
 
 ## §5.7 The server-rendered site
 

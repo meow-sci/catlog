@@ -1055,12 +1055,21 @@ internal sealed class MissionActor
                         LaunchPad: false, Body: impactBody.Name, CrewCount: _spec.CrewCount));
                 }
 
+                // KillCrew runs before the vehicle is disposed, and that order is what gives the
+                // KIA a flight to name: emitting it after the removal would leave the pipeline with
+                // a retired flight and a null attribution, which is not what a scuttle looks like.
+                var killed = new List<string>();
+                for (int i = 0; i < _spec.CrewCount && i < _crew.Count; i++)
+                    killed.Add(_crew[i]);
+                if (killed.Count > 0)
+                    _signals.Add(new CrewKilledSignal(last, _clock.Wall(last), _vehicle.Id, killed));
+
                 _signals.Add(new VehicleRemovedSignal(
                     last, _clock.Wall(last), _vehicle.Id, FlightEndReason.Destroyed, _spec.CrewCount));
 
                 // The only path that sets the game's Kia flag (docs/ksa-integration.md §4).
-                for (int i = 0; i < _spec.CrewCount && i < _crew.Count; i++)
-                    _signals.Add(new KiaSignal(last, _clock.Wall(last), _crew[i], KiaContext.ManualDestroy));
+                foreach (string name in killed)
+                    _signals.Add(new KiaSignal(last, _clock.Wall(last), name, KiaContext.ManualDestroy));
                 break;
             }
 

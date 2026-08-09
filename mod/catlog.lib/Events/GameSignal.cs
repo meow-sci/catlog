@@ -329,6 +329,27 @@ public sealed record EvaEndSignal(double SimT, long WallMs, string KittenName, d
 public sealed record TumbleSignal(double SimT, long WallMs, string KittenName, double SpeedMs, string Body)
     : GameSignal(SimT, WallMs);
 
+/// <summary>
+/// A vehicle's crew was killed outright — the game's <c>Vehicle.KillCrew()</c>, which is the only
+/// thing in the build that sets a roster row's <c>Kia</c> flag (<c>docs/ksa-integration.md</c> §4).
+/// </summary>
+/// <remarks>
+/// It produces no event of its own. It exists so the <see cref="KiaSignal"/> that the roster diff
+/// raises a fraction of a second later can be attributed to a flight: <c>KillCrew</c> runs
+/// <i>before</i> the vehicle is disposed, so it is the last moment at which the seats can be read
+/// and the vehicle's flight is still open. By the time the diff notices the dead kitten the flight
+/// has already ended.
+/// </remarks>
+/// <param name="SimT">Universe sim seconds.</param>
+/// <param name="WallMs">Client unix milliseconds.</param>
+/// <param name="VehicleId">The vehicle whose crew was killed.</param>
+/// <param name="KittenNames">The roster names seated on it at that instant.</param>
+public sealed record CrewKilledSignal(
+    double SimT,
+    long WallMs,
+    string VehicleId,
+    IReadOnlyList<string> KittenNames) : GameSignal(SimT, WallMs);
+
 /// <summary>A kitten was marked KIA.</summary>
 /// <param name="SimT">Universe sim seconds.</param>
 /// <param name="WallMs">Client unix milliseconds.</param>
