@@ -41,4 +41,6 @@ site/e2e/.results/
 # --- OS ---
 .DS_Store
 
-node_modules/
+node_modules/docs-site/dist/
+docs-site/node_modules/
+docs-site/.astro/

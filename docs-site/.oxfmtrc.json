@@ -1,0 +1,6 @@
+{
+  "$schema": "./node_modules/oxfmt/configuration_schema.json",
+  "singleQuote": false,
+  "semi": true,
+  "ignorePatterns": ["dist/**", "public/**", ".astro/**"]
+}
