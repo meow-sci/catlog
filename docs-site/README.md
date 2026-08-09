@@ -52,7 +52,7 @@ pnpm only — never npm, npx or yarn.
 | `pnpm dev`                          | Dev server on `localhost:4321`                                                  |
 | `pnpm build`                        | Build to `./dist/`. Also type-checks frontmatter and Starlight component props. |
 | `pnpm preview`                      | Serve the built site                                                            |
-| `pnpm check`                        | lint + format check + build — what CI runs                              |
+| `pnpm check`                        | lint + format check + build — what CI runs                                      |
 | `pnpm lint` / `pnpm lint:fix`       | oxlint                                                                          |
 | `pnpm format` / `pnpm format:check` | oxfmt                                                                           |
 
