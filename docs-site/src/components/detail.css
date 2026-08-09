@@ -1,0 +1,74 @@
+/*
+ * Shared chrome for the two detail renderers, EventDetail.astro and
+ * BoardDetail.astro. It lives here rather than in EventDetail's `is:global`
+ * block because Astro only ships a component's styles on pages that render it,
+ * and leaderboards/catalog.mdx imports BoardDetail alone — which uses `.ev-pill`
+ * and `.ev-dl` and would otherwise get them unstyled.
+ *
+ * Colours go through Starlight tokens, which src/styles/custom.css maps onto
+ * the catlog app palette; no hex value belongs in this file.
+ */
+
+/* Pills. A muted outline by default; the accent is spent only on the pills that
+   carry meaning. gray-4 is the app's subtle foreground — a hairline you can
+   see, and not a colour anything is written in. */
+.ev-pill {
+  font-size: var(--sl-text-xs);
+  font-weight: 400;
+  padding: 0.05rem 0.45rem;
+  border-radius: 999px;
+  border: 1px solid var(--sl-color-gray-4);
+  color: var(--sl-color-gray-2);
+  white-space: nowrap;
+}
+
+/* The accent as text, ~13.8:1 on the canvas. The two trigger pills are a pair
+   and read as one: "Something happened" takes the accent, "Sampled in the
+   background" keeps the neutral. */
+.ev-pill-event {
+  border-color: var(--sl-color-accent);
+  color: var(--sl-color-accent);
+}
+
+.ev-pill-passive {
+  border-color: var(--sl-color-gray-4);
+  color: var(--sl-color-gray-2);
+}
+
+/* "always on" is a locked state, so it is filled rather than merely outlined —
+   the app's `.chip.selected`: the 12% accent wash under body text, with the
+   accent on the border. The green tints and outlines; the word stays legible. */
+.ev-pill-locked {
+  border-color: var(--sl-color-accent);
+  background: var(--catlog-wash-selected);
+  color: var(--sl-color-text);
+}
+
+.ev-dl {
+  display: grid;
+  grid-template-columns: minmax(9rem, max-content) 1fr;
+  gap: 0.35rem 1rem;
+  margin-block: 1rem;
+  font-size: var(--sl-text-sm);
+}
+
+/* The term is the label and the description is the answer, so the term takes
+   the muted step and the description stays body text. */
+.ev-dl dt {
+  font-weight: 600;
+  color: var(--sl-color-gray-2);
+}
+
+.ev-dl dd {
+  margin: 0;
+}
+
+@media (max-width: 40rem) {
+  .ev-dl {
+    grid-template-columns: 1fr;
+  }
+
+  .ev-dl dd {
+    margin-block-end: 0.5rem;
+  }
+}

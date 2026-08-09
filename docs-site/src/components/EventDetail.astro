@@ -6,6 +6,7 @@
  */
 import { eventByType } from "../data/events";
 import { segments } from "./rich";
+import "./detail.css";
 
 interface Props {
   type: string;
@@ -112,53 +113,8 @@ const triggerLabel =
     align-items: baseline;
   }
 
-  .ev-pill {
-    font-size: var(--sl-text-xs);
-    font-weight: 400;
-    padding: 0.05rem 0.45rem;
-    border-radius: 999px;
-    border: 1px solid var(--sl-color-gray-4);
-    color: var(--sl-color-gray-2);
-    white-space: nowrap;
-  }
-
-  .ev-pill-event {
-    border-color: var(--sl-color-accent);
-    color: var(--sl-color-accent-high);
-  }
-
-  .ev-pill-locked {
-    border-color: var(--sl-color-accent);
-  }
-
   .ev-summary {
     font-size: var(--sl-text-lg);
-  }
-
-  .ev-dl {
-    display: grid;
-    grid-template-columns: minmax(9rem, max-content) 1fr;
-    gap: 0.35rem 1rem;
-    margin-block: 1rem;
-    font-size: var(--sl-text-sm);
-  }
-
-  .ev-dl dt {
-    font-weight: 600;
-    color: var(--sl-color-gray-2);
-  }
-
-  .ev-dl dd {
-    margin: 0;
-  }
-
-  @media (max-width: 40rem) {
-    .ev-dl {
-      grid-template-columns: 1fr;
-    }
-    .ev-dl dd {
-      margin-block-end: 0.5rem;
-    }
   }
 
   .ev-table-wrap {
@@ -176,7 +132,10 @@ const triggerLabel =
     text-align: left;
     vertical-align: top;
     padding: 0.35rem 0.6rem;
-    border-block-end: 1px solid var(--sl-color-gray-5);
+    /* Row rules are `--color-border`, as everywhere else on the site and in the
+       app. gray-5 is the app's strong border and shouts once a table has
+       twenty rows. */
+    border-block-end: 1px solid var(--sl-color-hairline);
   }
 
   .ev-opt {

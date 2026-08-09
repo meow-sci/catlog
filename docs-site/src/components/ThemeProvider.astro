@@ -1,0 +1,26 @@
+---
+/**
+ * Replaces Starlight's ThemeProvider, which reads `localStorage` and
+ * `prefers-color-scheme` and can land the document in light mode.
+ *
+ * This site is dark only — it wears the catlog web app's dark palette, and the
+ * app is the product it is documenting. So the document is stamped `dark`
+ * unconditionally and there is nothing to read a preference from: the paired
+ * `ThemeSelect.astro` override renders no toggle.
+ *
+ * The stamp matters even though `src/styles/custom.css` already forces the dark
+ * values: several built-in components branch on the attribute itself rather
+ * than on a colour (`<Badge>` swaps its variant backgrounds under
+ * `[data-theme='light']:root`), so the attribute has to agree with the palette.
+ */
+---
+
+{/* Inlined, not bundled, so the attribute is set before first paint. Starlight
+    also renders dark by default when no attribute is present, so there is no
+    light frame to flash even in the instant before this runs. */}
+<script is:inline>
+  document.documentElement.dataset.theme = "dark";
+  // The stock ThemeSelect is gone, but leave the global callable in case any
+  // other Starlight script reaches for it.
+  window.StarlightThemeProvider = { updatePickers() {} };
+</script>

@@ -1,0 +1,12 @@
+---
+/**
+ * Replaces Starlight's light/dark picker with nothing.
+ *
+ * The site is dark only (see `ThemeProvider.astro` and `src/styles/custom.css`),
+ * so a control offering a choice that cannot be honoured is worse than no
+ * control. Removed as an override rather than hidden with CSS: hiding it would
+ * leave the <select>, its custom element and its localStorage writes in the
+ * page, reachable by keyboard and by assistive technology, still promising a
+ * light theme that will never arrive.
+ */
+---

@@ -5,6 +5,10 @@
  */
 import { boardByStat } from "../data/boards";
 import { segments } from "./rich";
+// `.ev-pill` and `.ev-dl` below come from here, not from EventDetail — this
+// page renders BoardDetail alone, and Astro only ships a component's styles on
+// pages that use it.
+import "./detail.css";
 
 interface Props {
   stat: string;

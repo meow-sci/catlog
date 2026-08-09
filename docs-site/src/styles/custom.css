@@ -1,37 +1,199 @@
+/*
+ * The catlog documentation site's skin.
+ *
+ * This site is DARK ONLY, and it is dark in exactly the colours the catlog web
+ * app is dark in. The values below are copied verbatim from the dark block of
+ * `site/assets/css/catlog.css` — that file is the app's, is not edited from
+ * here, and stays the origin of every colour. If a token changes there, change
+ * the copy here; do not re-derive or "improve" it, because the whole point is
+ * that a reader moving between meow.science.fail/catlog and the app itself sees
+ * one product rather than two that happen to share a green.
+ *
+ * There is no light palette. `src/components/ThemeProvider.astro` stamps
+ * `data-theme="dark"` before first paint and `src/components/ThemeSelect.astro`
+ * renders nothing, so the header has no toggle to press; the mapping below is
+ * declared *unlayered*, which beats everything Starlight ships inside
+ * `@layer starlight.*` — including its `:root[data-theme='light']` block. That
+ * belt-and-braces matters for one real case: a visitor who picked "light" here
+ * before the toggle was removed still has `starlight-theme: light` in
+ * localStorage, and must still get a dark page.
+ */
+
 :root {
   --sl-content-width: 60rem;
   --sl-text-5xl: 3.5rem;
 }
 
-/* Dark mode colors. */
-:root {
-  --sl-color-accent-low: #2b1a00;
-  --sl-color-accent: #b06a00;
-  --sl-color-accent-high: #ffd08a;
-  --sl-color-white: #ffffff;
-  --sl-color-gray-1: #f2ede7;
-  --sl-color-gray-2: #d0c8bf;
-  --sl-color-gray-3: #a3988b;
-  --sl-color-gray-4: #61574c;
-  --sl-color-gray-5: #3b352d;
-  --sl-color-gray-6: #2a251f;
-  --sl-color-black: #1a1714;
+/*
+ * Scoped to `screen` on purpose. Starlight's print.css is also unlayered and
+ * forces a light palette for paper; leaving print alone keeps a printed page
+ * legible and cheap instead of laying 100% ink over every sheet.
+ */
+@media screen {
+  /* `::backdrop` does not inherit from `:root`, which is why Starlight declares
+     both and why we have to as well — the search modal's overlay lives there. */
+  :root,
+  ::backdrop {
+    color-scheme: dark;
+
+    /* --- the catlog palette, dark, verbatim ------------------------------- */
+    --catlog-canvas: #0b0c0e;
+    --catlog-panel: #161719;
+    --catlog-panel-raised: #1f2125;
+    --catlog-panel-sunken: #0e0f11;
+    --catlog-border: #2a2d32;
+    --catlog-border-strong: #3a3e45;
+    --catlog-fg: #e8eaed;
+    --catlog-fg-muted: #9aa0a8;
+    --catlog-fg-subtle: #61666e;
+    --catlog-accent: #2cfa1f;
+    --catlog-accent-hover: #54fb4a;
+    --catlog-accent-press: #1fd615;
+    --catlog-accent-fg: #052008;
+    --catlog-danger: #ef4444;
+    --catlog-warning: #f5c542;
+    /* The app's selected-row wash. Reused below as the aside/badge tint recipe:
+       a 12% hue over the canvas is how catlog colours a surface, rather than
+       inventing a mid-tone that is in neither palette. */
+    --catlog-wash-selected: rgb(44 250 31 / 0.12);
+
+    /* --- Starlight's grey ladder ------------------------------------------
+     *
+     * Starlight has seven greys where catlog has three foregrounds, four
+     * surfaces and two borders, so the ladder is mapped by ROLE (what each step
+     * is actually used for in the theme's own CSS), not by lightness index.
+     *
+     *   white / 1  strong text — headings, table headers, aside body, hero h1
+     *   2 / 3      secondary text — hero tagline, card descriptions, footer,
+     *              edit link, sidebar group headings, "On this page"
+     *   4          heavier hairlines and decorative marks (aside table rules,
+     *              search tree diagram, FileTree guides)
+     *   5          every 1px component border — cards, `pre`, tabs, the header
+     *              divider, the Steps bullet ring
+     *   6          the raised surface — code blocks, sidebar, nav, Steps bullets
+     *   7          hover elevation (Starlight only defines this for light; we
+     *              define it because `<LinkCard>`'s hover reads it, and a hover
+     *              that lifts to `--color-panel-raised` is what the app does)
+     */
+    --sl-color-white: var(--catlog-fg);
+    --sl-color-gray-1: var(--catlog-fg);
+    --sl-color-gray-2: var(--catlog-fg-muted);
+    /* Deliberately muted rather than subtle: gray-3 carries real prose (footer,
+       LinkCard descriptions), and `--color-fg-subtle` is only 3.4:1 on canvas —
+       fine for a label in the app, not fine for a sentence here. */
+    --sl-color-gray-3: var(--catlog-fg-muted);
+    --sl-color-gray-4: var(--catlog-fg-subtle);
+    --sl-color-gray-5: var(--catlog-border-strong);
+    --sl-color-gray-6: var(--catlog-panel);
+    --sl-color-gray-7: var(--catlog-panel-raised);
+    --sl-color-black: var(--catlog-canvas);
+
+    /* --- the green --------------------------------------------------------
+     *
+     * The app treats #2cfa1f as a fill AND, in dark only, as a text colour —
+     * it is ~13.8:1 on the canvas there. Starlight uses `--sl-color-text-accent`
+     * for both jobs (link text, but also the active sidebar item's background,
+     * the skip link, primary LinkButtons, the TOC marker), which is the same
+     * dual role, so it gets the raw green. Whatever sits ON that fill is
+     * `--sl-color-text-invert`, and that is precisely what `--color-accent-fg`
+     * exists for.
+     *
+     * low / base / high is then the app's own three-step green: the near-black
+     * accent-fg, the green, and the hover green.
+     */
+    --sl-color-accent-low: var(--catlog-accent-fg);
+    --sl-color-accent: var(--catlog-accent);
+    --sl-color-accent-high: var(--catlog-accent-hover);
+
+    /* Starlight points `--sl-color-text` at gray-2. catlog's body copy is
+       `--color-fg`, not the muted step, so body text is repointed at gray-1 and
+       gray-2 is freed to be the app's actual muted foreground. */
+    --sl-color-text: var(--catlog-fg);
+    --sl-color-text-accent: var(--catlog-accent);
+    --sl-color-text-invert: var(--catlog-accent-fg);
+
+    --sl-color-bg: var(--catlog-canvas);
+    /* One elevated surface for the whole site, as in the app: "there is no
+       second card style". Nav, sidebar and code blocks are all `--color-panel`
+       floating on the canvas. */
+    --sl-color-bg-nav: var(--catlog-panel);
+    --sl-color-bg-sidebar: var(--catlog-panel);
+    /* Inline code is the app's sunken surface, which is darker than the canvas
+       and therefore invisible without the hairline the app pairs it with — see
+       the `code` rule at the foot of this file. */
+    --sl-color-bg-inline-code: var(--catlog-panel-sunken);
+    --sl-color-bg-accent: var(--catlog-accent);
+
+    --sl-color-hairline: var(--catlog-border);
+    --sl-color-hairline-light: var(--catlog-border);
+    --sl-color-hairline-shade: var(--catlog-canvas);
+    --sl-color-backdrop-overlay: rgb(11 12 14 / 0.72);
+
+    /* --- the semantic hues ------------------------------------------------
+     *
+     * Starlight wants five hue families (blue/purple/green/orange/red) for
+     * asides, badges and the Card icon rotation. catlog's palette has exactly
+     * one positive colour, one warning and one danger, so:
+     *
+     *   note    → neutral. A note is a plain heads-up and the app's plain
+     *             surface is the panel; a blue would be the first colour on
+     *             this site that is in neither palette.
+     *   tip     → the accent green.
+     *   success → the accent green as well. tip and success therefore look
+     *             alike; that is a real loss, and the alternative was inventing
+     *             a second green, which is worse.
+     *   caution → --color-warning.
+     *   danger  → --color-red.
+     *
+     * `-low` is the surface, mixed as the app mixes: the hue at 12% over the
+     * canvas. `-high` is the title/link colour inside that surface.
+     */
+    --sl-color-blue-low: rgb(154 160 168 / 0.1);
+    --sl-color-blue: var(--catlog-fg-muted);
+    --sl-color-blue-high: var(--catlog-fg);
+
+    --sl-color-purple-low: var(--catlog-wash-selected);
+    --sl-color-purple: var(--catlog-accent);
+    --sl-color-purple-high: var(--catlog-accent);
+
+    --sl-color-green-low: var(--catlog-wash-selected);
+    --sl-color-green: var(--catlog-accent);
+    --sl-color-green-high: var(--catlog-accent);
+
+    --sl-color-orange-low: rgb(245 197 66 / 0.12);
+    --sl-color-orange: var(--catlog-warning);
+    --sl-color-orange-high: var(--catlog-warning);
+
+    --sl-color-red-low: rgb(239 68 68 / 0.12);
+    --sl-color-red: var(--catlog-danger);
+    --sl-color-red-high: var(--catlog-danger);
+
+    /* Badge text is hard-coded `#fff` per variant upstream. catlog has no pure
+       white; every badge sits on one of the dark `-low` washes, so the app's
+       foreground is both correct and still 13:1+. */
+    --sl-badge-default-text: var(--catlog-fg);
+    --sl-badge-note-text: var(--catlog-fg);
+    --sl-badge-danger-text: var(--catlog-fg);
+    --sl-badge-success-text: var(--catlog-fg);
+    --sl-badge-caution-text: var(--catlog-fg);
+    --sl-badge-tip-text: var(--catlog-fg);
+
+    /* The app sets --shadow-panel: none in dark and keeps one deep shadow for
+       popovers. sm/md are panel-ish (banners, LinkCards, pagination); lg is the
+       search modal, which is the one thing here that is genuinely a popover. */
+    --sl-shadow-sm: none;
+    --sl-shadow-md: none;
+    --sl-shadow-lg: 0 16px 48px -12px rgb(0 0 0 / 0.6);
+  }
 }
 
-/* Light mode colors. */
-:root[data-theme="light"] {
-  --sl-color-accent-low: #ffe3bd;
-  --sl-color-accent: #8a5000;
-  --sl-color-accent-high: #4a2b00;
-  --sl-color-white: #1a1714;
-  --sl-color-gray-1: #2a251f;
-  --sl-color-gray-2: #3b352d;
-  --sl-color-gray-3: #61574c;
-  --sl-color-gray-4: #8d8275;
-  --sl-color-gray-5: #c7bfb5;
-  --sl-color-gray-6: #f2ede7;
-  --sl-color-gray-7: #f9f6f3;
-  --sl-color-black: #ffffff;
+/* One ring for everything, as in the app — otherwise the browser's own blue
+   focus ring is the single colour on this site that is in neither palette.
+   Only the colour is set: Starlight tunes the ring's geometry per component
+   (`--sl-outline-offset-inside` pulls it inside elements that would otherwise
+   clip it), and that is not a skin decision to overrule. */
+:focus-visible {
+  outline-color: var(--sl-color-accent);
 }
 
 /* Wide reference tables scroll rather than pushing the page sideways. */
@@ -39,4 +201,50 @@
   display: block;
   max-width: 100%;
   overflow-x: auto;
+}
+
+/* Row rules are `--color-border`, as in the app's tables. Starlight's default
+   is gray-5, which is the app's *strong* border — too loud once a page like
+   leaderboards/catalog stacks forty of them. */
+.sl-markdown-content :is(th, td):not(:where(.not-content *)) {
+  border-bottom: 1px solid var(--sl-color-hairline);
+}
+
+/* The app's `code` rule: sunken fill plus a hairline. Without the border the
+   fill is darker than the canvas it sits on and inline code reads as a hole.
+   `:not(pre) >` keeps it off Expressive Code's own markup, which draws its own
+   frame and resets `code` entirely. */
+.sl-markdown-content :not(pre) > code:not(:where(.not-content *)) {
+  border: 1px solid var(--sl-color-hairline);
+  border-radius: 4px;
+}
+
+/* Not in a heading, though. The event and board pages put a whole event type in
+   an <h3>, and at that size the hairline becomes a box the width of the line
+   and reads as a text input. The type carries itself there. */
+.sl-markdown-content :is(h1, h2, h3, h4, h5, h6) code:not(:where(.not-content *)) {
+  border-color: transparent;
+}
+
+/* One container shape, as in the app: cards are the panel surface with a
+   hairline, not an outline drawn on the bare canvas. */
+.card,
+.sl-link-card {
+  background-color: var(--sl-color-gray-6);
+  border-color: var(--sl-color-hairline);
+}
+
+/* Restated because the rule above is unlayered and would otherwise outrank
+   Starlight's own `:hover`, which lives in `@layer starlight.components`. */
+.sl-link-card:hover {
+  background-color: var(--sl-color-gray-7);
+  border-color: var(--catlog-border-strong);
+}
+
+/* Card icons rotate through four hues upstream (`:nth-child(4n+1)` and
+   friends). With five families collapsed onto three colours that rotation reads
+   as noise, so every card icon is the accent — the app's one highlight. */
+.card {
+  --sl-card-border: var(--sl-color-accent);
+  --sl-card-bg: var(--catlog-wash-selected);
 }

@@ -22,6 +22,13 @@ export default defineConfig({
       description:
         "The player's reference for catlog: what the Kitten Space Agency mod records, and how those records become leaderboards.",
       customCss: ["./src/styles/custom.css"],
+      // Dark only, in the catlog web app's dark palette. ThemeProvider stamps
+      // the document `dark` instead of consulting the visitor's preference, and
+      // ThemeSelect renders nothing so the header carries no toggle.
+      components: {
+        ThemeProvider: "./src/components/ThemeProvider.astro",
+        ThemeSelect: "./src/components/ThemeSelect.astro",
+      },
       editLink: {
         baseUrl: "https://github.com/meow-sci/catlog/edit/main/docs-site/",
       },

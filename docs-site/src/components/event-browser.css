@@ -1,3 +1,9 @@
+/*
+ * The event browser's own chrome. Every colour here goes through a Starlight
+ * token, which `src/styles/custom.css` maps onto the catlog app palette — so
+ * this file never names a hex value and never drifts from the app.
+ */
+
 .eb-controls {
   display: flex;
   flex-wrap: wrap;
@@ -11,6 +17,8 @@
   font-size: var(--sl-text-xs);
   text-transform: uppercase;
   letter-spacing: 0.06em;
+  /* The app's `.label`: uppercase, tracked out, muted — gray-2/3 are both the
+     muted foreground here, 7.4:1 on the canvas. */
   color: var(--sl-color-gray-3);
   margin-block-end: 0.25rem;
 }
@@ -19,16 +27,32 @@
   flex: 1 1 16rem;
 }
 
+/* Inputs follow the app's form controls: the raised panel, not the canvas, with
+   the *strong* border. On a dark page a control has to look raised out of the
+   page rather than punched into it, which is what `--sl-color-black` gave. */
 .eb-search input,
 .eb-select select {
   width: 100%;
   padding: 0.4rem 0.6rem;
   font: inherit;
   font-size: var(--sl-text-sm);
-  color: var(--sl-color-white);
-  background: var(--sl-color-black);
+  color: var(--sl-color-text);
+  background: var(--sl-color-gray-7);
   border: 1px solid var(--sl-color-gray-5);
   border-radius: 0.25rem;
+}
+
+/* Muted rather than the app's subtle: a placeholder here is a worked example
+   ("orbit, speed_ms, tumble…") and needs to be read, not just sensed. */
+.eb-search input::placeholder {
+  color: var(--sl-color-gray-3);
+}
+
+/* One ring for everything, as in the app: the accent, offset. */
+.eb-search input:focus-visible,
+.eb-select select:focus-visible {
+  outline: 2px solid var(--sl-color-accent);
+  outline-offset: 2px;
 }
 
 .eb-select {
@@ -49,9 +73,10 @@
   gap: 0.75rem;
 }
 
+/* The app's one container shape: panel fill, hairline border. */
 .eb-item {
   padding: 0.85rem 1rem;
-  border: 1px solid var(--sl-color-gray-5);
+  border: 1px solid var(--sl-color-hairline);
   border-radius: 0.4rem;
   background: var(--sl-color-gray-6);
 }
@@ -69,6 +94,9 @@
   font-weight: 600;
 }
 
+/* Pills. The neutral pill is a muted outline on the panel; the two that mean
+   something get the accent. `--sl-color-gray-4` is the app's subtle foreground,
+   which is a hairline you can see and not a colour anything is written in. */
 .eb-pill {
   font-size: var(--sl-text-xs);
   padding: 0.05rem 0.45rem;
@@ -78,13 +106,27 @@
   white-space: nowrap;
 }
 
+/* The two trigger pills are a pair and have to read as one: "Something
+   happened" is the accent (this event fires), "Sampled in the background" is
+   the neutral (it is just taken). Accent-as-text is 12.6:1 on the panel, which
+   is what makes the green usable here at all — see the note in custom.css. */
 .eb-pill-event {
   border-color: var(--sl-color-accent);
-  color: var(--sl-color-accent-high);
+  color: var(--sl-color-accent);
 }
 
+.eb-pill-passive {
+  border-color: var(--sl-color-gray-4);
+  color: var(--sl-color-gray-2);
+}
+
+/* "always on" is a locked state, so it is filled, not merely outlined — the
+   app's `.chip.selected`: the 12% accent wash, the accent border, body text on
+   top. The green is the border and the tint; the word stays readable. */
 .eb-pill-locked {
   border-color: var(--sl-color-accent);
+  background: var(--catlog-wash-selected);
+  color: var(--sl-color-text);
 }
 
 .eb-summary {
@@ -92,17 +134,19 @@
   font-size: var(--sl-text-sm);
 }
 
+/* The field and board names are the payload of this row, so they are body text;
+   the "Records"/"Feeds" label in front of them is the muted step. */
 .eb-meta {
   margin: 0.15rem 0;
   font-size: var(--sl-text-xs);
-  color: var(--sl-color-gray-2);
+  color: var(--sl-color-text);
   font-family: var(--sl-font-mono, ui-monospace, monospace);
 }
 
 .eb-meta-k {
   display: inline-block;
   min-width: 5rem;
-  color: var(--sl-color-gray-3);
+  color: var(--sl-color-gray-2);
   font-family: var(--sl-font);
 }
 
