@@ -27,7 +27,7 @@ commit. See [ARCHITECTURE.md](ARCHITECTURE.md#7-keeping-the-documentation-true) 
 - **[Projector, boards & the read API](#projector-boards--the-read-api)** — `PROJ-*`, 84 entries
 - **[Archive & restore](#archive--restore)** — `ARCH-*`, 13 entries
 - **[The two frontends](#the-two-frontends)** — `UI-*`, 56 entries
-- **[The mod and its KSA-free core](#the-mod-and-its-ksa-free-core)** — `MOD-*`, 69 entries
+- **[The mod and its KSA-free core](#the-mod-and-its-ksa-free-core)** — `MOD-*`, 70 entries
 - **[The load harness](#the-load-harness)** — `LOAD-*`, 26 entries
 - **[Containers, nginx & deployment](#containers-nginx--deployment)** — `OPS-*`, 25 entries
 - **[Documentation](#documentation)** — `DOCS-*`, 4 entries
@@ -1966,6 +1966,24 @@ In memory it would have handed a config-editing player a general bypass for ordi
 Owner decisions, in order: *"FinalShip should be a single attempt and quit no matter what after. The next game run will naturally pick these up anyway since they are buffered in SQLite and persistent. I DO NOT want to cause unintentional shutdown hangs"*, then *"The FinalShip optimization should NOT be prevented by the minimum 30s window, it is a special case that should be allowed to run regardless of when the last API call was made."* The persistence premise is verified: `MarkShipped` (the `DELETE`) runs only on a `200`, so nothing leaves the outbox until the server acknowledges it and **`FinalShip` is an optimisation, never a correctness requirement** — skipping it entirely loses nothing. What replaced the old 5 s / `ConsecutiveFailures < 3` drain loop: one `ShipOnceAsync`, run on the thread pool, waited on for at most **2 s**, and cancelled and abandoned (never awaited again) if it has not finished — because a hung TCP connect or a server that accepts and never answers must not be able to hold the game open. Every outcome proceeds immediately to disposal, nothing throws across the host boundary, at most one log line, and disposal itself is now wrapped so a disposal racing an abandoned request cannot throw out of the host's unload path. **The exemption is narrow by construction:** a private `ShutdownExemption` enum threaded through private overloads, so the public `ShipOnceAsync` always passes `No` and no caller inside or outside the assembly can ask for `Yes`. It is defensible because it fires at most once per game session — abusing it means actually quitting and relaunching KSA, which costs far more than the 30 s it saves, and that self-limiting property is exactly what the in-session triggers lack. The exempt request **is still stamped**, so the next session's first ordinary batch waits out a full window from it: the exemption buys one batch on the way out, not a reset. Tested for promptness against an unreachable server, a handler that accepts and never responds, and an already-dead-latched shipper, because a shutdown hang would be invisible in normal play and infuriating in the wild.
 
 ---
+
+### MOD-070 — `StatusWindow.EndRows` was unconditional self-recursion; the class of bug is now a build failure
+
+*Accepted · 2026-08-09 · mod.*
+
+`EndRows()` was `{ EndRows(); }` — an infinite self-call on the game thread, reached from all three of the status window's sections. Pressing the status-window key would have stack-overflowed, which in .NET is uncatchable and terminates the process, taking the player's unsaved game with it. It has been there since the file was written.
+
+**Why nothing caught it.** `mod/catlog` — the KSA-referencing project — has no tests, by construction: it cannot be exercised without the game. `catlog.lib` holds the entire suite and none of it reaches this file. The compiler is no help either: a method that only calls itself is well-typed.
+
+**Nor were the .NET analysers, which was the assumption going in.** `EnableNETAnalyzers` with `AnalysisMode=All` was tried against a two-line reproduction of exactly this method and reported **zero** diagnostics — the Microsoft analyser set has no infinite-recursion rule. What `AnalysisMode=Recommended` *did* produce was 13 errors demanding the `MeowSci.Catlog.Lib` namespace be renamed (CA1716, `Lib` is a reserved word in some CLI languages) — public-API design rules, on an assembly with no public API. That combination is worth recording because it is the trap: the obvious control was both ineffective against the actual bug and expensive against everything else.
+
+**SonarAnalyzer's S2190 does catch it**, verified the same way and then verified again by reintroducing the bug and watching the build fail. So `mod/Directory.Build.props` takes `SonarAnalyzer.CSharp` as a `PrivateAssets=all` analyser **scoped by project name to `catlog` alone**. The scoping is the argument: the justification is "this code cannot be tested", and that is not true of `catlog.lib`, the two test projects, `catlog.sim` or `catlog.loadgen` — applying it there would have spent the zero-warning budget on 18 style findings in code that already has tests.
+
+Two rules are off solution-wide (S125 "remove commented-out code", which cannot tell a quoted `PRAGMA` in an explanatory comment from dead code; S3267 "use LINQ `Where`", which would put an enumerator and a closure allocation into early-return validators and per-tick filters), and six more are off inside `mod/catlog` because a Harmony shell structurally cannot satisfy them — an interface member cannot be static, `BindingFlags.NonPublic` *is* how a patch body is resolved, and deleting a patch body's unused parameter stops the patch binding at all. Each is listed with its reason in the props file.
+
+**The fix itself is two lines.** `EndRows` now closes what `BeginRows` opened, in reverse order — `ImGui.EndTable()` then `ImGui.PopStyleVar()` — which is what the asymmetry with `BeginRows`'s own failure path (it pops before returning false) always implied.
+
+**The transferable point is about where the untested surface is.** catlog's testing strategy is deliberate and correct: keep everything testable in `catlog.lib`, keep `mod/catlog` a thin KSA-facing shell. The consequence is that the shell is precisely where a bug survives, so it needs a compensating control that is not a test — and the control has to be checked against the bug it is supposed to catch, not assumed.
 
 ## The load harness
 

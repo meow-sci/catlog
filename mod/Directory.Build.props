@@ -13,6 +13,19 @@
         <ImplicitUsings>disable</ImplicitUsings>
         <WarningsAsErrors/>
         <WarningsNotAsErrors>CS1591</WarningsNotAsErrors>
+        <!-- Two SonarAnalyzer rules are switched off, both because they contradict a
+             house rule rather than because they are inconvenient:
+               S125  "remove commented out code" — catlog's comments explain *why*, and
+                     explaining a PRAGMA or an SQL clause means writing it down. The rule
+                     cannot tell a quoted statement from a dead one.
+               S3267 "simplify this loop with LINQ Where" — the loops it flags are
+                     early-return validators and per-tick filters. `Where` allocates an
+                     enumerator and usually a closure; these run on the game thread or per
+                     event, and the allocation is the thing being avoided.
+             Everything else Sonar has to say is an error, including S2190, the rule that
+             would have caught MOD-070. -->
+        <NoWarn>$(NoWarn);S125;S3267</NoWarn>
+
         <!-- The game mod ships as a folder of DLLs: NuGet dependencies must land next
              to the assembly, not just in the nuspec. -->
         <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
@@ -71,4 +84,47 @@
              documented but unused. -->
         <SelectedDistModDir Condition="'$(SelectedDistModDir)' == ''">$(KSAUserModDir)</SelectedDistModDir>
     </PropertyGroup>
+
+    <!-- The compensating control for mod/catlog, and ONLY for mod/catlog.
+         mod/catlog is the KSA-facing shell: exercising it needs the running game, so the
+         whole suite lives in catlog.lib and this project has no coverage at all. MOD-070
+         shipped an unconditional self-recursion on the game thread there and nothing
+         caught it — verified: neither the compiler nor the .NET analysers, even at
+         AnalysisMode=All, have a rule for it. SonarAnalyzer's S2190 does.
+
+         Scoped by project name rather than applied to the whole solution because the
+         justification is "this code cannot be tested", and it does not hold anywhere
+         else: catlog.lib, the two test projects, catlog.sim and catlog.loadgen all have
+         tests or are themselves harnesses, and Sonar's opinions about their style are
+         noise we would spend the zero-warning budget on.
+         PrivateAssets=all keeps it out of anything the mod folder ships. -->
+    <!-- Six Sonar rules a Harmony shell structurally cannot satisfy. Each is suppressed
+         because the code CANNOT be written the way the rule wants, not because the rule is
+         inconvenient:
+           S2325 "make it static"          — StarMap interface members; an interface
+                                             implementation cannot be static.
+           S1186 "empty method"            — StarMap requires OnImmediateLoad to exist; there
+                                             is genuinely nothing to do at that phase, and it
+                                             already carries a doc comment saying so.
+           S3011 "accessibility bypass"    — BindingFlags.NonPublic is how Harmony resolves a
+                                             patch body by name. That is the mechanism.
+           S1172 "unused parameter"        — a Harmony patch body's signature must match the
+                                             method it patches. Deleting an unused parameter
+                                             silently stops the patch from binding, which is a
+                                             worse failure than an unused argument.
+           S3358 "nested ternary"          — the three-way reason ladder in DisposePrefix, whose
+                                             arms each carry the comment explaining the game
+                                             behaviour behind them.
+           S3218 "shadows outer member"    — a positional record struct's own parameter names.
+         S2190 — the rule that would have caught MOD-070 — stays on, as does everything else. -->
+    <PropertyGroup Condition="'$(MSBuildProjectName)' == 'catlog'">
+        <NoWarn>$(NoWarn);S2325;S1186;S3011;S1172;S3358;S3218</NoWarn>
+    </PropertyGroup>
+
+    <ItemGroup Condition="'$(MSBuildProjectName)' == 'catlog'">
+        <PackageReference Include="SonarAnalyzer.CSharp" Version="10.16.0.128591">
+            <PrivateAssets>all</PrivateAssets>
+            <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+        </PackageReference>
+    </ItemGroup>
 </Project>

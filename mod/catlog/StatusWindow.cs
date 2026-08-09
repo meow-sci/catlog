@@ -311,9 +311,14 @@ public sealed class StatusWindow
         return true;
     }
 
+    // Closes what BeginRows opened, in reverse order: the table, then the
+    // CellPadding style var BeginRows pushed. BeginRows already pops the style
+    // var on its own failure path and returns false, so EndRows is only ever
+    // reached when the table was actually begun.
     private static void EndRows()
     {
-        EndRows();
+        ImGui.EndTable();
+        ImGui.PopStyleVar();
     }
 
     private static void Row(ImString label)

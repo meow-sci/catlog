@@ -370,6 +370,12 @@ settings and the DigitalOcean firewall — is [docs/operations.md → Zero to ru
 
 - **Commits** are conventional: `feat(server): …`, `fix(mod): …`, `perf(loadgen): …`.
 - **Every change keeps `make test` green**, and adds tests for what it changed.
+- **Zero warnings.** `mod/` builds with `TreatWarningsAsErrors` *and*
+  `MSBuildTreatWarningsAsErrors`, so a warning fails the build. `mod/catlog` additionally runs
+  SonarAnalyzer, because it is the one project that cannot have tests — it needs the running game —
+  and MOD-070 was an infinite recursion that shipped there unnoticed. If Sonar flags something a
+  Harmony patch body structurally cannot avoid, add the rule to the scoped `NoWarn` in
+  `mod/Directory.Build.props` **with its reason**, next to the six already there.
 - **Every change keeps the documentation true.** The table of what to update when is in
   [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#7-keeping-the-documentation-true), and every change gets
   a dated entry in [docs/DECISIONS.md](docs/DECISIONS.md) saying *why*.
