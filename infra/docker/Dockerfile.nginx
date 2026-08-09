@@ -2,15 +2,14 @@
 #
 #   docker build -f infra/docker/Dockerfile.nginx -t catlog-nginx .
 #
-# Build context is the REPOSITORY ROOT: this image builds both frontends.
+# Build context is the REPOSITORY ROOT: this image builds the site's assets.
 #
 # What it contains, and why each part is here:
 #   * nginx + ngx_brotli, built from source against the SAME nginx version, so
 #     `brotli_static` can serve the .br files the asset stages produce.
 #   * site/dist  → /usr/share/nginx/catlog/site  (served at /static/)
-#   * spa/dist   → /usr/share/nginx/catlog/spa   (served at /app/)
-#     both pre-compressed: every compressible file has a .br and a .gz sibling,
-#     so the origin never compresses a static asset at request time.
+#     pre-compressed: every compressible file has a .br and a .gz sibling, so
+#     the origin never compresses a static asset at request time.
 #   * /etc/nginx/nginx.conf — the http-level configuration, which is
 #     domain-independent and therefore baked.
 #
@@ -32,32 +31,8 @@ ARG NODE_IMAGE=node:24-trixie
 # whatever architecture produced it, so emulating amd64 on an arm64 laptop costs
 # minutes and buys nothing.
 #
-# It also cost correctness. Under emulation the reader's test suite is roughly
-# three times slower, and two focus assertions in HeaderSearch.test.tsx —
-# `waitFor(() => expect(document.activeElement).toBe(combo))`, on React Aria's
-# focus management — exceeded waitFor's 1 s default and failed. The same 306
-# tests pass natively. A test suite that fails because the builder is emulated
-# is reporting on the builder, not on the code.
-#
 # `nginx-modules` is deliberately NOT native: it compiles nginx, ngx_brotli and
 # a static libbrotli into an amd64 .so that must match the runtime base.
-#
-# ---------------------------------------------------------------------------
-# THE READER'S UNIT TESTS DO NOT RUN HERE
-# ---------------------------------------------------------------------------
-# `SPA_CHECKS` defaults to 0. `make release` runs `pnpm -C spa check` natively
-# first, which is the same gate — once, on the host, in about a second.
-#
-# Running them here as well was duplicated work that made every release hostage
-# to a test flake having nothing to do with packaging: `HeaderSearch.test.tsx`
-# races a dynamic `import()` against focus, and its outcome depends on whether
-# the module graph is warm. Two identical runs in the same container gave 304
-# and then 306 passes.
-#
-# What this stage still guarantees is what a *build* can: the bundle typechecks
-# and compiles (`tsc -b && vite build`), and it emitted its deep-link fallback.
-# Whether the artifact actually works is `scripts/container-smoke.sh`'s job, and
-# it asserts that against the real image.
 
 # ---------------------------------------------------------------------------
 # ngx_brotli, built against this exact nginx
@@ -132,49 +107,13 @@ COPY site/ ./
 RUN pnpm build
 
 # ---------------------------------------------------------------------------
-# The React reader (vite)
-# ---------------------------------------------------------------------------
-FROM --platform=$BUILDPLATFORM ${NODE_IMAGE} AS spa-build
-RUN corepack enable
-WORKDIR /src/spa
-
-# SPA_BASE=/app/ — nginx serves the bundle at https://<host>/app/ and
-# src/state/router.ts reads the same value back out of import.meta.env.BASE_URL.
-#
-# VITE_CATLOG_API_BASE= (empty) — src/api/client.ts keeps an empty string, so
-# every request comes out as a relative /v1/…, same-origin with the read API.
-# This is what lets [cors] allowed_origins be EMPTY in production.
-ARG SPA_BASE=/app/
-ARG VITE_CATLOG_API_BASE=
-# The reader's typecheck/lint/format/test gates. OFF here by default, and run
-# natively by `make release` instead — see the note at the top of this file.
-ARG SPA_CHECKS=0
-
-COPY spa/package.json spa/pnpm-lock.yaml spa/pnpm-workspace.yaml ./
-RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
-    pnpm install --frozen-lockfile
-COPY spa/ ./
-
-# The same four gates CI runs. A bundle that does not typecheck, lint, match the
-# formatter or pass its tests must not reach an image either.
-RUN if [ "${SPA_CHECKS}" = "1" ]; then \
-      pnpm typecheck && pnpm lint && pnpm fmt:check && pnpm test; \
-    else echo "SPA_CHECKS=0 — skipping typecheck/lint/fmt/test"; fi
-
-RUN SPA_BASE="${SPA_BASE}" VITE_CATLOG_API_BASE="${VITE_CATLOG_API_BASE}" pnpm build
-# The deep-link fallback. nginx uses try_files rather than 404.html, but a build
-# that stopped emitting it has changed in a way this image should notice.
-RUN test -f dist/404.html
-
-# ---------------------------------------------------------------------------
 # Pre-compression: one .br and one .gz beside every compressible asset
 # ---------------------------------------------------------------------------
 FROM --platform=$BUILDPLATFORM ${NODE_IMAGE} AS precompress
 WORKDIR /assets
 COPY --from=site-build /src/site/dist ./site
-COPY --from=spa-build  /src/spa/dist  ./spa
 COPY scripts/precompress.mjs /precompress.mjs
-RUN node /precompress.mjs ./site ./spa
+RUN node /precompress.mjs ./site
 
 # ---------------------------------------------------------------------------
 # Runtime
@@ -192,7 +131,6 @@ LABEL org.opencontainers.image.title="catlog-nginx" \
 
 COPY --from=nginx-modules /modules/*.so /usr/lib/nginx/modules/
 COPY --from=precompress /assets/site /usr/share/nginx/catlog/site
-COPY --from=precompress /assets/spa  /usr/share/nginx/catlog/spa
 COPY infra/nginx/nginx.conf /etc/nginx/nginx.conf
 COPY infra/nginx/maintenance.html /usr/share/nginx/catlog/error/maintenance.html
 

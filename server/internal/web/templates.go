@@ -144,10 +144,10 @@ func (s *Server) signedIn(r *http.Request) bool {
 
 // --- template functions ---------------------------------------------------------
 
-// Number formatting is [units], not a second implementation of it: the SPA
-// renders the same values from the same JSON, and the two frontends showing one
-// record differently is exactly the failure that package exists to prevent.
-// Read its comment before changing what a number looks like here.
+// Number formatting is [units], not a second implementation of it: the same
+// values reach a reader as JSON from the read API, and the page and the API
+// disagreeing about one record is exactly the failure that package exists to
+// prevent. Read its comment before changing what a number looks like here.
 var templateFuncs = template.FuncMap{
 	// value is the number with its unit applied: metres scaled to km/Mm, a
 	// career time in milliseconds rendered as a duration, a count labelled.
@@ -426,9 +426,8 @@ func formatDate(ms int64) string {
 
 // isoInstant renders a unix-ms timestamp as an RFC 3339 / ISO-8601 instant, for
 // machine-readable attributes — a `<time datetime>` must carry a valid datetime
-// string, and the display form ("2026-08-07 14:32 UTC") is not one. Mirrors the
-// SPA's isoInstant (spa/src/ui/format.ts), including returning "" for an
-// instant that does not exist rather than inventing an epoch.
+// string, and the display form ("2026-08-07 14:32 UTC") is not one. Returns ""
+// for an instant that does not exist rather than inventing an epoch.
 func isoInstant(ms int64) string {
 	if ms <= 0 {
 		return ""
@@ -440,8 +439,7 @@ func isoInstant(ms int64) string {
 // when the handle is not the prefix. stats.Summarize composes every feed line
 // handle-first, which is what lets the `feed-item` template render the handle
 // as a profile link and the rest of the sentence as prose — with the whole
-// sentence as the fallback when the shape ever changes. The SPA's
-// withoutHandle (spa/src/state/feed.ts) is the same split.
+// sentence as the fallback when the shape ever changes.
 func trimHandle(summary, handle string) string {
 	rest, ok := strings.CutPrefix(summary, handle+" ")
 	if !ok {

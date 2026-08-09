@@ -294,7 +294,7 @@ async function personalise() {
  * `document` (detail.type ∈ started / finished / error / retrying /
  * retries-failed, detail.el the initiating element). Everything the stream
  * lands — the prime, a row, the 20 s heartbeat — is a DOM mutation inside the
- * panel. Between the two, three honest states modelled on the SPA's FeedPanel:
+ * panel. Between the two, three honest states:
  *
  *   connecting   — a fetch started and nothing has arrived yet
  *   live         — the stream patched something in

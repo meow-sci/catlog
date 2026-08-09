@@ -254,8 +254,9 @@ func run(ctx context.Context, cfg config.Config, log *slog.Logger, ready func(pu
 		Projections: live,
 		Events:      events,
 		Directory:   dir,
-		// The JSON half of the activity feed, for the `spa/` frontend: the
-		// datastar stream in package web is HTML and stays where it is.
+		// The JSON half of the activity feed (`/v1/feed/stream`), for any
+		// client that wants events rather than markup: the datastar stream in
+		// package web is HTML and stays where it is.
 		Feed: broadcaster,
 		// The live half of the raw event log (`/v1/events/stream`).
 		RawEvents: rawBroadcaster,

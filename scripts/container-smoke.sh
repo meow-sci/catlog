@@ -96,8 +96,8 @@ TOMLEOF
 : > "$WORK/config/catlogd.env"
 
 # A plaintext server block on 8080. The production one needs certificates; what
-# is being proved here is the proxying, the pre-compressed assets and the SPA
-# routing, none of which is about TLS.
+# is being proved here is the proxying and the pre-compressed assets, neither of
+# which is about TLS.
 cat > "$WORK/nginx/conf/10-catlog.conf" <<'NGINXEOF'
 server {
     listen 8080;
@@ -118,16 +118,6 @@ server {
     }
     location /static/ {
         alias /usr/share/nginx/catlog/site/;
-        add_header Vary Accept-Encoding;
-    }
-    location /app/assets/ {
-        alias /usr/share/nginx/catlog/spa/assets/;
-        add_header Vary Accept-Encoding;
-        add_header Cache-Control "public, max-age=31536000, immutable";
-    }
-    location /app/ {
-        alias /usr/share/nginx/catlog/spa/;
-        try_files $uri $uri/ /app/index.html;
         add_header Vary Accept-Encoding;
     }
     location /admin/ { return 403; }
@@ -201,7 +191,7 @@ check "catlogctl reaches 127.0.0.1:6060 through 'compose exec'" \
 check "the admin port is not published" \
       "! dc port catlogd 6060"
 
-# --- 4. the proxy, the assets and the SPA ---------------------------------
+# --- 4. the proxy and the site --------------------------------------------
 say "4. nginx"
 dc up -d nginx >/dev/null
 for _ in $(seq 1 30); do curl -fsS "$BASE/healthz" >/dev/null 2>&1 && break; sleep 1; done
@@ -209,8 +199,6 @@ for _ in $(seq 1 30); do curl -fsS "$BASE/healthz" >/dev/null 2>&1 && break; sle
 check "/healthz answers through the proxy"      "curl -fsS '$BASE/healthz' | grep -q '\"ok\":true'"
 check "the datastar home page renders"          "curl -fsS '$BASE/' | grep -qi '<html'"
 check "/admin/ is refused"                      "test \"\$(curl -s -o /dev/null -w '%{http_code}' '$BASE/admin/stats')\" = 403"
-check "/app/ serves the reader"                 "curl -fsS '$BASE/app/' | grep -qi '<html'"
-check "an /app/ deep link serves the reader"    "curl -fsS '$BASE/app/boards/rud_total' | grep -qi '<html'"
 
 # --- 5. pre-compressed assets ---------------------------------------------
 # The assertion the whole of §5 exists for. `--compressed` would decode
@@ -244,9 +232,6 @@ origin_id=$(dc exec -T nginx sha256sum /usr/share/nginx/catlog/site/css/catlog.c
 [ -n "$served_id" ] && [ "$served_id" = "$origin_id" ] \
     && ok "the identity response is byte-identical to the original" \
     || bad "identity response ($served_id) != the original ($origin_id)"
-check "hashed SPA assets are immutable" \
-      "curl -s -D - -o /dev/null \"$BASE/app/\$(curl -s '$BASE/app/' | grep -o 'assets/[^\\\"]*\\.js' | head -1)\" \
-       | grep -qi 'immutable'"
 
 # --- 6. proxied responses are compressed on the fly -----------------------
 say "6. dynamic compression of proxied responses"

@@ -196,7 +196,15 @@ Then:
 Cache rules, in order:
 
 1. **Bypass cache** — `(http.request.uri.path eq "/v1/ingest") or (http.request.uri.path contains "/sse") or (http.request.uri.path contains "/stream") or (starts_with(http.request.uri.path, "/auth/")) or (starts_with(http.request.uri.path, "/api/")) or (http.request.uri.path eq "/dashboard")`
-2. **Cache everything** — `starts_with(http.request.uri.path, "/static/") or starts_with(http.request.uri.path, "/app/assets/")`
+2. **Cache everything** — `starts_with(http.request.uri.path, "/static/")`
+
+> **⚠ One-time cleanup, still outstanding.** Rule 2 used to read
+> `… or starts_with(http.request.uri.path, "/app/assets/")`, for a second frontend that no longer
+> exists ([UI-057](DECISIONS.md#ui-057)). That clause has to be **deleted from the zone's Cache
+> Rules by hand** — Cloudflare configuration lives in the dashboard, not in this repo, so nothing
+> in `make deploy` will do it for you. Until it is gone the rule is harmless (nothing serves
+> `/app/assets/` any more, and the path 404s), but it is a stale edge rule pointing at a removed
+> surface. Delete it the next time you are in the dashboard.
 
 The SSE bypass matters twice: Cloudflare buffers a stream it might cache **or compress**, and the
 symptom is feed frames arriving seconds late.
@@ -353,7 +361,6 @@ Nothing is published anywhere. The images exist in your local Docker daemon and 
 curl -fsS https://origin.catlog.science.fail/healthz    # the origin, Cloudflare out of the picture
 curl -fsS https://catlog.science.fail/healthz           # the same, through Cloudflare
 curl -sI -H 'Accept-Encoding: br' https://catlog.science.fail/static/css/catlog.css | grep -i content-encoding
-curl -fsS https://catlog.science.fail/app/ | head -3    # the React reader
 make ops-status
 ```
 
@@ -438,7 +445,6 @@ stay down. Now it always starts, and answers 502 → the maintenance page, while
 | `/v1/ingest` | The body is brotli-compressed and **hashed byte for byte**. `brotli off; gzip off;` and never a `gunzip`, `brotli` or `sub_filter` filter. It also carries **no** `error_page` — the shipper needs the real 5xx to know to retry. |
 | `/v1/{feed,events}/{sse,stream}` | `proxy_buffering off`, `proxy_cache off`, 1 h read timeout, `X-Accel-Buffering: no`, compression off in both directions. **Never compress a stream.** |
 | `/static/` | The datastar site's assets, from the image. Pre-compressed; `expires 1h` because there is no content hashing in the site build. |
-| `/app/`, `/app/assets/` | The React reader. `try_files … /app/index.html` for deep links; the hashed assets are `immutable` for a year because vite *does* hash. |
 | `/admin/` | `return 403`. Belt and braces — the admin mux binds loopback inside the container's own namespace and refuses non-loopback peers. |
 | everything else | Proxied, dynamically compressed, and the only place `error_page 502` shows the maintenance page. |
 
@@ -518,7 +524,7 @@ runs in `make test-nginx`; the smoke test proves the shipped artefact.
 | Image | Base | Size | Contents |
 |---|---|---|---|
 | `catlog/catlogd` | `dhi.io/static:20250419-glibc-debian13` | 21 MB | `catlogd`, `catlogctl` |
-| `catlog/catlog-nginx` | `nginx:1.29` + `ngx_brotli` | 64 MB | nginx, `site/dist`, `spa/dist`, both pre-compressed |
+| `catlog/catlog-nginx` | `nginx:1.29` + `ngx_brotli` | 63 MB | nginx, `site/dist`, pre-compressed |
 
 Local names, not registry paths: they are built on your machine and streamed to the VM.
 

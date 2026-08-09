@@ -65,8 +65,8 @@ type TypeCount struct {
 	Type  string `json:"type"`
 	Count int64  `json:"count"`
 	// Share is Count as a fraction of the enclosing total, 0–1. Published rather
-	// than left to the client because both frontends want it and neither should
-	// have to decide what to do when the denominator is zero.
+	// than left to the client because every client wants it and none should have
+	// to decide what to do when the denominator is zero.
 	Share float64 `json:"share"`
 	// First and Last are the receive times of the oldest and newest event of
 	// this type in this window, unix ms. Absent in a per-window breakdown where

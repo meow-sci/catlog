@@ -38,8 +38,8 @@ friend group deciding who is actually the worst pilot.
 **Stats about the stats.** How many events catlog holds, of what kinds, arriving how fast, since
 when. No records, no ranking, nobody's handle — just the size of the thing.
 
-There are two websites, both showing the same data: a fast server-rendered one at the root, and a
-React reader at `/app/`. They exist to be compared, and you can use whichever you prefer.
+All of it lives on one website — server-rendered and fast, with the feed arriving live over a
+single stream.
 
 ---
 

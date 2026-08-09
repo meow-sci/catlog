@@ -2,8 +2,6 @@
 server/bin/
 site/dist/
 site/node_modules/
-spa/dist/
-spa/node_modules/
 mod/**/bin/
 mod/**/obj/
 

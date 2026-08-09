@@ -14,7 +14,7 @@ name: Deploy docs site to GitHub Pages
 
 on:
   # Only redeploy when the site (or this workflow) actually changes. Every other
-  # path in this repository — server/, mod/, site/, spa/, infra/ — is somebody
+  # path in this repository — server/, mod/, site/, infra/ — is somebody
   # else's job, and a docs deploy on every commit is pure waste.
   #
   # Note the deliberate asymmetry with docs/event-details.md: a commit that

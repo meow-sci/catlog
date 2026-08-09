@@ -72,8 +72,10 @@ catlog_base_url: "https://{{ catlog_domain }}"
 catlog_accepted_htu:
   - "{{ catlog_base_url }}/v1/ingest"
 
-# The SPA is served same-origin at /app/, so there is no cross-origin reader to
-# allow. An empty list is safer than any non-empty one.
+# Every browser client catlog deploys is served same-origin by catlogd, so there
+# is nothing to allow. Add an origin here only when a third-party browser reader
+# on another origin needs the public read API; empty is safer than any non-empty
+# value, and this is the only thing that opens it.
 catlog_cors_allowed_origins: []
 
 # Sized to the box. GOMEMLIMIT is a soft ceiling for the Go heap; mem_limit is

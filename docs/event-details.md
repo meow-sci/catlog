@@ -336,8 +336,8 @@ deliberately no exhaustive `switch` over this set anywhere in catlog.
 **The server now keeps the same eight rows** in `server/internal/stats/situation.go` — the contact
 column only, because no board reads the rails bit. Three boards (`softest_touchdown`,
 `landed_bodies`, `splashdowns`) decide what a transition *means* from it, so it could not stay on the
-mod side alone. **It is a two-sided table**: see [Number formatting](#number-formatting) for the rule
-that governs both of catlog's.
+mod side alone. **It is catlog's one two-sided table**: see [Number formatting](#number-formatting)
+for the discipline that governs it.
 
 The server's table also draws a distinction the mod's does not need. `knownSituation(name)` is not
 `contactOf(name) == contactNone`: `maneuvering` and `freefall` are *known* to be off the ground,
@@ -2086,8 +2086,7 @@ already names). `units.Split("")` renders the number alone, and inventing a labe
 put the word on the page twice. Two tests that asserted "every board has a unit" allow exactly these
 four (`stats_test.go`, `readapi_test.go`) rather than being deleted, so a *fifth* unitless board is
 still a test failure and a decision somebody has to make. `units.ForKey("stage_count")` returns `""`
-by falling through, which is correct and needed no units change — and therefore no
-`spa/src/ui/units.ts` edit.
+by falling through, which is correct and needed no units change at all.
 
 **Four boards have no flag exclusion, and one has it only sometimes.** That is a property of the
 source event rather than a choice: `scoreable` passes every event carrying no flight, and §4.1 sends
@@ -2346,9 +2345,11 @@ then relabelled per player by `Redact`. **The mark excludes nothing and scores n
 
 ### Number formatting
 
-`server/internal/units` is **the single definition of a formatted catlog number**; `spa/src/ui/units.ts`
-is a port of it, and `Conformance` / `LabelConformance` (`units.go:468-572`) are the shared tables. A
-rule change is three edits in one commit: `units.go`, its test table, and the port.
+`server/internal/units` is **the single definition of a formatted catlog number**, and `Conformance`
+/ `LabelConformance` (`units.go:468-572`) are the tables that pin it. A rule change is two edits in
+one commit: the rule in `units.go`, and the row in `Conformance` that fixes its output. The read API
+publishes raw numbers, so anything rendering them elsewhere — a community dashboard over
+`GET /v1/…` — reproduces these rules from those tables rather than from prose.
 
 - Three significant figures: `decimals = clamp(2 - floor(log10|x|), 0, 6)`; round on the magnitude,
   re-apply sign, trim trailing zeros, group in threes with a canonical `,`.
@@ -2363,13 +2364,12 @@ rule change is three edits in one commit: `units.go`, its test table, and the po
   `inc_deg` → `deg`, `dyn_pressure_pa` → `Pa`, `duration_s` → `s`, `mass_kg` → `kg`, and
   `vehicle` / `kitten` / `from` / `to` → unitless by falling off the end.
 
-**catlog has exactly two two-sided tables, and both are edited in pairs.** A row changed on one side
-and not the other is a silent divergence between two implementations that are supposed to agree, so
-neither has a "later".
+**catlog has exactly one two-sided table, and it is edited in pairs.** A row changed on one side and
+not the other is a silent divergence between two implementations that are supposed to agree, so it
+has no "later".
 
 | Table | Sides | What disagreement would do |
 |---|---|---|
-| Number formatting | `server/internal/units/units.go` ↔ `spa/src/ui/units.ts`, pinned by the shared `Conformance` / `LabelConformance` tables | the same value renders differently on the two frontends |
 | Situation → surface contact | `server/internal/stats/situation.go` ↔ `mod/catlog.lib/Telemetry/SituationInfo.cs` | a board lands on one side of a landing and not the other — `landed_bodies`, `splashdowns` and `softest_touchdown` all decide what a transition *means* from this table |
 
 The server's copy carries the contact column only; the on-rails bit is not ported because no board
@@ -2696,7 +2696,7 @@ that the code is wrong.**
    (`stats/situation.go`) and treats everything else, `"unknown"` included, as no surface contact.
 7. **`docs/ingest-api.md:277` — the career-board value is "seconds since the career began".** The
    fold multiplies by 1000 and the unit string is `"ms"` (PROJ-047). The same stale phrase appears in
-   `store/projections.go:76`, `stats/fold.go:133-134` and `spa/src/api/types.ts:36`.
+   `store/projections.go:76` and `stats/fold.go:133-134`.
 8. **`docs/ingest-api.md:217-218` — response shapes are missing published fields**: `periods` on the
    board index, and `title` / `unit` / `period` / `bucket` / `limit` / `offset` on the board page.
 9. **`docs/ARCHITECTURE.md:51-52` and `docs/CONSTITUTION.md:70-72` still claim stat keys are

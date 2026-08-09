@@ -13,8 +13,8 @@ export default defineConfig({
   base: "/catlog/",
   integrations: [
     react({
-      // React Compiler is on, matching spa/. Rules of React are therefore
-      // mandatory and hand-written useMemo/useCallback/memo are forbidden.
+      // React Compiler is on. Rules of React are therefore mandatory and
+      // hand-written useMemo/useCallback/memo are forbidden.
       babel: { plugins: [["babel-plugin-react-compiler", {}]] },
     }),
     starlight({

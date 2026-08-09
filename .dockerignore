@@ -5,7 +5,7 @@
 # key and the pepper — into the daemon, where one careless `COPY . .` in any
 # future Dockerfile stage would bake it into a published image layer.
 #
-# It is also what makes the frontend builds correct at all: `COPY site/ ./`
+# It is also what makes the site build correct at all: `COPY site/ ./`
 # would otherwise overwrite the container's freshly-installed `node_modules`
 # with the host's (built for a different platform), and pnpm aborts with
 # ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY rather than silently using them.
@@ -34,7 +34,6 @@ node_modules/
 # --- build output: rebuilt inside the image ---
 server/bin/
 site/dist/
-spa/dist/
 **/bin/
 **/obj/
 
@@ -52,6 +51,6 @@ site/e2e/
 
 # NOT ignored, and each is needed by a stage:
 #   server/          Dockerfile.catlogd
-#   site/ spa/       Dockerfile.nginx (minus the exclusions above)
+#   site/            Dockerfile.nginx (minus the exclusions above)
 #   scripts/precompress.mjs
 #   infra/nginx/*    Dockerfile.nginx

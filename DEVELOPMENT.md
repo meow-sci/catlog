@@ -13,11 +13,11 @@ pieces are. This document says how to drive them.
 |---|---|---|
 | Go | 1.26 | `server/` |
 | .NET SDK | 10 | `mod/` |
-| Node + pnpm | 24 / 11 | `site/`, `spa/` |
+| Node + pnpm | 24 / 11 | `site/` |
 | Docker | any | **optional** — one test suite (`make test-nginx`) |
 
-**pnpm only.** Never `npm`, `npx` or `yarn` — the two frontends have their own lockfiles and a
-foreign package manager will rewrite them.
+**pnpm only.** Never `npm`, `npx` or `yarn` — `site/` and `docs-site/` have their own lockfiles and
+a foreign package manager will rewrite them.
 
 **A KSA install is optional but the solution assumes one is findable.** `mod/Directory.Build.props`
 resolves the game's reference assemblies through a ladder — `$KSA_DLL_DIR`, then a sibling
@@ -25,9 +25,9 @@ resolves the game's reference assemblies through a ladder — `$KSA_DLL_DIR`, th
 `mod/catlog` (and therefore `make mod-build`) cannot compile. Everything else builds anywhere.
 
 ```sh
-make bootstrap    # go mod download · dotnet restore · pnpm install ×2
-make build        # server binaries · .NET solution · site/dist · spa/dist
-make test         # unit tests: go + catlog.lib + spa. No docker, no network.
+make bootstrap    # go mod download · dotnet restore · pnpm install
+make build        # server binaries · .NET solution · site/dist
+make test         # unit tests: go + catlog.lib. No docker, no network.
 ```
 
 `make help` lists every target.
@@ -42,12 +42,11 @@ make site-build   # once, and after any change under site/assets/
 make dev
 ```
 
-`make dev` runs three processes in the foreground and stops all of them on Ctrl-C:
+`make dev` runs two processes in the foreground and stops both of them on Ctrl-C:
 
 | | URL | What |
 |---|---|---|
 | `catlogd` | <http://127.0.0.1:8080> | The read API, the ingest endpoint, and the server-rendered datastar site |
-| `spa` | <http://127.0.0.1:5173> | The React reader (vite, with HMR) |
 | `mockidp` | <http://127.0.0.1:9090> | Stand-in Discord, Google and GitHub |
 | `catlogd` admin | <http://127.0.0.1:6060> | Loopback-only admin API — seed, rebuild, stats, ban |
 
@@ -58,35 +57,28 @@ the credential file, and drive a real flight through the whole pipeline:
 make sim SCENARIO=hop-lithobrake CRED=$HOME/Downloads/catlog-credential.json
 ```
 
-Both frontends update while it runs — the feed over server-sent events, with no reload.
+The site updates while it runs — the feed over server-sent events, with no reload.
 
 **`make seed`** inserts a deterministic demo dataset (`demo_ace`, `demo_tumbler`, `demo_crasher`)
 if you want boards to look at without flying anything. It is idempotent.
 
-### Variants
+`make dev-server` is an alias for `make dev`, kept because `make loadgen`'s help text and the e2e
+instructions name it.
 
-| Command | When |
-|---|---|
-| `make dev-server` | catlogd + mockidp only, no reader. What `make loadgen` and the e2e suites want. |
-| `make spa-dev` | Just the reader's vite server, against a catlogd you started yourself. |
-| `make spa-preview` | The **built** bundle on its own origin at `:4173`. See "CORS" below. |
+### CORS is not exercised locally
 
-### Why the SPA runs at `:5173` and not behind catlogd
+catlog's own pages are rendered by catlogd and are same-origin, so `[cors] allowed_origins` is `[]`
+in `catlogd.dev.toml`, `[]` by default, and `[]` in production
+([UI-020](docs/DECISIONS.md#ui-020), [UI-056](docs/DECISIONS.md#ui-056)). The allow-list is live code
+for a *third-party* browser reader of the public read API — a community dashboard, a stream overlay —
+on its own origin.
 
-Vite proxies `/v1` to `CATLOG_DEV_API` (which `make dev` threads from `SERVER_URL`), so the reader
-runs **same-origin** in development and does not depend on the server's CORS allow-list being right.
-That is the point — but it also means `make dev` cannot catch a CORS mistake.
-
-`make spa-preview` is the other half: a built bundle on a different origin, cross-origin against
-catlogd, which is the shape a *separately hosted* reader has. Both ports are already in
-`catlogd.dev.toml`'s `[cors] allowed_origins`.
-
-**Production is not that shape.** nginx serves the reader at `/app/` on the same origin as the read
-API, built with an empty `VITE_CATLOG_API_BASE`, so `[cors] allowed_origins` is **empty** there
-([UI-056](docs/DECISIONS.md#ui-056)). `make spa-preview` remains the only local target that exercises
-the allow-list, and the allow-list remains live code for anyone hosting the reader elsewhere — exact
-`scheme://host[:port]` strings only, because catlogd refuses to start on a wildcard or a trailing
-slash and a malformed entry silently never matches.
+**No local target exercises it.** There is no `make` target that serves a page from a second origin,
+so a mistake in an allow-list entry will not surface until a real cross-origin consumer tries it.
+Entries are exact `scheme://host[:port]` strings compared byte for byte; catlogd refuses to start on
+a wildcard, a `*` or a trailing slash, because a malformed entry silently never matches. The unit
+tests in `server/internal/readapi/cors_test.go` and
+`TestCORSCoversTheReadAPIAndNothingElse` are where the behaviour is actually pinned.
 
 ### Configuration
 
@@ -110,7 +102,6 @@ Production keeps its secrets in the environment, never in a file.
 | `make server-build` | `go build ./cmd/...` | `server/bin/{catlogd,catlogctl,mockidp}` |
 | `make mod-build` | `dotnet build mod/catlog.slnx -c Release` | five projects, incl. the game mod |
 | `make site-build` | esbuild + asset copy | `site/dist/` — served at `/static/` in dev, by nginx in prod |
-| `make spa-build` | `tsc -b && vite build` | `spa/dist/` — `index.html`, `404.html`, hashed assets |
 
 ### Building the datastar site
 
@@ -121,25 +112,6 @@ production that key is left empty and nginx serves the same tree.
 
 **Re-run `make site-build` after editing anything under `site/assets/`.** Nothing watches it.
 
-### Building the React reader
-
-`VITE_CATLOG_API_BASE` is the read API's origin, **baked in at build time**:
-
-| Value | Meaning |
-|---|---|
-| unset | `http://127.0.0.1:8080` — the local dev server (`spa/.env`) |
-| `""` | same origin; requests come out as `/v1/…` (`spa/.env.development`, used by `pnpm dev`) |
-| `https://catlog.example` | a deployed API |
-
-A real environment variable wins over `.env`, which is how the GitHub Pages workflow points a build
-at production. `SPA_BASE=/sub/` builds for a subpath deployment; the router reads the same value back
-out of `import.meta.env.BASE_URL`, so nothing in the source assumes `/`.
-
-**A static host must answer an unmatched path with `index.html`** — the router uses real paths, not
-fragments. The build emits `dist/404.html` as a byte copy of `index.html`, which is what GitHub Pages
-needs; nginx wants `try_files $uri $uri/ /index.html`. Without it, deep links break and *nothing else
-does*, so test a deep link rather than the home page. `spa/README.md` has the per-host table.
-
 ---
 
 ## Testing
@@ -148,16 +120,14 @@ Five modes, in ascending order of how much they need to be real.
 
 ### 1. Unit tests — `make test`
 
-**No docker, no network, no database files, no game.** Three suites:
+**No docker, no network, no database files, no game.** Two suites:
 
 | | What it covers |
 |---|---|
 | `make server-test` | Every Go package: the auth chain step by step, fold golden tests, migration idempotence, the rebuild-equals-incremental property, redaction, the unit formatter, secret hygiene. |
 | `make mod-test` | `catlog.lib`: detector edges, window boundaries, impact correlation, outbox pruning and crash recovery, the JWS/JWK implementation, the shipper's recovery table on a virtual clock, and the **assembly guard** that proves zero KSA references. |
-| `make spa-test` | The reader: the API client, the router, the unit-formatter port against generated vectors, page rendering, and an assertion that the React Compiler actually ran. |
 
-This is the one that must always be green. `make spa-check` additionally runs the reader's
-typecheck, lint and format check — that is what its CI does.
+This is the one that must always be green.
 
 ### 2. Integration tests — `make test-integration`
 
@@ -190,7 +160,7 @@ make sim SCENARIO=soak CRED=… SPEED=100     # pace at 100 sim seconds per wall
 ```
 
 Assertions are baseline-relative, so a scenario is re-runnable against a database that already holds
-data. Needs `make dev` (or `make dev-server`) in another terminal.
+data. Needs `make dev` in another terminal.
 
 ### 4. End-to-end — `make e2e`, `make e2e-full`
 
@@ -209,9 +179,6 @@ The suite covers the journeys only a browser can prove: the OAuth dance through 
 the account-age gate, the credential wizard (including an assertion that the private key never leaves
 the page), the boards, the SSE feed arriving without a reload, and revoke / delete-my-data.
 
-`spa/` has its own browser check, `make spa-smoke`: real chromium against a **built, served** bundle
-and a seeded catlogd, testing a deep link from a cold context. Start `make spa-preview` first.
-
 ### 5. Load testing — `make loadgen`
 
 **Hundreds of players, randomised careers, real identities, real crypto.** This is the other half of
@@ -226,7 +193,7 @@ make loadgen SEED=4242 REPORT=json               # reproducible; JSON on stdout
 make loadgen LOADGEN_ARGS=--help                 # every flag, and what it measures
 ```
 
-Needs `make dev-server` in another terminal. It touches nothing outside 127.0.0.1.
+Needs `make dev` in another terminal. It touches nothing outside 127.0.0.1.
 
 Every player is provisioned the way a real one is — `mockidp` mints a subject, catlogd runs the OAuth
 code exchange, sets a session cookie and issues a license against a key pair generated in the harness

@@ -144,8 +144,8 @@ func (h *feedHub) run(rows <-chan []store.FeedRow) {
 
 // Paging bounds for `GET /v1/feed`.
 const (
-	// DefaultFeedLimit matches the server-rendered panel's own row count, so the
-	// two frontends show the same amount of history by default.
+	// DefaultFeedLimit matches the server-rendered panel's own row count, so
+	// this endpoint and the page show the same amount of history by default.
 	DefaultFeedLimit = 30
 	// MaxFeedLimit is the whole table (§5.4). Asking for more is clamped, for
 	// the same cache reason as [MaxLimit].

@@ -55,8 +55,9 @@ func TestFeedSnapshotIsNewestFirstAndClamps(t *testing.T) {
 	}
 }
 
-// TestFeedSnapshotIsAnArrayWhenEmpty matters to the SPA: `rows: null` would make
-// every consumer of this endpoint need a null check the type does not admit.
+// TestFeedSnapshotIsAnArrayWhenEmpty is a wire-contract assertion: `rows: null`
+// would make every consumer of this endpoint need a null check the type does not
+// admit.
 func TestFeedSnapshotIsAnArrayWhenEmpty(t *testing.T) {
 	f := newFixture(t)
 	if body := strings.TrimSpace(f.get("/v1/feed").Body.String()); !strings.Contains(body, `"rows":[]`) {
@@ -69,7 +70,7 @@ type stubFeed struct{ ch chan []store.FeedRow }
 
 func (s stubFeed) Subscribe() (<-chan []store.FeedRow, func()) { return s.ch, func() {} }
 
-// TestFeedStreamEmitsJSONEvents pins the wire format the SPA's EventSource
+// TestFeedStreamEmitsJSONEvents pins the wire format an EventSource client
 // parses: `event: feed` with a JSON `store.FeedRow` payload — not HTML, which is
 // the whole reason this route exists alongside the datastar one.
 func TestFeedStreamEmitsJSONEvents(t *testing.T) {

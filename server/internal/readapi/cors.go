@@ -9,10 +9,13 @@ import (
 //
 // # Why this exists at all
 //
-// `spa/` is a second frontend built the opposite way to `site/`: a static React
-// bundle hosted on GitHub Pages that fetches every number from these endpoints.
-// It runs on a different origin, so without these headers the browser refuses to
-// hand it any response body.
+// The §4.8 read endpoints are anonymous public facts, and a browser page on
+// another origin — a community dashboard, a stream overlay, somebody's own
+// scoreboard — is a legitimate consumer of them. Without these headers the
+// browser refuses to hand such a page any response body, whatever the server
+// returned. catlog's own site is rendered by catlogd and is same-origin, so it
+// needs none of this: the allow-list is empty until a deployment names an
+// origin, and that is the posture to keep.
 //
 // # Why it stops here
 //
@@ -40,8 +43,8 @@ import (
 // wrong.
 type cors struct {
 	// allowed is the exact-match origin list from [config.CORS]. Empty disables
-	// cross-origin access entirely, which is the correct posture for a
-	// deployment that has no second frontend.
+	// cross-origin access entirely, which is the default and the correct
+	// posture for a deployment with no cross-origin reader.
 	allowed []string
 }
 
@@ -79,8 +82,8 @@ func (c cors) wrap(h http.HandlerFunc) http.HandlerFunc {
 // preflight answers `OPTIONS` for a §4.8 route.
 //
 // A GET with no custom headers is a CORS "simple request" and is never
-// preflighted, so in practice the SPA does not reach this — until somebody adds
-// a header, at which point the absence of an OPTIONS route would be a 405 that
+// preflighted, so in practice a reader does not reach this — until it adds a
+// header, at which point the absence of an OPTIONS route would be a 405 that
 // looks like a network failure in the browser console. It is answered here so
 // that day is uneventful.
 //

@@ -35,9 +35,9 @@ mod/catlog ────────────── mod/catlog.lib ───�
                                                                                     │
                             ┌───────────────────────────────────────────────────────┤
                             ▼                                                       ▼
-                   site/ + server/internal/web                                    spa/
-                   server-rendered datastar site                        static React reader
-                   (same origin, sessions, dashboard)                   (any host, read-only)
+                   site/ + server/internal/web                            GET /v1/… JSON read API
+                   server-rendered datastar site                          anonymous, cacheable, CORS-
+                   (sessions, dashboard, credential)                      capable for other clients
 ```
 
 Two properties do most of the work:
@@ -60,7 +60,6 @@ enums are allow-lists (Constitution §6).
 | `server/` | Go module `github.com/meow-sci/catlog/server`. Three binaries: `catlogd`, `catlogctl`, `mockidp`. | [server.md](server.md) |
 | `mod/` | .NET 10 solution: `catlog.lib` (KSA-free core), `catlog` (the game mod), `catlog.sim`, `catlog.loadgen`, two test projects. | [mod.md](mod.md) |
 | `site/` | The datastar site's static assets (CSS, three JS modules, vendored datastar) and the Playwright e2e suite. **HTML is rendered by the Go server** — the templates live in `server/internal/web/templates/`. | [ui-design.md](ui-design.md) |
-| `spa/` | The React reader: a standalone Vite app over the public read API. Own lockfile, own toolchain, own deployment. | [ui-design.md](ui-design.md), `spa/README.md` |
 | `contracts/` | Cross-language conformance vectors, generated deterministically and consumed by **both** the Go and C# suites. This is what guarantees mod↔server interop without the game. | [ingest-api.md](ingest-api.md) |
 | `docs/` | This directory. The specification, the decisions, the design record. | — |
 | `infra/` | The production deployment: two Dockerfiles, the compose project, the nginx configuration, and the Ansible roles and playbooks that own the VM. | [operations.md](operations.md) |
@@ -71,24 +70,20 @@ enums are allow-lists (Constitution §6).
 Four toolchains: **Go 1.26**, **.NET SDK 10**, **Node 24 + pnpm 11**. `pnpm` only — never `npm`,
 `npx` or `yarn`. Docker is optional and used by exactly one test suite.
 
-### The two frontends
+### The frontend
 
-catlog has two, and they are independent by design — same data, two UI patterns, kept side by side
-so they can be compared:
+catlog has exactly one: `site/` + `server/internal/web/`. HTML is rendered by Go's `html/template`
+inside `catlogd`; `site/` holds only the static assets (CSS, three JS modules, vendored datastar)
+and the Playwright suite. Interactivity is datastar patching fragments the server rendered, never a
+client-side model of the same data. `make site-build` (esbuild) is the whole build. The design
+contract it implements is [ui-design.md](ui-design.md); the decision to have one frontend rather
+than two is [UI-057](DECISIONS.md#ui-057).
 
-|  | `site/` + `server/internal/web/` | `spa/` |
-|---|---|---|
-| Rendering | Server-rendered Go templates, datastar for interactivity | React 19, client-rendered, React Compiler on |
-| Auth | Sessions, the dashboard, credential issuance | **None.** Anonymous, read-only |
-| Hosting | Rendered by `catlogd`; nginx serves `/static/` in prod | nginx serves it at `/app/` in prod; any static host otherwise |
-| Talks to | Everything | Seven `GET /v1/…` endpoints, **same-origin** in prod |
-| Build | `make site-build` (esbuild) | `make spa-build` (vite) |
-
-Neither requires the other to be running, and they can still live on different domains — the reader
-keeps its own lockfile, toolchain and build. But in production they do not: nginx serves the reader
-at `/app/` on the same origin, so `[cors] allowed_origins` is **empty** there and the CORS
-allow-list is live code only for a deployment that puts them apart ([UI-056](DECISIONS.md#ui-056)). The design
-contract they both implement is [ui-design.md](ui-design.md).
+The public `GET /v1/…` read API is **not** the site's private channel. It is anonymous, cacheable
+(§4.8) and CORS-capable, so a browser page on another origin — a community dashboard, a stream
+overlay — is a first-class consumer. `[cors] allowed_origins` is empty by default and empty in
+production; it is the opt-in a deployment sets when such a consumer exists
+([UI-020](DECISIONS.md#ui-020), [UI-056](DECISIONS.md#ui-056)).
 
 ---
 
@@ -99,8 +94,6 @@ contract they both implement is [ui-design.md](ui-design.md).
 | `catlogd` public HTTP | `127.0.0.1:8080` |
 | `catlogd` admin HTTP — loopback only, never proxied | `127.0.0.1:6060` |
 | `mockidp` (the local stand-in for Discord/Google/GitHub) | `127.0.0.1:9090` |
-| `spa/` vite dev server | `127.0.0.1:5173` |
-| `spa/` vite preview (built bundle, cross-origin) | `127.0.0.1:4173` |
 | nginx (dev, docker, optional) | `127.0.0.1:8081` |
 | Data directory | `./data/` → `events.db`, `projections.db`, `keys/`, `archive/` |
 | Dev issuer / proof `htu` base | `http://127.0.0.1:8080` |

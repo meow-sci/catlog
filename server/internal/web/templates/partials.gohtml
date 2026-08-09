@@ -117,7 +117,7 @@ page whose datastar module never ran, because both show the same rows.
 {{define "feed-panel" -}}
 {{- /* #feed-status is the connection hint me.js maintains from datastar's
        fetch-lifecycle events plus the patches the stream lands (connecting /
-       live / reconnecting, modelled on the SPA's FeedPanel). It ships empty
+       live / reconnecting). It ships empty
        and stays empty when no stream is ever opened — a page with no JS makes
        no claim about a connection it does not have. */}}
 <article id="feed-panel" class="panel" data-init="@get('/v1/feed/sse')">
@@ -134,8 +134,7 @@ page whose datastar module never ran, because both show the same rows.
      Deliberately NOT a listbox: role="listbox"/"option" announce a combobox
      contract (aria-expanded, aria-activedescendant, arrow-key management) that
      nothing here implements, and links are not options. A plain list of links
-     in a polite live region is the honest version — the SPA's React Aria
-     ComboBox is the other frontend's answer to the same requirement. */}}
+     in a polite live region is the honest version. */}}
 {{define "search-suggest" -}}
 <ul id="search-suggest" aria-live="polite" aria-label="Handle suggestions">
 {{- range .Handles}}<li><a href="{{playerPath .}}">{{.}}</a></li>{{end}}

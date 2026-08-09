@@ -5,7 +5,7 @@
 -- vehicles. This one answers questions about the log itself — how many events
 -- there are, of what kinds, arriving how fast, since when. It is the data for
 -- nerds about the data collected by nerds, and it backs `GET /v1/stats` and the
--- "Stats of stats" page on both frontends.
+-- "Stats of stats" page.
 --
 -- # Why a table rather than a count over events.db
 --

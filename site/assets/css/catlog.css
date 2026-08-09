@@ -8,10 +8,9 @@
  * it. That is the trade: ~1000 hand-written lines that we chose, instead of 193
  * of ours layered over 83 kB of somebody else's.
  *
- * The token names and values are shared with the React reader (docs/ui-design.md
- * §2): same names, same numbers, declared here as custom properties and there in
- * Tailwind's @theme. Two frontends showing one leaderboard in two greens would
- * defeat the point of having two.
+ * The token names and values are the ones docs/ui-design.md §2 defines, declared
+ * here as custom properties. That document is where a colour, a step on the type
+ * scale or a radius is decided; this file is where it is spelled.
  *
  * Contents
  *   1. font face
@@ -261,10 +260,8 @@ ol {
   padding-left: var(--space-6);
 }
 
-/* One ring for everything, on :focus-visible and on [data-focus-visible] so the
-   two frontends focus identically. */
-:focus-visible,
-[data-focus-visible] {
+/* One ring for everything. */
+:focus-visible {
   outline: var(--focus-width) solid var(--color-accent-text);
   outline-offset: var(--focus-offset);
   border-radius: inherit;

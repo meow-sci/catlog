@@ -116,8 +116,8 @@ type eventsData struct {
 }
 
 // eventTypeChoices is the chip union both pages share: ingest's registry — the
-// same allow-list the batch validator enforces, mirrored by docs/events.md and
-// the SPA's KNOWN_EVENT_TYPES — plus the page's own types, plus the active
+// same allow-list the batch validator enforces, mirrored by docs/events.md —
+// plus the page's own types, plus the active
 // filter (so its chip cannot vanish under itself). A type a newer mod version
 // introduces becomes filterable as soon as one shows up.
 func eventTypeChoices(events []readapi.EventRow, filter string) []string {

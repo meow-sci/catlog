@@ -280,9 +280,11 @@ type Projector struct {
 // CORS is the [cors] section: which foreign origins may read the public §4.8
 // endpoints from a browser.
 //
-// Not in §5.3. It exists because `spa/` is a second, independent frontend that
-// is hosted somewhere else entirely (GitHub Pages) and reaches catlog over
-// XHR — which the same-origin policy blocks unless the server says otherwise.
+// Not in §5.3. It exists because the §4.8 endpoints are anonymous public facts
+// that a browser page on another origin — a community dashboard, an overlay —
+// may legitimately fetch, and the same-origin policy blocks that unless the
+// server says otherwise. catlog's own site is served by catlogd and is
+// same-origin, so the list stays empty unless a deployment names a reader.
 //
 // The scope is deliberately narrow. Only the routes [readapi.Server.Register]
 // mounts ever carry these headers; `/api/*`, the `/auth/*` flows and the admin
@@ -294,9 +296,9 @@ type CORS struct {
 	// compares the echoed origin byte for byte, so an entry that is not exactly
 	// what the browser sends silently does nothing.
 	//
-	// Production sets it in the environment
-	// (CATLOG_CORS_ALLOWED_ORIGINS=https://owner.github.io) rather than here,
-	// so no deployment URL is baked into the repository.
+	// A deployment sets it in the environment
+	// (CATLOG_CORS_ALLOWED_ORIGINS=https://reader.example) rather than here, so
+	// no deployment URL is baked into the repository.
 	AllowedOrigins []string `toml:"allowed_origins"`
 }
 
@@ -362,17 +364,12 @@ func Default() Config {
 			Decoders: 0,
 		},
 		CORS: CORS{
-			// Vite's dev server (5173) and its `preview` server (4173) on both
-			// spellings of loopback — the four origins `pnpm -C spa dev` and
-			// `pnpm -C spa preview` can actually appear as. Nothing public: a
-			// default that allowed a real deployment would be a default that
-			// shipped one.
-			AllowedOrigins: []string{
-				"http://127.0.0.1:5173",
-				"http://localhost:5173",
-				"http://127.0.0.1:4173",
-				"http://localhost:4173",
-			},
+			// EMPTY, and that is the default worth defending. Every browser
+			// client catlog ships is served same-origin by catlogd, so nothing
+			// needs cross-origin reads until an operator deploys a reader on
+			// another origin and names it. A default that allowed an origin
+			// would be a default that shipped one.
+			AllowedOrigins: nil,
 		},
 	}
 }
@@ -497,8 +494,9 @@ func (c Config) Validate() error {
 	}
 	// A CORS origin is compared to the browser's `Origin` header by exact string
 	// equality, so a typo cannot fail at request time in any visible way — the
-	// header simply never matches and the SPA sees an opaque network error with
-	// nothing in the server log. Reject the malformed shapes at startup instead.
+	// header simply never matches and the reader sees an opaque network error
+	// with nothing in the server log. Reject the malformed shapes at startup
+	// instead.
 	for _, origin := range c.CORS.AllowedOrigins {
 		errs = append(errs, validateOrigin(origin))
 	}

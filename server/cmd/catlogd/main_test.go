@@ -134,18 +134,19 @@ func TestStartupCreatesEverythingAndShutsDownCleanly(t *testing.T) {
 
 // TestCORSCoversTheReadAPIAndNothingElse is the test that has to exist.
 //
-// The `spa/` frontend is served from a different origin, so the §4.8 read
-// endpoints answer cross-origin requests. Every other route on the public
-// listener is either cookie-authenticated (`/api/*`, `/auth/*`, `/dashboard`) or
-// signature-authenticated with a same-origin assumption (`/v1/ingest`), and an
-// `Access-Control-Allow-Origin` on any of them would let a page on the
-// allow-listed origin read a signed-in user's account out of the browser.
+// The §4.8 read endpoints answer cross-origin requests, because a browser
+// reader on another origin is a legitimate consumer of them. Every other route
+// on the public listener is either cookie-authenticated (`/api/*`, `/auth/*`,
+// `/dashboard`) or signature-authenticated with a same-origin assumption
+// (`/v1/ingest`), and an `Access-Control-Allow-Origin` on any of them would let
+// a page on the allow-listed origin read a signed-in user's account out of the
+// browser.
 //
 // Only the whole wiring can prove this: the boundary is *which mux entries the
 // middleware is attached to*, and that is decided in run(), not in any one
 // package. Hence a test here rather than in internal/readapi.
 func TestCORSCoversTheReadAPIAndNothingElse(t *testing.T) {
-	const origin = "https://spa.example.invalid"
+	const origin = "https://reader.example.invalid"
 
 	cfg := testutil.Config(t)
 	cfg.CORS.AllowedOrigins = []string{origin}

@@ -3,7 +3,7 @@
  * Pre-compress a built asset tree in place: `foo.css` gains `foo.css.br` and
  * `foo.css.gz` beside it.
  *
- *   node scripts/precompress.mjs site/dist spa/dist
+ *   node scripts/precompress.mjs site/dist
  *
  * nginx serves the siblings with `brotli_static on; gzip_static on;` — see
  * infra/nginx/prod.conf.tmpl — so the origin never compresses a static asset at
@@ -12,10 +12,9 @@
  * is free here, because it happens once, at build time, in a container stage
  * that is thrown away).
  *
- * No dependency, deliberately: node's own zlib has brotli, and both frontends
- * are hermetic by design (no CDN, no runtime fetch). A compressor from npm
- * would be the only build input neither `site/` nor `spa/` needs for anything
- * else.
+ * No dependency, deliberately: node's own zlib has brotli, and `site/` is
+ * hermetic by design (no CDN, no runtime fetch). A compressor from npm would be
+ * the only build input `site/` does not need for anything else.
  *
  * Idempotent: re-running overwrites the siblings and never compresses a
  * sibling. `--check` reports what would change and writes nothing.

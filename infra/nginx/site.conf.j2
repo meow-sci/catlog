@@ -136,25 +136,6 @@ server {
         access_log off;
     }
 
-    # --- the React reader at /app/ ------------------------------------------
-    # vite DOES content-hash, so its assets are immutable and can be cached for
-    # a year. The shell that names them cannot, which is why these are two
-    # locations and not one.
-    location /app/assets/ {
-        alias /usr/share/nginx/catlog/spa/assets/;
-        add_header Vary Accept-Encoding;
-        add_header Cache-Control "public, max-age=31536000, immutable";
-        access_log off;
-    }
-
-    location /app/ {
-        alias /usr/share/nginx/catlog/spa/;
-        # HTML5 deep links: /app/boards/rud_total is a route, not a file.
-        try_files $uri $uri/ /app/index.html;
-        add_header Vary Accept-Encoding;
-        expires 5m;
-    }
-
     # --- the admin mux is never proxied -------------------------------------
     # catlogd binds it to 127.0.0.1:6060 inside its own network namespace and
     # refuses non-loopback peers, so this is belt and braces — but it is the

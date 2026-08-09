@@ -10,11 +10,11 @@ import (
 	"github.com/meow-sci/catlog/server/internal/testutil"
 )
 
-// The origin the SPA is pretended to be served from. Not a real deployment URL —
+// The origin a cross-origin reader is pretended to be served from. Not a real deployment URL —
 // the point of the allow-list is that it is configuration.
-const spaOrigin = "https://example.invalid"
+const readerOrigin = "https://example.invalid"
 
-// corsMux is a read API that allows exactly [spaOrigin].
+// corsMux is a read API that allows exactly [readerOrigin].
 func corsMux(t *testing.T) *http.ServeMux {
 	t.Helper()
 	events := testutil.MemEvents(t)
@@ -26,7 +26,7 @@ func corsMux(t *testing.T) *http.ServeMux {
 		Projections:    live{testutil.MemProjections(t)},
 		Events:         events,
 		Directory:      dir,
-		AllowedOrigins: []string{spaOrigin},
+		AllowedOrigins: []string{readerOrigin},
 		Log:            testutil.DiscardLogger(),
 	})
 	if err != nil {
@@ -63,9 +63,9 @@ var readPaths = []string{
 func TestCORSAllowsTheConfiguredOriginOnEveryReadRoute(t *testing.T) {
 	mux := corsMux(t)
 	for _, path := range readPaths {
-		rec := do(t, mux, http.MethodGet, path, spaOrigin)
-		if got := rec.Header().Get("Access-Control-Allow-Origin"); got != spaOrigin {
-			t.Errorf("GET %s Access-Control-Allow-Origin = %q, want %q", path, got, spaOrigin)
+		rec := do(t, mux, http.MethodGet, path, readerOrigin)
+		if got := rec.Header().Get("Access-Control-Allow-Origin"); got != readerOrigin {
+			t.Errorf("GET %s Access-Control-Allow-Origin = %q, want %q", path, got, readerOrigin)
 		}
 		// The §4.8 responses are cached by a CDN (s-maxage=30). Without this a
 		// shared cache could serve the allow-listed answer to everyone.
@@ -84,10 +84,10 @@ func TestCORSRefusesAnUnlistedOrigin(t *testing.T) {
 	for _, origin := range []string{
 		"https://evil.invalid",
 		// Prefix and suffix games: exact match, not "starts with".
-		spaOrigin + ".evil.invalid",
-		"https://evil.invalid?" + spaOrigin,
+		readerOrigin + ".evil.invalid",
+		"https://evil.invalid?" + readerOrigin,
 		// A trailing slash is not an origin, and must not be treated as one.
-		spaOrigin + "/",
+		readerOrigin + "/",
 	} {
 		mux := corsMux(t)
 		rec := do(t, mux, http.MethodGet, "/v1/leaderboards", origin)
@@ -106,7 +106,7 @@ func TestCORSPreflight(t *testing.T) {
 	mux := corsMux(t)
 
 	req := httptest.NewRequest(http.MethodOptions, "/v1/leaderboards/kitten_tumbles", nil)
-	req.Header.Set("Origin", spaOrigin)
+	req.Header.Set("Origin", readerOrigin)
 	req.Header.Set("Access-Control-Request-Method", "GET")
 	req.Header.Set("Access-Control-Request-Headers", "x-trace-id")
 	rec := httptest.NewRecorder()
@@ -116,7 +116,7 @@ func TestCORSPreflight(t *testing.T) {
 		t.Errorf("preflight status = %d, want 204", rec.Code)
 	}
 	for header, want := range map[string]string{
-		"Access-Control-Allow-Origin":  spaOrigin,
+		"Access-Control-Allow-Origin":  readerOrigin,
 		"Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
 		"Access-Control-Allow-Headers": "x-trace-id",
 		"Access-Control-Max-Age":       "600",
@@ -144,11 +144,11 @@ func TestCORSPreflight(t *testing.T) {
 	}
 }
 
-// TestCORSIsOffByDefaultForAServerWithNoAllowList pins the posture of a
-// deployment that has no second frontend: no allow-list, no headers, ever.
+// TestCORSIsOffByDefaultForAServerWithNoAllowList pins the default posture of a
+// deployment with no cross-origin reader: no allow-list, no headers, ever.
 func TestCORSIsOffByDefaultForAServerWithNoAllowList(t *testing.T) {
 	f := newFixture(t) // built with no AllowedOrigins
-	rec := do(t, f.mux, http.MethodGet, "/v1/leaderboards", spaOrigin)
+	rec := do(t, f.mux, http.MethodGet, "/v1/leaderboards", readerOrigin)
 	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "" {
 		t.Errorf("a read API with no allow-list emitted Access-Control-Allow-Origin = %q", got)
 	}

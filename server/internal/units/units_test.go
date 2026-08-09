@@ -9,14 +9,14 @@ import (
 	"github.com/meow-sci/catlog/server/internal/units"
 )
 
-// TestConformance is the whole point of the package: the table in [units.Conformance]
-// is the contract the TypeScript implementation in `spa/` has to reproduce, and
-// this asserts the Go half of it.
+// TestConformance is the whole point of the package: [units.Conformance] is the
+// written contract for what a catlog number looks like, and this asserts that
+// the code still meets it.
 //
 // A failure here means one of two things happened. Either a rule changed — in
-// which case the package comment, this table and the SPA's copy all move
-// together — or a rule broke, in which case the two frontends have just started
-// disagreeing about what a record says.
+// which case the package comment and this table move together — or a rule
+// broke, in which case a record has just started reading differently than the
+// contract says it should.
 func TestConformance(t *testing.T) {
 	for _, tc := range units.Conformance {
 		got := units.Format(tc.Value, tc.Unit)
@@ -68,7 +68,7 @@ func TestLabelNamesOnlyAUnitEveryCellCarries(t *testing.T) {
 }
 
 // The canonical separators are en-US's, and they are the *fallback* — the form
-// a reader with no JavaScript keeps. Both frontends re-render them through
+// a reader with no JavaScript keeps. The site re-renders them through
 // Intl.NumberFormat, so what this asserts is that the fallback is a pair of
 // characters people actually write, and not the U+202F narrow no-break space
 // this used to bake in for everybody.

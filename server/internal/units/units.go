@@ -2,20 +2,20 @@
 //
 // # Why this is a package and not a template function
 //
-// catlog has two frontends. `server/internal/web` renders the same boards the
-// JSON API publishes, and `spa/` re-renders them from that JSON in TypeScript.
-// The API publishes raw numbers in the unit the event carried — metres,
+// The JSON API publishes raw numbers in the unit the event carried — metres,
 // metres per second, milliseconds, joules — because that is the honest wire
 // contract and because a formatted string is not a number a client can sort.
-// Formatting therefore happens twice, once per frontend, and **the two
-// implementations must agree character for character** or the same record reads
-// differently depending on which site you opened.
+// `server/internal/web` turns those numbers into text for the site, and any
+// client reading the API has to turn them into text for itself. The rules for
+// doing that are therefore neither a template's business nor a client's: they
+// live here, written down, so that one record does not read differently
+// depending on who rendered it.
 //
-// So the rules live here, written down, with a worked table below that the
-// TypeScript implementation is expected to reproduce verbatim.
-// [Conformance] is that table as data: it is asserted by units_test.go, and it
-// is the list to port to `spa/` and to keep in step. **Neither implementation
-// may change a rule without changing the other and updating this table.**
+// The rules are below, with a worked table. [Conformance] is that table as
+// data: it is asserted by units_test.go and it is what anyone reimplementing
+// the formatting against the public API should reproduce verbatim. **A rule
+// change is two edits in one commit — the rule here, and the row in
+// [Conformance] that pins it.**
 //
 // # The rules
 //
@@ -31,11 +31,10 @@
 //     know it.** A Go process serves one HTML response to a shared cache
 //     (§4.8's `s-maxage=30`), so the separator baked in here is a *canonical*
 //     one — [GroupSeparator] and [DecimalSeparator], which are en-US's — and the
-//     browser re-renders it. Both frontends do that through `Intl.NumberFormat`:
-//     the SPA calls it directly, and the server-rendered site calls it over the
-//     number and precision this package publishes in [Split], which is why that
-//     function exists and why [Format] is only ever the fallback a reader with
-//     no JavaScript sees. Everything below therefore describes the canonical
+//     browser re-renders it. The site does that through `Intl.NumberFormat`,
+//     over the number and precision this package publishes in [Split], which is
+//     why that function exists and why [Format] is only ever the fallback a
+//     reader with no JavaScript sees. Everything below therefore describes the canonical
 //     form; the *placement* of the groups is Intl's business, and it differs by
 //     more than a character — en-IN groups 12,34,567 and es-ES leaves 1234
 //     alone.
@@ -127,9 +126,8 @@ const (
 	// en-US's — that [Format] renders with.
 	//
 	// They are not a claim about how a reader writes numbers. They are what a
-	// cached, locale-blind HTML response can honestly say, and both frontends
-	// replace them with the reader's own through `Intl.NumberFormat`: the SPA
-	// formats from the JSON directly, the server-rendered site re-renders the
+	// cached, locale-blind HTML response can honestly say; the site replaces
+	// them with the reader's own through `Intl.NumberFormat`, re-rendering the
 	// element [Split] describes. A reader with JavaScript off keeps these, which
 	// is why they are the conventional pair and not a sentinel nobody writes.
 	GroupSeparator   = ","
@@ -248,8 +246,8 @@ func numberParts(v float64, tail string) Parts {
 //
 // The returned string is a label to render **as it is**. Do not uppercase it:
 // "M/S" is not a unit, "PA" is not a unit, and "RUDS" is not how catlog writes
-// that word. Both frontends exempt this one header cell from the uppercasing
-// every other header gets, and that is why.
+// that word. The site exempts this one header cell from the uppercasing every
+// other header gets, and that is why.
 func Label(unit string) string {
 	switch unit {
 	case Seconds, Millis:
@@ -263,7 +261,7 @@ func Label(unit string) string {
 }
 
 // Measured is rule 7 in prose — the noun phrase for a sentence like
-// "Measured in ___.", which both frontends put above a board.
+// "Measured in ___.", which goes above a board.
 //
 // It differs from [Label] in two ways, both deliberate. It is lower case,
 // because it lands mid-sentence. And for a duration it keeps the storage unit
@@ -458,13 +456,14 @@ func ForKey(key string) string {
 	return ""
 }
 
-// Conformance is the shared table both implementations must reproduce: the Go
-// one through units_test.go, the TypeScript one in `spa/` through its own.
+// Conformance is the worked table the rules above describe, as data. It is
+// asserted by units_test.go, which is why it is exported: the tests live in
+// units_test, outside the package.
 //
-// It is exported so a future `catlogctl` sub-command, or a generator, can emit
-// it as JSON for the SPA to consume rather than have the list transcribed by
-// hand. Until then: **copy it, keep it in step, and add a row here first when a
-// rule changes.**
+// It is also the citable form of the contract — for docs, and for anyone
+// rendering these numbers from the public API themselves — so a future
+// `catlogctl` sub-command could emit it as JSON without inventing a second
+// list. **Add a row here first when a rule changes.**
 var Conformance = []struct {
 	Value float64
 	Unit  string
@@ -533,8 +532,8 @@ var Conformance = []struct {
 // two answer different questions — one is per *value*, one is per *unit* — and
 // because a header label has no value to be right about.
 //
-// The same standing rule applies: **copy it, keep it in step, and add a row here
-// first when a rule changes.** The TypeScript port is `spa/src/ui/units.conformance.ts`.
+// The same standing rule applies: **add a row here first when a rule
+// changes.**
 var LabelConformance = []struct {
 	Unit string
 	// Label is the column header — [Label]'s answer.

@@ -83,9 +83,9 @@ tick_s     = 0
 decoders   = 0
 
 # --- cross-origin reads -----------------------------------------------------
-# EMPTY, and that is the point. The React reader is served from this same origin
-# at /app/, built with an empty VITE_CATLOG_API_BASE so its requests come out as
-# relative /v1/… paths. There is no cross-origin frontend to allow, and an empty
-# allow-list is safer than any non-empty one.
+# EMPTY, and that is the point. catlog's own pages are rendered by catlogd and
+# fetch the read API from the same origin, so there is nothing here to allow.
+# Only a third-party browser reader on another origin needs an entry, and an
+# empty allow-list is safer than any non-empty one.
 [cors]
 allowed_origins = [{% for o in catlog_cors_allowed_origins %}"{{ o }}"{{ ", " if not loop.last }}{% endfor %}]

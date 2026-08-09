@@ -1,26 +1,32 @@
 # catlog UI design specification
 
-The shared contract for the redesign of catlog's **two** frontends:
+The design contract for catlog's frontend — the server-rendered datastar site:
 
-| | `server/internal/web/` + `site/` | `spa/` |
-|---|---|---|
-| Rendering | Go `html/template`, server-rendered | Vite + React 19 + React Compiler, static |
-| Interactivity | datastar (`/v1/feed/sse`) | nanostores + `EventSource` (`/v1/feed/stream`) |
-| Styling | hand-written CSS in `site/assets/css/catlog.css` | Tailwind 4 (`spa/src/index.css`) |
-| UI kit | none — semantic HTML | **react-aria-components (required)** |
-| Owns | session, dashboard, credential wizard, docs | nothing stateful; read-only |
-| Deployment | with `catlogd`, same origin | separate host, cross-origin, CDN |
+| | `server/internal/web/` + `site/` |
+|---|---|
+| Rendering | Go `html/template`, server-rendered |
+| Interactivity | datastar over `/v1/feed/sse` and `/v1/events/sse` — HTML fragments, no client-side model |
+| Styling | hand-written CSS in `site/assets/css/catlog.css` |
+| UI kit | none — semantic HTML |
+| Owns | the session, the dashboard, the credential wizard, `/docs/*` |
+| Deployment | with `catlogd`, same origin; nginx serves `/static/` in production |
 
-They are a deliberate bake-off (`spa/README.md`, D14). They must reach **feature and
-behaviour parity** on everything below. They must **not** reach markup parity — see §10.
+There is one frontend. A second — a React reader over the public read API — ran alongside this
+one for a while as a deliberate bake-off, and it is gone
+([UI-057](DECISIONS.md#ui-057)). What that experiment settled is kept where it earned its
+place: this document is the contract for the site that stayed.
+
+The public `GET /v1/…` read API is a separate published surface, and a third-party browser
+client of it is a real consumer ([UI-020](DECISIONS.md#ui-020)). Where a rule below binds
+*any client* rather than only this site, it says so.
 
 > **Status.** This began as a specification and is now a **living record of a shipped
-> redesign**: §2–§11 have been implemented in both frontends, and where the document and the
-> repository disagree the repository is the fact and this file is the bug. It is edited in
-> place rather than appended to — a stale sentence here is how two frontends came to put a
-> raw unit string in a column header (§4.4), so a correction goes in the paragraph that was
-> wrong. §1 is the pre-redesign report and is kept as history; §12 lists what is still open.
-> Uncertainties are marked **⚠ FLAG**; resolved ones say so and say how.
+> redesign**: §2–§11 are implemented, and where the document and the repository disagree the
+> repository is the fact and this file is the bug. It is edited in place rather than appended
+> to — a stale sentence here is how a raw unit string came to sit in a column header (§4.4),
+> so a correction goes in the paragraph that was wrong. §1 is the pre-redesign report and is
+> kept as history; §12 lists what is still open. Uncertainties are marked **⚠ FLAG**; resolved
+> ones say so and say how.
 
 ---
 
@@ -36,7 +42,7 @@ behaviour parity** on everything below. They must **not** reach markup parity �
 7. [New features](#7-new-features)
 8. [API status and remaining gaps](#8-api-status-and-remaining-gaps)
 9. [Copy and tone](#9-copy-and-tone)
-10. [Where the two frontends may legitimately differ](#10-where-the-two-frontends-may-legitimately-differ)
+10. *removed — it sanctioned differences between two frontends; there is one*
 11. [What must not be thrown away](#11-what-must-not-be-thrown-away)
 12. [Open questions](#12-open-questions)
 
@@ -44,14 +50,14 @@ behaviour parity** on everything below. They must **not** reach markup parity �
 
 ## 0. How to read this
 
-Two agents will implement this independently and must arrive at matching behaviour without
-talking to each other. So:
+This was written so that an implementer could build against it without asking questions, and
+it is still read that way. So:
 
 - **Numbers here are normative.** `#2cfa1f` means `#2cfa1f`.
 - **§4 is not negotiable and is not mine.** The unit rules are implemented in
   `server/internal/units` with a conformance table (`units.Conformance`) asserted by
-  `units_test.go`. The SPA ports that table verbatim. Neither implementation may change a
-  rule without changing the other and the table.
+  `units_test.go`. A rule may not change without the row that pins it changing in the same
+  commit.
 - **§11 is a do-not-break list.** The e2e suite asserts a DOM contract. A redesign that
   ignores §11 goes red and will not know why.
 - Where this document and the repository disagree, the repository is the fact.
@@ -62,8 +68,8 @@ talking to each other. So:
 
 ### 1.1 Established before this survey
 
-- **The "huge CSS" is not ours.** `site/assets/css/catlog.css` is 193 lines;
-  `spa/src/index.css` is 48. The weight is the vendored `@picocss/pico` (2.1.1, ~83 kB) and
+- **The "huge CSS" is not ours.** `site/assets/css/catlog.css` is 193 lines. The weight is
+  the vendored `@picocss/pico` (2.1.1, ~83 kB) and
   its large default type scale. **Pico goes.** That means: drop the `@picocss/pico` entry
   from `vendorFiles` in `site/scripts/build.mjs`, drop the `<link>` from `layout.gohtml`,
   and grow `catlog.css` to carry the reset, the type scale, the theme and the form controls
@@ -75,13 +81,12 @@ talking to each other. So:
 - **`user_key` appears nowhere in the public read API and in no template** except
   `docs_privacy.gohtml`'s prose, which explains the construction rather than printing a
   value. That is correct and this specification keeps it.
-- **Both public frontends sit behind a cache.** Every read response carries
+- **Every public surface sits behind a cache.** Every read response carries
   `Cache-Control: public, s-maxage=30, stale-while-revalidate=300`, and so does every public
   HTML page (`web/pages.go`, `publicCache`). Consequence, which drives §7.1: **nothing
   personalised can ever be server-rendered on a public page.**
-- **The two frontends disagree about number formatting today.** Go groups with U+202F
-  (`templates.go`, `group()`); the SPA uses `Intl.NumberFormat('en')` — ASCII commas — and
-  compacts above 100 000 to `4.2M`. §4 settles this.
+- **Number formatting is ad hoc today.** `templates.go`'s `group()` inserts U+202F between
+  thousands and nothing states the rounding rule. §4 settles it, in one place.
 
 ### 1.2 Landed concurrently — read this before writing any code
 
@@ -102,7 +107,7 @@ its shape is the one to build against:
 
 `cd server && go build ./...` is green with these in the tree.
 
-**Two consequences for the frontends, both since done:**
+**Two consequences, both since done:**
 
 1. ✅ `web/templates.go` registered the old `formatValue` as the `value` template function,
    and `contextPairs`/`scalar` formatted context values with it. Both moved to
@@ -118,9 +123,9 @@ its shape is the one to build against:
 
 ## 2. Design tokens
 
-Both frontends define the same token names with the same values. The datastar site declares
-them as CSS custom properties on `:root`; the SPA declares them in Tailwind's `@theme` so
-they also generate utilities (`bg-panel`, `text-fg-muted`, …), as flexo does.
+The site declares these as CSS custom properties on `:root` in
+`site/assets/css/catlog.css`. **The names and values here are the source**; the stylesheet
+points back at this section rather than restating the reasoning.
 
 ### 2.1 Colour
 
@@ -227,7 +232,7 @@ Nothing a reader needs may be `--color-fg-subtle`.
 
 **Theme resolution.** `localStorage['catlog:theme']` ∈ `{light, dark, system}` →
 `prefers-color-scheme` → dark. Stamp `data-theme="light|dark"` on `<html>` (absent for
-`system`, so the media query wins). Both frontends ship a **synchronous inline `<head>`
+`system`, so the media query wins). The site ships a **synchronous inline `<head>`
 script** that does this before first paint; anything async produces a white flash on a
 dark-theme reload. `layout.gohtml` currently hardcodes `data-theme="dark"` for pico's
 benefit — that attribute becomes ours and must become dynamic.
@@ -254,8 +259,7 @@ tables beneath it.
 --weight-normal: 400;   --weight-medium: 500; --weight-semibold: 600;
 ```
 
-- **Nothing above 24 px anywhere.** The SPA's current `text-3xl` (30 px) home heading comes
-  down.
+- **Nothing above 24 px anywhere**, including the home heading.
 - `h1` = `--text-2xl`/600/tight; `h2` = `--text-xl`/600; `h3` = `--text-lg`/600. Panel
   headers are `--text-sm`/600 uppercase `+0.04em` — a label, not a heading.
 - Body copy, cells and inputs are `--text-base`. Never shrink a table to fit; scroll it (§11).
@@ -281,11 +285,10 @@ tables beneath it.
 ```
 
 - **One container shape**: a panel — 1 px border, `--radius-lg`, `--color-panel`,
-  `--shadow-panel`. The SPA already has it (`Panel` in `ui/kit.tsx`); the datastar site
-  adopts it as `.panel`. No second card style.
+  `--shadow-panel`, spelled `.panel`. No second card style.
 - **Focus**: `outline: var(--focus-width) solid var(--color-accent-text);
-  outline-offset: var(--focus-offset); border-radius: inherit;` on `:focus-visible` **and**
-  `[data-focus-visible]` (React Aria drives the attribute). One ring for everything.
+  outline-offset: var(--focus-offset); border-radius: inherit;` on `:focus-visible`. One ring
+  for everything.
 - **Motion**: exactly two — the feed-arrival flash (`catlog-arrive`, 1.2 s, accent at 22 % →
   transparent) and a 150 ms `transition-colors` on hover. Both wrapped in
   `@media (prefers-reduced-motion: reduce)`. Nothing else animates.
@@ -293,8 +296,8 @@ tables beneath it.
 
 ### 2.4 Inter, self-hosted from fontsource
 
-Both frontends load **Inter Variable**, self-hosted, latin subset, **no CDN**. The datastar
-site's build must stay hermetic (D2 — the same argument that made
+The site loads **Inter Variable**, self-hosted, latin subset, **no CDN**. The build must
+stay hermetic (D2 — the same argument that made
 `site/assets/vendor/datastar.js` a committed file).
 
 ```css
@@ -326,12 +329,12 @@ U+2193, which are listed individually and are *not* inside `U+2000-206F`.
 > **`→` U+2192 is in no subset of this package** — not latin, not latin-ext, not any of the
 > other five. An earlier draft of this section claimed it fell inside `U+2000-206F`; it does
 > not (`0x2192 > 0x206F`), and the claim was wrong rather than imprecise. **Use `›` U+203A**,
-> which both frontends now do: the datastar site through `.more::after { content: ' \203A' }`
-> and in the two docs pages that had a literal arrow. Likewise `✓` U+2713 and `▾` U+25BE are
-> in no subset — where a symbol is wanted, the SPA uses a `lucide-react` icon, which is SVG
-> and depends on no font at all. Verify against `unicode.json`, not against this paragraph.
+> which the site does through `.more::after { content: ' \203A' }` and in the two docs pages
+> that had a literal arrow. Likewise `✓` U+2713 and `▾` U+25BE are in no subset — where a
+> symbol is wanted, use an inline SVG, which depends on no font at all. Verify against
+> `unicode.json`, not against this paragraph.
 
-**datastar site.** Add the fontsource package as a `devDependency` of `site/package.json`
+Add the fontsource package as a `devDependency` of `site/package.json`
 and extend `vendorFiles` in `site/scripts/build.mjs`, resolving through `require.resolve` —
 the file already does this for pico and says why ("so a version bump in package.json cannot
 silently leave a stale path behind"). Copy the `.woff2` to `dist/fonts/` and declare
@@ -339,18 +342,13 @@ silently leave a stale path behind"). Copy the `.woff2` to `dist/fonts/` and dec
 own CSS, so the `src:` URLs match where the build actually put the files.
 `font-display: swap`.
 
-**SPA.** `pnpm add` the same package, `import` its latin CSS in `src/main.tsx` **before**
-`./index.css`, set `--font-sans` in `@theme`. Vite fingerprints and rewrites the URLs.
-
-> **Resolved — package name.** It is `@fontsource-variable/inter`, pinned at **5.3.0** in
-> both frontends, and recorded in `docs/DECISIONS.md`. One correction to the instructions
+> **Resolved — package name.** It is `@fontsource-variable/inter`, pinned at **5.3.0**, and
+> recorded in `docs/DECISIONS.md`. One correction to the instructions
 > above: 5.3.0 ships **no `latin.css` entry** — `index.css`, `wght.css`, `standard.css` and
 > `opsz.css` each declare *all* seven subsets, so importing any of them emits six `.woff2`
-> files where five are never fetched. Both frontends therefore declare one `@font-face`
-> themselves against `files/inter-latin-wght-normal.woff2` (48 kB, weight axis only), with
-> the package's own latin `unicode-range` copied verbatim. Both must stay on the same
-> package at the same major version; a metric or axis mismatch is invisible until the two
-> screenshots are put side by side.
+> files where five are never fetched. `catlog.css` therefore declares one `@font-face`
+> itself against `files/inter-latin-wght-normal.woff2` (48 kB, weight axis only), with the
+> package's own latin `unicode-range` copied verbatim.
 
 ---
 
@@ -362,11 +360,10 @@ Inter's tabular figures are why a leaderboard column reads as a column.
 `font-feature-settings` replaces rather than composes: a descendant that sets it for any
 other feature silently drops `tnum`, and the failure is invisible until a column
 un-aligns. `font-variant-numeric` is the high-level property browsers map to `tnum` and it
-composes. Tailwind's `tabular-nums` utility emits exactly this.
+composes.
 
-`spa/src/index.css` used to set `font-feature-settings: 'tnum' 1` **on `body`**. Both halves
-were wrong — the low-level property, and applying it globally including to prose — and both
-were removed.
+Setting `font-feature-settings: 'tnum' 1` **on `body`** is wrong twice over — the low-level
+property, and applying it globally including to prose. Neither is done here.
 
 **Where it applies — the complete list:**
 
@@ -384,13 +381,10 @@ were removed.
 | `<code>` (ULIDs, thumbprints) | ❌ already monospace |
 
 ```css
-/* datastar site */
 .tnum, td.value, td.rank, th.value, th.rank, .stat-value, time {
   font-variant-numeric: tabular-nums;
 }
 ```
-
-The SPA uses the `tabular-nums` utility on the same set of elements.
 
 Additionally `font-variant-numeric: tabular-nums slashed-zero` on any ULID, career label or
 key thumbprint rendered in the sans face. Inside `<code>` the mono font already
@@ -401,15 +395,15 @@ distinguishes `0`/`O`.
 ## 4. The unit renderer
 
 **This is implemented and it is not mine.** `server/internal/units` is the authority; its
-package comment is the specification and `units.Conformance` is the cross-language table.
-Everything below restates it so a frontend implementer does not have to read Go — but
+package comment is the specification and `units.Conformance` is the table that pins it.
+Everything below restates it so an implementer does not have to read Go — but
 **read `units.go` anyway**, and when the two disagree, `units.go` wins.
 
 ### 4.1 The rules
 
 `units.Format(v float64, unit string) string` returns **one string**, number and unit
 together. There is no `{num, unit}` split — the string is the contract, and that is what
-makes two implementations agree.
+makes a rendering checkable.
 
 1. **Not finite** (`NaN`, `±Inf`) → `—` (em dash). Nothing in catlog may put a bare `NaN`
    on a public page.
@@ -420,7 +414,8 @@ makes two implementations agree.
    **Rounding is defined on the magnitude** — `round(|x| · 10^d) / 10^d`, halves up, sign
    re-applied. This is spelled out precisely because `strconv.FormatFloat` and
    `Number.toFixed` disagree at ties, and `math.Round` / `Math.round` agree on a
-   non-negative input. The TypeScript port must do the same dance, not call `toFixed`.
+   non-negative input. Any client reimplementing this must do the same dance, not reach for
+   its language's fixed-decimal formatter.
 3. **Length (`m`), energy (`J`) and pressure (`Pa`) scale by SI prefix** — the largest of
    `1, k, M, G, T` whose scaled magnitude is ≥ 1. **No sub-unit prefixes**: `0.5 J` is
    `0.5 J`, never `500 mJ`.
@@ -459,8 +454,7 @@ key gets no unit rather than a wrong one.
 
 ### 4.2 The conformance table
 
-`units.Conformance` in full, as of the landed code. The SPA reproduces every row. `·` marks
-U+202F.
+`units.Conformance` in full, as of the landed code. `·` marks U+202F.
 
 | value | unit | renders |
 |---:|---|---|
@@ -513,8 +507,8 @@ demonstrate: **an orbital speed stays in m/s and gets grouped** (`7·799 m/s`), 
 time becomes a duration** (`37.5 s`), **an impact energy takes an SI prefix** (`48 MJ`), and
 **a transfer becomes a two-component duration** (`243d 01h`).
 
-`units.LabelConformance` is the rule-7 table, and the SPA reproduces it the same way. It is
-a second table rather than three more columns on the first because the two answer different
+`units.LabelConformance` is the rule-7 table. It is a second table rather than three more
+columns on the first because the two answer different
 questions — one is per *value*, one is per *unit*, and a header label has no value to be
 right about.
 
@@ -544,9 +538,8 @@ its own.
 
 ### 4.3 Where the renderer lives — the decision, and why it is right
 
-**It is implemented twice — once in Go for the server-rendered site, once in TypeScript for
-the SPA — and pinned by a shared conformance table. The JSON API publishes raw numbers and
-never a formatted string.**
+**It is implemented once, in Go, in `server/internal/units`, and pinned by
+`units.Conformance`. The JSON API publishes raw numbers and never a formatted string.**
 
 I reached this independently before finding `units.go`, and the package comment gives the
 same argument, so it is settled from both ends. Restating it because it is the kind of
@@ -557,26 +550,19 @@ decision that gets re-litigated:
 2. **It would freeze presentation into a CDN-cached public contract.** Every read response
    is `s-maxage=30`. A `value_display` field makes a decimal place an API change with a
    30-second-plus propagation delay.
-3. **It would break the seam the SPA exists to test.** `spa/README.md`: "The only thing it
-   shares with the rest of the repo is an HTTP contract." A frontend that renders the
-   server's display strings is not a second implementation of anything, and the bake-off
-   stops being a bake-off.
-4. **The API is a public product.** `docs_api.gohtml`: "Everything on this site is also
+3. **The API is a public product.** `docs_api.gohtml`: "Everything on this site is also
    JSON. No key, no sign-up." A third party wants `7799`, in m/s.
-5. **The risk is divergence, not duplication.** The function is ~120 lines. A shared vector
-   table removes the divergence far more reliably than a shared implementation would remove
-   the coupling.
+4. **The formatting still has to happen somewhere, so it should happen where it can be
+   pinned.** The function is ~120 lines and the conformance table is what makes its output
+   checkable — by `units_test.go` here, and by anybody rendering catlog numbers elsewhere.
 
-**What the SPA implementer does:** port `units.Format`, `units.ForKey`, `units.Label` and
-`units.Measured` to `spa/src/ui/units.ts`, and port `units.Conformance` and
-`units.LabelConformance` to `spa/src/ui/units.conformance.ts`, asserted row by row by
-`units.test.ts`. `spa/src/ui/format.ts`'s `formatValue`/`exactValue` are replaced;
-`formatInstant`, `formatAgo` and `$now` stay exactly as they are (§11).
-**⚠ FLAG** — both tables are Go `var`s, not JSON files. The package comment notes that a
-future `catlogctl` sub-command could emit them for the SPA to consume rather than have them
-transcribed. Until that exists they are copied by hand, and **a rule change means editing
-three places in one commit**: `units.go`, `units_test.go`'s assertions, and the SPA's port.
-Rule 7 was added this way and is the worked example.
+**A rule change is two edits in one commit**: the rule in `units.go`, and the row in
+`units.Conformance` that fixes its output. Rule 7 was added this way and is the worked
+example.
+
+**⚠ FLAG** — both tables are Go `var`s, not JSON files, so a third-party client rendering
+catlog numbers has to transcribe them. The package comment notes that a future `catlogctl`
+sub-command could emit them as JSON. Nothing in this repository needs that today (§12.2).
 
 ### 4.4 Rendering rules around the renderer
 
@@ -587,7 +573,7 @@ Rule 7 was added this way and is the worked example.
   comparison and tile surfaces where there is no header. Prefer consistency over saving
   three characters.
 - **The header label is `units.Label($board.Unit)`, never `$board.Unit`.** This paragraph
-  used to say `<th class="value">{{$board.Unit}}</th>`, both frontends did exactly that, and
+  used to say `<th class="value">{{$board.Unit}}</th>`, the template did exactly that, and
   the result was a column of `37.5 s`, `10h 23m` and `243d 01h` sitting under a header
   reading `ms` — a statement about catlog's storage that no cell in the column supports and
   no reader can check. Rule 7 in §4.1 is the fix and `units.LabelConformance` pins it. The
@@ -596,14 +582,12 @@ Rule 7 was added this way and is the worked example.
   the one place it is true and the one place a reader needs it, because it is what makes
   `data-value` and the cell `title` legible.
 - **The unit header is the one header cell that is not uppercased.** `M/S` is not a unit,
-  `PA` is not a unit, and `RUDS` is not how catlog writes that word. datastar:
-  `thead th.value { text-transform: none; letter-spacing: 0 }`. SPA: `normal-case
-  tracking-normal` on that `HeadCell` and nowhere else.
+  `PA` is not a unit, and `RUDS` is not how catlog writes that word:
+  `thead th.value { text-transform: none; letter-spacing: 0 }`, and nowhere else.
 - **Right-align every value cell**, `font-variant-numeric: tabular-nums`, `white-space:
   nowrap`. The existing CSS already does this; keep it.
-- **`title` keeps the exact figure.** `title="7799 m/s"` on every formatted value. The SPA
-  already does this via `exactValue`; the datastar site adopts it. It is also how a reader
-  recovers the digits `48 MJ` hides.
+- **`title` keeps the exact figure.** `title="7799 m/s"` on every formatted value. It is how
+  a reader recovers the digits `48 MJ` hides.
 - **`data-value`.** Every value cell carries `data-value="<the exact float, as sent>"`, and
   the e2e suite reads it. This was not decoration: `site/e2e/boards.spec.ts` used to
   reconstruct numbers by stripping non-digits from the rendered text, which produced `513`
@@ -611,12 +595,11 @@ Rule 7 was added this way and is the worked example.
   on passing while asserting nothing. Those assertions moved onto `data-value` with the unit
   renderer and must stay there.
 - **Titlecase** for body names and RUD causes on `_ - .` boundaries, matching
-  `stats.titleize` exactly: `luna` → `Luna`, `ground_impact` → `Ground Impact`. Both
-  frontends implement it. Do **not** re-titlecase board titles — the server already did.
-- **Instants are not `units.Format`.** They keep today's behaviour: fixed UTC, no locale.
-  `2026-08-07 14:32 UTC` (Go) / `7 Aug 2026, 14:32 UTC` (SPA). Relative "4m ago" stays in
-  the feed and the "updated" columns, computed from a store, never from `Date.now()` in
-  render (§11).
+  `stats.titleize` exactly: `luna` → `Luna`, `ground_impact` → `Ground Impact`. Do **not**
+  re-titlecase board titles — the server already did.
+- **Instants are not `units.Format`.** They keep today's behaviour: fixed UTC, no locale —
+  `2026-08-07 14:32 UTC`. Relative "4m ago" stays in the feed and the "updated" columns,
+  computed from a shared clock rather than re-read per element (§11).
 
 ---
 
@@ -624,9 +607,10 @@ Rule 7 was added this way and is the worked example.
 
 ### 5.1 Page inventory
 
-● = both frontends. ○ = datastar only (needs a session, which the SPA has no concept of).
+● = the public data surface — anonymous, cached under §4.8, and its 404. ○ = the account
+surface and the pages that document it; `/login` and `/dashboard` need a session.
 
-| Route | Both | What a human wants here |
+| Route | Data | What a human wants here |
 |---|:--:|---|
 | `/` | ● | **Where am I and what is happening?** Global tiles, three featured boards, the live feed, a search box, and — if a "me" handle is set — a personal card above the fold |
 | `/boards` | ● | The index. Which boards exist, how populated, which way each reads |
@@ -642,13 +626,10 @@ Rule 7 was added this way and is the worked example.
 | `/docs/{install,privacy,api}` | ○ | How to install; what is stored; how to call the API |
 | 404 | ● | What was asked for, and two ways back |
 
-The SPA's footer already says "Sign-in, handles and credentials live on the main catlog
-site." Keep it; make it a link once a base URL is configurable.
-
 ### 5.2 The three journeys
 
 **A — "see my own stats."** No account, no session. The user types their handle into search
-(§7.2), lands on `/p/{handle}`, presses **This is me**. Thereafter, in both frontends:
+(§7.2), lands on `/p/{handle}`, presses **This is me**. Thereafter:
 
 - the header shows `You: whiskers_prime` linking to the profile;
 - `/` leads with a **Your standing** panel — three best ranks, most recent activity, a link
@@ -661,7 +642,7 @@ site." Keep it; make it a link once a base URL is configurable.
 **B — "see global stats for all."** `/` opens with global tiles, then the featured boards,
 then the feed. The **period selector** on `/boards/{stat}` —
 `alltime | daily | weekly | monthly | yearly`, fully supported by the API since the rolling
-periods landed and **used by neither frontend today** — turns a static ranking into "what
+periods landed and **unused when this was written** — turns a static ranking into "what
 happened this week", which is the cheapest available way to make a leaderboard worth
 revisiting. Shipping it is most of Journey B.
 
@@ -678,27 +659,27 @@ is a link you can paste into a Discord channel — the actual social act being d
 Three different things; conflating them is how privacy bugs happen.
 
 - **Hidden** — present in the API, not rendered by default. A display decision, made in the
-  frontends.
+  renderer.
 - **Redacted** — removed or replaced *server-side* before any client sees it. A privacy
   decision. It can never be implemented in CSS or in a frontend.
 - **Never collected** — the `user_key` posture. Unchanged.
 
 ### 6.1 Default tables — what is hidden
 
-**Out of every default table, both frontends:**
+**Out of every default table:**
 
 | Field | Where it is | Why it goes |
 |---|---|---|
 | `context.flight` | five boards' context blob; rendered today by `contextPairs` | a client-minted ULID; means nothing to a reader and eats the widest column |
 | `context.career` | the career-time boards | already **redacted** to a per-player label by the server (§6.3); still hidden here because a 16-character token is not a fact a reader wants in a table |
-| `stat` key (`rud_ground_impact`) | SPA boards index and board subtitle | the title says it better; keep the key in `data-stat` and in the URL |
+| `stat` key (`rud_ground_impact`) | the boards index and the board subtitle | the title says it better; keep the key in `data-stat` and in the URL |
 | event / session / batch ids | not rendered today | keep it that way |
 | `updated_seq`, checkpoints | not rendered | internal |
 
 **In, by default:** rank, handle, value+unit, the human-meaningful context (`body`, `from`,
 `energy_j`, `t1_sim`), and when. That is the whole default row.
 
-`contextPairs` (Go) and `describeContext` (TS) both become a **display allow-list**:
+`contextPairs` becomes a **display allow-list**:
 
 ```
 show:  body, from, energy_j, t1_sim
@@ -706,7 +687,7 @@ hide:  everything else, including any key not on the list
 ```
 
 An unknown key is hidden rather than shown, so the fold layer can add context keys without
-a frontend release and a new internal id cannot leak into a table by default. Values are
+a template change and a new internal id cannot leak into a table by default. Values are
 formatted with `units.ForKey` + `units.Format`, which is what turns
 `energy_j: 48000000` into `48 MJ` and `t1_sim: 313` into `5m 13s`.
 
@@ -715,8 +696,8 @@ sent it — which is already post-redaction, so there is nothing further to stri
 
 ### 6.2 The raw event view
 
-`GET /v1/players/{handle}/events` — **implemented**, `readapi/events.go`. Route
-`/p/{handle}/events` in both frontends.
+`GET /v1/players/{handle}/events` — **implemented**, `readapi/events.go`. Rendered at
+`/p/{handle}/events`.
 
 What it is for, in the endpoint's own words: every other endpoint publishes "a fold's
 opinion about a history nobody outside the server can see. This is the history… what makes
@@ -769,15 +750,14 @@ keeping: the promise is also the only reading of the flags that Constitution §8
 consequence test permits, because a browsable list of whose flights were flagged is a
 durable public mark on a person.
 
-Both frontends therefore **link the raw-event view from the profile** — `#profile-events` on
-the datastar site, the *Raw events* link on the SPA's `PlayerPage` — and neither gates it.
+The profile therefore **links the raw-event view** (`#profile-events`) and does not gate it.
 
 `EventRow` does **not** get a `flagged` field, and must not: there is nothing flagged left in
 the response to mark.
 
-**The global log and the live tail — datastar contract.** `GET /v1/events` gave the same
-page of the same log a global view (every row naming its handle, handle-less players and
-flagged flights excluded at the seam), and the datastar site renders it at `/events` with
+**The global log and the live tail.** `GET /v1/events` gives the same page of the same log a
+global view (every row naming its handle, handle-less players and flagged flights excluded at
+the seam), and the site renders it at `/events` with
 `?type=` chips, an optional `?handle=` narrowing (rendered as `#events-handle-filter` with a
 clear link, 404ing an unknown handle exactly as the per-handle page does), and `?before=`
 cursor paging under the same page-until-the-cursor-is-gone rule. Both events pages render
@@ -878,22 +858,19 @@ says so.
 
 ### 7.1 The "me" handle in localStorage
 
-**Client-side in both frontends, and that is forced rather than chosen.** Every public page
-is served `s-maxage=30` to a shared cache, so there is no server-rendered personalisation
-available to either frontend. Both do the same thing in the same place.
+**Client-side, and that is forced rather than chosen.** Every public page is served
+`s-maxage=30` to a shared cache, so there is no server-rendered personalisation available at
+all (§1.1).
 
 **Storage.** Key `catlog:me`, value the handle as a plain string in display casing. One key,
-no JSON envelope, so a user can read and clear it. (Storage does not cross origins, so the
-two frontends do not actually share a value; the same key name means a future same-origin
-deployment would.)
+no JSON envelope, so a user can read and clear it.
 
 **Setting it:** a **This is me** toggle on `/p/{handle}`; a `You: <handle>` header chip with
-a clear control; and — datastar only — an offer after the wizard's step 4, the one moment
-the site knows the handle for certain.
+a clear control; and an offer after the wizard's step 4, the one moment the site knows the
+handle for certain.
 
-**Effects, identical in both:** header identity, the `/` **Your standing** panel, row
-highlighting on every board table, and the sticky **You: #147** strip when the row is
-off-page (§5.2).
+**Effects:** header identity, the `/` **Your standing** panel, row highlighting on every
+board table, and the sticky **You: #147** strip when the row is off-page (§5.2).
 
 **When it is set but the handle no longer resolves.** `/v1/players/{handle}` answers 404
 identically for unknown, retired and banned — deliberately, so it is not a ban oracle. So
@@ -905,9 +882,9 @@ the UI:
 2. **Never auto-clears.** The stored value is the user's data; a 404 during an incident, a
    rebuild, or a moderation action that gets reversed must not silently erase it. The notice
    offers **Keep it** (dismiss for this session) and **Forget it** (clear the key).
-3. **Distinguishes a 404 from a failure.** `status === 0` — offline, DNS, a refused CORS
-   preflight — shows nothing at all. Only a real 404 raises the notice. The SPA's
-   `ApiError.notFound` getter already encodes this and is the only place it should live.
+3. **Distinguishes a 404 from a failure.** A transport failure — offline, DNS, a refused
+   request — shows nothing at all. Only a real 404 raises the notice, and that distinction
+   belongs in one place rather than at each call site.
 4. **Degrades to nothing.** Personalised panels are absent, not empty-with-a-spinner.
 
 **Privacy properties, to be stated in `docs/privacy` when this ships:** the "me" handle is a
@@ -952,11 +929,11 @@ search is linkable. Typing shows suggestions (250 ms debounce, `AbortController`
 keystroke); Enter goes to the results page; a single exact match on Enter goes straight to
 that profile.
 
-- SPA: React Aria `ComboBox`, `allowsCustomValue`, `menuTrigger="input"`. Arrow keys and
-  Escape come free, which is the whole argument for React Aria here.
-- datastar: an ordinary `<form action="/search" method="get">` that works with JavaScript
-  off, enhanced by `data-on-input__debounce.250ms="@get('/search/suggest?q=…')"` patching a
-  `<ul id="search-suggest">`. The server renders `/search?q=` itself, cacheable by URL.
+An ordinary `<form action="/search" method="get">` that works with JavaScript off, enhanced
+by `data-on-input__debounce.250ms="@get('/search/suggest?q=…')"` patching a
+`<ul id="search-suggest">`. The server renders `/search?q=` itself, cacheable by URL. Arrow
+keys, Escape and the live region are hand-wired, which is the cost of having no component
+library and is paid once.
 
 ### 7.3 Per-handle board ranks
 
@@ -1026,9 +1003,8 @@ Behaviour the UI must respect:
 - `min_players` does **not** apply here, as on a profile: a board somebody is actually on is
   shown whether or not the public index lists it.
 
-**UI.** SPA: React Aria `TagGroup` of removable handle chips plus a `ComboBox` to add.
-datastar: a `<form>` with the same chips as removable `<a>`s and a search field, rendered
-server-side from the query string. Both write `?handles=` on every change so the URL is
+**UI.** A `<form>` with the selected handles as removable `<a>` chips and a search field,
+rendered server-side from the query string. Every change writes `?handles=`, so the URL is
 always the shareable truth.
 
 ---
@@ -1056,8 +1032,8 @@ is not, the honest interim is `?period=` returning **values without ranks**, and
 hiding the rank column for a windowed view rather than showing an all-time rank next to a
 weekly value — which would be a wrong number, not a missing one.
 
-**2. `count` on `BoardResponse` — nice to have.** Both frontends currently infer "there is
-probably more" from `rows.length >= limit` (`BoardPage.tsx` says so in a comment). The board
+**2. `count` on `BoardResponse` — nice to have.** The pager currently infers "there is
+probably more" from a full page rather than from a count. The board
 census is already computed for the index and `PlayerRow.Players` now carries the same figure
 per board, so the number exists; it is just not on the board response. With it, the pager
 becomes real and `/boards/{stat}` can say "41 players". Without it, keep the current
@@ -1076,13 +1052,14 @@ endpoint excludes flagged flights outright, so there is nothing in the response 
 
 **Not needed, recorded so nobody builds them:**
 
-- A `quantity` field on board metadata. I had proposed one so no frontend string-matches
+- A `quantity` field on board metadata. I had proposed one so no client string-matches
   `"m/s"` — `units.Format` takes the unit string directly and switches on it, so the
   classification already lives in one place. Dropped.
 - `?around=<handle>` on a board — the client computes the offset from the rank it has (§7.3).
 - Any endpoint answering "is this handle me". There is no session on the read API and there
-  must not be. `credentials: 'omit'` in the SPA client and the absence of
-  `Access-Control-Allow-Credentials` in `readapi/cors.go` are load-bearing and stay.
+  must not be. `readapi/cors.go` emitting no `Access-Control-Allow-Credentials` is
+  load-bearing and stays, and a browser client of the read API should send
+  `credentials: 'omit'` for the same reason.
 
 ---
 
@@ -1099,7 +1076,6 @@ Voice:
 - *"catlog watches your Kitten Space Agency flights and keeps score. Lithobrakes you walked
   away from, speeds nobody should reach, and every rapid unscheduled disassembly along the
   way."*
-- *"Leaderboards for things that went wrong"* — the SPA's `h1`.
 - *"Rapid Unscheduled Disassemblies"* as a board title; *"an unexplained disassembly"* for
   an unknown cause.
 
@@ -1155,7 +1131,7 @@ Explanations that earn their length:
 
 **Errors the user must act on.** The auth-error page is a code, a detail and a way back —
 deliberately plain, and the e2e suite asserts its structure. The wizard's failures name the
-error code. The SPA's `Failure` shows the server's own `detail` plus the status, because
+error code. A failure panel shows the server's own `detail` plus the status, because
 *"when this is a CORS refusal or a stopped server, the difference between 'failed to fetch'
 and a 500 is the entire diagnosis"*. Never replace a diagnosable message with a generic
 apology, funny or otherwise. Search's 400s (§7.2) belong here too — but the right fix is not
@@ -1188,32 +1164,27 @@ be undone."* Consequences, in order, no jokes.
 
 ---
 
-## 10. Where the two frontends may legitimately differ
+## 10. *(removed)*
 
-Parity is about **features and behaviour**, not markup. Every row below is sanctioned;
-nothing else is.
+This section sanctioned the ways catlog's two frontends were allowed to differ. There is one
+frontend ([UI-057](DECISIONS.md#ui-057)), so there is nothing left to sanction. The number is
+kept rather than renumbering §11 and §12, which are cited by number from the code and from
+`docs/DECISIONS.md`.
 
-| | datastar site | SPA |
-|---|---|---|
-| **UI kit** | none. Semantic HTML, hand-written CSS, no component library. Staying lean *is* its half of the bake-off | **react-aria-components, required.** `Table` for boards, `ComboBox` for search, `TagGroup` for comparison chips, `Tabs` for periods, `Dialog`/`Popover` for details and raw payloads, `ToggleButton` for the theme |
-| **Client JS** | `datastar.js` (vendored, 34 kB), `keygen.js`, the inline theme script, one small `me.js`. That is the whole budget | the bundle |
-| **Personalisation** | client-side: `me.js` stamps `data-me="<handle>"` on `<html>` and CSS does the rest (`tr[data-handle="…"]`). Forced by `s-maxage=30` | client-side: a nanostores atom over `localStorage` |
-| **Comparison** | server-rendered at `/compare?handles=…` via a new `Compare` method on `web.Read`, cacheable by URL, no client JS | fetch `/v1/compare`, render with React Aria |
-| **Search** | server-rendered `/search?q=`, progressively enhanced with a debounced datastar suggestion patch | React Aria `ComboBox` against `/v1/players?q=` |
-| **Raw events** | server-rendered `/p/{handle}/events` + `/events` via `web.Read`, live-tailed by `/v1/events/sse` (datastar HTML frames) | fetch `/v1/players/{handle}/events` / `/v1/events`, live via `/v1/events/stream` (JSON) |
-| **Live feed** | `/v1/feed/sse`, HTML `PatchElements` frames, zero client code | `/v1/feed/stream`, JSON, nanostores + `EventSource` |
-| **Account surface** | owns `/login`, `/dashboard`, the wizard, `/docs/*` | has none, and links out |
-| **Routing** | server routes, full page loads | History API, base-path aware, `404.html` fallback |
-| **Styling** | CSS custom properties + hand-written rules | the same tokens in Tailwind `@theme`, consumed as utilities |
-| **Timestamps** | `2026-08-07 14:32 UTC` | `7 Aug 2026, 14:32 UTC` — two renderings of the same fixed UTC instant, both locale-independent |
-
-**What may *not* differ:** which pages exist, what each shows, what is hidden, every
-number's formatting **and every value column's header label** (§4 — character for
-character, `units.Format` and `units.Label`), the colour and type tokens (§2), the
-copy for shared surfaces, the "me" semantics including its failure behaviour (§7.1), the
+What it was protecting is not gone, it just stopped being a comparison: markup is
+negotiable, **behaviour is not**. That list is §11 — plus the invariants the old table named
+explicitly, none of which a redesign may drop: every number's formatting **and every value
+column's header label** (§4 — character for character, `units.Format` and `units.Label`), the
+colour and type tokens (§2), the "me" semantics including its failure behaviour (§7.1), the
 comparison rules (≤8 handles, `found: false` as a column, best-cell by `ascending`, absent ≠
 zero), the search rules (no request under 2 characters, `truncated` means narrow not page),
 and the tone rules (§9).
+
+**The client-JS budget, stated as a limit rather than a comparison:** `datastar.js`
+(vendored, 34 kB), `keygen.js` on the dashboard, the inline `<head>` theme script, `me.js`,
+and `intl.js`. Nothing else. No component library, and no client-side model of data the
+server already rendered — a page that fetches JSON to render what a template could have
+rendered has crossed the line this budget exists to hold.
 
 ---
 
@@ -1247,9 +1218,9 @@ wires it), `#events-tail` (the `data-init` element holding the SSE open),
 `#events-heartbeat`, `#events-handle-filter[data-handle]` with `#events-handle-clear` on the
 global page, `#nav-events`; `#theme-toggle`;
 `#feed-panel` (and `#feed-panel[data-stream]` + `#feed-status`, the connection hint me.js
-maintains); `#feed[data-source]` — the datastar site no longer stamps `data-count`, which
-the SSE prepend path could not keep true and a sometimes-wrong attribute is worse than none
-(the SPA, which re-renders the list, still carries it); `li.feed-item[data-feed-id][data-type]`
+maintains); `#feed[data-source]` — there is deliberately no `data-count`, which the SSE
+prepend path could not keep true, and a sometimes-wrong attribute is worse than none;
+`li.feed-item[data-feed-id][data-type]`
 (a line patched in live additionally carries `data-arrived`, the only thing the arrival
 flash is scoped to);
 `#not-found`, `#not-found-detail`, `#not-found-home`; `#auth-error[data-error]` with
@@ -1271,20 +1242,20 @@ datastar module never ran — both show the same rows. `feed.spec.ts` waits on i
 **`feedItemID` shared between `feed.go` and the template.** The SSE handler removes
 scrolled-off lines by this id.
 
-**`ascending`, published per board and never inferred.** Both frontends state it in words
-("Lowest wins.") and both mark it. Drop it and `fastest_to_orbit` is presented backwards.
-It is now on `PlayerRow` too, so the profile has no excuse either.
+**`ascending`, published per board and never inferred.** The page states it in words
+("Lowest wins.") and marks it. Drop it and `fastest_to_orbit` is presented backwards. It is
+on `PlayerRow` too, so the profile has no excuse either.
 
 **The `rewound` dagger and its exact tooltip** — *"An earlier save of this career was loaded,
 so its clock did not only run forwards."* It qualifies a number and does nothing else; the
-row ranks normally. Keep it in both, with the `sr-only` "(career rewound)".
+row ranks normally. Keep it, with the `sr-only` "(career rewound)".
 
 **The `min_players` paragraph** and **"Ranks skip nobody"**. Each answers a support question
 end to end. They look like padding and are not.
 
-**`pickFeatured` (SPA) and `handleHome`'s skip-if-missing (Go).** The board index is
-assembled from data; a front page pinned to three literal names can be pinned to a board
-that is not there. Both handle it, differently, deliberately.
+**`handleHome`'s skip-if-missing.** The board index is assembled from data; a front page
+pinned to three literal names can be pinned to a board that is not there. The featured list
+is a *preference*, filtered against what the server actually publishes (PROJ-039).
 
 **Fixed UTC everywhere.** *"a leaderboard is a shared artefact, and localising it would make
 two people describing the same row disagree."* A redesign that adds a friendly local
@@ -1297,19 +1268,14 @@ exists to protect.
 
 **`Failure` showing the server's `detail` and status.** See §9.3.
 
-**`credentials: 'omit'`** in the SPA client, and `readapi/cors.go` emitting no
-`Access-Control-Allow-Credentials`, ever.
+**`readapi/cors.go` emitting no `Access-Control-Allow-Credentials`, ever.** The read API is
+anonymous public facts; there is no per-user answer for a cookie to unlock, and letting one
+ride along would be the first step to there being one.
 
-**`$now` as a store rather than `Date.now()` in render.** React Compiler memoization assumes
-render is idempotent; `format.ts` is the file that makes it true. Replacing `formatValue`
-with the unit renderer must not disturb `$now`, `formatAgo` or `formatInstant`.
-
-**`withoutHandle()`** in the SPA feed — the server composes complete sentences for the
-server-rendered panel, and the SPA renders the handle as its own link, so the prefix would
-otherwise appear twice.
-
-**Focus and scroll management in the SPA** — `main` with `tabIndex={-1}`, focus moved on
-route change, `history.scrollRestoration = 'manual'`. Small, correct, easy to delete.
+**`trimHandle` on feed lines.** `stats.Summarize` composes complete sentences, every branch
+handle-first, and the template renders that leading handle as its own link — so the prefix
+must be trimmed from the sentence or it appears twice. There is a plain-text fallback for the
+day a branch stops being handle-first.
 
 **Accessibility already present:** `<output>` for loading, `role="alert"` for failures,
 `aria-live="polite" aria-relevant="additions"` on the feed, `aria-current="page"` on nav,
@@ -1324,14 +1290,13 @@ with it. **The scroll goes on a wrapper element, not on the `<table>`.** An earl
 this line recommended `display: block; overflow-x: auto` on the table itself; that does make
 `overflow-x` apply, but it also stops the table filling its container — the anonymous table
 box inside a block box is sized to its content, so a three-column board ends up half the
-width of the panel around it. Both frontends use the wrapper: `.table-wrap` on the datastar
-site, `<div class="w-full max-w-full overflow-x-auto">` inside `DataTable` in the SPA.
+width of the panel around it. `.table-wrap` is the wrapper (UI-042).
 
 **`#feed-heartbeat`** — the hidden element the 20 s patch writes to, which keeps nginx and
 any CDN from dropping an idle stream.
 
-**The em dash for a value that is not a number.** Both frontends already do it, and
-`units.Format` does it now. Never `NaN`, never `0`, never blank.
+**The em dash for a value that is not a number.** `units.Format` does it. Never `NaN`, never
+`0`, never blank.
 
 ---
 
@@ -1342,26 +1307,26 @@ Still open:
 1. **Period-scoped profile ranks (§8.1).** Needs a period-aware `StatAhead`. Until it
    exists, a windowed profile must hide ranks rather than show all-time ranks beside
    weekly values.
-2. **`units.Conformance` as JSON (§4.3).** Today the table is transcribed into the SPA by
-   hand, and rule 7 added a second table (`units.LabelConformance`) transcribed the same
-   way, so a rule change touches three places and now two tables. A `catlogctl` sub-command
-   emitting both would remove the transcription; the package comment already contemplates
-   it.
+2. **`units.Conformance` as JSON (§4.3).** Nothing in this repository needs it — formatting
+   happens once, in Go, beside the table. It stays open for a *third-party* client rendering
+   catlog numbers from the public API, which today has to transcribe two Go `var`s by hand. A
+   `catlogctl` sub-command emitting both would remove that; the package comment already
+   contemplates it.
 3. **`count` on `BoardResponse` (§8.2).** Cheap, and it turns an inferred pager into a real
-   one. Still not on the response — both frontends still infer "there is probably more"
-   from `rows.length >= limit`. API agent's call whether it is in scope.
+   one. Still not on the response — the pager still infers "there is probably more" from a
+   full page. API agent's call whether it is in scope.
 
 Resolved since this was written, kept so nobody re-opens them:
 
 4. **Flagged flights in the raw-event view (§6.2).** ✅ Resolved by *excluding* them:
    `readapi/events.go` filters the events of flagged flights out, the privacy page was
-   rewritten to state the mechanism, and both frontends link the raw view from the profile.
+   rewritten to state the mechanism, and the profile links the raw view.
    `EventRow.flagged` is not needed and must not be added.
-5. **The fontsource package name and version (§2.4).** ✅ `@fontsource-variable/inter@5.3.0`
-   in both frontends, recorded in `docs/DECISIONS.md`. There is no `latin.css` entry, so
-   both declare their own `@font-face` against `files/inter-latin-wght-normal.woff2`.
+5. **The fontsource package name and version (§2.4).** ✅ `@fontsource-variable/inter@5.3.0`,
+   recorded in `docs/DECISIONS.md`. There is no `latin.css` entry, so `catlog.css` declares
+   its own `@font-face` against `files/inter-latin-wght-normal.woff2`.
 6. **Global stat tiles (§8.3).** ✅ Shipped assembled from `/v1/leaderboards`, as
-   recommended: `#tile-boards` and `#tile-placements` on both front pages. A public
+   recommended: `#tile-boards` and `#tile-placements` on the front page. A public
    `/v1/stats` remains a separate question and nobody needs it yet.
 7. **`web.Read` growth.** ✅ `PlayerEvents`, `Search` and `Compare` are on the interface, and
    the datastar pages go through it rather than around it into `store`.

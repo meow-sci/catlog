@@ -104,7 +104,7 @@ file paths and patch points belong in `event-details.md` and nowhere on the site
 | Anything a visitor to the website would notice | `README.md` |
 | Repo layout, ports, a new top-level directory | `docs/ARCHITECTURE.md` |
 | An integrity check | `docs/integrity-audit.md`, against Constitution §8's five tests |
-| Either frontend's visual or interaction design | `docs/ui-design.md` |
+| The site's visual or interaction design | `docs/ui-design.md` |
 | Something now unbuilt, blocked, or refused | `docs/ROADMAP.md` |
 
 **Always, additionally:** `docs/DECISIONS.md`.
@@ -130,7 +130,6 @@ file paths and patch points belong in `event-details.md` and nowhere on the site
 | `server/` | Go 1.26. `catlogd`, `catlogctl`, `mockidp`. Logic in `internal/*`. | `docs/server.md` |
 | `mod/` | .NET 10. `catlog.lib` (KSA-free core), `catlog` (the game mod), `catlog.sim`, `catlog.loadgen`, 2 test projects. | `docs/mod.md` |
 | `site/` | Datastar site's CSS/JS + the Playwright suite. **HTML templates live in `server/internal/web/templates/`.** | `docs/ui-design.md` |
-| `spa/` | Standalone React reader over the public read API. Own lockfile and deployment. | `spa/README.md` |
 | `contracts/testdata/` | Deterministic cross-language conformance vectors, consumed by both suites. | `docs/ingest-api.md` |
 | `infra/` | Dockerfiles, the compose project, nginx config, Ansible roles and playbooks. | `docs/operations.md` |
 | `docs-site/` | Astro 7 + Starlight + React. The **player-facing** docs site, published to GitHub Pages at `/catlog/`. Own lockfile, own deployment. | `docs-site/README.md` |
@@ -146,7 +145,7 @@ file paths and patch points belong in `event-details.md` and nowhere on the site
 - **C#**: `ImplicitUsings` disabled (every `using` explicit), nullable enabled,
   `TreatWarningsAsErrors`, immutable records, per-subsystem dead-latch error handling. **`catlog.lib`
   must never reference KSA** — a guard test enforces it.
-- **TypeScript (`spa/`, `docs-site/`)**: React Compiler is on, so the Rules of React are mandatory and
+- **TypeScript (`docs-site/`)**: React Compiler is on, so the Rules of React are mandatory and
   hand-written `useMemo`/`useCallback`/`memo` are **forbidden** (a manual memo makes the compiler bail
   out of the whole component). Anything that navigates is an `<a href>`.
 - **Every change keeps `make test` green** and adds tests for what it changed.
@@ -160,9 +159,9 @@ file paths and patch points belong in `event-details.md` and nowhere on the site
   why every stateful verb is an admin route.
 - **`_ms` is metres per second in payload keys** (`speed_ms`, `fastest_ms`) **while the board unit
   string `"ms"` is milliseconds.** Only `unitForKey` knows the difference.
-- **`server/internal/units` is the single definition of a formatted catlog number**, and
-  `spa/src/ui/units.ts` is a port of it. A rule change is three edits in one commit: `units.go`, its
-  test table, and the port.
+- **`server/internal/units` is the single definition of a formatted catlog number.** A rule change
+  is two edits in one commit: the rule in `units.go`, and the row in `units.Conformance` that pins
+  it.
 - **There is no allow-list of celestial bodies.** `body` is opaque to the server; `fastest_to_<body>`
   and `rud_<cause>` boards exist because a name appeared in the data. Never add a fixed list, and
   never assume a fixed board list in a client.
