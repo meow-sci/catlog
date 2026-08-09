@@ -15,42 +15,28 @@ catlog_domain: "{{ lookup('env', 'CATLOG_DOMAIN') }}"
 
 # The direct name, DNS-only (grey cloud), for bypassing Cloudflare when
 # isolating a fault. Optional — leave CATLOG_ORIGIN_DOMAIN unset to have no such
-# name at all. When set it is included in the certificate and restricted to
-# catlog_direct_allow_cidrs.
+# name at all. When set it is added to the certificate as a SAN. Who may reach
+# it is the cloud firewall's answer.
 catlog_origin_domain: "{{ lookup('env', 'CATLOG_ORIGIN_DOMAIN') | default('', true) }}"
 
-# Who may reach the direct name. A name that bypasses the DDoS front door must
-# not be open to the internet.
-catlog_direct_allow_cidrs: >-
-  {{ (lookup('env', 'CATLOG_DIRECT_ALLOW_CIDRS') | default('', true))
-     | split(',') | map('trim') | reject('equalto', '') | list }}
-
-# Who may reach port 22.
-catlog_admin_ssh_cidrs: >-
-  {{ (lookup('env', 'ADMIN_SSH_CIDR') | default('', true))
-     | split(',') | map('trim') | reject('equalto', '') | list }}
+# Who may reach port 22 is NOT decided here. The host ruleset accepts SSH from
+# anywhere and roles/common does not touch sshd's configuration; access to 22 is
+# managed by hand at the DigitalOcean cloud firewall. A rule that locks the
+# operator out of the box is worse than no rule, because fixing it needs the box.
 
 # --- storage ----------------------------------------------------------------
 
-# Where the NVMe volume is mounted. Everything that must survive a rebuild of
-# the box lives under here.
-catlog_data_root: "{{ lookup('env', 'CATLOG_DATA_ROOT') | default('/mnt/catlog', true) }}"
+# The NVMe volume's mount point. DigitalOcean formats it ext4, mounts it and
+# maintains its fstab entry; nothing here discovers a device, creates a
+# filesystem or writes a mount unit. roles/storage verifies two things about it
+# and then creates the directory tree.
+catlog_data_root: "{{ lookup('env', 'CATLOG_DATA_ROOT') | default('/mnt/catlog_db_prime', true) }}"
 
-# The block device to mount there, e.g. /dev/disk/by-id/scsi-0DO_Volume_catlog.
-# Prefer a by-id or by-uuid path: /dev/sdb is not stable across reboots.
-# Leave unset if the volume is already mounted by the provider's own automation.
-catlog_device: "{{ lookup('env', 'CATLOG_NVME_DEVICE') | default('', true) }}"
-
-# Guard rail. Creating a filesystem is the one irreversible thing in these
-# playbooks, so it never happens unless you ask for it by name, once.
-catlog_format_device: "{{ (lookup('env', 'CATLOG_FORMAT_DEVICE') | default('0', true)) == '1' }}"
-catlog_filesystem: ext4
-
-# nosuid,nodev because nothing here should ever be setuid or a device node.
-# NOT noexec, and that is not an oversight: the Turso driver extracts a native
-# .so under catlog_data_root and dlopen()s it. The storage role proves the mount
-# is exec-capable by running a file from it, and fails the play if it is not.
-catlog_mount_opts: "defaults,nosuid,nodev,noatime"
+# Whether the data root must be a real mount point. Leave it true: a volume that
+# failed to attach leaves an ordinary empty directory behind, and catlog would
+# open its databases on the root disk without complaining. Set it false only for
+# a throwaway box with no volume attached.
+catlog_require_mounted_volume: true
 
 # --- the container user -----------------------------------------------------
 #
@@ -63,18 +49,18 @@ catlog_gid: "{{ lookup('env', 'CATLOG_GID') | default('65532', true) }}"
 
 # --- images -----------------------------------------------------------------
 #
-# Digest-pinned. `make deploy` exports these from infra/.release.json, which
-# `make release` wrote when it pushed. A tag can be moved; a digest cannot, and
-# rollback depends on that.
+# Local image names, exported by `make deploy` from infra/.release.env — which
+# scripts/ship-images.sh wrote when it streamed them to this host. There is no
+# registry and nothing to pull: the images are already here, and the play
+# refuses to deploy a name it cannot find locally.
+#
+# The release file also carries CATLOG_IMAGE_ID / NGINX_IMAGE_ID, the content
+# hashes of exactly what was shipped. The tag is what compose reads; the ID is
+# what proves the tag still means what it meant.
 catlog_image: "{{ lookup('env', 'CATLOG_IMAGE') }}"
 catlog_nginx_image: "{{ lookup('env', 'NGINX_IMAGE') }}"
-catlog_registry: "{{ lookup('env', 'GHCR_REGISTRY') | default('ghcr.io', true) }}"
-# The VM authenticates with a READ-ONLY token. GHCR_TOKEN — the one that can
-# push — is deliberately not referenced anywhere in these playbooks: it stays on
-# the machine that builds, and nothing copies it to a public-facing box. See
-# infra/deploy.env.example.
-catlog_registry_user: "{{ lookup('env', 'GHCR_PULL_USER') | default(lookup('env', 'GHCR_USER'), true) | default('', true) }}"
-catlog_registry_token: "{{ lookup('env', 'GHCR_PULL_TOKEN') | default('', true) }}"
+catlog_image_id: "{{ lookup('env', 'CATLOG_IMAGE_ID') | default('', true) }}"
+catlog_nginx_image_id: "{{ lookup('env', 'NGINX_IMAGE_ID') | default('', true) }}"
 
 # --- catlogd ----------------------------------------------------------------
 
@@ -147,17 +133,18 @@ acme_renew_oncalendar: "*-*-* 03:17:00 UTC"
 # --- host baseline ----------------------------------------------------------
 
 catlog_unattended_upgrades: true
-# Refuses to run unless the connecting user already has an authorized key, so
-# this cannot be the step that locks you out.
-catlog_harden_sshd: true
+
+# OFF, and off by default deliberately: it disables password authentication, and
+# these playbooks do not get to be the reason you cannot log in. Turn it on only
+# once key-based access is proven and you are happy to lose the password path.
+# It still refuses to run unless the connecting user already has an authorized
+# key, but the first line of defence is that it does not run at all.
+catlog_harden_sshd: false
 catlog_journal_max_use: 500M
 
-# Refreshed from Cloudflare on every run; roles/cloudflare_firewall falls back
-# to the vendored copy if the fetch fails, and reports drift in --check mode.
-# The interface facing the internet. Taken from the default route, which is
-# right on every single-NIC cloud VM; override if the box is multi-homed.
-catlog_ext_if: "{{ ansible_facts.default_ipv4.interface | default('eth0') }}"
-
+# Fetched by roles/catlog_nginx for `set_real_ip_from` — and for nothing else.
+# No firewall on this box is derived from them; that is the DigitalOcean cloud
+# firewall's job and it is maintained by hand.
 cloudflare_ips_v4_url: https://www.cloudflare.com/ips-v4
 cloudflare_ips_v6_url: https://www.cloudflare.com/ips-v6
 

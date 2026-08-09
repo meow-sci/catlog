@@ -1,22 +1,86 @@
-# roles/catlog_nginx — the server blocks and the real_ip configuration.
+# roles/catlog_nginx — the server blocks, and who nginx believes the client is.
 #
 # The http-level half — compression, the rate-limit zones, the catlogd upstream,
-# the log format — is baked into the image at /etc/nginx/nginx.conf, because it
-# is domain-independent and can therefore be validated by `nginx -t` at build
+# the JSON log format — is baked into the image at /etc/nginx/nginx.conf, because
+# it is domain-independent and can therefore be validated by `nginx -t` at build
 # time. Only what depends on this host is rendered here.
+#
+# NOTHING IN THESE PLAYBOOKS MANAGES A FIREWALL. Who may reach ports 22, 80 and
+# 443 is decided at the DigitalOcean cloud firewall, by hand. Docker maintains
+# its own iptables rules for the ports it publishes and needs no help. The
+# Cloudflare ranges fetched below are used for ONE thing — `set_real_ip_from` —
+# which is nginx configuration, not packet filtering.
 
-- name: Refuse to render without the Cloudflare ranges
-  # This role must never run before roles/cloudflare_firewall has published the
-  # fact. Enabling real_ip while the origin is still reachable directly lets any
-  # client choose its own rate-limit bucket by sending CF-Connecting-IP — which
-  # is strictly worse than having no rate limiting at all. The firewall runs
-  # first, from the same list, in the same play.
+# ---------------------------------------------------------------------------
+# Cloudflare's ranges, for real_ip
+# ---------------------------------------------------------------------------
+# Refetched every run. They change, and a stale list has two failure modes:
+# an address Cloudflare has released is still trusted to set CF-Connecting-IP,
+# and an address it has added has its traffic attributed to the edge instead of
+# to the visitor — which lands in the rate-limit buckets and the access log.
+
+- name: Fetch the Cloudflare IPv4 ranges
+  ansible.builtin.uri:
+    url: "{{ cloudflare_ips_v4_url }}"
+    return_content: true
+    timeout: 15
+  register: cf_v4
+  failed_when: false
+  changed_when: false
+  check_mode: false
+  delegate_to: localhost
+  become: false
+
+- name: Fetch the Cloudflare IPv6 ranges
+  ansible.builtin.uri:
+    url: "{{ cloudflare_ips_v6_url }}"
+    return_content: true
+    timeout: 15
+  register: cf_v6
+  failed_when: false
+  changed_when: false
+  check_mode: false
+  delegate_to: localhost
+  become: false
+
+- name: Fall back to the vendored ranges
+  ansible.builtin.set_fact:
+    cloudflare_v4: >-
+      {{ (cf_v4.content | default('')).split('\n') | map('trim') | reject('equalto', '') | list
+         if cf_v4.status | default(0) == 200
+         else lookup('file', 'cloudflare-ips-v4.txt').splitlines() | map('trim') | reject('equalto', '') | list }}
+    cloudflare_v6: >-
+      {{ (cf_v6.content | default('')).split('\n') | map('trim') | reject('equalto', '') | list
+         if cf_v6.status | default(0) == 200
+         else lookup('file', 'cloudflare-ips-v6.txt').splitlines() | map('trim') | reject('equalto', '') | list }}
+
+- name: Say where the ranges came from
+  ansible.builtin.debug:
+    msg: >-
+      Cloudflare ranges: {{ cloudflare_v4 | length }} v4 + {{ cloudflare_v6 | length }} v6,
+      {{ 'fetched live' if cf_v4.status | default(0) == 200 else 'FROM THE VENDORED FALLBACK — refresh it' }}.
+      These are also the source list for the DigitalOcean firewall, which is
+      maintained by hand — re-check it when this list moves.
+
+- name: Refuse to continue with an implausible range list
+  # A truncated or HTML-ified response would otherwise be written into
+  # set_real_ip_from, and nginx would stop trusting Cloudflare's headers —
+  # collapsing every visitor into an edge address in the rate limiter and the log.
   ansible.builtin.assert:
-    that: cloudflare_ranges is defined and cloudflare_ranges | length > 10
-    fail_msg: >-
-      cloudflare_ranges is not set. Run roles/cloudflare_firewall first —
-      real_ip must not be configured before 443 is restricted to those ranges.
+    that:
+      - cloudflare_v4 | length >= 10
+      - cloudflare_v6 | length >= 5
+      - cloudflare_v4 | select('search', '/') | list | length == cloudflare_v4 | length
+    fail_msg: "The Cloudflare range list does not look like a list of CIDRs. Refusing to apply it."
     quiet: true
+
+- name: Publish the combined range list
+  ansible.builtin.set_fact:
+    cloudflare_ranges: "{{ cloudflare_v4 + cloudflare_v6 }}"
+
+# ---------------------------------------------------------------------------
+# The configuration
+# ---------------------------------------------------------------------------
 
 - name: Render the server blocks
   ansible.builtin.template:
@@ -25,7 +89,7 @@
     mode: "0644"
   notify: Reload nginx
 
-- name: Render the real_ip and direct-access rules
+- name: Render the real_ip configuration
   ansible.builtin.template:
     src: "{{ playbook_dir }}/../../nginx/realip.conf.j2"
     dest: "{{ catlog_data_root }}/nginx/conf/20-realip.conf"

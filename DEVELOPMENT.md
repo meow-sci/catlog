@@ -337,8 +337,8 @@ What you type:
 make deploy-env      # once: copy infra/deploy.env.example → infra/deploy.env and fill it in
 make preflight       # read-only: local tools, secrets, the VM
 make provision       # one-time and re-runnable: baseline, storage, docker, firewall, certs
-make release         # build both images, smoke-test the stack, push to GHCR, record the digests
-make deploy          # pull those digests, stop→start catlogd, health-gate, recreate nginx
+make release         # build both images, smoke-test the stack, stream them to the VM over ssh
+make deploy          # stop→start catlogd on the shipped images, health-gate, recreate nginx
 ```
 
 Steady state is `make release && make deploy`. `make ops-status` and `make ops-logs` are the two you
@@ -351,6 +351,18 @@ image proves any of that.
 
 `infra/deploy.env` is gitignored and is the only place a deployment secret exists outside the VM.
 There is no vault and no `--extra-vars`.
+
+**Ansible is not installed on your machine** — `scripts/ansible.sh` runs it in `alpine/ansible`,
+which already ships every collection the playbooks import. Docker, `make` and `ssh` are the whole
+local requirement. You can drive it directly when you want something the make targets do not wrap:
+
+```sh
+scripts/ansible.sh --check --diff playbooks/site.yml
+scripts/ansible.sh playbooks/ops.yml --tags status
+```
+
+**Going from an empty VM to a running deployment** — including the DNS records, the Cloudflare zone
+settings and the DigitalOcean firewall — is [docs/operations.md → Zero to running](docs/operations.md#zero-to-running).
 
 ---
 

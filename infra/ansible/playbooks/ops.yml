@@ -74,16 +74,6 @@
           changed_when: false
           failed_when: false
 
-        - name: Check the edge firewall is actually in place
-          # PartOf=docker.service should keep it, but a Docker restart flushing
-          # DOCKER-USER is exactly the kind of thing that goes unnoticed until
-          # it matters — and it would leave 443 open to the whole internet.
-          ansible.builtin.command:
-            cmd: iptables -S CATLOG-EDGE
-          register: st_fw
-          changed_when: false
-          failed_when: false
-
         - name: Report
           ansible.builtin.debug:
             msg: |
@@ -97,9 +87,6 @@
                          {{ (st_deployed.content | b64decode | from_json).nginx | default('?')
                              if st_deployed.content is defined else '?' }}
               cert       {{ st_cert.stdout | default('NONE — run: make certs') | replace('\n', ' | ') }}
-              edge rules {{ (st_fw.stdout_lines | default([]) | length) }} iptables rules on CATLOG-EDGE
-                         {{ 'WARNING: none — 80/443 are open to the internet. Run: make provision --tags firewall'
-                            if (st_fw.rc | default(1)) != 0 else '' }}
               data       {{ st_du.stdout | default('') | replace('\n', ' | ') }}
               ─────────────────────────────────────────────────────────────────
               {{ st_capacity.stdout | default('') }}
@@ -156,9 +143,12 @@
               openssl x509 -noout -dates -subject -issuer -ext subjectAltName \
                 -in {{ catlog_data_root }}/acme/live/fullchain.pem \
                                               > "$D/cert.txt"                  2>&1 || true
-              { nft list ruleset; echo; iptables -S; echo; ip6tables -S; } \
-                                              > "$D/firewall.txt"              2>&1 || true
-              systemctl status --no-pager docker catlog-firewall catlog-acme.timer catlog-nightly.timer \
+              # Docker's own rules, for reading — nothing here manages them.
+              # A published port that is not reachable usually shows up as a
+              # missing DNAT in the nat table.
+              { iptables -S; echo; iptables -t nat -S; echo; ip6tables -S; } \
+                                              > "$D/iptables.txt"              2>&1 || true
+              systemctl status --no-pager docker catlog-acme.timer catlog-nightly.timer \
                                               > "$D/units.txt"                 2>&1 || true
 
               # The rendered nginx configuration, which is not a secret and is

@@ -23,11 +23,11 @@ data-*/
 
 # --- deployment (docs/operations.md) ---
 #
-# deploy.env holds every secret the deployment needs — IdP client secrets, the
-# Cloudflare API token, the GHCR PAT. It is the ONLY place they exist outside
-# the VM, and it must never become the second place they exist.
+# deploy.env holds every secret the deployment needs — the IdP client secrets,
+# the Cloudflare API token, the VM's address and its host key. It is the ONLY
+# place they exist outside the VM, and it must never become the second.
 infra/deploy.env
-# What `make release` pushed, by digest. Machine-written, per-machine.
+# What `make release` shipped, by image ID. Machine-written, per-machine.
 infra/.release.env
 # Diagnostics bundles and fetched backups. The bundles carry no secrets by
 # design, but a fetched backup carries player data.

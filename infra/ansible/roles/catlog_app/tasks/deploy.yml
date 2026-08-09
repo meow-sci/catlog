@@ -26,14 +26,11 @@
       {{ (catlog_deployed_raw.content | b64decode | from_json)
          if catlog_deployed_raw.content is defined else {} }}
 
-- name: Pull the new images before stopping anything
-  # Order matters. A failed pull must cost nothing; a failed pull after the stop
-  # costs the whole outage.
-  community.docker.docker_image_pull:
-    name: "{{ item }}"
-  loop:
-    - "{{ catlog_image }}"
-    - "{{ catlog_nginx_image }}"
+# There is no pull step: tasks/main.yml has already verified both images are on
+# this host, and they got here by `docker save | ssh docker load` before any of
+# this ran. The property that mattered about pulling first — that a transfer
+# failure costs nothing, because it happens before the stop — is preserved by
+# shipping being a separate command that runs earlier.
 
 - name: Stop catlogd
   ansible.builtin.command:

@@ -73,39 +73,7 @@
 - name: Flush handlers so the daemon is reconfigured before anything uses it
   ansible.builtin.meta: flush_handlers
 
-- name: Refuse to install the push token on the VM
-  # The guard that makes the read-only split real rather than aspirational. A
-  # copy-pasted write token would work perfectly — pulls would succeed, nothing
-  # would look wrong — and the VM would be holding a credential that can publish
-  # a poisoned image to every future deploy.
-  ansible.builtin.assert:
-    that: lookup('env', 'GHCR_PULL_TOKEN') != lookup('env', 'GHCR_TOKEN')
-    fail_msg: >-
-      GHCR_PULL_TOKEN is the same value as GHCR_TOKEN. The VM must get a
-      read:packages token, not the write:packages one — Docker stores it
-      readable in /root/.docker/config.json on a public-facing box. Create a
-      second PAT with read:packages only.
-    quiet: true
-  when:
-    - catlog_registry_token | length > 0
-    - lookup('env', 'GHCR_TOKEN') | length > 0
-
-- name: Log in to the image registry
-  # The VM pulls our finished images from GHCR with a READ-ONLY token. It never
-  # authenticates to dhi.io either: the hardened base layers are already inside
-  # the images we push, so that credential also stays on the build machine.
-  community.docker.docker_login:
-    registry_url: "{{ catlog_registry }}"
-    username: "{{ catlog_registry_user }}"
-    password: "{{ catlog_registry_token }}"
-    reauthorize: true
-  when: catlog_registry_token | length > 0
-  no_log: true
-
-- name: Say that the images will have to be public
-  ansible.builtin.debug:
-    msg: >-
-      GHCR_PULL_TOKEN is unset, so this host is not authenticated to
-      {{ catlog_registry }}. Pulls will only work if the packages are public —
-      and GHCR packages default to PRIVATE regardless of repository visibility.
-  when: catlog_registry_token | length == 0
+# There is no `docker login` here, and no registry credential on this box at
+# all. Images arrive by `docker save | ssh docker load` from the machine that
+# built them (scripts/ship-images.sh), so the VM never authenticates anywhere
+# and holds nothing that could be stolen and used to publish a poisoned image.

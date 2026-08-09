@@ -15,9 +15,12 @@ your own machine.
 make deploy-env      # once: copy infra/deploy.env.example → infra/deploy.env, fill it in
 make preflight       # read-only: local tools, secrets, the VM. Changes nothing
 make provision       # one-time and re-runnable: baseline, storage, docker, firewall, certs
-make release         # build both images, smoke-test the stack, push to GHCR, record the digests
-make deploy          # pull those digests, stop→start catlogd, health-gate, recreate nginx
+make release         # build both images, smoke-test the stack, stream them to the VM over ssh
+make deploy          # stop→start catlogd on the shipped images, health-gate, recreate nginx
 ```
+
+Never done this before? Go to [Zero to running](#zero-to-running), which is the whole thing in
+order, including the parts you do in somebody else's web UI.
 
 Steady state is `make release && make deploy`. Everything runs from your machine — no CI required,
 and `infra/deploy.env` is the only place a secret exists outside the VM (OPS-026).
@@ -36,13 +39,11 @@ and `infra/deploy.env` is the only place a secret exists outside the VM (OPS-026
 `make deploy` prints both digest sets and asks before it stops anything (`CONFIRM=1` skips the
 prompt). `make release` refuses a dirty working tree unless `ALLOW_DIRTY=1`.
 
-**Two GHCR tokens, and they must be different ones.** Package visibility is independent of repository
-visibility and defaults to private, so the images stay private behind a public repo — and the VM has
-to authenticate to pull them. It gets a `read:packages` token; `GHCR_TOKEN`, which can push, never
-leaves your machine and no playbook refers to it. Docker stores whatever it is given readable in
-`/root/.docker/config.json`, so a write token there would turn one compromised box into a
-supply-chain foothold over every later deploy. `make preflight` and `roles/docker` both refuse if the
-two values match (OPS-032).
+**There is no registry.** `make release` streams both images to the VM with
+`docker save | ssh docker load` — one pipe, nothing written to disk on either end, no account, no
+credential on the box that could be stolen and used to publish a poisoned image. It skips any image
+whose ID already matches the VM's, so a server-only redeploy does not re-send the nginx image
+(OPS-032).
 
 ---
 
@@ -50,8 +51,41 @@ two values match (OPS-032).
 
 | | |
 |---|---|
-| **Your machine** | `docker` + `buildx`, `ansible-core`, `make`, `ssh` |
+| **Your machine** | `docker` + `buildx`, `make`, `ssh`, `git`. **No Ansible** |
 | **The VM** | Docker CE + compose plugin, `python3`, `openssh`, and optionally `unattended-upgrades` |
+
+**Ansible runs in a container.** `scripts/ansible.sh` wraps `alpine/ansible:2.21.0`, which already
+ships `community.docker`, `community.general` and `ansible.posix` — so there is nothing to
+`pip install`, no virtualenv to keep, and no version of Ansible on your machine to drift. Every
+`make` target that touches the VM goes through it, and you can drive it directly:
+
+```sh
+scripts/ansible.sh playbooks/ops.yml --tags status
+scripts/ansible.sh --check --diff playbooks/site.yml
+ANSIBLE_ENTRY=ansible-inventory scripts/ansible.sh --list
+```
+
+It mounts `infra/` (the playbooks and the files they template from) and `diagnostics/` (the only
+path it writes), passes `infra/deploy.env` with `--env-file`, and mounts `~/.ssh` **read-only**. The
+rest of the repository is deliberately not mounted — `data/` holds the signing key, the session key
+and the pepper, and no playbook has any business seeing them.
+
+**The whole connection is described in `deploy.env`; your own `~/.ssh/config` is not consulted.**
+`CATLOG_SSH_IDENTITY_FILE` names the key, and `scripts/lib/deploy-env.sh` generates a one-`Host` ssh
+config from it, mounting the key at a fixed path inside the container. That is not a preference: the
+container's `HOME` is not your home directory, so an `IdentityFile` written as an absolute path — the
+normal way to write one — points at nothing in there. The same generated config drives `make ops-ssh`
+and the image shipping, so all three are the same connection and cannot drift.
+
+Two things it does that are not obvious:
+
+- **The VM's host key is pinned, not accepted on sight.** `CATLOG_SSH_HOST_KEY` becomes the
+  `UserKnownHostsFile` for the run, with `StrictHostKeyChecking=yes`. There is no trust-on-first-use
+  step and no prompt to click through, and a server presenting a different key stops every play
+  immediately — which is what a rebuilt droplet or a machine-in-the-middle deserves.
+- The container runs as your uid, and the wrapper synthesises `/etc/passwd` and `/etc/group` entries
+  for it. Without them OpenSSH refuses to start at all — "No user exists for uid 501", exit 255,
+  no connection attempted — and every play would fail with an error naming nothing useful.
 
 Deliberately absent from the VM: `go`, `node`/`pnpm`, `.NET`, `git`, `ansible`, `rsync`, `nginx`,
 `certbot`/`acme.sh`, `logrotate`, any monitoring agent, any language runtime.
@@ -62,7 +96,310 @@ Three choices keep that list short:
   nothing long-running holds the Docker socket (OPS-025).
 - **No log files are written to the volume.** Both containers log to stdout, Docker's `json-file`
   driver rotates them, and `docker logs` is the single source (OPS-027).
-- **The firewall is nftables plus `DOCKER-USER` rules**, both already available — no `ufw` (OPS-024).
+- **No firewall is managed on the box at all** (OPS-024). Ports 22, 80 and 443 are governed entirely
+  by the DigitalOcean cloud firewall, by hand. Docker maintains its own iptables rules for the ports
+  it publishes and needs no help.
+
+**Nothing in these playbooks narrows access to anything.** No `nftables` ruleset, no `DOCKER-USER`
+chain, no `ufw`, and sshd's configuration is left alone. A firewall rule that locks the operator out
+is the one class of mistake that cannot be undone from the machine it was made on, and a cloud
+firewall is undone with one click from a laptop. The one thing derived from Cloudflare's published
+ranges is nginx's `set_real_ip_from`, which is proxy configuration rather than packet filtering.
+
+---
+
+## Zero to running
+
+Nothing built, nothing configured, an empty Debian/Ubuntu droplet and a `science.fail` zone on
+Cloudflare.
+
+| | |
+|---|---|
+| Droplet | its public IPv4 — `$CATLOG_SSH_HOST` below, and **only** in `infra/deploy.env` |
+| Public name | `catlog.science.fail` — Cloudflare **proxied** |
+| Direct name | `origin.catlog.science.fail` — **DNS only** |
+
+The droplet's address and its host key are the two facts that identify one specific machine, so they
+live in gitignored `infra/deploy.env` and nowhere else. The names are public DNS and the product's
+own URLs, so they are written out. Several commands below read the address from that file:
+
+```sh
+set -a; . infra/deploy.env; set +a      # $CATLOG_SSH_HOST, $CATLOG_SSH_USER, …
+```
+
+You need, on your machine: Docker (running), `make`, `ssh`, `git`. That is the whole list —
+[Ansible runs in a container](#what-is-installed-on-the-vm-and-what-is-not).
+
+### 1 — Pin the host key, then prove you can reach the droplet
+
+The droplet's SSH host key is knowable before anything connects to it, so it is **pinned** rather
+than accepted on sight. Read it from the **droplet console** — DigitalOcean → your droplet → Access →
+Launch Droplet Console — which does not travel over the network you are trying to authenticate:
+
+```sh
+cat /etc/ssh/ssh_host_ed25519_key.pub          # in the droplet console
+```
+
+Paste that line into `CATLOG_SSH_HOST_KEY` in `infra/deploy.env` (step 6), and the droplet's IP into
+`CATLOG_SSH_HOST`. Reading a host key off an unverified connection only pins whatever answered; the
+console step is what makes the pin mean anything.
+
+From then on there is no trust-on-first-use step and no prompt to click through: `scripts/ansible.sh`
+writes a `known_hosts` from that value and points ssh at it with `StrictHostKeyChecking=yes`. If the
+droplet is ever rebuilt, every play stops until you verify and replace the key — which is the correct
+response to a host whose identity changed.
+
+Then check you can get in, and that the NVMe volume is mounted where you expect:
+
+```sh
+set -a; . infra/deploy.env; set +a
+ssh "$CATLOG_SSH_USER@$CATLOG_SSH_HOST" \
+  'cat /etc/os-release; uname -m; findmnt /mnt/catlog_db_prime; df -h /mnt/catlog_db_prime'
+```
+
+DigitalOcean formats the volume ext4, mounts it and maintains its fstab entry, so there is no device
+to identify and nothing to format. `findmnt` must print a line — if it does not, the volume is not
+attached, and `make provision` will refuse rather than quietly put the databases on the root disk.
+
+### 2 — DNS, in the Cloudflare dashboard
+
+**DNS → Records → Add record**, twice:
+
+| Type | Name | IPv4 address | Proxy status |
+|---|---|---|---|
+| `A` | `catlog` | the droplet's IP | **Proxied** (orange cloud) |
+| `A` | `origin.catlog` | the same IP | **DNS only** (grey cloud) |
+
+`catlog.science.fail` is baked into every licence catlog issues, as the `htu` the mod signs against
+and compares by exact string equality. Choose it once — changing it later invalidates credentials
+already in players' hands.
+
+`origin.catlog.science.fail` publishes the droplet's address, which is the point: it is how you tell
+"our origin is broken" from "the edge is broken" in one `curl`. It does not weaken Cloudflare,
+because both firewall layers below refuse 443 from anywhere except Cloudflare and your own address.
+
+### 3 — Cloudflare zone settings
+
+**SSL/TLS → Overview → Full (strict)**. Do this before any traffic: the origin will have a real
+Let's Encrypt certificate, and anything less than Full (strict) is either unencrypted to the origin
+or unauthenticated.
+
+Then:
+
+| Where | Setting |
+|---|---|
+| SSL/TLS → Edge Certificates | **Always Use HTTPS: on** |
+| Speed → Optimization | **Rocket Loader: off**, **Mirage: off** — they rewrite HTML and defer scripts, and the datastar pages depend on their own script order |
+| Security → Bots | **Bot Fight Mode: off** — it would challenge the mod's shipper, which cannot solve a challenge |
+| Caching → Cache Rules | see below |
+
+Cache rules, in order:
+
+1. **Bypass cache** — `(http.request.uri.path eq "/v1/ingest") or (http.request.uri.path contains "/sse") or (http.request.uri.path contains "/stream") or (starts_with(http.request.uri.path, "/auth/")) or (starts_with(http.request.uri.path, "/api/")) or (http.request.uri.path eq "/dashboard")`
+2. **Cache everything** — `starts_with(http.request.uri.path, "/static/") or starts_with(http.request.uri.path, "/app/assets/")`
+
+The SSE bypass matters twice: Cloudflare buffers a stream it might cache **or compress**, and the
+symptom is feed frames arriving seconds late.
+
+### 4 — The Cloudflare API token (for ACME)
+
+**My Profile → API Tokens → Create Token → Create Custom Token**:
+
+| Setting | Value |
+|---|---|
+| Permissions | `Zone` → `DNS` → **Edit** |
+| | `Zone` → `Zone` → **Read** |
+| Zone Resources | Include → Specific zone → `science.fail` |
+
+Copy the token once — it is not shown again. A Global API Key would also work and **must not be
+used**: it can do anything to every zone on the account, and this credential ends up in
+`/opt/catlog/.env` on a public-facing VM.
+
+### 5 — The DigitalOcean cloud firewall
+
+**This is the only firewall.** Nothing on the box filters packets — no `nftables`, no `DOCKER-USER`
+rules, no `ufw` — so these rules are the whole of who can reach the droplet. Get them right.
+
+The upside of putting it here is that every mistake is recoverable from a laptop: a rule that shuts
+you out is one click to undo, rather than something that has to be fixed on a machine it has made
+unreachable.
+
+**Networking → Firewalls → Create Firewall**, name it `catlog`.
+
+**Inbound rules** — delete the defaults, then add:
+
+| Type | Protocol | Port | Sources |
+|---|---|---|---|
+| Custom | TCP | `443` | the 22 Cloudflare CIDRs below, **plus your own address** |
+| SSH | TCP | `22` | whatever you want it to be |
+
+**Port 22 is yours alone to manage, here and only here.** Nothing in the playbooks narrows SSH: the
+host ruleset accepts it from anywhere and sshd's configuration is left untouched. That is deliberate.
+A firewall rule that locks the operator out of their own machine is the one mistake that cannot be
+fixed from the machine, and a home connection's address is not the same address next week. Getting it
+wrong in the DigitalOcean UI costs one click and a page reload.
+
+Cloudflare's ranges, for pasting into the Sources box:
+
+```
+173.245.48.0/20, 103.21.244.0/22, 103.22.200.0/22, 103.31.4.0/22, 141.101.64.0/18,
+108.162.192.0/18, 190.93.240.0/20, 188.114.96.0/20, 197.234.240.0/22, 198.41.128.0/17,
+162.158.0.0/15, 104.16.0.0/13, 104.24.0.0/14, 172.64.0.0/13, 131.0.72.0/22,
+2400:cb00::/32, 2606:4700::/32, 2803:f800::/32, 2405:b500::/32, 2405:8100::/32,
+2a06:98c0::/29, 2c0f:f248::/32
+```
+
+**Port 80 is deliberately absent.** With SSL/TLS at Full (strict), Cloudflare always reaches the
+origin over 443, and "Always Use HTTPS" redirects plaintext at the edge without ever contacting the
+droplet. ACME is DNS-01, so it needs no inbound port either. Nothing legitimate arrives on 80.
+
+**Outbound rules**: leave the permissive defaults. The droplet needs to reach apt, Let's Encrypt, the
+Cloudflare API and the three identity providers. It never pulls a container image — those arrive over
+the ssh connection you already have.
+
+Then **Droplets → add `catlog`** to the firewall.
+
+With `doctl`, the same thing:
+
+```sh
+CF="173.245.48.0/20,103.21.244.0/22,103.22.200.0/22,103.31.4.0/22,141.101.64.0/18,\
+108.162.192.0/18,190.93.240.0/20,188.114.96.0/20,197.234.240.0/22,198.41.128.0/17,\
+162.158.0.0/15,104.16.0.0/13,104.24.0.0/14,172.64.0.0/13,131.0.72.0/22,\
+2400:cb00::/32,2606:4700::/32,2803:f800::/32,2405:b500::/32,2405:8100::/32,\
+2a06:98c0::/29,2c0f:f248::/32"
+ME=203.0.113.5/32          # your address — curl -s https://ifconfig.me
+
+doctl compute firewall create --name catlog \
+  --inbound-rules "protocol:tcp,ports:443,address:${CF},address:${ME} protocol:tcp,ports:22,address:${ME}" \
+  --outbound-rules "protocol:tcp,ports:all,address:0.0.0.0/0,address:::/0 protocol:udp,ports:all,address:0.0.0.0/0,address:::/0 protocol:icmp,address:0.0.0.0/0,address:::/0" \
+  --droplet-ids "$(doctl compute droplet list --format ID,Name --no-header | awk '/catlog/{print $1}')"
+```
+
+**Cloudflare changes these ranges, and this list is maintained by hand.** `roles/catlog_nginx`
+refetches them on every run for nginx's `set_real_ip_from` and says so when the published list has
+moved — that is your cue to update the rules here too. Nothing updates them for you.
+
+### 6 — Fill in `deploy.env`
+
+```sh
+make deploy-env          # copies infra/deploy.env.example → infra/deploy.env
+```
+
+It already carries `catlog.science.fail` and `origin.catlog.science.fail`. Replace every
+`CHANGE_ME`:
+
+| Key | Value |
+|---|---|
+| `CATLOG_SSH_HOST` | the droplet's public IPv4 |
+| `CATLOG_SSH_HOST_KEY` | the host key from step 1 |
+| `CATLOG_SSH_IDENTITY_FILE` | the private key that reaches the droplet, e.g. `~/.ssh/digitalocean` |
+| `ACME_EMAIL` | where Let's Encrypt sends expiry warnings |
+| `CF_API_TOKEN` | from step 4 |
+| `DHI_USER` / `DHI_TOKEN` | a Docker Hub PAT; DHI is free but authenticated. Build-time only |
+| `CATLOG_IDP_*` | the three OAuth apps' credentials |
+
+Set **`ACME_STAGING=1`** for now. Let's Encrypt's production CA allows five failed issuances an hour;
+the staging CA has no limit worth worrying about, and you want the DNS-01 plumbing proved before you
+start spending real attempts.
+
+The OAuth applications' redirect URIs are
+`https://catlog.science.fail/auth/{discord,google,github}/callback`.
+
+`infra/deploy.env` is gitignored and is the only place any of this exists outside the VM.
+
+### 7 — Preflight
+
+```sh
+docker login dhi.io      # the hardened base images; free, but authenticated
+make preflight
+```
+
+Read-only. It reports every missing key at once, checks the droplet is Debian-family, and — the two
+worth watching — reports whether the data root is a real mount point and refuses if it is `noexec`.
+
+### 8 — Provision
+
+```sh
+make provision
+```
+
+Baseline packages and the `catlog` user, the NVMe mount and its directory tree, Docker CE, the on-box
+firewall, the Let's Encrypt certificate, the nginx configuration and the compose project. Ten to
+fifteen minutes, mostly apt and the certificate.
+
+It creates no filesystem and touches no fstab: the volume arrives formatted and mounted, and the
+storage role only verifies that — a real mount point, not `noexec`, and able to execute a file — then
+lays out the directories on it.
+
+Idempotent: running it again on a healthy box changes nothing.
+
+### 9 — Build, push and deploy
+
+```sh
+make release      # builds both images, smoke-tests the whole stack, pushes, records the digests
+make deploy       # pulls those digests, stop→start catlogd, health-gates, recreates nginx
+```
+
+`make release` runs `scripts/container-smoke.sh` as a hard gate, so a broken image never reaches the
+VM. First run takes a few minutes — the nginx image compiles ngx_brotli — and streams about 85 MB.
+Later releases usually send only catlogd, because the nginx image is unchanged and gets skipped.
+
+Nothing is published anywhere. The images exist in your local Docker daemon and on the VM, and
+`infra/.release.env` records exactly which ones, by content hash.
+
+### 10 — Verify, through the bypass first
+
+```sh
+curl -fsS https://origin.catlog.science.fail/healthz    # the origin, Cloudflare out of the picture
+curl -fsS https://catlog.science.fail/healthz           # the same, through Cloudflare
+curl -sI -H 'Accept-Encoding: br' https://catlog.science.fail/static/css/catlog.css | grep -i content-encoding
+curl -fsS https://catlog.science.fail/app/ | head -3    # the React reader
+make ops-status
+```
+
+Checking the bypass first is the habit worth forming: if it works and the proxied name does not, the
+problem is Cloudflare's side, and you have halved the search space without logging into anything.
+
+With `ACME_STAGING=1` your browser will call the certificate untrusted, and `curl` needs `-k`. That
+is expected until the next step.
+
+### 11 — Real certificates, then HSTS
+
+```sh
+# in infra/deploy.env: remove ACME_STAGING (or set it to 0)
+make certs
+```
+
+`roles/acme` sees the staging certificate, reissues against the production CA and reloads nginx.
+Confirm in a browser that the padlock is clean, then — and only then:
+
+```sh
+# in infra/deploy.env: CATLOG_HSTS_MAX_AGE=31536000
+make provision TAGS=nginx
+```
+
+HSTS last, deliberately. It is a promise you cannot withdraw for `max-age` seconds, and a browser
+that has seen it will refuse to talk to the name over plaintext for a year no matter what you do
+next.
+
+### 12 — Seed and admit players
+
+```sh
+make ops-exec CMD='keygen'           # only if the key set was not created at first boot
+make ops-status
+```
+
+Optionally enable the nightly maintenance timer, once `rebuild`, `archive` and `backup` are all live
+— it is installed disabled precisely because a timer that fails every night at 04:30 trains you to
+ignore it. Set `catlog_nightly_enabled: true` and re-run `make provision TAGS=maintenance`.
+
+### If something is wrong
+
+`make ops-status` first, `make ops-logs` second — the latter fetches a full diagnostics bundle into
+`./diagnostics/` and the symptom table under [Triage](#triage) maps each failure to the file in it
+that names the cause.
+
+---
 
 ---
 
@@ -129,18 +466,31 @@ unreachable; a victim's address makes it a weapon; the spoofed value also lands 
 
 `real_ip` is therefore on unconditionally, which is only safe because Ansible applies both halves
 from **one fact, in one run, in the required order**:
-`roles/cloudflare_firewall` fetches the ranges and restricts 80/443 to them, then
-`roles/catlog_nginx` renders `set_real_ip_from` from the same list — and refuses to render at all if
-the firewall role has not run (OPS-024).
+`roles/catlog_nginx` fetches Cloudflare's published ranges on every run and renders
+`set_real_ip_from` from them, refusing to apply a list that does not look like CIDRs.
 
-### The firewall detail that is easy to get wrong
+**Its safety depends on something this repository does not control:** the origin must not be
+reachable on 443 from outside those ranges, which is the DigitalOcean firewall's rule. Widen that
+rule and `real_ip` stops being a fix and becomes the hole (OPS-024).
 
-**Published container ports never traverse the INPUT chain.** They are DNAT'd in `nat/PREROUTING`
-and filtered in `FORWARD`, so a host ruleset that "blocks everything but 22" leaves 443 open to the
-internet, silently. The rules that matter live in a `CATLOG-EDGE` chain jumped from `DOCKER-USER`.
+### Where access control actually lives
 
-`catlog-firewall.service` is `PartOf=docker.service` because restarting Docker re-creates and flushes
-`DOCKER-USER`. `make ops-status` reports the rule count for the same reason.
+**The DigitalOcean cloud firewall, and nowhere else** — step 5 of
+[Zero to running](#zero-to-running). Nothing on the box filters packets.
+
+That is a deliberate choice rather than an omission. A host firewall on a machine you reach over the
+network is the one component whose failure mode is losing the machine, and there was nothing it could
+express here that the cloud firewall cannot: the box listens on 22 (sshd) and 80/443 (Docker's
+published ports), and that is the whole surface.
+
+One thing worth knowing if you ever reconsider: **published container ports never traverse the INPUT
+chain.** They are DNAT'd in `nat/PREROUTING` and filtered in `FORWARD`, so a host ruleset that
+"blocks everything but 22" would leave 443 wide open while looking correct. Any on-box rule for a
+container port has to go in `DOCKER-USER`, and has to be re-applied whenever Docker restarts, because
+Docker re-creates and flushes that chain. A cloud firewall has neither problem.
+
+`make ops-logs` still collects `iptables -S` and the nat table — for reading, not for managing. A
+published port that is unreachable usually shows up there as a missing DNAT rule.
 
 ### §6.3 The test suite
 
@@ -167,8 +517,10 @@ runs in `make test-nginx`; the smoke test proves the shipped artefact.
 
 | Image | Base | Size | Contents |
 |---|---|---|---|
-| `ghcr.io/meow-sci/catlogd` | `dhi.io/static:20250419-glibc-debian13` | 21 MB | `catlogd`, `catlogctl` |
-| `ghcr.io/meow-sci/catlog-nginx` | `nginx:1.29` + `ngx_brotli` | | nginx, `site/dist`, `spa/dist`, both pre-compressed |
+| `catlog/catlogd` | `dhi.io/static:20250419-glibc-debian13` | 21 MB | `catlogd`, `catlogctl` |
+| `catlog/catlog-nginx` | `nginx:1.29` + `ngx_brotli` | 64 MB | nginx, `site/dist`, `spa/dist`, both pre-compressed |
+
+Local names, not registry paths: they are built on your machine and streamed to the VM.
 
 **The runtime base needs glibc, and needs as little else as possible.**
 
@@ -199,8 +551,9 @@ Turso engine need executable mappings, so the container runs with no seccomp pro
 default and nothing in `compose.prod.yaml` forbids them. It is the one hardening flag that must not
 be added.
 
-`TURSO_GO_CACHE_DIR` points at `/var/lib/catlog/turso-cache`, a bind mount from the NVMe volume, and
-`roles/storage` proves that filesystem can execute a file rather than trusting `findmnt`. A `noexec`
+`TURSO_GO_CACHE_DIR` points at `/var/lib/catlog/turso-cache`, a bind mount from
+`$CATLOG_DATA_ROOT/turso-cache`, and `roles/storage` proves that filesystem can execute a file rather
+than trusting `findmnt` alone. A `noexec`
 mount produces a startup crash whose message names a permission error on a file catlogd has just
 successfully written — one of the least obvious failures in this system, which is why it is checked
 in `preflight`, enforced in `storage`, and named in the smoke test's failure output.
@@ -221,15 +574,28 @@ ngx_brotli + a static libbrotli) runs emulated (OPS-031).
 ### The layout on the VM
 
 ```
-/opt/catlog/                compose.yaml (from git), .env (rendered), deployed.json
-/mnt/catlog/                the NVMe volume — nosuid,nodev,noatime, NEVER noexec
-├── config/    0750 root:catlog   catlogd.toml (0640), catlogd.env (0640)
-├── data/      0750 <uid>         events.db, projections.db, keys/ (0700), archive/
-├── turso-cache/ 0700 <uid>       the extracted libturso_sync_sdk_kit.so
-├── backups/   0750 <uid>         catlogctl backup output
-├── acme/      0700 root          acme.sh state; live/ is mounted read-only into nginx
-└── nginx/conf/                   10-catlog.conf, 20-realip.conf
+/opt/catlog/                     compose.yaml (from git), .env (rendered), deployed.json
+/mnt/catlog_db_prime/            the NVMe volume — mounted by DigitalOcean, ext4, NEVER noexec
+├── config/       0750 root:catlog   catlogd.toml (0640), catlogd.env (0640)
+├── data/         0750 <uid>         events.db, projections.db, keys/ (0700), archive/
+├── turso-cache/  0700 <uid>         the extracted libturso_sync_sdk_kit.so
+├── backups/      0750 <uid>         catlogctl backup output
+├── acme/         0700 root          acme.sh state; live/ is mounted read-only into nginx
+└── nginx/conf/                      10-catlog.conf, 20-realip.conf
 ```
+
+**The volume is the provider's.** Nothing here discovers a block device, creates a filesystem or
+writes an fstab entry — DigitalOcean does all three. `roles/storage` checks two things and then
+creates directories:
+
+- **that the path is a real mount point.** A volume that failed to attach leaves an ordinary empty
+  directory behind, and catlog would open its databases on the root disk — an order of magnitude
+  smaller, and gone with the droplet — without complaining once.
+- **that it is not `noexec`, and can actually execute a file.** See below; we no longer own the
+  mount, so this can only be refused, not fixed.
+
+Only one path is configured, `CATLOG_DATA_ROOT`, and it flows to the container through the compose
+`.env`. Everything that must survive a rebuild is under it: one thing to back up, one thing to move.
 
 `<uid>` is the hardened image's nonroot user. `roles/catlog_app` asserts the image's configured user
 matches `catlog_uid` before it deploys anything — a silent mismatch is a permission-denied on
@@ -283,20 +649,20 @@ purpose.
 
 | Name | Type | Value | Cloudflare proxy | Purpose |
 |---|---|---|---|---|
-| `catlog.<domain>` | `A` (+ `AAAA`) | the VM's public IP | **Proxied — orange cloud** | The public origin. Everything reaches catlog through this, behind Cloudflare's DDoS absorption and analytics. |
-| `origin.catlog.<domain>` | `A` (+ `AAAA`) | the same IP | **DNS only — grey cloud** | The bypass. Resolves straight to the box, so one `curl` distinguishes "our origin is broken" from "the edge is broken". |
+| `catlog.science.fail` | `A` | the droplet's IP | **Proxied — orange cloud** | The public origin. Everything reaches catlog through this, behind Cloudflare's DDoS absorption and analytics. |
+| `origin.catlog.science.fail` | `A` | the same address | **DNS only — grey cloud** | The bypass. Resolves straight to the box, so one `curl` distinguishes "our origin is broken" from "the edge is broken". |
 
 Set them in the Cloudflare dashboard under **DNS → Records**. The orange/grey cloud toggle is the
 "Proxy status" column.
 
-**`catlog.<domain>` is baked into every licence catlog issues** as the `htu` the mod signs against
+**`catlog.science.fail` is baked into every licence catlog issues** as the `htu` the mod signs against
 (`[ingest] accepted_htu`, compared by exact string equality with no normalisation). Choose it once —
 changing it later invalidates credentials already in the wild.
 
-**The bypass name is not public access.** It is restricted to `CATLOG_DIRECT_ALLOW_CIDRS` at two
-layers: the `CATLOG-EDGE` firewall chain, and an nginx rule keyed on `$realip_remote_addr` — the peer
-address, before `real_ip` rewrote `$remote_addr`, because that is the one address a client cannot
-choose for itself. A name that bypasses the DDoS front door must not be open to everyone.
+**Who may use the bypass name is the cloud firewall's answer.** nginx answers on it to anyone who
+can open a connection; restricting inbound 443 to Cloudflare's ranges plus your own address is what
+makes that a short list. A name that bypasses the DDoS front door should not be reachable by the
+internet at large — and that rule belongs in the one place all the other access rules live.
 
 Leave `CATLOG_ORIGIN_DOMAIN` unset if you do not want one. You will regret it the first time
 something is wrong.
@@ -314,63 +680,25 @@ nothing is routed to yet.
 Both names go on **one certificate**, as SANs. `roles/acme` reads the SANs off the existing
 certificate and reissues if a name is missing, so adding `CATLOG_ORIGIN_DOMAIN` later just works.
 
-### The Cloudflare API token
+### The Cloudflare API token, and the zone settings
 
-Create it at **My Profile → API Tokens → Create Token → Create Custom Token**:
+Both are procedure rather than design, and both live in
+[Zero to running](#zero-to-running) — steps 3 and 4 — with the exact values.
 
-| Setting | Value |
-|---|---|
-| Permissions | `Zone` → `DNS` → **Edit** |
-| | `Zone` → `Zone` → **Read** |
-| Zone Resources | Include → Specific zone → `<domain>` |
+Two of them are worth restating because getting them wrong is quiet rather than loud:
 
-Put it in `infra/deploy.env` as `CF_API_TOKEN`. Optionally add `CF_ZONE_ID` (shown on the zone's
-Overview page) so acme.sh does not have to search for the zone.
+- **SSL/TLS must be Full (strict).** There is a real Let's Encrypt certificate at the origin;
+  anything less is either unencrypted to the origin or unauthenticated.
+- **SSE must be excluded from Cloudflare's caching *and* its compression.** Cloudflare buffers a
+  stream it might cache or compress, and the symptom is feed frames arriving seconds late. Check the
+  zone's Cache Rules before suspecting nginx.
 
 **A Global API Key would work and must not be used.** It can do anything to every zone on the
-account, and this credential is written to `/opt/catlog/.env` on a public-facing VM.
-
-### Cloudflare zone settings
-
-| Setting | Value | Why |
-|---|---|---|
-| SSL/TLS → Overview | **Full (strict)** | There is a real Let's Encrypt certificate at the origin. Anything less is either unencrypted to the origin or unauthenticated. |
-| SSL/TLS → Edge Certificates → Always Use HTTPS | on | Nothing depends on plaintext; DNS-01 has no challenge path to break. |
-| Caching → Cache Rules | cache `/static/*` and `/app/assets/*`; **bypass** `/v1/ingest`, every SSE path, `/auth/*`, `/api/*`, `/dashboard` | The read API already emits `s-maxage=30` and is designed for a CDN. The bypasses are cookie-authenticated, streaming, or byte-hashed. |
-| Compression | leave on | It re-compresses at the edge; our origin brotli reduces the CF↔origin leg, which is the one we pay for. |
-| Security → Bot Fight Mode | **off for `/v1/*`** | It would challenge the mod's shipper, which cannot solve a challenge. |
-| Speed → Rocket Loader / Mirage | off | They rewrite HTML and defer scripts; the datastar pages depend on their own script order. |
-
-**SSE needs excluding from both caching and compression.** Cloudflare buffers a stream otherwise, and
-the symptom is frames arriving late — check the zone's Cache Rules and Compression before suspecting
-nginx.
+account, and this credential ends up in `/opt/catlog/.env` on a public-facing VM. The scoped token
+is `Zone:DNS:Edit` + `Zone:Zone:Read` on the one zone.
 
 **Do not enable nginx's `proxy_cache` micro-cache with Cloudflare in front.** Two stacked shared
 caches make every staleness question twice as hard.
-
-### First bring-up, in order
-
-```sh
-make deploy-env                     # fill in infra/deploy.env
-make ansible-deps
-make preflight                      # read-only; fails naming every missing key at once
-```
-
-1. **Create both DNS records now.** ACME does not need them, but the firewall does not care and
-   Cloudflare needs the zone to exist before the token can touch it.
-2. `make provision` — baseline, NVMe mount, Docker, firewall, ACME, nginx, the compose project.
-   Set `ACME_STAGING=1` in `deploy.env` for the first run: Let's Encrypt's production CA gives you
-   five failed issuances an hour, and the staging CA has no meaningful limit.
-3. `make release && make deploy`.
-4. Verify **through the bypass first**, which tests the origin with Cloudflare out of the picture:
-   ```sh
-   curl -fsS https://origin.catlog.<domain>/healthz          # {"ok":true}
-   curl -fsS https://catlog.<domain>/healthz                 # same, through Cloudflare
-   curl -sI  -H 'Accept-Encoding: br' https://catlog.<domain>/static/css/catlog.css | grep -i content-encoding
-   ```
-5. Turn off `ACME_STAGING`, `make certs`, and confirm the certificate is trusted.
-6. Only then set `CATLOG_HSTS_MAX_AGE=31536000` and re-run `make provision --tags nginx`. HSTS is a
-   promise you cannot take back for `max-age` seconds.
 
 ### Renewal
 
@@ -402,8 +730,9 @@ key or the pepper is one you have to treat as a secret forever, and you will not
 | ingest failing for everyone | `catlogd.log` for `htu` mismatches — `accepted_htu` is compared by exact string equality |
 | SSE frames arriving late | `nginx.log`, then Cloudflare's Cache Rules and Compression |
 | the disk filling | `admin-stats.json` WAL sizes — the Turso WAL never auto-checkpoints |
-| rate limiting the wrong people | `nginx.log` client addresses. If they are Cloudflare edge IPs, `real_ip` is not in force — check `firewall.txt` and re-run `make provision --tags firewall,nginx` |
-| 443 unexpectedly open | `firewall.txt` for the `CATLOG-EDGE` chain. A Docker restart flushes `DOCKER-USER` |
+| rate limiting the wrong people | `nginx.log` client addresses. If they are Cloudflare edge IPs, `real_ip` is not in force — check `firewall.txt` and re-run `make provision TAGS=nginx` |
+| 443 reachable from somewhere it should not be | the DigitalOcean firewall's inbound rules — nothing on the box restricts it |
+| a published port unreachable | `iptables.txt`, for a missing DNAT in Docker's `nat` table |
 
 `make ops-exec CMD='projections rebuild'` and friends reach the admin mux. The catlogd image has no
 shell, which is not an obstacle: `docker compose exec` runs the binary directly. For a real shell,

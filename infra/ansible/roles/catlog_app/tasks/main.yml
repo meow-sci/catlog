@@ -14,18 +14,6 @@
       infra/.release.json — run `make release` first, or export them by hand.
     quiet: true
 
-- name: Warn if the images are not digest-pinned
-  # A tag can be moved under you; a digest cannot, and rollback depends on
-  # being able to name the exact thing that was running before.
-  ansible.builtin.debug:
-    msg: >-
-      WARNING: {{ item }} is not digest-pinned. Rollback will be approximate and
-      two deploys of the same tag may not be the same bytes.
-  when: "'@sha256:' not in item"
-  loop:
-    - "{{ catlog_image }}"
-    - "{{ catlog_nginx_image }}"
-
 - name: Create the project directory
   ansible.builtin.file:
     path: /opt/catlog
@@ -68,12 +56,43 @@
   no_log: true
   notify: Restart catlogd
 
-- name: Pull the images
-  community.docker.docker_image_pull:
-    name: "{{ item }}"
+- name: Check both images are on this host
+  # Nothing pulls. `make release` streamed them here with
+  # `docker save | ssh docker load`, so a missing image means that step did not
+  # run — and saying so is worth more than a `compose up` failing with
+  # "image not found" three tasks later.
+  ansible.builtin.command:
+    cmd: "docker image inspect {{ item }} --format {% raw %}'{{.Id}}'{% endraw %}"
+  register: catlog_image_ids
+  changed_when: false
+  failed_when: false
   loop:
     - "{{ catlog_image }}"
     - "{{ catlog_nginx_image }}"
+
+- name: Refuse to deploy an image that is not here
+  ansible.builtin.assert:
+    that: item.rc == 0
+    fail_msg: >-
+      {{ item.item }} is not on this host. Run `make release` from the machine
+      that builds — it streams the images over ssh; there is no registry to pull
+      from.
+    quiet: true
+  loop: "{{ catlog_image_ids.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Check the shipped image is the one that was built
+  # The release file records the content hash of exactly what was streamed. A
+  # tag can be reused across builds; this catches a stale image wearing the
+  # right name, which is the failure a registry digest would have caught.
+  ansible.builtin.assert:
+    that: catlog_image_ids.results[0].stdout | trim == catlog_image_id
+    fail_msg: >-
+      {{ catlog_image }} on this host is {{ catlog_image_ids.results[0].stdout | trim }},
+      but the release recorded {{ catlog_image_id }}. Re-run `make release`.
+    quiet: true
+  when: catlog_image_id | length > 0
 
 - name: Read the image's configured user
   ansible.builtin.command:

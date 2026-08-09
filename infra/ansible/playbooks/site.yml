@@ -1,9 +1,9 @@
 # make provision — the whole box, from a fresh VM to one ready for `make deploy`.
 #
 # Idempotent and re-runnable: running it against a healthy host changes nothing.
-# The role ORDER is load-bearing in one place — cloudflare_firewall must run
-# before catlog_nginx, because real_ip must not be configured until 443 is
-# restricted to the ranges it trusts. Both read the same fact.
+# Nothing here manages a firewall. Ports 22, 80 and 443 are governed by the
+# DigitalOcean cloud firewall, by hand; Docker maintains its own iptables rules
+# for the ports it publishes and needs no help from us.
 - name: Provision the catlog host
   hosts: catlog
   become: true
@@ -14,8 +14,6 @@
       tags: [storage, baseline]
     - role: docker
       tags: [docker, baseline]
-    - role: cloudflare_firewall
-      tags: [firewall]
     - role: catlog_app
       tags: [app]
     - role: acme

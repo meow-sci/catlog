@@ -73,9 +73,9 @@ E2E_DATA_DIR ?= data-e2e
         e2e e2e-browser e2e-full server-run-test-env \
         sim loadgen dev dev-server spa-dev spa-preview spa-smoke spa-deps \
         mockidp-run keys seed testvectors db-snapshot clean precompress \
-        preflight images images-smoke images-push release provision deploy \
+        preflight images images-smoke images-ship release provision deploy \
         rollback certs ops-status ops-logs ops-exec ops-backup ops-ssh \
-        deploy-env ansible-deps
+        deploy-env
 
 ## help: list targets
 help:
@@ -328,7 +328,7 @@ precompress: site-build spa-build
 #
 #     make preflight && make provision && make release && make deploy
 #
-# Every target below is a thin wrapper around one docker or ansible-playbook
+# Every target below is a thin wrapper around one docker or scripts/ansible.sh
 # command you could type by hand. Settings and secrets come from infra/deploy.env
 # (gitignored; copy infra/deploy.env.example), which is included and exported
 # here and nowhere else.
@@ -351,11 +351,17 @@ CATLOG_VERSION    ?= $(shell git describe --tags --always --dirty 2>/dev/null ||
 CATLOG_COMMIT     ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 CATLOG_BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 
-GHCR_REGISTRY  ?= ghcr.io
-GHCR_NAMESPACE ?= meow-sci
-CATLOGD_REPO   := $(GHCR_REGISTRY)/$(GHCR_NAMESPACE)/catlogd
-NGINX_REPO     := $(GHCR_REGISTRY)/$(GHCR_NAMESPACE)/catlog-nginx
+# Local image names. There is no registry: `make images-ship` streams them to
+# the VM over ssh (scripts/ship-images.sh), so nothing needs a hostname prefix
+# and nothing needs an account.
+CATLOGD_REPO := catlog/catlogd
+NGINX_REPO   := catlog/catlog-nginx
 
+# Ansible runs in a container (scripts/ansible.sh, alpine/ansible), so the only
+# things this machine needs are docker and ssh. The wrapper mounts infra/ and
+# diagnostics/, passes infra/deploy.env with --env-file, and synthesises a passwd
+# entry for your uid — without which OpenSSH refuses to start at all.
+#
 # infra/deploy.env is sourced INSIDE each deployment recipe, never `include`d
 # with a global `export`. Two reasons, both learned the hard way:
 #
@@ -369,7 +375,7 @@ NGINX_REPO     := $(GHCR_REGISTRY)/$(GHCR_NAMESPACE)/catlog-nginx
 LOAD_ENV = set -a; . $(CURDIR)/$(DEPLOY_ENV); set +a;
 NEED_ENV = @test -f $(DEPLOY_ENV) || { echo "no $(DEPLOY_ENV) — run 'make deploy-env' first" >&2; exit 1; }
 
-ANSIBLE = cd $(ANSIBLE_DIR) && ansible-playbook
+ANSIBLE = scripts/ansible.sh
 
 ## deploy-env: create infra/deploy.env from the example (safe to re-run)
 deploy-env:
@@ -380,19 +386,17 @@ deploy-env:
 	  echo "created $(DEPLOY_ENV) — fill it in, then run 'make preflight'"; \
 	fi
 
-## ansible-deps: install the collections the playbooks need
-ansible-deps:
-	ansible-galaxy collection install -r $(ANSIBLE_DIR)/requirements.yml
-
 ## preflight: check local tools, secrets and the VM. Read-only, changes nothing
 preflight:
 	@test -f $(DEPLOY_ENV) || { echo "no $(DEPLOY_ENV) — run 'make deploy-env' first" >&2; exit 1; }
 	@command -v docker  >/dev/null || { echo "docker is not on PATH" >&2; exit 1; }
 	@docker buildx version >/dev/null 2>&1 || { echo "docker buildx is missing" >&2; exit 1; }
-	@command -v ansible-playbook >/dev/null || { \
-	  echo "ansible-playbook is not on PATH — 'brew install ansible' or 'uv tool install ansible-core'" >&2; exit 1; }
 	@docker info >/dev/null 2>&1 || { echo "the docker daemon is unreachable — start Docker Desktop" >&2; exit 1; }
-	$(LOAD_ENV) $(ANSIBLE) playbooks/preflight.yml
+	@command -v ssh >/dev/null || { echo "ssh is not on PATH" >&2; exit 1; }
+	@# Catches a base-image bump that removed a config key or a plugin, which
+	@# --syntax-check cannot: it loads neither callbacks nor connection plugins.
+	@ANSIBLE_ENTRY=ansible-config scripts/ansible.sh validate
+	$(ANSIBLE) playbooks/preflight.yml
 
 ## images: build catlogd and catlog-nginx for linux/amd64
 # SPA_CHECKS=0 skips the reader's typecheck/lint/format/test inside the build —
@@ -417,31 +421,27 @@ images:
 images-smoke:
 	scripts/container-smoke.sh $(CATLOGD_REPO):$(CATLOG_VERSION) $(NGINX_REPO):$(CATLOG_VERSION)
 
-## images-push: push both images to GHCR and record their digests
-images-push:
-	$(NEED_ENV)
-	@$(LOAD_ENV) test -n "$$GHCR_TOKEN" || { echo "GHCR_TOKEN is unset — see infra/deploy.env" >&2; exit 1; }
-	@$(LOAD_ENV) echo "$$GHCR_TOKEN" | docker login $(GHCR_REGISTRY) -u "$$GHCR_USER" --password-stdin
-	docker push $(CATLOGD_REPO):$(CATLOG_VERSION)
-	docker push $(CATLOGD_REPO):sha-$(CATLOG_COMMIT)
-	docker push $(NGINX_REPO):$(CATLOG_VERSION)
-	docker push $(NGINX_REPO):sha-$(CATLOG_COMMIT)
-	@scripts/write-release.sh $(RELEASE_FILE) $(CATLOGD_REPO):$(CATLOG_VERSION) $(NGINX_REPO):$(CATLOG_VERSION) $(CATLOG_VERSION)
+## images-ship: stream both images to the VM over ssh, and record the release
+# `docker save | ssh docker load`. No registry, no tarball on either end. Skips
+# an image whose ID already matches the one on the VM, so a server-only redeploy
+# does not re-send the nginx image.
+images-ship:
+	scripts/ship-images.sh $(CATLOGD_REPO):$(CATLOG_VERSION) $(NGINX_REPO):$(CATLOG_VERSION) $(CATLOG_VERSION)
 
-## release: images + images-smoke + images-push  (the one you run before deploying)
+## release: images + images-smoke + images-ship  (the one you run before deploying)
 release:
 	@if [ -n "$$(git status --porcelain)" ] && [ -z "$(ALLOW_DIRTY)" ]; then \
 	  echo "the working tree is dirty — commit first, or 'make release ALLOW_DIRTY=1'" >&2; exit 1; fi
 	@$(MAKE) images SPA_CHECKS=1
 	@$(MAKE) images-smoke
-	@$(MAKE) images-push
+	@$(MAKE) images-ship
 	@echo
 	@echo "released $(CATLOG_VERSION). Next: make deploy"
 
 ## provision: one-time (and re-runnable) — baseline, storage, docker, firewall, certs, app
 provision:
 	$(NEED_ENV)
-	$(LOAD_ENV) $(ANSIBLE) playbooks/site.yml $(if $(strip $(TAGS)),--tags "$(TAGS)",) $(ANSIBLE_ARGS)
+	$(ANSIBLE) playbooks/site.yml $(if $(strip $(TAGS)),--tags "$(TAGS)",) $(ANSIBLE_ARGS)
 
 ## deploy: pull the released digests on the VM and replace catlogd (CONFIRM=1 to skip the prompt)
 deploy:
@@ -451,30 +451,30 @@ deploy:
 	  $(LOAD_ENV) printf '\nDeploy these to %s? catlogd will be STOPPED and restarted. [y/N] ' "$$CATLOG_SSH_HOST"; \
 	  read a; [ "$$a" = y ] || { echo aborted; exit 1; }; fi
 	$(NEED_ENV)
-	$(LOAD_ENV) set -a; . $(CURDIR)/$(RELEASE_FILE); set +a; \
+	set -a; . $(CURDIR)/$(RELEASE_FILE); set +a; \
 	  $(ANSIBLE) playbooks/deploy.yml $(ANSIBLE_ARGS)
 
 ## rollback: return to the previous digests recorded on the VM
 rollback:
 	$(NEED_ENV)
-	$(LOAD_ENV) $(ANSIBLE) playbooks/rollback.yml $(ANSIBLE_ARGS)
+	$(ANSIBLE) playbooks/rollback.yml $(ANSIBLE_ARGS)
 
 ## certs: issue or renew the TLS certificate, then reload nginx if it changed
 certs:
 	$(NEED_ENV)
-	$(LOAD_ENV) $(ANSIBLE) playbooks/certs.yml $(ANSIBLE_ARGS)
+	$(ANSIBLE) playbooks/certs.yml $(ANSIBLE_ARGS)
 
 ## ops-status: one screen — containers, version, health, cert expiry, disk, firewall
 ops-status:
 	$(NEED_ENV)
-	$(LOAD_ENV) $(ANSIBLE) playbooks/ops.yml --tags status $(ANSIBLE_ARGS)
+	$(ANSIBLE) playbooks/ops.yml --tags status $(ANSIBLE_ARGS)
 
 ## ops-logs: gather a diagnostics bundle into ./diagnostics/ (SINCE=24h widens the window)
 ops-logs:
 	@mkdir -p $(DIAG_DIR)
 	@stamp=$$(date -u +%Y%m%dT%H%M%SZ); dest="$(DIAG_DIR)/$$stamp"; mkdir -p "$$dest"; \
-	 $(LOAD_ENV) cd $(ANSIBLE_DIR) && ansible-playbook playbooks/ops.yml --tags logs \
-	   -e catlog_fetch_dest="$(CURDIR)/$$dest" $(ANSIBLE_ARGS) && \
+	 scripts/ansible.sh playbooks/ops.yml --tags logs \
+	   -e catlog_fetch_dest="/work/diagnostics/$$stamp" $(ANSIBLE_ARGS) && \
 	 tar -xzf "$(CURDIR)/$$dest/diagnostics.tar.gz" -C "$(CURDIR)/$$dest" --strip-components=1 && \
 	 rm -f "$(CURDIR)/$$dest/diagnostics.tar.gz" && \
 	 echo && echo "diagnostics in $$dest:" && ls -la "$(CURDIR)/$$dest"
@@ -483,7 +483,7 @@ ops-logs:
 ops-exec:
 	@test -n "$(CMD)" || { echo "usage: make ops-exec CMD='projections rebuild'" >&2; exit 1; }
 	$(NEED_ENV)
-	$(LOAD_ENV) $(ANSIBLE) playbooks/ops.yml --tags exec -e catlog_ctl_cmd="$(CMD)" $(ANSIBLE_ARGS)
+	$(ANSIBLE) playbooks/ops.yml --tags exec -e catlog_ctl_cmd="$(CMD)" $(ANSIBLE_ARGS)
 
 ## ops-backup: take a backup on the VM (FETCH=1 also copies it here — it holds player data)
 ops-backup:
@@ -492,15 +492,17 @@ ops-backup:
 	  read a; [ "$$a" = y ] || { echo aborted; exit 1; }; fi
 	@mkdir -p $(DIAG_DIR)
 	$(NEED_ENV)
-	$(LOAD_ENV) $(ANSIBLE) playbooks/backup.yml \
+	$(ANSIBLE) playbooks/backup.yml \
 	  $(if $(strip $(FETCH)),-e catlog_fetch_backup=true -e catlog_fetch_dest="$(CURDIR)/$(DIAG_DIR)",) \
 	  $(ANSIBLE_ARGS)
 
 ## ops-ssh: an interactive shell on the VM
 ops-ssh:
 	$(NEED_ENV)
-	@$(LOAD_ENV) test -n "$$CATLOG_SSH_HOST" || { echo "CATLOG_SSH_HOST is unset — see infra/deploy.env" >&2; exit 1; }
-	@$(LOAD_ENV) exec ssh -p "$${CATLOG_SSH_PORT:-22}" "$${CATLOG_SSH_USER:-root}@$$CATLOG_SSH_HOST"
+	@# Through the same generated config the playbooks use, so this is the same
+	@# connection — same key, same pinned host key — and not whatever your own
+	@# ~/.ssh/config would have decided.
+	scripts/ssh.sh
 
 ## clean: remove build output (keeps data/ and node_modules/)
 clean:

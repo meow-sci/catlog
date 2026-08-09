@@ -29,7 +29,7 @@ commit. See [ARCHITECTURE.md](ARCHITECTURE.md#7-keeping-the-documentation-true) 
 - **[The two frontends](#the-two-frontends)** — `UI-*`, 56 entries
 - **[The mod and its KSA-free core](#the-mod-and-its-ksa-free-core)** — `MOD-*`, 69 entries
 - **[The load harness](#the-load-harness)** — `LOAD-*`, 26 entries
-- **[Containers, nginx & deployment](#containers-nginx--deployment)** — `OPS-*`, 23 entries
+- **[Containers, nginx & deployment](#containers-nginx--deployment)** — `OPS-*`, 25 entries
 - **[Documentation](#documentation)** — `DOCS-*`, 2 entries
 
 ---
@@ -2173,7 +2173,7 @@ Because the only importer of testcontainers-go and moby/moby/client sits behind 
 
 *Accepted · 2026-08-08 · WP-CONTAINER.*
 
-`ghcr.io/meow-sci/catlogd` (the Go server) and `ghcr.io/meow-sci/catlog-nginx` (the proxy plus both frontends' assets), built by `infra/docker/Dockerfile.*` and run by `infra/compose.prod.yaml`.
+`catlog/catlogd` (the Go server) and `catlog/catlog-nginx` (the proxy plus both frontends' assets), built by `infra/docker/Dockerfile.*` and run by `infra/compose.prod.yaml`.
 
 **Why a hardened base at all.** catlogd parses attacker-supplied input on every request — a brotli-compressed batch body, a JWS proof, an OAuth callback. If any of that ever yields code execution, what the attacker finds next is the whole question, and a DHI non-dev variant answers it with: no shell, no package manager, no interpreter, nonroot by default. The image is a loader, a libc, catlogd and catlogctl.
 
@@ -2253,15 +2253,43 @@ The argument against automating host state is that a script and a human end up d
 
 The corollary is that a change made by hand on the VM is a bug, and will be silently reverted by the next run. That is the intended behaviour, not a rough edge.
 
-### OPS-024 — The Cloudflare `real_ip` hazard is resolved by making one fact drive both the firewall and nginx
+### OPS-024 — No firewall is managed on the box; access control lives at the cloud provider
 
 *Accepted · 2026-08-08 · WP-CONTAINER.*
 
-Per-IP rate-limit zones key on the remote address, which becomes a Cloudflare edge address the moment CF fronts the origin — so they have to key on `CF-Connecting-IP` instead. But turning `real_ip` on while the origin is still reachable directly is **strictly worse than having no rate limiting at all**: any client can then choose its own bucket by sending that header. A fresh random value per request makes the limiter unreachable, a victim's address makes it a weapon, and the spoofed value lands in the access log too.
+These playbooks install no `nftables` ruleset, add no `DOCKER-USER` rules, do not install `ufw`, and
+leave sshd's configuration alone. Ports 22, 80 and 443 are governed entirely by the DigitalOcean
+cloud firewall, maintained by hand. Docker maintains its own iptables rules for the ports it
+publishes and needs no help.
 
-`roles/cloudflare_firewall` fetches the ranges, publishes them as `cloudflare_ranges`, and `roles/catlog_nginx` renders `set_real_ip_from` from that same fact — in that order, in one play, with an assertion in the nginx role that refuses to render if the firewall has not run. The ordering is enforced rather than remembered, which is the only reason `real_ip` can be on unconditionally.
+**The asymmetry is the whole argument.** A host firewall on a machine reached over the network is the
+one component whose failure mode is losing the machine — a wrong rule cannot be fixed from the box it
+has made unreachable, and a home connection's address is not the same address next week. A cloud
+firewall rule is one click to undo from a laptop. Against that, there was nothing the on-box layer
+could express that the cloud one cannot: the surface is sshd on 22 and Docker's published 80/443, and
+that is all of it.
 
-**The rules that actually protect 80/443 are in `DOCKER-USER`, not in the host input chain.** Published container ports are DNAT'd and forwarded, so they never traverse INPUT: an nftables ruleset that "blocks everything but 22" leaves 443 open to the internet, silently. `catlog-firewall.service` is `PartOf=docker.service` because restarting Docker re-creates and flushes `DOCKER-USER`, which would take those rules with it.
+An earlier version of this did manage both layers, and the thing worth keeping from it is the trap:
+**published container ports never traverse the INPUT chain.** They are DNAT'd in `nat/PREROUTING` and
+filtered in `FORWARD`, so a host ruleset that "blocks everything but 22" leaves 443 wide open while
+reading as correct. An on-box rule for a container port has to live in `DOCKER-USER` and be
+re-applied on every Docker restart, because Docker re-creates and flushes that chain. Neither problem
+exists at the provider.
+
+**What survives is `set_real_ip_from`, and it is not packet filtering.** Per-IP rate-limit zones key
+on the remote address, which becomes a Cloudflare edge address once CF fronts the origin — so nginx
+has to learn the client from `CF-Connecting-IP`. `roles/catlog_nginx` fetches Cloudflare's published
+ranges on every run and renders that list, refusing to apply anything that does not look like CIDRs.
+
+Its safety now depends on a rule this repository does not own: **the origin must not be reachable on
+443 from outside Cloudflare's ranges.** With that rule in place, only a Cloudflare peer can set the
+header. Widen it and any client can choose its own rate-limit bucket — a random value per request
+makes the limiter unreachable, a victim's address makes it a weapon, and the spoofed value lands in
+the access log. That trade is the price of moving access control off the box, and it is stated in
+`realip.conf.j2` where somebody widening the rule might read it.
+
+`make ops-logs` still collects `iptables -S` and the nat table, for reading rather than managing: a
+published port that is unreachable usually shows up there as a missing DNAT.
 
 ### OPS-025 — TLS is Let's Encrypt via DNS-01, run by a host timer rather than a sidecar
 
@@ -2339,19 +2367,54 @@ The consequence is that the build stage **cannot execute what it produced** — 
 `Dockerfile.nginx`'s `nginx-modules` stage is **not** cross-compiled and runs emulated. It builds C — nginx plus ngx_brotli plus a static libbrotli — and a cross-toolchain for that is a large amount of machinery to save about a minute on a stage that is cached anyway.
 
 
-### OPS-032 — Two GHCR tokens: the VM gets `read:packages`, and the push token never leaves the build machine
+### OPS-032 — Images are streamed to the VM over ssh; there is no registry
 
 *Accepted · 2026-08-08 · WP-CONTAINER.*
 
-GHCR package visibility is **independent of repository visibility and defaults to private** — GitHub's own words are that a linked package "inherits the access permissions (but not the visibility) of the linked repository". So catlog's images stay private while the repository is public, which is what we want, and which means the VM must authenticate in order to pull.
+`make release` ends in `docker save <image> | ssh <host> 'docker load'` — one pipe, nothing written to disk on either end. No tarball on the laptop, no staging file on the VM, nothing to clean up when it is interrupted, and no copy of the image left in anybody's `/tmp`.
 
-`docker login` writes that credential to `/root/.docker/config.json`, base64-encoded and readable, on a public-facing box. Given one token for both jobs, compromising the VM once would hand over the ability to publish a poisoned `catlogd` — escalating a single owned host into a foothold on every subsequent deploy. The images are digest-pinned, which limits the blow to *future* releases rather than the running one, but that is a mitigation, not a reason to leave a write credential lying there.
+**Why no registry.** One VM, one operator, two images totalling ~85 MB. A registry adds an account, a storage quota, a service that must be up at deploy time, and — the part that decided it — **a credential on a public-facing box**. `docker login` writes it readable to `/root/.docker/config.json`, so any registry the VM can pull from is a registry a compromised VM can be used against. Streaming inverts that: the machine that builds initiates the transfer, and the VM holds no credential for anything.
 
-So: `GHCR_TOKEN` (`write:packages`) is used only by `make images-push` and is referenced by no playbook; `GHCR_PULL_TOKEN` (`read:packages`) is the only one Ansible installs. `GHCR_PULL_USER` allows a machine account, so the VM's credential need not be tied to a person at all.
+**What it costs, stated plainly:** there is no off-box copy of what is deployed. Lose the droplet and the images go with it. They are rebuilt from the git tag by `make release` — which is why the version is stamped into the binary and why the smoke test gates the release — and rollback is unaffected, because the previous image is still on the VM.
 
-**Both `make preflight` and `roles/docker` refuse when the two values are equal.** Without that check the split would be aspirational: a copy-pasted write token works perfectly — pulls succeed, nothing looks wrong — and the whole point is silently lost. The guard is duplicated on purpose, because preflight runs before anything has been written to the VM and the role runs at the moment it would be.
+**Two things make it cheap enough to be the only path.** `docker save` output is *already* compressed (measured: 20.7 MB through gzip became 20.6 MB), so nothing is spent compressing it again. And `ship-images.sh` compares image IDs over ssh first, skipping anything already present — so a server-only redeploy sends ~21 MB rather than 85 MB, and an unchanged one sends nothing.
 
-Not addressed here, and worth knowing: private packages draw on GitHub Packages quotas (Free 500 MB storage / 1 GB transfer per month, shared with Actions artifacts) where public ones are unmetered. At ~85 MB a version that needs a retention policy before it needs a bigger plan.
+**Identity without a registry digest.** `RepoDigests` are assigned by a registry and there is none, so the release records the image **ID** — the config hash, equally immutable and preserved across save/load. The tag is what compose reads; the ID is what `roles/catlog_app` asserts against, which catches a stale image wearing the right name. That is the failure a digest pin was there to prevent, and it is still prevented.
+
+The playbooks never pull. `roles/catlog_app` verifies both images are present and fails with "run `make release`" if not, because a `compose up` failing with *image not found* three tasks later says nothing about the cause.
+
+### OPS-033 — Ansible runs in a container, so the only local requirements are Docker and ssh
+
+*Accepted · 2026-08-08 · WP-CONTAINER.*
+
+`scripts/ansible.sh` wraps `alpine/ansible:2.21.0`, which is multi-arch and already ships `community.docker`, `community.general` and `ansible.posix` — so there is no galaxy install step, no virtualenv, and no locally-installed Ansible whose version can drift from the one that last worked. `make preflight` checks the collections are present rather than assuming, so a base-image change that dropped one fails before a play needs it.
+
+It mounts `infra/` (the playbooks, and the `compose.prod.yaml` and `nginx/*.j2` that roles template from — which is why the mount is `infra/` and not `infra/ansible/`), `diagnostics/` read-write, and `~/.ssh` **read-only**. The rest of the repository is deliberately not mounted: `data/` holds the signing key, the session key and the pepper.
+
+Three things that were only discovered by running it:
+
+- **The connection is described in `deploy.env`, never inherited from `~/.ssh/config`.** Mounting your `~/.ssh` wholesale and letting your own config apply works until that config names an `IdentityFile` by absolute path — the normal way to write one — at which point the container, whose `HOME` is elsewhere, cannot find it. `CATLOG_SSH_IDENTITY_FILE` names the key and `lib/deploy-env.sh` generates a one-`Host` config from it, used identically by the container, `make ops-ssh` and the image shipping.
+- **That generated `Host` line must name the address, not just an alias.** Ansible connects to `ansible_host`, so a block matching only `Host catlog` applies to none of the real traffic: ssh falls back to `~/.ssh/id_*` and the default `known_hosts`, and fails with an authentication error that names no cause. Caught with `ssh -G <address>`, which prints what actually resolves rather than what was intended — worth reaching for whenever an ssh config "should" be working.
+- **A synthesised `/etc/passwd` is mandatory.** `--user 501:20` gives the container a uid absent from the image's passwd file, and OpenSSH then refuses to start at all — *"No user exists for uid 501"*, exit 255, no connection attempted. Every play would fail at its first task with an error naming nothing useful. The wrapper writes a passwd and group file for the run.
+- **`HOME` must be a tmpfs owned by that uid.** Bind-mounting `~/.ssh` *into* `$HOME` makes Docker create the parent owned by root, after which nothing else can be created in it — and that breaks, one at a time and with unrelated-looking errors, every Ansible path defaulting to `~/.ansible`: local staging, the ssh `ControlPath`, and remote staging for a `delegate_to: localhost` task (where the "target" is the container). The last of those would have killed `roles/catlog_nginx`'s Cloudflare fetch halfway through a provision run. Overriding each path works and is whack-a-mole; `--tmpfs "$HOME:uid=…"` fixes the class, because the parent is then ours.
+- **`stdout_callback = yaml` is gone.** It was `community.general`'s plugin, removed in that collection's 12.0.0; the image ships 13, where naming it is a hard startup error rather than a warning. `[ssh_connection]` is likewise unknown to ansible-core 2.21 — `pipelining` belongs in `[defaults]` now, and every line of that section had been silently doing nothing. Both were found by `ansible-config validate`, which is worth running after any base-image bump: **`--syntax-check` does not load callbacks or connection plugins, so it cannot catch either.**
+- **Empty bash arrays need `${arr[@]+"${arr[@]}"}`.** macOS ships bash 3.2, where `"${arr[@]}"` on an empty array under `set -u` is an unbound-variable error.
+
+**The VM's host key is pinned rather than accepted on sight.** `CATLOG_SSH_HOST_KEY` in `deploy.env` is written to a `known_hosts` for the run, and ssh is given that file alone with `StrictHostKeyChecking=yes`. A host key is knowable before anything connects — DigitalOcean shows it in the droplet console — so trust-on-first-use here would be accepting whatever answered and calling it verified. The pin also removes the one manual step the container path otherwise had, and turns a rebuilt droplet or a machine-in-the-middle into an immediate, loud failure instead of a prompt somebody clicks through. Ports other than 22 need OpenSSH's `[host]:port` form, which is not interchangeable with the bare one; the wrapper handles both, and both are tested.
+
+
+### OPS-034 — The data volume is the provider's; the playbooks verify it and never manage it
+
+*Accepted · 2026-08-08 · WP-CONTAINER.*
+
+DigitalOcean attaches the NVMe volume, formats it ext4, mounts it at `/mnt/catlog_db_prime` and maintains its fstab entry. `roles/storage` discovers no block device, creates no filesystem and writes no mount unit — an earlier version did all three, and every line of it was a way to destroy data in exchange for automating something that had already happened.
+
+What is left is one configured path (`CATLOG_DATA_ROOT`, which flows to the container through the compose `.env`), the directory tree under it, and two checks:
+
+- **The path must be a real mount point** — `findmnt <path>`, deliberately without `--target`. A volume that failed to attach leaves an ordinary empty directory behind, and catlog would open its databases on the root disk: an order of magnitude smaller, and gone with the droplet, with nothing anywhere saying so. `--target` would have reported the root filesystem and looked healthy.
+- **It must not be `noexec`, and must actually execute a file.** The Turso driver extracts a 19 MB shared object there and `dlopen`s it. We no longer own the mount, so this can only be refused with a reason, never fixed — which is still worth far more than a crash whose message names a permission error on a file catlogd has just written successfully.
+
+Everything that must survive a rebuild lives under that one root — databases, key set, archive, config, certificates, backups — so there is one thing to back up and one thing to move.
 
 
 ---

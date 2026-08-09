@@ -1,6 +1,6 @@
 {{ ansible_managed | comment }}
 # catlog — the server blocks. Rendered by roles/catlog_nginx into
-# /mnt/catlog/nginx/conf/10-catlog.conf and mounted at
+# $CATLOG_DATA_ROOT/nginx/conf/10-catlog.conf and mounted at
 # /etc/nginx/catlog.d/10-catlog.conf.
 #
 # The http-level half (compression, zones, the catlogd upstream, logging) is
@@ -14,9 +14,12 @@
 #   {{ catlog_origin_domain }}
 #       the direct name, DNS-only (grey cloud). It resolves straight to this
 #       box, bypassing Cloudflare, and exists so a fault can be isolated to
-#       "us" or "the edge" in one curl. It is reachable only from
-#       catlog_direct_allow_cidrs — see the geo/allow rules below — because a
-#       name that bypasses the DDoS front door must not be open to everyone.
+#       "us" or "the edge" in one curl.
+#
+#       WHO MAY USE IT IS THE CLOUD FIREWALL'S ANSWER, NOT NGINX'S. This server
+#       answers on that name to anyone who can open a connection; restricting
+#       443 to Cloudflare's ranges plus your own address is what makes that a
+#       short list. nginx does not second-guess it.
 {% endif %}
 
 # --- HTTP: redirect to HTTPS ------------------------------------------------
@@ -63,21 +66,6 @@ server {
     add_header X-Frame-Options DENY always;
 
     limit_conn catlog_conn {{ catlog_conn_limit }};
-
-{% if catlog_origin_domain %}
-    # The direct name bypasses Cloudflare — and with it the DDoS front door, the
-    # WAF and every edge rule. So it is restricted to the operator's addresses.
-    #
-    # $catlog_block_direct is computed by a `map` in 20-realip.conf, keyed on
-    # $realip_remote_addr: the PEER address, before real_ip rewrote
-    # $remote_addr from CF-Connecting-IP. That is the only address a client
-    # cannot choose for itself, which is exactly the property an access rule
-    # needs. One `if` with a bare `return` — the single form of `if` that is
-    # documented as safe in a server block.
-    if ($catlog_block_direct) {
-        return 403;
-    }
-{% endif %}
 
     # --- maintenance page ---------------------------------------------------
     # Deploys stop catlogd before starting it (the database lock forbids

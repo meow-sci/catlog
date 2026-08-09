@@ -1,8 +1,15 @@
-# Collections these playbooks need beyond ansible-core.
+# The collections these playbooks import.
+#
+# You do not need to install them: `scripts/ansible.sh` runs everything in
+# alpine/ansible, which ships all three (community.docker 5.x,
+# community.general 13.x, ansible.posix 2.x). `make preflight` checks they are
+# actually present rather than assuming, so a change of base image that dropped
+# one would be caught before a play needed it.
+#
+# This file exists so the dependency is written down, and so the playbooks can
+# still be run by a locally-installed ansible if you ever want to:
 #
 #   ansible-galaxy collection install -r infra/ansible/requirements.yml
-#
-# `make preflight` checks they are present and tells you this command if not.
 collections:
   - name: community.docker
     version: ">=4.0.0"

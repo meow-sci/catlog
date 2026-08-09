@@ -64,7 +64,7 @@ enums are allow-lists (Constitution §6).
 | `contracts/` | Cross-language conformance vectors, generated deterministically and consumed by **both** the Go and C# suites. This is what guarantees mod↔server interop without the game. | [ingest-api.md](ingest-api.md) |
 | `docs/` | This directory. The specification, the decisions, the design record. | — |
 | `infra/` | The production deployment: two Dockerfiles, the compose project, the nginx configuration, and the Ansible roles and playbooks that own the VM. | [operations.md](operations.md) |
-| `scripts/` | `e2e-full.sh` (the whole-stack proof), `db-snapshot.sh`, `precompress.mjs` (build-time brotli/gzip siblings), `container-smoke.sh` (the release gate). | [../DEVELOPMENT.md](../DEVELOPMENT.md) |
+| `scripts/` | `e2e-full.sh` (the whole-stack proof), `db-snapshot.sh`, `precompress.mjs` (build-time brotli/gzip siblings), `container-smoke.sh` (the release gate), `ansible.sh` (runs Ansible in a container so nothing is installed locally). | [../DEVELOPMENT.md](../DEVELOPMENT.md) |
 | `data/` | Runtime state, git-ignored: `events.db`, `projections.db`, `keys/`, `archive/`. | — |
 
 Four toolchains: **Go 1.26**, **.NET SDK 10**, **Node 24 + pnpm 11**. `pnpm` only — never `npm`,

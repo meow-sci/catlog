@@ -9,8 +9,8 @@
     that: ansible_facts.os_family == "Debian"
     fail_msg: >-
       These playbooks target Debian or Ubuntu ({{ ansible_facts.os_family }} found).
-      The container path needs Docker CE from the official repository and nftables
-      from the base system; neither assumption survives a different family.
+      The container path needs Docker CE from the official repository and apt to
+      install it; neither assumption survives a different family.
     quiet: true
 
 - name: Install the baseline packages
@@ -18,8 +18,6 @@
     name:
       - ca-certificates   # outbound TLS, and the Docker repository key
       - gnupg             # apt keyring for the Docker repository
-      - nftables          # already present on Debian 12+/Ubuntu 22.04+; named so a
-                          # minimal cloud image without it still works
     state: present
     update_cache: true
     cache_valid_time: 3600
