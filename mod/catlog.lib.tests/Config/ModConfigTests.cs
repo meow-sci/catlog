@@ -1,6 +1,10 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using MeowSci.Catlog.Lib.Config;
+using MeowSci.Catlog.Lib.Detect;
+using MeowSci.Catlog.Lib.Events;
 using MeowSci.Catlog.Lib.Ship;
 using Xunit;
 
@@ -307,5 +311,174 @@ public sealed class ModConfigTests
     public void SerializedFileCarriesTheHeaderComment()
     {
         Assert.StartsWith("# catlog", new ModConfig().Serialize());
+    }
+
+    // ----- [events]: per-event-type reporting ---------------------------------------------
+
+    /// <summary>
+    /// The dotted-key trap, pinned. Tomlyn writes a dictionary key containing a dot as a
+    /// <i>quoted</i> key, and it has to: a bare <c>telemetry.window = false</c> under
+    /// <c>[events]</c> is a nested table in TOML, not a key of that name. If this assertion ever
+    /// loses its quotes, every file the mod writes becomes one the mod cannot read.
+    /// </summary>
+    [Fact]
+    public void EventTableRoundTripsWithQuotedDottedKeys()
+    {
+        using var dir = new TempDir();
+        string path = dir.File("catlog.toml");
+        var original = new ModConfig
+        {
+            Events =
+            {
+                [EventTypes.TelemetryWindow] = false,
+                [EventTypes.VehicleStaging] = false,
+                [EventTypes.VehicleOrbit] = true,
+            },
+        };
+
+        original.Save(path);
+        string text = File.ReadAllText(path);
+        ModConfig loaded = ModConfig.LoadOrCreate(path);
+
+        Assert.Contains("[events]", text, StringComparison.Ordinal);
+        Assert.Contains("\"telemetry.window\" = false", text, StringComparison.Ordinal);
+        Assert.Contains("\"vehicle.staging\" = false", text, StringComparison.Ordinal);
+        Assert.Contains("\"vehicle.orbit\" = true", text, StringComparison.Ordinal);
+
+        Assert.False(loaded.Events[EventTypes.TelemetryWindow]);
+        Assert.False(loaded.Events[EventTypes.VehicleStaging]);
+        Assert.True(loaded.Events[EventTypes.VehicleOrbit]);
+    }
+
+    /// <summary>
+    /// Absent means enabled, so a fresh install writes an empty table rather than 22 keys. The
+    /// negative half matters more than the positive one: if the defaults were ever written out,
+    /// a type added in a later build would arrive switched to whatever an old file happened to say.
+    /// </summary>
+    [Fact]
+    public void FirstRun_WritesAnEmptyEventTableMeaningEverythingIsReported()
+    {
+        using var dir = new TempDir();
+        string path = dir.File("catlog.toml");
+
+        ModConfig config = ModConfig.LoadOrCreate(path);
+        string text = File.ReadAllText(path);
+
+        Assert.Empty(config.Events);
+        Assert.Same(EventTypeFilter.All, config.EventFilter());
+
+        // Every registry name appears in the file exactly once — inside the commented example
+        // block in the header, never as a live key.
+        foreach (string type in EventTypes.All)
+        {
+            Assert.Contains($"# \"{type}\" = true", text, StringComparison.Ordinal);
+            Assert.DoesNotContain($"\n\"{type}\"", text, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
+    /// The header's commented list is the only documentation of this section a player ever sees —
+    /// there is no example file — so it goes stale the moment a type is added without it. This is
+    /// the test that stops that being a silent omission.
+    /// </summary>
+    [Fact]
+    public void TheHeaderDocumentsEveryRegisteredEventType()
+    {
+        string[] lines = new ModConfig().Serialize().Split('\n');
+
+        foreach (string type in EventTypes.All)
+        {
+            string line = Assert.Single(
+                lines, l => l.StartsWith($"# \"{type}\" = ", StringComparison.Ordinal));
+
+            // Every example reads `= true`: the block documents what exists, it does not ship
+            // opinions about what a player should switch off.
+            Assert.Contains("= true", line, StringComparison.Ordinal);
+
+            // And each of the five that cannot be switched off says so on its own line.
+            Assert.Equal(EventTypes.IsAlwaysReported(type), line.EndsWith("# locked on", StringComparison.Ordinal));
+        }
+    }
+
+    /// <summary>An event type that does not exist is dropped, exactly as an unknown root key is.</summary>
+    [Fact]
+    public void UnknownEventTypesInTheTableAreDropped()
+    {
+        using var dir = new TempDir();
+        string path = dir.File("catlog.toml");
+        File.WriteAllText(
+            path,
+            """
+            schema = 1
+
+            [events]
+            "vehicle.rud" = false
+            "vehicle.explodes_a_lot" = false
+            "telemetry" = false
+            """);
+
+        ModConfig config = ModConfig.LoadOrCreate(path);
+
+        Assert.Equal([EventTypes.VehicleRud], config.Events.Keys.ToArray());
+        Assert.Equal([EventTypes.VehicleRud], config.EventFilter().Disabled.ToArray());
+    }
+
+    /// <summary>
+    /// A <c>true</c> the player wrote by hand survives the round trip: it says the same thing as
+    /// an absent key, and silently deleting what someone typed is how a config file loses trust.
+    /// </summary>
+    [Fact]
+    public void AnExplicitTrueIsKeptAndReportsAsEnabled()
+    {
+        var config = new ModConfig { Events = { [EventTypes.VehicleSoi] = true } };
+
+        config.Normalize();
+
+        Assert.True(config.Events[EventTypes.VehicleSoi]);
+        Assert.True(config.EventFilter().IsEnabled(EventTypes.VehicleSoi));
+        Assert.False(config.EventFilter().HasDisabled);
+    }
+
+    /// <summary>The §7.2 → §7.5 hand-off: what the file says reaches the pipeline that emits.</summary>
+    [Fact]
+    public void DisabledTypesFlowIntoEventPipelineOptions()
+    {
+        var config = new ModConfig
+        {
+            Events =
+            {
+                [EventTypes.TelemetryWindow] = false,
+                [EventTypes.KittenTumble] = false,
+            },
+        };
+        config.Normalize();
+
+        var options = new EventPipelineOptions("01J9V5M3E8Z0FAKEINSTALL01", Types: config.EventFilter());
+
+        Assert.NotNull(options.Types);
+        Assert.False(options.Types.IsEnabled(EventTypes.TelemetryWindow));
+        Assert.False(options.Types.IsEnabled(EventTypes.KittenTumble));
+        Assert.True(options.Types.IsEnabled(EventTypes.VehicleStaging));
+        Assert.Equal("kitten.tumble, telemetry.window", options.Types.DisabledList);
+    }
+
+    /// <summary>
+    /// A bare dotted key is a TOML table, not a key, and Tomlyn says so by failing the parse. Rule
+    /// 2 then applies unchanged — defaults, and the player's file left exactly as they wrote it so
+    /// they can add the quotes. Documented here because it is the one mistake this section invites.
+    /// </summary>
+    [Fact]
+    public void ABareDottedKeyFailsTheParseAndLeavesTheFileAlone()
+    {
+        using var dir = new TempDir();
+        string path = dir.File("catlog.toml");
+        const string bare = "schema = 1\nsample_hz = 5.0\n\n[events]\ntelemetry.window = false\n";
+        File.WriteAllText(path, bare);
+
+        ModConfig config = ModConfig.LoadOrCreate(path);
+
+        Assert.Equal(Wire.DefaultSampleHz, config.SampleHz);
+        Assert.Empty(config.Events);
+        Assert.Equal(bare, File.ReadAllText(path));
     }
 }

@@ -7,10 +7,36 @@ sidebar:
   order: 3
 ---
 
-import { Aside } from "@astrojs/starlight/components";
+import { Aside, LinkCard } from "@astrojs/starlight/components";
 
 If a number you expected is missing, it is one of the rules on this page. They are
-all here.
+all here — starting with the one that is not a rule at all.
+
+## You may have switched it off
+
+**A board can be legitimately empty because you told catlog not to record what
+feeds it.** Almost every kind of event is optional: you can switch it off in the
+mod's settings, and from then on the mod stops producing it, nothing is sent, and
+the server never learns there was anything to know. There is no other source, so
+the board simply has nothing of yours to rank.
+
+This is the first thing to check when a number is missing and none of the rules
+below seem to apply — particularly if you changed a setting months ago and forgot.
+The mod's status window has a row that says whether anything is switched off, and
+lists what.
+
+**Five kinds of record cannot be switched off**, and setting them to off is
+ignored: a flight beginning, a flight ending, a flight being marked, a session
+starting, and losing a kitten. Those are the ones that decide what a run is
+_worth_ rather than what it contains — the marking one in particular is the only
+thing that says a run was assisted, so without it every rule in the next section
+would be optional too.
+
+<LinkCard
+  title="Turning things off"
+  href="/catlog/start/turning-things-off/"
+  description="Every kind of event, what switching it off costs you, and why five are refused."
+/>
 
 ## The flag rule
 

@@ -10,6 +10,7 @@ Owns **§4.3–§4.5, §4.8–§4.10**. Event payloads are in [events.md](events
 
 - Batch = NDJSON (one envelope per line, `\n` separated, UTF-8, no BOM), compressed with **Brotli**; request header `Content-Encoding: br`, `Content-Type: application/x-ndjson`.
 - Events within a batch are ordered by outbox append order (oldest first). A batch never mixes streams.
+- **A batch may legally omit any event type, and now sometimes does by configuration.** `catlog.toml`'s `[events]` table lets a player switch individual types off in the mod (five are locked on — see [mod.md](mod.md) and MOD-072). Nothing about the wire contract changes: absence has always been legal, only an *unknown* type is rejected, and a server must not infer anything from a type it did not receive.
 - The envelope's keys are exactly those in [events.md](events.md) §4.1 and **unknown envelope keys reject the batch**. Every one is required, including `career` — 16 lowercase Crockford base32 characters (`0-9 a-z` minus `i l o u`), stable for the lifetime of one KSA save. A malformed or missing `career` is `400 malformed_batch`, like any other envelope error.
 - Limits (server-enforced; mirror in mod constants):
 

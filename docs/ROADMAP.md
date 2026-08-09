@@ -129,6 +129,27 @@ complexity budget is better spent elsewhere.
 Anything already in the code that fails those five tests is listed in
 [integrity-audit.md](integrity-audit.md) for the owner to decide on.
 
+### An in-game editor for the `[events]` table
+
+`catlog.toml` lets a player switch individual event types off, and the status window **reports** what
+is off — `N off in catlog.toml: <names>` — but it does not edit it. That is deliberate rather than
+unfinished. The window is read-only rows and one checkbox by design, and it has no text input, which
+is the stated reason it needs no `HotkeyGuard` (MOD-051); a toggle per switchable type would mean
+persisting from the game thread, re-deriving the pipeline's filter live mid-session, and deciding
+what happens to a half-open telemetry window when its type is switched off underneath it. The file is
+the interface, the header documents every key, and the window's job is to make sure a setting a
+player made months ago is never invisible. If it is ever built, it must go through
+`ModConfig.Normalize` and `EventTypeFilter.Create` like every other path — the two-layer refusal in
+MOD-072 is not something a UI gets to bypass.
+
+### Locking `vehicle.rud` along with the other five
+
+Considered and refused. The five types that cannot be switched off are the ones whose absence makes a
+number *better* than it was; `vehicle.rud` only hides how often a player exploded, and the
+`vehicle.impact.survived` verdict — the one that actually scores — is computed client-side before the
+filter ever sees the envelope, so it stays honest either way. Vanity-hiding is a preference, and
+Constitution §8's proportionality is the reason the list stops where it does. See MOD-072.
+
 ### Save-scum detection
 
 catlog cannot tell save-scumming from ordinary reloading, and **does not try**. Reloading before a

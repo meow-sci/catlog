@@ -26,6 +26,7 @@ const triggerLabel =
     <span class={`ev-pill ev-pill-${event.trigger}`}>{triggerLabel}</span>
     <span class="ev-pill ev-pill-ver">v{event.ver}</span>
     {event.droppable && <span class="ev-pill ev-pill-drop">droppable</span>}
+    {event.alwaysOn && <span class="ev-pill ev-pill-locked">always on</span>}
   </h3>
 
   <p class="ev-summary">{event.summary}</p>
@@ -51,6 +52,22 @@ const triggerLabel =
           </>
         ) : (
           "Nothing. It is recorded and kept, but no leaderboard reads it."
+        )
+      }
+    </dd>
+    <dt>Can you switch it off?</dt>
+    <dd>
+      {
+        event.alwaysOn ? (
+          <>
+            No. This is one of the five catlog always reports — see{" "}
+            <a href="/catlog/start/turning-things-off/">Turning things off</a>.
+          </>
+        ) : (
+          <>
+            Yes, in the mod's settings file. You then stop appearing on whatever it feeds — see{" "}
+            <a href="/catlog/start/turning-things-off/">Turning things off</a>.
+          </>
         )
       }
     </dd>
@@ -108,6 +125,10 @@ const triggerLabel =
   .ev-pill-event {
     border-color: var(--sl-color-accent);
     color: var(--sl-color-accent-high);
+  }
+
+  .ev-pill-locked {
+    border-color: var(--sl-color-accent);
   }
 
   .ev-summary {

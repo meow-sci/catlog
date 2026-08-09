@@ -4,7 +4,8 @@
 proportionality) · **Scope:** every integrity mechanism that exists in code today, plus the ones
 that are proposed and not built.
 
-**This audit changed no code.** Everything below classified *Borderline* or *Too far* is flagged
+**Amended 2026-08-09** for M10, the `[events]` table's locked types — the only mechanism added
+since. **This audit changed no code.** Everything below classified *Borderline* or *Too far* is flagged
 for the owner's decision, per the principle's own instruction.
 
 ## Headline
@@ -48,6 +49,7 @@ document as a to-do list.
 | M7 | Impacts inside the game's 5 s post-teleport FX-suppression window are dropped | `mod/catlog/Patcher.cs:394`, `:426`; `VehicleTelemetry.cs:777` | **In scope** | Keep |
 | M8 | `vehicle.impact.survived` frame correlation, incl. manual-destroy flipping the verdict | `mod/catlog.lib/Detect/ImpactCorrelator.cs` (170 lines) | **In scope** | Keep |
 | M9 | NaN/Inf scrubbing on every game read | `mod/catlog/VehicleTelemetry.cs` (`Sanitize.Finite`, ~20 call sites) | **In scope** | Keep |
+| M10 | `catlog.toml`'s `[events]` table refuses to switch off `session.started`, `flight.started`, `flight.ended`, `flight.flagged`, `kitten.kia` (2026-08-09) | `mod/catlog.lib/Events/EventTypes.cs` (`AlwaysReported`), `Config/ModConfig.cs` (`NormalizeEvents`), `Events/EventTypeFilter.cs` (`Create`) | **In scope** | Keep |
 | **Server side** ||||
 | S1 | `flight_state.flags` and the `flags = 0` exclusion applied by every fold | `server/internal/stats/flight.go:99`, `server/internal/stats/fold.go:159` | **In scope** | Keep — highest value per line in the repo |
 | S2 | `FlagOther` (bit 5): an unrecognised flag value excludes the flight | `server/internal/stats/flight.go:32`, `:37` | **In scope** | Keep |
@@ -126,6 +128,49 @@ not with a heuristic.
 **Post-teleport impact suppression (M7).** Reads the game's own `Vehicle.IsImpactFxSuppressed()`
 predicate. This is the cheapest possible form of the principle: the game already knows the answer,
 so ask it.
+
+**The `[events]` locked list (M10, added 2026-08-09).** The mod now lets a player switch individual
+event types off in `catlog.toml`, which is a **new player-controlled surface that can suppress
+events** and therefore belongs in this audit. Five types refuse the setting, and a `false` on any of
+them is dropped with a warning naming the key.
+
+Against the five-part test, taking the refusal itself as the mechanism under audit:
+
+1. **Stock-data test.** It compares against catlog's own wire contract and nothing else — a set of
+   five type names from the registry, tested with a set membership. It models nothing about what a
+   player ought to be able to achieve, and reads no game value at all.
+2. **One-look test.** One `HashSet` with the reason for each of the five written beside it, read by
+   both enforcement points and by the test that asserts the list is exactly those five.
+3. **No-new-machinery test.** No table, no stage, no job, no accumulated state. It is a membership
+   test on a string, evaluated per envelope.
+4. **Honest-player test.** An honest player cannot trip it, because tripping it requires typing
+   `"flight.flagged" = false` into a file — and even then the consequence is a log line and the mod
+   continuing to behave the way a stock install does. Nothing is excluded and nothing is scored
+   differently.
+5. **Consequence test.** Its only effect is that a setting is not applied. It queues no work for a
+   human, scores no suspicion, and treats no player differently because of history.
+
+**The distinction that matters here, stated so it is not lost: this is a refusal to accept a
+configuration, not an inference about a player.** Nothing about the person is being judged, guessed
+at, or recorded. The mod does not notice that the key was present, does not report it, does not flag
+the flight and does not remember it next session; the file is rewritten without the key and the log
+says why. That is the same category as clamping `ship_interval_s` up to the floor (MOD-065) — the
+mod declining to do something on the player's behalf — and it is emphatically not the category §8
+governs, which is machinery that tries to infer cheating from data.
+
+**The suppression point is late on purpose, and that is an integrity property.** The filter is
+applied at `EventPipeline.Add`, after the detector, the flight tracker, the impact correlator and the
+window accumulator have all advanced. Dropping an envelope therefore rewinds no state, so a type a
+player switched off cannot change what the *other* types say — `vehicle.rud` off does not make a
+fatal impact report `survived: true`, which is pinned by a test. Filtering earlier, in the dispatch
+switch, would have taken that bookkeeping with it and made suppression of one type quietly corrupt
+another.
+
+**`vehicle.rud` was considered for the locked list and left out.** Switching it off hides how often a
+player exploded; it cannot make any number better than it was, because the `survived` verdict is
+computed before the filter runs. Locking it would have been machinery bought for vanity rather than
+for integrity, which is what §8 exists to refuse. Recorded in MOD-072 and in
+[ROADMAP.md](ROADMAP.md).
 
 ---
 

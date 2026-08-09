@@ -83,6 +83,10 @@
   color: var(--sl-color-accent-high);
 }
 
+.eb-pill-locked {
+  border-color: var(--sl-color-accent);
+}
+
 .eb-summary {
   margin: 0.4rem 0 0.5rem;
   font-size: var(--sl-text-sm);

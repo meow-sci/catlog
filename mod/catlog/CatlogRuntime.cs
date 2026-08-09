@@ -197,7 +197,10 @@ public sealed class CatlogRuntime : IDisposable
             ModVersion: ModVersion,
             GameBuild: VehicleTelemetry.GameBuild(),
             WindowSeconds: config.WindowS,
-            CareerId: VehicleTelemetry.CareerId(installId)));
+            CareerId: VehicleTelemetry.CareerId(installId),
+            // The [events] table, already normalised: keys the player cannot switch off have been
+            // dropped with a warning by now, and EventTypeFilter refuses them a second time.
+            Types: config.EventFilter()));
 
         BatchShipper? shipper = null;
         if (credential is not null && shipperOutbox is not null)

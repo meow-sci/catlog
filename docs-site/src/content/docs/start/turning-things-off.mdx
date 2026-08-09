@@ -1,0 +1,121 @@
+---
+title: Turning things off
+description: >-
+  You can stop catlog recording any kind of event you like. Here is exactly
+  which leaderboards each one costs you, and the five it will not let you
+  switch off.
+sidebar:
+  order: 4
+---
+
+import { Aside, LinkCard } from "@astrojs/starlight/components";
+
+catlog records 22 different kinds of thing. **You can switch almost any of them
+off**, one at a time, in the mod's settings file — and the mod will keep doing
+everything else exactly as before.
+
+Nothing is switched off to begin with. The settings file carries the full list
+written out as comments, with a note on each line saying what it feeds, so the
+file itself tells you what you would be giving up before you give it up.
+
+## What switching one off actually does
+
+The mod stops producing that kind of record at all. Nothing is written down,
+nothing is sent, and the server never learns there was anything to know.
+
+That has one consequence and it is worth being blunt about it:
+
+<Aside type="caution" title="Every kind you switch off is a leaderboard you stop appearing on">
+  There is no other source for it. Every number catlog publishes is worked out from what the mod
+  reported, so a board fed only by a kind of event you turned off simply has nothing of yours to
+  rank. Your existing rows stay where they are — you just stop adding to them.
+</Aside>
+
+The reverse is also true, and it is the reason this page exists: **if a board of
+yours looks empty when you expected a number on it, one of the possible causes is
+that you turned its events off** — possibly a long time ago. The mod's status
+window has a row that tells you. It reads _all reported_ when nothing is off, and
+otherwise lists exactly what is.
+
+## What each one costs you
+
+| If you switch off            | You stop appearing on                                                                                         |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| Situation changes            | Softest Touchdown, Bodies Landed On, Splashdowns                                                              |
+| Atmosphere crossings         | Fastest Atmospheric Entry                                                                                     |
+| Orbit changes                | Orbits Achieved, Fastest to Orbit, Highest Apoapsis, Lowest Stable Orbit, Roundest Orbit, Most Inclined Orbit |
+| Arriving at a new world      | Bodies Visited, and every Fastest to _somewhere_ board                                                        |
+| Vehicles coming apart        | Rapid Unscheduled Disassemblies, and the board for each cause                                                 |
+| Impacts                      | Biggest Lithobrake Survived, Biggest Bang Survived                                                            |
+| Staging                      | Stagings, Most Stages                                                                                         |
+| Docking                      | Dockings                                                                                                      |
+| Undocking                    | nothing today — it is recorded as part of the story, and no board reads it                                    |
+| Engine ignition              | Engines Lit                                                                                                   |
+| Engine shutdown              | nothing today                                                                                                 |
+| Running a tank dry           | Ran Dry                                                                                                       |
+| Starting a spacewalk         | Spacewalks                                                                                                    |
+| Ending a spacewalk           | Longest Spacewalk                                                                                             |
+| Kittens tumbling             | Kitten Tumbles                                                                                                |
+| The roster snapshot          | Distance Travelled, Furthest-Travelled Kitten, Most Missions Flown — and your kittens stop appearing anywhere |
+| The 30-second flight summary | Peak G Survived, Max Q Survived, Highest Altitude, Fastest Surface Speed, Fastest Orbital Speed               |
+
+Two of those deserve a sentence more.
+
+**The roster snapshot** is where every per-kitten number comes from. Turning it
+off does not just cost you three boards; your kittens stop being a thing catlog
+knows about.
+
+**The 30-second flight summary** is by far the largest amount of data catlog
+sends, so it is the most tempting one to turn off. It is also the only kind of
+record catlog is ever willing to discard on its own when the local spool fills up
+— so turning it off leaves catlog nothing it can shed if you play offline for a
+very long stretch. There is no substitute for it: the speeds on those boards are
+not read from anywhere else, deliberately.
+
+## The five you cannot switch off
+
+Five kinds of record are refused. Set one of them to off and the mod ignores it,
+says so in the log, and tidies the setting back out of the file the next time it
+writes it.
+
+They are not refused to make you send more. They are refused because switching
+them off would not change what you _report_ — it would change what your runs are
+_worth_, and everybody else's numbers are ranked against yours.
+
+| Always reported       | Why                                                                                                                                                                                                                                      |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A flight being marked | This is the only thing that says a run was assisted. Without it, teleporting, refuelling, draining resources and using the terminal's destroy command would all score normally and appear publicly. It is the one that actually matters. |
+| Losing a kitten       | This is what stops a crash that killed the crew being counted as a landing you walked away from.                                                                                                                                         |
+| Starting a session    | The only record that a save was loaded. The time-to-milestone boards note it beside your row — they do not exclude you — but a "seconds from the start" figure means nothing if nobody can tell the clock went backwards.                |
+| A flight beginning    | This is what makes a flight a flight. Without it there is no crew, no world and nothing for a board to attach to, so every flight you flew would be a fragment the server could not join up.                                             |
+| A flight ending       | This is what makes something _recovered_. Without it nothing you land is ever counted as landed, and Kittens Recovered, Most Kittens Home At Once, Peak G Survived and Max Q Survived all score nothing.                                 |
+
+Note what is **not** on that list: vehicles coming apart. How often you explode is
+yours to keep to yourself. Whether you survived an impact is worked out on your
+own machine before anything is written down, so that answer stays honest whether
+or not you report the explosion.
+
+<Aside type="note" title="This is a refusal to accept a setting, nothing more">
+  Nothing about you is being judged, recorded or reported when the mod ignores one of those five.
+  There is no note in your file, nothing sent to the server, and nothing remembered next time you
+  play. The setting simply is not applied, and the log says which one and why.
+</Aside>
+
+## Being honest about what this is
+
+Anyone willing to modify the mod itself can send whatever they like, and no amount
+of this changes that. The five above exist so that switching off the thing that
+keeps a leaderboard meaningful is not a one-line edit in a text file — which is a
+much smaller claim, and the true one.
+
+<LinkCard
+  title="What counts and what doesn't"
+  href="/catlog/leaderboards/eligibility/"
+  description="Every other reason a number you expected might be missing."
+/>
+
+<LinkCard
+  title="Browse every event"
+  href="/catlog/events/browse/"
+  description="All 22, with the ones that cannot be switched off marked."
+/>

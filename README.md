@@ -73,6 +73,11 @@ your account — the install id, the per-kitten id and the save id — are dropp
 player before anything is published, so two accounts shipping from the same computer cannot be
 linked from outside. Your untrusted local clock is never published either.
 
+**You can turn parts of it off.** The mod's settings file lists every kind of thing catlog records,
+and any of them can be switched off individually — each one you turn off is simply a leaderboard you
+stop appearing on. Five cannot be switched off, because they are what keeps everyone else's numbers
+honest rather than anything about you.
+
 **You can leave.** One button deletes everything: events, batches, credentials, archived data. Your
 handle is retired rather than recycled, so nobody can take it and pretend to be you.
 

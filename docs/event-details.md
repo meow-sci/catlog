@@ -40,6 +40,7 @@ commit, in player language. A commit that updates one and not the other is an in
 | A board's fold, eligibility, unit or title | [Boards](#boards) | `src/content/docs/leaderboards/catalog.mdx` + `src/data/boards.ts` |
 | A new board or board family | [Boards](#boards) + [Suppression](#suppression-and-eligibility-matrix) | both of the above |
 | A rebuild-vs-incremental divergence | [Rebuild ≠ incremental](#rebuild--incremental) | `leaderboards/eligibility.mdx` |
+| Whether a type can be switched off in `catlog.toml` | the [registry table](#the-registry) + [Turning a type off](#turning-a-type-off--the-events-table) | `src/data/events.ts` + `start/turning-things-off.mdx` |
 
 `docs-site/src/data/events.ts` and `docs-site/src/data/boards.ts` are the machine-readable mirror of
 this file's tables. They are *derived* data: this document wins any disagreement, and the fix is to
@@ -119,8 +120,8 @@ Envelopes go to `OutboxDb.Append` in emission order (`:552-569`).
 | Knob | Value | Where |
 |---|---|---|
 | Passive sample rate | **2.0 Hz** default | `Wire.DefaultSampleHz`, `mod/catlog.lib/Wire.cs:130` |
-| Configurable range | `sample_hz` clamped to **[0.1, 20]** | `ModConfig.Normalize`, `Config/ModConfig.cs:224` |
-| Telemetry window | **30.0 sim seconds** (`window_s` clamped [5, 300]) | `Wire.TelemetryWindowSeconds`, `Wire.cs:133`; `ModConfig.cs:225` |
+| Configurable range | `sample_hz` clamped to **[0.1, 20]** | `ModConfig.Normalize`, `Config/ModConfig.cs:310` |
+| Telemetry window | **30.0 sim seconds** (`window_s` clamped [5, 300]) | `Wire.TelemetryWindowSeconds`, `Wire.cs:133`; `ModConfig.cs:311` |
 | Detector debounce | **2.0 sim seconds** per (vehicle, `DetectKind`) | `Wire.DetectorDebounceSeconds`, `Wire.cs:136` |
 | Atmosphere hysteresis | **±2 %** of atmosphere height | `Wire.AtmosphereHysteresis`, `Wire.cs:139` |
 | Orbit-achieved margin | **1000 m** above atmosphere top | `Wire.OrbitAchievedMarginM`, `Wire.cs:142` |
@@ -151,9 +152,9 @@ CREATE TABLE schema_version (version INTEGER PRIMARY KEY);
 ```
 
 - `Append` uses `INSERT OR IGNORE` in one transaction (`:172-199`) — a retried append is idempotent.
-- `kind` comes from `EventTypes.KindOf` (`Events/EventTypes.cs:141-142`). **`telemetry.window` is the
+- `kind` comes from `EventTypes.KindOf` (`Events/EventTypes.cs:181-182`). **`telemetry.window` is the
   only kind-0 type**; the other 21 are kind 1, explicitly including `roster.snapshot` because it
-  carries totals that move boards (`EventTypes.cs:136-139`).
+  carries totals that move boards (`EventTypes.cs:176-179`).
 - `Prune` deletes oldest kind-0 rows until the cap is met, and stops when only kind-1 rows remain.
   It tracks the running total across the deletes rather than re-measuring the whole table after each
   one — the re-measure made pruning quadratic in the number of rows dropped, which mattered exactly
@@ -357,18 +358,18 @@ first char `[a-z0-9]`, rest `[a-z0-9._-]`, ≤ 40 chars (`stats/boards.go:241-25
 sites, not enums.
 
 `EngineEventKind { Ignition, Shutdown, Flameout }` (`GameSignal.cs:41-55`) selects the event type via
-`EventTypes.TypeOf` (`:193-198`), default → `engine.flameout`.
+`EventTypes.TypeOf` (`:233-238`), default → `engine.flameout`.
 
 ---
 
 ## Signal → event dispatch
 
-`EventPipeline.Dispatch` (`Detect/EventPipeline.cs:180-297`) is the single switch. Signal records are
+`EventPipeline.Dispatch` (`Detect/EventPipeline.cs:199-316`) is the single switch. Signal records are
 in `Events/GameSignal.cs`.
 
 | `GameSignal` subtype | Raised by | Produces |
 |---|---|---|
-| `FrameBoundarySignal` (`:138`) | `GameBridge.EndFrame` ← `CatlogRuntime.Tick` (`:366`) | drains `ImpactCorrelator.EndFrame()` → 0..n `vehicle.impact` (`EventPipeline.cs:184-187`) |
+| `FrameBoundarySignal` (`:138`) | `GameBridge.EndFrame` ← `CatlogRuntime.Tick` (`:366`) | drains `ImpactCorrelator.EndFrame()` → 0..n `vehicle.impact` (`EventPipeline.cs:203-206`) |
 | `SessionLoadedSignal` (`:151`) | `CatlogRuntime.OnSessionBoundary` (`:298-300`) ← `Patcher.SessionBoundaryPostfix` (`:691-701`) | `session.started` + full pipeline reset |
 | `VehicleCreatedSignal` (`:171`) | `PolledSignals.Track` (`:94-103`) | `flight.started` + replayed session-wide `flight.flagged` |
 | `VehicleRemovedSignal` (`:188`) | `Patcher.DisposePrefix` (`:537-538`); `PolledSignals.Prune` (`:228`) | `flight.ended` + drained impacts + flushed window |
@@ -393,7 +394,7 @@ Frame-derived, no signal: `EventDetector.Observe` on the published `TelemetryFra
 (`:107-110`).
 
 An unknown signal subtype is **ignored with a debug log**, never thrown — signals arrive from Harmony
-patch bodies and must never kill the worker (`EventPipeline.cs:292-295`).
+patch bodies and must never kill the worker (`EventPipeline.cs:311-314`).
 
 ---
 
@@ -403,32 +404,76 @@ patch bodies and must never kill the worker (`EventPipeline.cs:292-295`).
 `server/internal/ingest/types.go:16-39`. **The two lists agree exactly** — 22 names, same spelling,
 same order.
 
-| # | `type` | `ver` | outbox kind | Trigger | Feeds |
-|---|---|---|---|---|---|
-| 1 | `session.started` | 1 | 1 | event | `career` (rewind mark) |
-| 2 | `flight.started` | 1 | 1 | polled-discovery | `flight_state`, `heaviest_launch`, `most_parts`, `biggest_crew` |
-| 3 | `flight.ended` | 1 | 1 | event (+ passive net) | `flight_state`, `kittens_recovered`, `biggest_recovery`, feed |
-| 4 | `flight.flagged` | 1 | 1 | event (4 of 5) / passive (`tuning`) | `flight_state` → **excludes everything** |
-| 5 | `vehicle.situation` | 1 | 1 | passive | `softest_touchdown`, `landed_bodies`, `splashdowns`, `player_body` |
-| 6 | `vehicle.atmosphere` | 1 | 1 | passive | `fastest_entry` |
-| 7 | `vehicle.orbit` | 1 | 1 | passive | `orbits_achieved`, `highest_apoapsis`, `lowest_orbit`, `roundest_orbit`, `steepest_orbit`, `fastest_to_orbit`, feed |
-| 8 | `vehicle.soi` | 1 | 1 | passive | `soi_bodies`, `fastest_to_<body>`, `player_body`, feed |
-| 9 | `vehicle.rud` | 1 | 1 | event | `rud_total`, `rud_<cause>`, feed |
-| 10 | `vehicle.impact` | 1 | 1 | event (1-frame hold) | `biggest_lithobrake_survived`, `biggest_impact_energy`, feed |
-| 11 | `vehicle.staging` | 1 | 1 | event | `stagings`, `most_stages` |
-| 12 | `vehicle.docked` | 1 | 1 | event | `dockings` |
-| 13 | `vehicle.undocked` | 1 | 1 | event | — (decoded, counts nothing) |
-| 14 | `engine.ignition` | 1 | 1 | passive | `engine_ignitions` |
-| 15 | `engine.shutdown` | 1 | 1 | passive | — (decoded, counts nothing) |
-| 16 | `engine.flameout` | 1 | 1 | passive | `flameouts` |
-| 17 | `kitten.eva_start` | 1 | 1 | event | `evas` |
-| 18 | `kitten.eva_end` | 1 | 1 | event | `longest_eva` |
-| 19 | `kitten.tumble` | 1 | 1 | passive | `kitten_tumbles`, feed |
-| 20 | `kitten.kia` | 1 | 1 | passive | the impact-board KIA window (rebuild), feed |
-| 21 | `roster.snapshot` | 1 | **1** | passive (+1 event) | `distance_travelled`, `top_kitten_distance`, `top_kitten_missions`, `kitten` |
-| 22 | `telemetry.window` | 1 | **0** | passive | `peak_g_survived`, `max_q_survived`, `fastest_surface_speed`, `fastest_orbital_speed`, `highest_altitude` |
+| # | `type` | `ver` | outbox kind | Disableable? | Trigger | Feeds |
+|---|---|---|---|---|---|---|
+| 1 | `session.started` | 1 | 1 | **no — locked** | event | `career` (rewind mark) |
+| 2 | `flight.started` | 1 | 1 | **no — locked** | polled-discovery | `flight_state`, `heaviest_launch`, `most_parts`, `biggest_crew` |
+| 3 | `flight.ended` | 1 | 1 | **no — locked** | event (+ passive net) | `flight_state`, `kittens_recovered`, `biggest_recovery`, feed |
+| 4 | `flight.flagged` | 1 | 1 | **no — locked** | event (4 of 5) / passive (`tuning`) | `flight_state` → **excludes everything** |
+| 5 | `vehicle.situation` | 1 | 1 | yes | passive | `softest_touchdown`, `landed_bodies`, `splashdowns`, `player_body` |
+| 6 | `vehicle.atmosphere` | 1 | 1 | yes | passive | `fastest_entry` |
+| 7 | `vehicle.orbit` | 1 | 1 | yes | passive | `orbits_achieved`, `highest_apoapsis`, `lowest_orbit`, `roundest_orbit`, `steepest_orbit`, `fastest_to_orbit`, feed |
+| 8 | `vehicle.soi` | 1 | 1 | yes | passive | `soi_bodies`, `fastest_to_<body>`, `player_body`, feed |
+| 9 | `vehicle.rud` | 1 | 1 | yes | event | `rud_total`, `rud_<cause>`, feed |
+| 10 | `vehicle.impact` | 1 | 1 | yes | event (1-frame hold) | `biggest_lithobrake_survived`, `biggest_impact_energy`, feed |
+| 11 | `vehicle.staging` | 1 | 1 | yes | event | `stagings`, `most_stages` |
+| 12 | `vehicle.docked` | 1 | 1 | yes | event | `dockings` |
+| 13 | `vehicle.undocked` | 1 | 1 | yes | event | — (decoded, counts nothing) |
+| 14 | `engine.ignition` | 1 | 1 | yes | passive | `engine_ignitions` |
+| 15 | `engine.shutdown` | 1 | 1 | yes | passive | — (decoded, counts nothing) |
+| 16 | `engine.flameout` | 1 | 1 | yes | passive | `flameouts` |
+| 17 | `kitten.eva_start` | 1 | 1 | yes | event | `evas` |
+| 18 | `kitten.eva_end` | 1 | 1 | yes | event | `longest_eva` |
+| 19 | `kitten.tumble` | 1 | 1 | yes | passive | `kitten_tumbles`, feed |
+| 20 | `kitten.kia` | 1 | 1 | **no — locked** | passive | the impact-board KIA window (rebuild), feed |
+| 21 | `roster.snapshot` | 1 | **1** | yes | passive (+1 event) | `distance_travelled`, `top_kitten_distance`, `top_kitten_missions`, `kitten` |
+| 22 | `telemetry.window` | 1 | **0** | yes | passive | `peak_g_survived`, `max_q_survived`, `fastest_surface_speed`, `fastest_orbital_speed`, `highest_altitude` |
 
 Every event additionally lands in `event_census` (10 rows: own type + total, × 5 periods).
+
+### Turning a type off — the `[events]` table
+
+`catlog.toml` has an `[events]` table keyed by the wire type name. An **absent key means enabled**,
+so the table is empty on a fresh install; the full list ships commented out in the file's header with
+the boards each type feeds (`ModConfig.Header`, held in step with `EventTypes.All` by
+`TheHeaderDocumentsEveryRegisteredEventType`). Enforcement is two layers — `ModConfig.Normalize` →
+`NormalizeEvents`, so the file the player reads back is the truth, and `EventTypeFilter.Create`, so a
+hand-built `EventPipelineOptions` cannot express it either — and the filter is *applied* at
+`EventPipeline.Add`, which is late on purpose: every detector, tracker, correlator and window
+mutation has already happened, so a suppressed type cannot rewind state and cannot change what the
+other types say. `EventTypes.AlwaysReported` is the five locked types marked above. MOD-072.
+
+**Nothing here is a wire change.** A batch may always legally omit any type; only an *unknown* type
+is rejected (`400 malformed_batch`). The server cannot tell a player who flew nothing from a player
+who switched a type off, and does not try.
+
+What a player gives up per type, the seventeen that can be switched off:
+
+| Type off | Boards that stop moving | Other consequence |
+|---|---|---|
+| `vehicle.situation` | `softest_touchdown`, `landed_bodies`, `splashdowns` | `player_body` stops updating from situation changes |
+| `vehicle.atmosphere` | `fastest_entry` | — |
+| `vehicle.orbit` | `orbits_achieved`, `fastest_to_orbit`, `highest_apoapsis`, `lowest_orbit`, `roundest_orbit`, `steepest_orbit` | feed rows |
+| `vehicle.soi` | `soi_bodies`, and the whole `fastest_to_<body>` family | `player_body`, feed rows |
+| `vehicle.rud` | `rud_total`, every `rud_<cause>` board | RUD count becomes a self-reported zero. `vehicle.impact.survived` is unaffected — the correlator computes it before `Add` |
+| `vehicle.impact` | `biggest_lithobrake_survived`, `biggest_impact_energy` | feed rows |
+| `vehicle.staging` | `stagings`, `most_stages` | — |
+| `vehicle.docked` | `dockings` | — |
+| `vehicle.undocked` | none | genuinely unread by any fold today |
+| `engine.ignition` | `engine_ignitions` | — |
+| `engine.shutdown` | none | genuinely unread by any fold today |
+| `engine.flameout` | `flameouts` | — |
+| `kitten.eva_start` | `evas` | — |
+| `kitten.eva_end` | `longest_eva` | — |
+| `kitten.tumble` | `kitten_tumbles` | feed rows |
+| `roster.snapshot` | `distance_travelled`, `top_kitten_distance`, `top_kitten_missions` | the `kitten` table stops existing for that player. This is why it is `KindEvent` and never pruned |
+| `telemetry.window` | `peak_g_survived`, `max_q_survived`, `highest_altitude`, `fastest_surface_speed`, `fastest_orbital_speed` | The **only** `KindPassive` type, so it is the only thing `OutboxDb.Prune` may drop: switching it off leaves a full outbox nothing droppable. Also the highest-volume type, and therefore the most attractive knob. There is no fallback source — `boards.go` explicitly refuses to substitute `roster.snapshot.fastest_ms` |
+
+Two notes that follow from the folds rather than from this table. `scoreable()` treats an event with
+**no** flight as scoreable, so the `roster.snapshot`-sourced boards are never touched by the flag
+gate at all — turning that type off is the only way to lose them. And every type feeds
+`event_census` → `GET /v1/stats`, so disabling any of them makes that player's census under-report;
+that is expected and harmless.
 
 ---
 
@@ -505,7 +550,7 @@ re-resolved) flight ULID.
 
 | Key | Type | Units | Source |
 |---|---|---|---|
-| `vehicle_name` | string | — | `Ids.SanitizeVehicleName(created.VehicleName)` (`EventPipeline.cs:324`). The signal's `VehicleName` **is the vehicle id** — KSA has no separate display name (`PolledSignals.cs:98`). |
+| `vehicle_name` | string | — | `Ids.SanitizeVehicleName(created.VehicleName)` (`EventPipeline.cs:343`). The signal's `VehicleName` **is the vehicle id** — KSA has no separate display name (`PolledSignals.cs:98`). |
 | `body` | string | — | `VehicleTelemetry.BodyOf(vehicle)` (`PolledSignals.cs:99`) → lowercase `IParentBody.Id`, or `"unknown"`. |
 | `mass_kg` | number | kg | `VehicleTelemetry.MassKg` ← `Vehicle.TotalMass` (a **float**, `KSA/Vehicle.cs:551`), `Sanitize.Finite`d. 0 when unreadable. |
 | `part_count` | int | count | `Vehicle.Parts.Count` (`KSA/PartTree.cs:89`). 0 when unreadable. |
@@ -562,7 +607,7 @@ launch describe the same vehicle rather than three partial views of it.
 
 | Key | Type | Values |
 |---|---|---|
-| `reason` | string | `"recovered"` \| `"destroyed"` \| `"despawned"` (`EventTypes.cs:161-165`) |
+| `reason` | string | `"recovered"` \| `"destroyed"` \| `"despawned"` (`EventTypes.cs:201-205`) |
 | `crew_count` | int | occupied seats at the moment it ended (`Patcher.cs:538`). **0** on the silent-removal safety-net path (`PolledSignals.cs:228`), indistinguishable on the wire from a genuinely empty vehicle. |
 
 **Detector** — `EventPipeline.EndFlight` (`:366-405`). The order inside is load-bearing:
@@ -674,7 +719,7 @@ once-per-session latch.
 
 **Dedup.** Per `(flight, flag)` via a `HashSet<FlightFlag>` on the `FlightRecord`
 (`FlightTracker.cs:167`); session-wide flags additionally via `_sessionFlags`
-(`EventPipeline.cs:47,356`).
+(`EventPipeline.cs:55,375`).
 
 **Server — this is the exclusion mechanism.** `flightFold` ORs `FlagBit(flag)` into
 `flight_state.flags` (`stats/flight.go:120-125`). Bits: 0 `teleport`, 1 `refuel`, 2 `resource_edit`,
@@ -939,7 +984,7 @@ stat key still counts towards `soi_bodies` and still records `first_sim_t`.
 
 **Wire.** `"vehicle.rud"` (`EventTypes.cs:42`), `ver` 1, kind 1.
 
-**Payload** — `VehicleRudPayload`, `Payloads.cs:111-118`, built `EventPipeline.cs:211-218`
+**Payload** — `VehicleRudPayload`, `Payloads.cs:111-118`, built `EventPipeline.cs:230-237`
 
 | Key | Type | Units | Source |
 |---|---|---|---|
@@ -1006,7 +1051,7 @@ and `_held` (last frame) — `:37-38`.
 - `Splash(signal)` converts to an `ImpactSignal` with `LaunchPad: false` and appends (`:52-60`).
 - `Destroyed(vehicleId)` marks **both** lists (`:67-72`).
 - `EndFrame()` resolves `_held`, promotes `_pending` → `_held`, clears `_pending` (`:79-85`), called
-  from the `FrameBoundarySignal` case (`EventPipeline.cs:184-186`).
+  from the `FrameBoundarySignal` case (`EventPipeline.cs:203-205`).
 - `DrainFor(vehicleId)` resolves one vehicle's outstanding impacts immediately when its flight ends
   (`:98-111`); `Drain()` resolves everything at session end (`:118-129`).
 - Verdict: `Survived = !Destroyed` (`:159-167`).
@@ -1021,7 +1066,7 @@ lines after `Universe.ApplyVehicleSolvers` at `:1912`).
 **Flight attribution has two modes.** `EventFactory.FromResolvedImpact(tracker, impact)` (`:49-50`)
 *mints* a flight if needed; the explicit-flight overload (`:61-75`) does not. `EventPipeline.Flush`
 uses **peek** semantics and **drops** an impact whose flight already ended, with a debug log, rather
-than inventing a phantom flight with no `flight.started` (`EventPipeline.cs:160-171`).
+than inventing a phantom flight with no `flight.started` (`EventPipeline.cs:179-190`).
 
 **Game source.**
 
@@ -1103,7 +1148,7 @@ comes from `flight_state` (`flightBody`), because this payload carries none.
 
 | Key | Type | Source |
 |---|---|---|
-| `other_flight` | string \| **null** | `Tracker.PeekFlight(dock.OtherVehicleId)` (`EventPipeline.cs:237`) — **peek, never mint**, so a vehicle with no open flight yields the literal `"other_flight":null`. The Go struct is a plain `string` (`stats/payload.go:127`), so null decodes to `""`. |
+| `other_flight` | string \| **null** | `Tracker.PeekFlight(dock.OtherVehicleId)` (`EventPipeline.cs:256`) — **peek, never mint**, so a vehicle with no open flight yields the literal `"other_flight":null`. The Go struct is a plain `string` (`stats/payload.go:127`), so null decodes to `""`. |
 
 **Detector.** `EventPipeline.Dispatch`, `DockSignal` case (`:235-238`). The event is attributed to
 `dock.VehicleId`, the `thisVehicle` side.
@@ -1134,7 +1179,7 @@ installed `Patcher.cs:200-202`, body `:586-608`.
 **Wire.** `"vehicle.undocked"` (`EventTypes.cs:54`), `ver` 1, kind 1.
 
 **Payload.** The same record as `vehicle.docked`. `other_flight` = `Tracker.PeekFlight(undock.OtherVehicleId)`
-where "other" is the **vehicle that split off** (`GameSignal.cs:288`, `EventPipeline.cs:242`).
+where "other" is the **vehicle that split off** (`GameSignal.cs:288`, `EventPipeline.cs:261`).
 
 **Detector.** `EventPipeline.Dispatch`, `UndockSignal` case (`:240-242`).
 
@@ -1258,7 +1303,7 @@ unflagged flight. **Vectors.** None.
 
 **Wire.** `"kitten.eva_start"` (`EventTypes.cs:66`), `ver` 1, kind 1. `flight` =
 `Tracker.FlightFor(eva.VehicleId)` when the signal carries a vehicle id, else `null`
-(`EventPipeline.cs:252-253`). **`FlightFor` mints**, so this can create the EVA vehicle's flight ULID
+(`EventPipeline.cs:271-272`). **`FlightFor` mints**, so this can create the EVA vehicle's flight ULID
 before its `flight.started` exists — the one documented exception to the ordering invariant, see
 [Known drift](#known-drift).
 
@@ -1266,7 +1311,7 @@ before its `flight.started` exists — the one documented exception to the order
 
 | Key | Type | Source |
 |---|---|---|
-| `kid` | string (16 Crockford) | `Ids.KittenId(installId, kittenName)` (`EventPipeline.cs:410`). **Relabelled per player by `Redact` before publication.** |
+| `kid` | string (16 Crockford) | `Ids.KittenId(installId, kittenName)` (`EventPipeline.cs:428`). **Relabelled per player by `Redact` before publication.** |
 | `name` | string | `Ids.SanitizeName(eva.KittenName)` — ≤ 32 printable ASCII, fallback `"kitten"` |
 
 **Detector.** `EventPipeline.Dispatch`, `EvaStartSignal` case (`:250-255`).
@@ -1299,7 +1344,7 @@ every flightless event. That is a property of the source event, not a decision a
 ### `kitten.eva_end`
 
 **Wire.** `"kitten.eva_end"` (`EventTypes.cs:69`), `ver` 1, kind 1. `flight` = **explicitly `null`**
-(`EventPipeline.cs:260`) — asymmetric with `kitten.eva_start`.
+(`EventPipeline.cs:279`) — asymmetric with `kitten.eva_start`.
 
 **Payload** — `KittenEvaEndPayload`, `Payloads.cs:163-166`
 
@@ -1339,7 +1384,7 @@ missing one.
 ### `kitten.tumble`
 
 **Wire.** `"kitten.tumble"` (`EventTypes.cs:72`), `ver` 1, kind 1. `flight` = **null**
-(`EventPipeline.cs:267`), even though a tumble always belongs to a specific `KittenEva` vehicle that
+(`EventPipeline.cs:286`), even though a tumble always belongs to a specific `KittenEva` vehicle that
 has an open flight.
 
 **Payload** — `KittenTumblePayload`, `Payloads.cs:173-177`
@@ -1394,7 +1439,7 @@ a tumble at {speed} m/s on {body}"`.
 ### `kitten.kia`
 
 **Wire.** `"kitten.kia"` (`EventTypes.cs:75`), `ver` 1, kind 1. `flight` = **null**
-(`EventPipeline.cs:275`).
+(`EventPipeline.cs:294`).
 
 **Payload** — `KittenKiaPayload`, `Payloads.cs:183-186`
 
@@ -1454,8 +1499,8 @@ game, the rising edge can fire at most once per kitten per session.
 ### `roster.snapshot`
 
 **Wire.** `"roster.snapshot"` (`EventTypes.cs:78`), `ver` 1, **kind 1 (scoring, never pruned)** —
-called out explicitly at `EventTypes.cs:136-139` because it carries kitten totals that move boards.
-`flight` = **null** (`EventPipeline.cs:287`).
+called out explicitly at `EventTypes.cs:176-179` because it carries kitten totals that move boards.
+`flight` = **null** (`EventPipeline.cs:306`).
 
 **Payload** — `RosterSnapshotPayload`, `Payloads.cs:211-212`; rows `RosterKittenPayload`, `:196-203`;
 built by `EventFactory.RosterPayload` (`:81-97`). Shape: `{"kittens": [ {…}, {…} ]}`.
@@ -1528,7 +1573,7 @@ and must never become a speed board.
 ### `telemetry.window`
 
 **Wire.** `"telemetry.window"` (`EventTypes.cs:81`), `ver` 1, **the only kind-0 (passive, droppable)
-type** (`EventTypes.cs:141-142`). `flight` = `tracker.FlightFor(window.VehicleId)`.
+type** (`EventTypes.cs:181-182`). `flight` = `tracker.FlightFor(window.VehicleId)`.
 **`sim_t` = `window.Payload.T1Sim`**, the sim time of the window's *last sample*, not the emission
 instant (`EventFactory.FromWindow`, `:32-40`) — which is why in-session emission is slightly out of
 order by design.
@@ -2139,6 +2184,7 @@ fold writes. Surfaced as `collection.projected` / `collection.lag` and `projecto
 
 | Suppression | Mechanism | Where |
 |---|---|---|
+| A type the player switched off in `[events]` never leaves the machine — the server sees an absence, not a suppression | `EventTypeFilter.IsEnabled`, applied at the pipeline's single funnel; five types cannot be switched off at all | `Detect/EventPipeline.cs:469-475`; MOD-072 |
 | A flagged flight scores nothing — every board, including counters | `scoreable` → `flight_state.flags == 0` | `stats/fold.go:205-220`; PROJ-001 |
 | The `roster.snapshot` and flightless-`kitten.*` boards are exempt — `distance_travelled`, `top_kitten_distance`, `top_kitten_missions`, `longest_eva`, and `evas` whenever the EVA signal carried no vehicle id | `!ev.HasFlight()` → true | `stats/fold.go:226-228` |
 | An **unknown** flag value still excludes | `FlagOther`, bit 5 | `stats/flight.go:29,34-48`; PROJ-002 |
@@ -2146,7 +2192,7 @@ fold writes. Surfaced as `collection.projected` / `collection.lag` and `projecto
 | Crewless impacts never score — on **both** impact boards | `CrewCount >= 1` | `stats/boards.go:390` |
 | An impact within 5 s of a teleport is not recorded at all | `Vehicle.IsImpactFxSuppressed()` | `Patcher.cs:423-424,455-456` |
 | An impact whose vehicle died in frame *N* or *N+1* is `survived: false` | `ImpactCorrelator` | `ImpactCorrelator.cs:24-29` |
-| A manual destroy also flips `survived` | `EndFlight` tells the correlator first | `EventPipeline.cs:379-380` |
+| A manual destroy also flips `survived` | `EndFlight` tells the correlator first | `EventPipeline.cs:398-399` |
 | An impact within ±2 s of a `kitten.kia` (rebuild only) — on **both** impact boards | `b.KIANear`, via the shared `survivedImpact` | `stats/boards.go:397-401` |
 | `peak_g_survived` **and** `max_q_survived` require the flight ended `recovered` (rebuild only) | `st.Recovered()`, via the shared `survivedLoad` | `stats/boards.go:485-487` |
 | Absent `peak_g` / `max_q_pa` ≠ 0 | `*float64` + omit-don't-zero on the wire | `stats/payload.go:209-210`; `Payloads.cs:238,241` |

@@ -96,6 +96,14 @@ export default function EventBrowser() {
                   droppable
                 </span>
               ) : null}
+              {e.alwaysOn ? (
+                <span
+                  className="eb-pill eb-pill-locked"
+                  title="Cannot be switched off in the mod's settings"
+                >
+                  always on
+                </span>
+              ) : null}
             </div>
             <p className="eb-summary">{e.summary}</p>
             <p className="eb-meta">

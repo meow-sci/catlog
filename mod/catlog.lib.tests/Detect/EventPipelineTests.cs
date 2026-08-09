@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
@@ -416,6 +417,131 @@ public sealed class EventPipelineTests
             pipeline.Flush(TestData.WallMs), static e => e.Type == EventTypes.VehicleImpact);
         Assert.Equal(flight, impact.Flight);
         Assert.True(Assert.IsType<VehicleImpactPayload>(impact.Payload).Survived);
+    }
+
+    // ----- [events]: a disabled type is subtracted and nothing else moves ------------------
+
+    /// <summary>
+    /// The whole promise of the <c>[events]</c> table, stated as a diff: switching a type off
+    /// removes exactly those events from the golden sequence and leaves every remaining envelope
+    /// byte for byte what it was. Suppression happens at <c>Add</c>, after every detector, tracker,
+    /// correlator and window has already advanced, so it cannot rewind anything.
+    /// </summary>
+    [Theory]
+    [InlineData("telemetry.window")]
+    [InlineData("vehicle.impact")]
+    [InlineData("vehicle.situation")]
+    public void GoldenScenario_DisablingATypeSubtractsOnlyThatType(string disabled)
+    {
+        string[] baseline = Canonical(HopAndSurvivedLithobrake(EventTypeFilter.All));
+        string[] filtered = Canonical(HopAndSurvivedLithobrake(EventTypeFilter.Create([disabled])));
+
+        Assert.Contains(baseline, line => line.Contains($"\"type\":\"{disabled}\"", StringComparison.Ordinal));
+        Assert.Equal(
+            baseline.Where(line => !line.Contains($"\"type\":\"{disabled}\"", StringComparison.Ordinal)).ToArray(),
+            filtered);
+    }
+
+    /// <summary>
+    /// The state-preservation half, made concrete. <c>vehicle.rud</c> is what tells the correlator
+    /// the vehicle did not survive; with it switched off the RUD event is gone but the impact still
+    /// reports <c>survived: false</c>, because the correlator was told before <c>Add</c> ever ran.
+    /// A filter placed in <c>Dispatch</c> would have skipped the case body and quietly turned a
+    /// fatal crash into a survived one — which is the whole reason the filter is not there.
+    /// </summary>
+    [Fact]
+    public void DisablingVehicleRud_DoesNotMakeAFatalImpactLookSurvived()
+    {
+        EventPipeline pipeline = TestData.Pipeline(types: EventTypeFilter.Create([EventTypes.VehicleRud]));
+        pipeline.ProcessSignal(TestData.Created());
+
+        var produced = new List<EventEnvelope>();
+        produced.AddRange(pipeline.ProcessSignal(TestData.Impact(simT: 30, speedMs: 210)));
+        produced.AddRange(pipeline.ProcessSignal(TestData.Rud(simT: 30, cause: RudCause.GroundImpact)));
+        produced.AddRange(pipeline.ProcessSignal(new FrameBoundarySignal(30, TestData.WallMs, 1)));
+        produced.AddRange(pipeline.ProcessSignal(new FrameBoundarySignal(30.1, TestData.WallMs, 2)));
+        produced.AddRange(pipeline.ProcessSignal(
+            new VehicleRemovedSignal(30.2, TestData.WallMs, "v1", FlightEndReason.Destroyed, 2)));
+
+        Assert.Equal(
+            [EventTypes.VehicleImpact, EventTypes.FlightEnded],
+            produced.Select(static e => e.Type).ToArray());
+
+        var impact = Assert.IsType<VehicleImpactPayload>(
+            produced.Single(static e => e.Type == EventTypes.VehicleImpact).Payload);
+        Assert.False(impact.Survived, "the correlator was told about the destruction before Add ran");
+    }
+
+    /// <summary>
+    /// A disabled type is not a disabled <i>detector</i>: the flag dedup, the window fold and the
+    /// flight bookkeeping all still run, so the events that remain are unchanged. Here the flag is
+    /// still recorded on the tracker even though nothing could switch <c>flight.flagged</c> off —
+    /// what is switched off is <c>flight.started</c>'s neighbour, <c>vehicle.staging</c>.
+    /// </summary>
+    [Fact]
+    public void DisablingATypeLeavesTheFlightIdentityIntact()
+    {
+        EventPipeline pipeline = TestData.Pipeline(types: EventTypeFilter.Create([EventTypes.VehicleStaging]));
+
+        IReadOnlyList<EventEnvelope> created = pipeline.ProcessSignal(TestData.Created(vehicleId: "v1"));
+        string flight = Assert.Single(created).Flight!;
+
+        Assert.Empty(pipeline.ProcessSignal(new StagingSignal(5, TestData.WallMs, "v1", 2)));
+
+        EventEnvelope ended = Assert.Single(pipeline.ProcessSignal(
+            new VehicleRecoveredSignal(10, TestData.WallMs, "v1", 2)));
+        Assert.Equal(EventTypes.FlightEnded, ended.Type);
+        Assert.Equal(flight, ended.Flight);
+    }
+
+    // The hop-lithobrake shape from GoldenScenario_HopAndSurvivedLithobrake, parameterised by the
+    // filter so the two runs are the same inputs in the same order.
+    private static List<EventEnvelope> HopAndSurvivedLithobrake(EventTypeFilter types)
+    {
+        EventPipeline pipeline = TestData.Pipeline(types: types);
+        var produced = new List<EventEnvelope>();
+
+        produced.Add(pipeline.SessionStarted(0, TestData.WallMs));
+        produced.AddRange(pipeline.ProcessSignal(TestData.Created(simT: 0, crewCount: 2)));
+        produced.AddRange(pipeline.ProcessFrame(TestData.Frame(1,
+            TestData.Snapshot(simT: 0, situation: "landed", altitudeM: 0))));
+        produced.AddRange(pipeline.ProcessFrame(TestData.Frame(2,
+            TestData.Snapshot(simT: 4, situation: "freefall", altitudeM: 4_000, surfaceSpeedMs: 300))));
+        produced.AddRange(pipeline.ProcessSignal(TestData.Impact(simT: 30, speedMs: 62, crewCount: 2)));
+        produced.AddRange(pipeline.ProcessSignal(new FrameBoundarySignal(30, TestData.WallMs, 3)));
+        produced.AddRange(pipeline.ProcessSignal(new FrameBoundarySignal(30.1, TestData.WallMs, 4)));
+        produced.AddRange(pipeline.ProcessSignal(
+            new VehicleRecoveredSignal(31, TestData.WallMs, "v1", 2)));
+
+        return produced;
+    }
+
+    // The NDJSON line each envelope would ship, with the two freshly minted ULIDs replaced by
+    // stable placeholders — they differ between any two runs by construction, and everything else
+    // in the line is exactly what the server would receive.
+    private static string[] Canonical(IEnumerable<EventEnvelope> produced)
+    {
+        var flights = new Dictionary<string, string>(StringComparer.Ordinal);
+        return produced
+            .Select(e => (e with
+            {
+                Id = "<id>",
+                Flight = e.Flight is null
+                    ? null
+                    : Placeholder(flights, e.Flight),
+            }).ToNdjsonLine())
+            .ToArray();
+
+        static string Placeholder(Dictionary<string, string> seen, string flight)
+        {
+            if (!seen.TryGetValue(flight, out string? name))
+            {
+                name = $"<flight-{seen.Count}>";
+                seen[flight] = name;
+            }
+
+            return name;
+        }
     }
 
     private sealed record UnknownSignal(double SimT, long WallMs) : GameSignal(SimT, WallMs);

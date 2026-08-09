@@ -112,8 +112,48 @@ public static class EventTypes
         [TelemetryWindow] = 1,
     };
 
+    // The five types a player cannot switch off in catlog.toml. Each one is load-bearing for
+    // something a leaderboard depends on being able to *exclude*, so turning it off is a cheat
+    // rather than a preference:
+    //
+    //   flight.flagged  — the sole writer of the server's flag bits, and therefore the only
+    //                     exclusion gate for every board, the live feed and the public raw-event
+    //                     views. Without it, teleporting, refuelling, resource-editing and console
+    //                     cheating all score normally and appear publicly.
+    //   kitten.kia      — drives the ±2 s window that disqualifies a fatal crash from
+    //                     biggest_lithobrake_survived and biggest_impact_energy. Without it, a
+    //                     crash that killed the crew scores as a survival.
+    //   session.started — the only source of the save-scum rewind mark.
+    //   flight.started  — without it every flight is a server-side phantom: a flight ULID that
+    //                     appears on joins with no start, no crew and no body, which is the exact
+    //                     hazard Flush's peek semantics exist to prevent.
+    //   flight.ended    — kills ended_reason, so nothing is ever "recovered": peak_g_survived and
+    //                     max_q_survived score nothing on a rebuild, and kittens_recovered and
+    //                     biggest_recovery score nothing at all.
+    //
+    // This is a HashSet rather than a switch so EventTypeFilter, ModConfig and the tests all read
+    // the same list, and so a test can assert it is exactly these five.
+    private static readonly HashSet<string> AlwaysReportedTypes = new(StringComparer.Ordinal)
+    {
+        SessionStarted,
+        FlightStarted,
+        FlightEnded,
+        FlightFlagged,
+        KittenKia,
+    };
+
     /// <summary>Every registered type name.</summary>
     public static IReadOnlyCollection<string> All => Versions.Keys;
+
+    /// <summary>
+    /// The types no configuration may suppress: the correctness and integrity spine.
+    /// </summary>
+    public static IReadOnlyCollection<string> AlwaysReported => AlwaysReportedTypes;
+
+    /// <summary>True when <paramref name="type"/> may never be disabled.</summary>
+    /// <param name="type">The event type name.</param>
+    /// <returns>True for the integrity spine.</returns>
+    public static bool IsAlwaysReported(string? type) => type is not null && AlwaysReportedTypes.Contains(type);
 
     /// <summary>True when <paramref name="type"/> is in the registry.</summary>
     /// <param name="type">The event type name.</param>

@@ -7,6 +7,9 @@ using Brutal.Numerics;
 using MeowSci.Catlog.Lib.Auth;
 using MeowSci.Catlog.Lib.Ship;
 using MeowSci.Catlog.Lib.Util;
+// System.Diagnostics has an EventTypeFilter of its own and this file needs Stopwatch from it,
+// so the catlog one is named explicitly rather than left to win an ambiguity it would lose.
+using EventTypeFilter = MeowSci.Catlog.Lib.Events.EventTypeFilter;
 
 namespace MeowSci.Catlog;
 
@@ -106,6 +109,15 @@ public sealed class StatusWindow
 
         Row("Install"u8);
         ImGui.Text(runtime.InstallId);
+
+        Row("Event types"u8);
+        // A player who switched something off months ago and forgot needs to be able to see it
+        // here, because the alternative is an empty board with no visible cause.
+        EventTypeFilter types = runtime.Pipeline.Types;
+        if (!types.HasDisabled)
+            ImGui.Text("all reported"u8);
+        else
+            ImGui.TextColored(Warn, $"{types.Disabled.Count} off in catlog.toml: {types.DisabledList}");
 
         Row("Recorded"u8);
         ImGui.Text($"{runtime.EventsAppended} events");

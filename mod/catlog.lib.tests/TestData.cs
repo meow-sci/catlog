@@ -144,11 +144,13 @@ internal static class TestData
     internal static EventPipelineOptions PipelineOptions(
         double windowSeconds = Wire.TelemetryWindowSeconds,
         string? sessionId = SessionId,
-        string? careerId = null)
-        => new(InstallId, "0.1.0", "2026.8.5.5168", sessionId, windowSeconds, careerId ?? CareerId);
+        string? careerId = null,
+        EventTypeFilter? types = null)
+        => new(InstallId, "0.1.0", "2026.8.5.5168", sessionId, windowSeconds, careerId ?? CareerId, types);
 
     internal static EventPipeline Pipeline(
         double windowSeconds = Wire.TelemetryWindowSeconds,
-        string? careerId = null)
-        => new(PipelineOptions(windowSeconds, careerId: careerId));
+        string? careerId = null,
+        EventTypeFilter? types = null)
+        => new(PipelineOptions(windowSeconds, careerId: careerId, types: types));
 }

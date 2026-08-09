@@ -1,7 +1,9 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Text;
 using System.Text.Json;
+using MeowSci.Catlog.Lib.Events;
 using MeowSci.Catlog.Lib.Util;
 using Tomlyn;
 
@@ -51,6 +53,65 @@ public sealed class ModConfig
         # refuses to send two batches to the server less than 30 seconds apart no matter
         # what this file says. There is no key that raises or lowers that. Events are never
         # lost by waiting: they queue in outbox.db and go out in the next batch.
+        #
+        # ---------------------------------------------------------------------------------
+        # [events] — per-event-type reporting.
+        #
+        # Every type is reported unless you list it here set to false. An omitted key means
+        # enabled, so the [events] table at the end of this file is empty on a fresh install
+        # and stays that way until you put something in it.
+        #
+        # QUOTE THE KEYS. In TOML a bare  telemetry.window = false  under [events] is a nested
+        # table named "window" inside a table named "telemetry" — not a key called
+        # "telemetry.window". The mod cannot read that, the whole file fails to parse, and you
+        # silently get stock settings back. Write the name in quotes, always.
+        #
+        # Five types cannot be switched off, because switching them off is a cheat rather
+        # than a preference, and setting them to false here is dropped with a warning:
+        #
+        #   flight.flagged   marks a run as tainted. It is the ONLY thing that does, so
+        #                    without it teleporting, refuelling, resource editing and console
+        #                    commands all score normally and show up publicly.
+        #   kitten.kia       is what stops a crash that killed the crew being counted as a
+        #                    lithobrake you survived.
+        #   session.started  is the only record that a save was reloaded.
+        #   flight.started   is what makes a flight a flight — with no start there is no crew,
+        #                    no body, and nothing for a board to join against.
+        #   flight.ended     is what makes a flight recovered. Without it nothing you land is
+        #                    ever counted as landed.
+        #
+        # Everything else is yours to turn off, and every one you turn off is a board you
+        # stop appearing on. The full list, with what each one feeds:
+        #
+        # [events]
+        # "session.started" = true    # locked on
+        # "flight.started" = true     # locked on
+        # "flight.ended" = true       # locked on
+        # "flight.flagged" = true     # locked on
+        # "vehicle.situation" = true  # softest_touchdown, landed_bodies, splashdowns
+        # "vehicle.atmosphere" = true # fastest_entry
+        # "vehicle.orbit" = true      # orbits_achieved, fastest_to_orbit, highest_apoapsis,
+        #                             # lowest_orbit, roundest_orbit, steepest_orbit
+        # "vehicle.soi" = true        # soi_bodies and every fastest_to_<body> board
+        # "vehicle.rud" = true        # rud_total and every rud_<cause> board
+        # "vehicle.impact" = true     # biggest_lithobrake_survived, biggest_impact_energy
+        # "vehicle.staging" = true    # stagings, most_stages
+        # "vehicle.docked" = true     # dockings
+        # "vehicle.undocked" = true   # no board reads it today; it is part of the story
+        # "engine.ignition" = true    # engine_ignitions
+        # "engine.shutdown" = true    # no board reads it today
+        # "engine.flameout" = true    # flameouts
+        # "kitten.eva_start" = true   # evas
+        # "kitten.eva_end" = true     # longest_eva
+        # "kitten.tumble" = true      # kitten_tumbles
+        # "kitten.kia" = true         # locked on
+        # "roster.snapshot" = true    # distance_travelled, top_kitten_distance,
+        #                             # top_kitten_missions, and the kitten roster itself
+        # "telemetry.window" = true   # peak_g_survived, max_q_survived, highest_altitude,
+        #                             # fastest_surface_speed, fastest_orbital_speed. Also the
+        #                             # only kind of row the outbox is allowed to drop when it
+        #                             # fills up, so turning it off leaves it nothing to shed.
+        # ---------------------------------------------------------------------------------
 
         """;
 
@@ -106,6 +167,31 @@ public sealed class ModConfig
 
     /// <summary>The outbox cap in bytes.</summary>
     public long OutboxCapBytes => OutboxCapMb * 1024L * 1024L;
+
+    /// <summary>
+    /// Per-event-type reporting, keyed by the wire type name (§4.2). A key set to <c>false</c>
+    /// stops that type being produced at all; an absent key means enabled.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Empty by default, and it stays empty.</b> Writing all 22 live keys out would mean every
+    /// future type silently arriving switched to whatever the file happens to say, and would turn a
+    /// one-line opt-out into a wall of noise. The full list ships commented out in
+    /// <c>Header</c> instead — that block is the only place the shape is documented for a player,
+    /// since there is no example file, so it has a test holding it in step with the registry.
+    /// </para>
+    /// <para>
+    /// <b>This property is declared last on purpose.</b> Tomlyn writes members in declaration
+    /// order, and a TOML table header swallows every key that follows it — a scalar declared after
+    /// this one would be emitted underneath <c>[events]</c> and then fail to parse as a bool,
+    /// taking the whole file down to defaults. New scalar keys go above.
+    /// </para>
+    /// <para>
+    /// Keys arrive quoted (<c>"telemetry.window" = false</c>) because they contain dots. Tomlyn
+    /// emits them that way and a bare dotted key is a parse error, not a key — see the header.
+    /// </para>
+    /// </remarks>
+    public Dictionary<string, bool> Events { get; set; } = new(StringComparer.Ordinal);
 
     /// <summary>
     /// True when shipping is configured coherently: enabled, with a parseable absolute http/https
@@ -230,6 +316,59 @@ public sealed class ModConfig
         LogLevel = OneOf(nameof(LogLevel), LogLevel, "info", ["debug", "info", "warn", "error"]);
         IngestUrl = (IngestUrl ?? string.Empty).Trim();
         CredentialPath = (CredentialPath ?? string.Empty).Trim();
+        Events = NormalizeEvents(Events);
+    }
+
+    /// <summary>
+    /// The emission filter this config expresses, for
+    /// <see cref="Detect.EventPipelineOptions.Types"/>.
+    /// </summary>
+    /// <returns>The filter; <see cref="EventTypeFilter.All"/> when nothing is disabled.</returns>
+    public EventTypeFilter EventFilter()
+    {
+        List<string>? disabled = null;
+        foreach (KeyValuePair<string, bool> entry in Events)
+        {
+            if (!entry.Value)
+                (disabled ??= []).Add(entry.Key);
+        }
+
+        return EventTypeFilter.Create(disabled);
+    }
+
+    // Rule 3 applied to a table: drop what cannot be honoured, warn about it, and let the rewritten
+    // file be the truth. Unknown keys go the same way Tomlyn's unknown root keys already do —
+    // ignored — because a typo must not be able to cost a player their whole config.
+    private static Dictionary<string, bool> NormalizeEvents(Dictionary<string, bool>? events)
+    {
+        var normalized = new Dictionary<string, bool>(StringComparer.Ordinal);
+        if (events is null)
+            return normalized;
+
+        foreach (KeyValuePair<string, bool> entry in events)
+        {
+            if (!EventTypes.IsKnown(entry.Key))
+            {
+                ModLog.Log.Warn(
+                    $"catlog: config [events] has no event type '{entry.Key}'; ignoring it.");
+                continue;
+            }
+
+            if (!entry.Value && EventTypes.IsAlwaysReported(entry.Key))
+            {
+                // Dropped rather than rewritten to true: absent already means enabled, so dropping
+                // says the same thing in fewer words, and the saved file then reads as what the
+                // mod is actually doing.
+                ModLog.Log.Warn(
+                    $"catlog: config [events] \"{entry.Key}\" = false is ignored — that type is part of "
+                    + "how a run is scored honestly and cannot be switched off. Reporting it.");
+                continue;
+            }
+
+            normalized[entry.Key] = entry.Value;
+        }
+
+        return normalized;
     }
 
     private static double Clamp(string name, double value, double min, double max)

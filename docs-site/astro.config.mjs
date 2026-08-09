@@ -33,6 +33,7 @@ export default defineConfig({
             { label: "What catlog is", slug: "start/what-catlog-is" },
             { label: "How a flight becomes a score", slug: "start/flight-to-score" },
             { label: "Your identity and your handle", slug: "start/identity" },
+            { label: "Turning things off", slug: "start/turning-things-off" },
           ],
         },
         {

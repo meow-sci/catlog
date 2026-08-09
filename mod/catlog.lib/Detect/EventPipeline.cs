@@ -17,13 +17,20 @@ namespace MeowSci.Catlog.Lib.Detect;
 /// career, which is the correct answer for any caller that has no concept of a KSA save — one such
 /// caller has exactly one career, forever.
 /// </param>
+/// <param name="Types">
+/// Which event types may be emitted (§7.2 <c>[events]</c>). Null means all of them, which is the
+/// right answer for every caller that has no config file — the simulator, the load generator and
+/// the tests. A filter here cannot suppress <see cref="EventTypes.AlwaysReported"/> whatever it
+/// names; see <see cref="EventTypeFilter"/>.
+/// </param>
 public sealed record EventPipelineOptions(
     string InstallId,
     string ModVersion = "0.1.0",
     string GameBuild = "unknown",
     string? SessionId = null,
     double WindowSeconds = Wire.TelemetryWindowSeconds,
-    string? CareerId = null);
+    string? CareerId = null,
+    EventTypeFilter? Types = null);
 
 /// <summary>
 /// The worker-side pipeline: telemetry frames and game signals in, <see cref="EventEnvelope"/>s
@@ -44,6 +51,7 @@ public sealed record EventPipelineOptions(
 public sealed class EventPipeline
 {
     private readonly EventPipelineOptions _options;
+    private readonly EventTypeFilter _types;
     private readonly HashSet<FlightFlag> _sessionFlags = [];
     private readonly HashSet<string> _liveVehicles = new(StringComparer.Ordinal);
 
@@ -56,12 +64,16 @@ public sealed class EventPipeline
     public EventPipeline(EventPipelineOptions options)
     {
         _options = options;
+        _types = options.Types ?? EventTypeFilter.All;
         _windows = new WindowAccumulator(options.WindowSeconds);
         Tracker = new FlightTracker(options.InstallId, options.SessionId, options.CareerId);
     }
 
     /// <summary>The identity bookkeeper. Exposed for the simulator and the status window.</summary>
     public FlightTracker Tracker { get; }
+
+    /// <summary>The emission filter in force. Exposed so the status window can report it.</summary>
+    public EventTypeFilter Types => _types;
 
     /// <summary>The current session ULID.</summary>
     public string SessionId => Tracker.SessionId;
@@ -78,6 +90,13 @@ public sealed class EventPipeline
     /// <summary>
     /// The <c>session.started</c> event. Emit exactly once per session, before anything else.
     /// </summary>
+    /// <remarks>
+    /// The one path that returns an envelope without going through <see cref="Add"/>, and so the
+    /// one path the <c>[events]</c> filter does not see. That is safe precisely because
+    /// <c>session.started</c> is in <see cref="EventTypes.AlwaysReported"/>: there is no
+    /// configuration that could have suppressed it, so there is nothing here to check. If that
+    /// list ever loses <c>session.started</c>, this method has to grow a filter test.
+    /// </remarks>
     /// <param name="simT">Universe sim seconds.</param>
     /// <param name="wallMs">Client unix milliseconds.</param>
     /// <returns>The envelope.</returns>
@@ -428,6 +447,30 @@ public sealed class EventPipeline
         }
     }
 
-    private static void Add(ref List<EventEnvelope>? envelopes, EventEnvelope envelope)
-        => (envelopes ??= []).Add(envelope);
+    /// <summary>
+    /// The single funnel every produced envelope passes through, and therefore the one place the
+    /// <c>[events]</c> filter belongs.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Suppression here is late on purpose. C# evaluates the argument before the call, so by the
+    /// time this runs the flight ULID has been minted, the flag has been recorded on the tracker,
+    /// the window has closed and the impact has been resolved. Dropping the envelope costs one
+    /// wasted ULID and nothing else — no detector state is rewound, so a disabled type cannot
+    /// change what the *other* types say. Filtering in <c>Dispatch</c> would skip the case body and
+    /// take that bookkeeping with it.
+    /// </para>
+    /// <para>
+    /// The <see cref="EventTypes.IsAlwaysReported"/> test is deliberately redundant with
+    /// <see cref="EventTypeFilter.Create"/>'s: this is the choke point, so this is where the
+    /// guarantee has to be readable, not two files away.
+    /// </para>
+    /// </remarks>
+    private void Add(ref List<EventEnvelope>? envelopes, EventEnvelope envelope)
+    {
+        if (!EventTypes.IsAlwaysReported(envelope.Type) && !_types.IsEnabled(envelope.Type))
+            return;
+
+        (envelopes ??= []).Add(envelope);
+    }
 }

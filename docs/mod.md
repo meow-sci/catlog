@@ -42,6 +42,7 @@ one sealed class per type, because-messages on assertions, and an assembly-wide 
 catlog.lib/
   Wire.cs         every §4.3/§4.5 constant in one place, including the hard reporting floor
   Events/         EventEnvelope · Payloads (one record per §4.2 type) · EventTypes registry
+                  EventTypeFilter — which types may be emitted; the [events] table's runtime form
                   GameSignal + one sealed record per Harmony-origin signal
   Telemetry/      TelemetrySnapshot · TelemetryFrame · GameBridge (the game-thread seam)
                   SituationInfo (the verified packed-bitfield table) · Sanitize (NaN/Inf scrub)
@@ -165,6 +166,51 @@ meant a ~9-second freeze at quit, which is what MOD-071 fixed. It is exempt beca
 abusing it means actually quitting and relaunching KSA. The exempt request is still stamped, so it
 buys one batch on the way out rather than a reset.
 
+### `catlog.toml`, and the types a player may switch off
+
+`ModConfig` is Tomlyn, atomic save, and three rules: never throw, never overwrite a file that failed
+to parse, clamp rather than reject. The last of those is why the file a player reads back is always
+the truth about what the mod is doing.
+
+**`[events]` turns individual event types off.** The key is the wire type name, the value is a bool,
+and an *absent* key means enabled — so the table is empty on a fresh install and stays empty until
+the player puts something in it. The full list ships **commented out in the file's header**, one
+line per type annotated with the boards it feeds, because there is no example file and the header is
+the only self-documenting surface the config has; a test holds that block in step with the registry.
+Keys must be quoted: a bare `telemetry.window = false` is a nested table in TOML, not a key with a
+dot in it, and it fails the parse — which, by rule 2, drops the whole file to defaults and leaves the
+player's edit on disk untouched.
+
+**Five types cannot be switched off**, and a `false` on any of them is dropped with a warning naming
+the key: `session.started`, `flight.started`, `flight.ended`, `flight.flagged` and `kitten.kia`.
+Switching those off is a cheat rather than a preference — `flight.flagged` is the sharp end, being
+the only thing that marks a run as tainted, so a one-line edit would make teleporting, refuelling,
+resource-editing and console cheating score normally and appear publicly. The threat model is the
+floor's, unchanged: *the attacker is a player editing a text file*, and recompiling the assembly is
+out of scope.
+
+It is enforced **twice**, for the reason the floor is enforced three times — clamping the config
+alone only closes the path you thought of:
+
+1. `ModConfig.Normalize` drops unknown keys and drops a locked `false`, both with a warning, so the
+   rewritten file reads as what the mod is actually doing. The courtesy.
+2. `EventTypeFilter.Create` refuses the locked names again, so a filter built by hand — by the
+   simulator, the load generator, a test, or any caller that never touches `ModConfig` — still
+   cannot express "stop reporting `flight.flagged`". The guarantee.
+
+`EventPipeline.Add` is where the filter is applied, and it is the single funnel every envelope goes
+through. **Suppression there is late on purpose**: the flight ULID has been minted, the flag recorded
+on the tracker, the window closed and the correlator told, all before `Add` runs — so dropping an
+envelope costs one wasted ULID and rewinds nothing, and a disabled type cannot change what the other
+types say. Filtering in `Dispatch` would skip the case body and take that bookkeeping with it.
+`Add` re-checks the locked list redundantly, because the choke point is where the guarantee has to
+be readable. `SessionStarted` is the one path that bypasses `Add`, and it is safe only because
+`session.started` is locked; its remarks say so, with the condition attached.
+
+`schema` was **not** bumped for this. The key is additive, an old file parses fine, and a bump would
+send every existing config down `LoadOrCreate`'s mismatch path and discard the player's ingest URL,
+credential path and log level in exchange for a key they never set.
+
 ## §7.4 `catlog` — the game project
 
 The only code that touches KSA, and deliberately thin: everything else is a call into `catlog.lib`.
@@ -172,6 +218,7 @@ The only code that touches KSA, and deliberately thin: everything else is a call
 | File | What |
 |---|---|
 | `Mod.cs` | Lifecycle, config load, the status window (F10) |
+| `StatusWindow.cs` | Read-only ImGui rows: patches, vehicles, session, install, **event types**, recorded/queued counts, last ship, health. The *Event types* row reads `all reported`, or `N off in catlog.toml: <names>` in the warning colour — a player who switched something off months ago and forgot is otherwise looking at an empty board with no visible cause. It reports; it does not edit ([ROADMAP.md](ROADMAP.md)) |
 | `Patcher.cs` | The Harmony patches, each carrying its `ksa-integration.md` table row as a comment |
 | `VehicleTelemetry.cs` | **Every** KSA read, each with a `[KsaAnchor]` |
 | `PolledSignals.cs` | The 2 Hz poll, vehicle tracking, and the roster read at **two cadences** — an allocation-free KIA scan every tick, the `roster.snapshot` payload only when one is due |

@@ -57,6 +57,12 @@ export interface CatlogEvent {
   feeds: string[];
   /** True when the event is dropped first if the local spool fills up. */
   droppable?: boolean;
+  /**
+   * True when this event cannot be switched off in the mod's settings file.
+   * Everything without it can be. The five that carry it are the ones whose
+   * absence would let a run score as something it was not.
+   */
+  alwaysOn?: boolean;
   /** Anchor on the family page. */
   page: string;
 }
@@ -64,6 +70,7 @@ export interface CatlogEvent {
 export const EVENTS: CatlogEvent[] = [
   {
     type: "session.started",
+    alwaysOn: true,
     family: "session",
     ver: 1,
     summary: "You started playing, or loaded a save.",
@@ -86,6 +93,7 @@ export const EVENTS: CatlogEvent[] = [
   },
   {
     type: "flight.started",
+    alwaysOn: true,
     family: "flight",
     ver: 1,
     summary: "A vehicle appeared that catlog had not seen before.",
@@ -111,6 +119,7 @@ export const EVENTS: CatlogEvent[] = [
   },
   {
     type: "flight.ended",
+    alwaysOn: true,
     family: "flight",
     ver: 1,
     summary: "A vehicle left the world — recovered, destroyed, or simply gone.",
@@ -132,6 +141,7 @@ export const EVENTS: CatlogEvent[] = [
   },
   {
     type: "flight.flagged",
+    alwaysOn: true,
     family: "flight",
     ver: 1,
     summary: "Something happened on this flight that makes it ineligible for leaderboards.",
@@ -462,6 +472,7 @@ export const EVENTS: CatlogEvent[] = [
   },
   {
     type: "kitten.kia",
+    alwaysOn: true,
     family: "kitten",
     ver: 1,
     summary: "A kitten was lost.",
@@ -581,3 +592,6 @@ export const TRIGGER_LABEL: Record<Trigger, string> = {
 export function eventByType(type: string): CatlogEvent | undefined {
   return EVENTS.find((e) => e.type === type);
 }
+
+/** The events that cannot be switched off, in catalog order. */
+export const ALWAYS_ON: CatlogEvent[] = EVENTS.filter((e) => e.alwaysOn === true);
