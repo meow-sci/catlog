@@ -16,10 +16,14 @@
 
     - name: Read the certificate's dates and names
       ansible.builtin.command:
-        cmd: "openssl x509 -noout -dates -subject -ext subjectAltName -in {{ catlog_data_root }}/acme/live/fullchain.pem"
+        cmd: "openssl x509 -noout -issuer -dates -subject -ext subjectAltName -in {{ catlog_data_root }}/acme/live/fullchain.pem"
       register: certs_info
       changed_when: false
 
     - name: Report the certificate
       ansible.builtin.debug:
-        var: certs_info.stdout_lines
+        msg: >-
+          {{ ('*** STAGING CA — browsers will not trust this. ***'
+              if 'STAGING' in (certs_info.stdout | upper)
+              else 'Production CA — trusted.') }}
+          {{ certs_info.stdout_lines }}

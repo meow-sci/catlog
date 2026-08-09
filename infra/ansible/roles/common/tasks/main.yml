@@ -70,6 +70,15 @@
 # Container logs go to Docker's json-file driver (rotated in daemon.json), not
 # to the journal. This bounds what the rest of the system can accumulate.
 
+# `copy` does not create parent directories, and a minimal Debian image ships
+# neither of the drop-in directories below — they are conventions systemd reads
+# if present, not files the base install provides.
+- name: Create the journald drop-in directory
+  ansible.builtin.file:
+    path: /etc/systemd/journald.conf.d
+    state: directory
+    mode: "0755"
+
 - name: Bound the journal
   ansible.builtin.copy:
     dest: /etc/systemd/journald.conf.d/catlog.conf
@@ -87,7 +96,9 @@
   # on a box you are reaching by password is the classic way to lock yourself
   # out of it, and it happens after the play has already reported "changed".
   ansible.builtin.stat:
-    path: "{{ '/root/.ssh/authorized_keys' if ansible_user_id == 'root' else '/home/' ~ ansible_user_id ~ '/.ssh/authorized_keys' }}"
+    path: >-
+      {{ '/root/.ssh/authorized_keys' if ansible_facts['user_id'] == 'root'
+         else '/home/' ~ ansible_facts['user_id'] ~ '/.ssh/authorized_keys' }}
   register: catlog_authorized_keys
   when: catlog_harden_sshd | bool
 
@@ -97,10 +108,20 @@
       - catlog_authorized_keys.stat.exists
       - catlog_authorized_keys.stat.size > 0
     fail_msg: >-
-      catlog_harden_sshd is on but {{ ansible_user_id }} has no authorized_keys on
+      catlog_harden_sshd is on but {{ ansible_facts['user_id'] }} has no authorized_keys on
       this host. Disabling password authentication now would lock you out. Install
       your key first (ssh-copy-id), or set catlog_harden_sshd=false.
     quiet: true
+  when: catlog_harden_sshd | bool
+
+- name: Create the sshd drop-in directory
+  # Same reason as journald above. It also needs sshd_config to carry an
+  # `Include /etc/ssh/sshd_config.d/*.conf` line — Debian 12+ and Ubuntu 22.04+
+  # do; older ones do not, and would ignore the file entirely.
+  ansible.builtin.file:
+    path: /etc/ssh/sshd_config.d
+    state: directory
+    mode: "0755"
   when: catlog_harden_sshd | bool
 
 - name: Harden sshd

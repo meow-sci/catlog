@@ -125,6 +125,14 @@ acme_cf_zone_id: "{{ lookup('env', 'CF_ZONE_ID') | default('', true) }}"
 # issuances against production burns an hour-long lockout.
 acme_staging: "{{ (lookup('env', 'ACME_STAGING') | default('0', true)) == '1' }}"
 acme_image: "{{ lookup('env', 'ACME_IMAGE') | default('neilpang/acme.sh:latest', true) }}"
+
+# Reissue even when acme.sh would skip. Needed for exactly one thing in normal
+# use: moving from the staging CA to the production one, where the names have
+# not changed but the issuer must. `make certs FORCE=1`.
+#
+# Not a routine switch — every forced issuance counts against Let's Encrypt's
+# duplicate-certificate limit (five per week for the same set of names).
+acme_force: "{{ (lookup('env', 'ACME_FORCE') | default('0', true)) == '1' }}"
 # 03:17 rather than 03:00 — a renewal that shares a minute with every other
 # acme.sh install on the internet is a renewal that competes for the same rate
 # limit. acme.sh only acts when a certificate is within 30 days of expiry.
@@ -141,6 +149,14 @@ catlog_unattended_upgrades: true
 # key, but the first line of defence is that it does not run at all.
 catlog_harden_sshd: false
 catlog_journal_max_use: 500M
+
+# Whether nginx is told to trust CF-Connecting-IP from Cloudflare's ranges.
+#
+# THIS IS NOT A FIREWALL. Nothing on this host filters packets; the DigitalOcean
+# cloud firewall does that. This is one nginx directive, and turning it off costs
+# you accurate rate limiting and access logs — every visitor collapses into the
+# handful of Cloudflare edge addresses.
+catlog_realip_enabled: true
 
 # Fetched by roles/catlog_nginx for `set_real_ip_from` — and for nothing else.
 # No firewall on this box is derived from them; that is the DigitalOcean cloud

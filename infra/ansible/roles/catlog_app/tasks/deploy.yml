@@ -105,12 +105,43 @@
              else 'There was no previous deployment to roll back to.' }}
           The last 80 log lines are above; `make ops-logs` collects the rest.
 
-- name: Recreate nginx
-  # Safe to do plainly: nginx holds no lock and serves the maintenance page
-  # while catlogd is away.
-  ansible.builtin.command:
-    cmd: docker compose up -d nginx
-    chdir: /opt/catlog
+- name: Check nginx's config directory is a directory
+  # `make deploy` does not run roles/catlog_nginx, so it must not be the thing
+  # that first starts nginx. With the whole directory mounted there is one thing
+  # to check rather than two files, and it cannot be the wrong type by accident.
+  ansible.builtin.stat:
+    path: "{{ catlog_data_root }}/nginx/conf"
+  register: catlog_deploy_conf
+
+- name: Refuse to start nginx without it
+  ansible.builtin.assert:
+    that: catlog_deploy_conf.stat.isdir | default(false)
+    fail_msg: >-
+      {{ catlog_data_root }}/nginx/conf is missing. Run `make provision` — that
+      is what creates it and renders the server blocks into it.
+    quiet: true
+
+- name: Start nginx, recreating it if its mount points are stale
+  # `up -d` REUSES an existing container when the service spec has not changed —
+  # it does not rebuild its rootfs. A container created while a bind-mount source
+  # was missing has a DIRECTORY baked in at that mount point (Docker invents a
+  # missing source as a directory, and runc matches the type). Once the source is
+  # repaired to a file, starting that same container fails forever with
+  #
+  #     error mounting ".../20-realip.conf" ... : not a directory
+  #
+  # Recreating it is the only fix, and it must be the fallback rather than the
+  # default: nginx holds every open SSE stream, and bouncing it on every deploy
+  # would drop them all for no reason.
+  ansible.builtin.shell:
+    cmd: |
+      set -e
+      cd /opt/catlog
+      if docker compose up -d nginx; then exit 0; fi
+      echo "nginx would not start; its container has stale mount points. Recreating." >&2
+      ls -la {{ catlog_data_root }}/nginx/conf/ >&2
+      docker compose rm -sf nginx
+      docker compose up -d nginx
   changed_when: true
 
 - name: Read the deployed version
@@ -129,7 +160,7 @@
         "catlogd": "{{ catlog_image }}",
         "nginx": "{{ catlog_nginx_image }}",
         "version": "{{ catlog_deployed_version.stdout | trim }}",
-        "deployed_at": "{{ ansible_date_time.iso8601 }}",
+        "deployed_at": "{{ ansible_facts['date_time']['iso8601'] }}",
         "previous": {{ catlog_rollback | to_json }}
       }
 

@@ -47,6 +47,20 @@
     path: "{{ catlog_data_root }}/acme/live/fullchain.pem"
   register: acme_existing
 
+- name: Read the issuer on the existing certificate
+  # WHICH CA SIGNED IT IS PART OF THE QUESTION, not a detail. acme.sh stores the
+  # ACME directory per domain, so `--cron` renews from whatever CA first issued
+  # — for ever. Switching from staging to production is therefore not a renewal
+  # at all; it is a reissue against a different `--server`, and nothing in a
+  # renewal path can do it. Left undetected, `make certs` reports success and
+  # the origin keeps serving an untrusted certificate.
+  ansible.builtin.command:
+    cmd: "openssl x509 -noout -issuer -in {{ catlog_data_root }}/acme/live/fullchain.pem"
+  register: acme_existing_issuer
+  changed_when: false
+  failed_when: false
+  when: acme_existing.stat.exists
+
 - name: Read the names on the existing certificate
   # A certificate that does not cover catlog_origin_domain has to be reissued,
   # and "it exists" is not the same question as "it covers what we serve".
@@ -59,16 +73,42 @@
   failed_when: false
   when: acme_existing.stat.exists
 
-- name: Work out whether every name we serve is on it
-  # Matched as `DNS:<name>,` so that `example.com` cannot be judged present
-  # merely because `origin.example.com` is.
+- name: Work out whether the certificate came from the CA we want
+  # Let's Encrypt's staging chain says so in the issuer, e.g.
+  #   issuer=C=US, O=(STAGING) Let's Encrypt, CN=(STAGING) Wannabe Watercress R11
   ansible.builtin.set_fact:
-    acme_covers_all: >-
-      {{ acme_existing.stat.exists and
-         acme_domains
-         | map('regex_replace', '^(.*)$', 'DNS:\\1')
-         | reject('in', (acme_existing_sans.stdout | default('')) ~ ',')
-         | list | length == 0 }}
+    acme_cert_is_staging: "{{ 'STAGING' in (acme_existing_issuer.stdout | default('') | upper) }}"
+
+- name: Work out which names are missing from it
+  # Each name is matched WITH its `DNS:` prefix, which is what stops
+  # `catlog.science.fail` being judged present merely because
+  # `origin.catlog.science.fail` contains it. The prefix is prepended with an
+  # empty-anchor substitution and NO backreference: a replacement like `DNS:\1`
+  # does not survive a YAML folded scalar — the backslash arrives literally, the
+  # group is never expanded, and every name maps to the same dead string. That
+  # made this check always fail, which meant a certificate was requested on
+  # EVERY provision run. Against Let's Encrypt's production CA that is five runs
+  # to a week-long duplicate-certificate lockout.
+  ansible.builtin.set_fact:
+    acme_missing_names: >-
+      {{ acme_domains
+         | map('regex_replace', '^', 'DNS:')
+         | reject('in', acme_existing_sans.stdout | default(''))
+         | list }}
+
+- name: Say what the existing certificate covers
+  ansible.builtin.debug:
+    msg: >-
+      {{ 'No certificate yet — issuing for ' ~ (acme_domains | join(', ')) ~ ' from the '
+            ~ ('STAGING' if acme_staging | bool else 'PRODUCTION') ~ ' CA.'
+         if not acme_existing.stat.exists
+         else ('Existing certificate is from the ' ~ ('STAGING' if acme_cert_is_staging | bool else 'PRODUCTION')
+               ~ ' CA; we want ' ~ ('STAGING' if acme_staging | bool else 'PRODUCTION') ~ ' — reissuing.'
+               if acme_cert_is_staging | bool != acme_staging | bool
+               else ('Certificate is missing ' ~ (acme_missing_names | join(', ')) ~ ' — reissuing.'
+                     if acme_missing_names | length > 0
+                     else ('ACME_FORCE is set — reissuing anyway.' if acme_force | bool
+                           else 'Certificate covers every name and is from the right CA — not reissuing.'))) }}
 
 - name: Issue the certificate
   ansible.builtin.command:
@@ -76,6 +116,7 @@
       docker compose --profile acme run --rm acme
       --issue --dns dns_cf
       {% for d in acme_domains %}-d {{ d }} {% endfor %}
+      {{ '--force' if acme_force | bool or acme_existing.stat.exists else '' }}
       --server {{ 'letsencrypt_test' if acme_staging | bool else 'letsencrypt' }}
       --keylength ec-256
       --key-file /certs/privkey.pem
@@ -85,7 +126,20 @@
     chdir: /opt/catlog
   register: acme_issue
   changed_when: "'Cert success' in acme_issue.stdout or 'Certificate has been issued' in acme_issue.stdout"
-  when: not acme_covers_all | bool
+  # acme.sh exits 2 for "skipped — nothing to do": the domains have not changed
+  # and the certificate is not yet within its renewal window. That is the
+  # healthy case, not a failure, and it is acme.sh's own guard against exactly
+  # the runaway this role's gate is meant to prevent. Treating it as an error
+  # made a correct no-op fail the play.
+  failed_when: acme_issue.rc not in [0, 2]
+  # No certificate, a name missing from it, the wrong CA, or an explicit force.
+  # A healthy re-run of `make provision` matches none of those and issues
+  # nothing.
+  when: >-
+    not acme_existing.stat.exists
+    or acme_missing_names | length > 0
+    or acme_cert_is_staging | bool != acme_staging | bool
+    or acme_force | bool
   notify: Reload nginx after renewal
 
 - name: Install the renewal script

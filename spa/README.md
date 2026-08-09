@@ -129,7 +129,7 @@ instead of a 404. Every static host supports this; each spells it differently:
 | Host                        | What it needs                                                                                                             |
 | --------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
 | GitHub Pages                | a `404.html` copy of `index.html` at the site root — **the build emits it**, see `deepLinkFallback()` in `vite.config.ts` |
-| nginx                       | `location / { try_files $uri $uri/ /index.html; }` — **this is what catlog production does**, at `/app/`                    |
+| nginx                       | `location / { try_files $uri $uri/ /index.html; }` — **this is what catlog production does**, at `/app/`                  |
 | Netlify                     | `/*    /index.html   200` in `public/_redirects`                                                                          |
 | Cloudflare Pages            | the same `_redirects` line, or the "Single Page App" preset                                                               |
 | Vercel                      | `{ "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }] }`                                                   |

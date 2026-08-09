@@ -104,7 +104,7 @@
       ansible.builtin.debug:
         msg: |
           host        {{ inventory_hostname }} ({{ ansible_facts.distribution }} {{ ansible_facts.distribution_version }})
-          ssh as      {{ ansible_user_id }} with the key named by CATLOG_SSH_IDENTITY_FILE
+          ssh as      {{ ansible_facts['user_id'] }} with the key named by CATLOG_SSH_IDENTITY_FILE
           docker      {{ pf_docker.stdout | default('NOT INSTALLED — `make provision` will install it') }}
           compose     {{ pf_compose.stdout | default('NOT INSTALLED — `make provision` will install it') }}
           data root   {{ catlog_data_root }}

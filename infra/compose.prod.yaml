@@ -23,7 +23,13 @@ name: catlog
 
 services:
   catlogd:
-    image: ${CATLOG_IMAGE:?set CATLOG_IMAGE to a digest-pinned reference}
+    # A placeholder default rather than `:?`, because `:?` makes EVERY compose
+    # command fail when the variable is unset — including the acme one-shot that
+    # `make provision` runs to get a certificate, long before any image has been
+    # built. Provisioning a host and releasing to it are separate steps and must
+    # stay that way. An unreleased host fails at `up` with a plain "image not
+    # found", which is the right error at the right moment.
+    image: ${CATLOG_IMAGE:-catlog/catlogd:unreleased}
     container_name: catlog-catlogd
     restart: unless-stopped
 
@@ -95,12 +101,17 @@ services:
 
     mem_limit: ${CATLOG_MEM_LIMIT:-900m}
 
+    # Go raises its own soft limit to the hard one at startup, so what matters
+    # here is the hard limit, which Docker inherits from the daemon.
+    ulimits:
+      nofile: {soft: 65535, hard: 65535}
+
     logging:
       driver: json-file
       options: {max-size: "50m", max-file: "5"}
 
   nginx:
-    image: ${NGINX_IMAGE:?set NGINX_IMAGE to a digest-pinned reference}
+    image: ${NGINX_IMAGE:-catlog/catlog-nginx:unreleased}
     container_name: catlog-nginx
     restart: unless-stopped
 
@@ -123,10 +134,14 @@ services:
       - /tmp:rw,nosuid,nodev,size=16m
 
     volumes:
-      # Individual FILES, not the directory: /etc/nginx/catlog.d/00-bootstrap.conf
-      # is baked into the image and mounting over the directory would hide it.
-      - ${CATLOG_DATA_ROOT}/nginx/conf/10-catlog.conf:/etc/nginx/catlog.d/10-catlog.conf:ro
-      - ${CATLOG_DATA_ROOT}/nginx/conf/20-realip.conf:/etc/nginx/catlog.d/20-realip.conf:ro
+      # The whole directory, not the files inside it. Mounting individual files
+      # means Docker invents a missing source as a DIRECTORY, and a container
+      # remembers the type of each mount point it was created with — so a single
+      # start before the files exist leaves nginx permanently unable to start,
+      # with "not a directory". A directory mount has no such failure mode, and
+      # roles/storage guarantees this one exists. The default server that used
+      # to live here as a baked file is now in nginx.conf itself.
+      - ${CATLOG_DATA_ROOT}/nginx/conf:/etc/nginx/catlog.d:ro
       - ${CATLOG_DATA_ROOT}/acme/live:/etc/nginx/certs:ro
 
     depends_on:
@@ -140,11 +155,18 @@ services:
 
     networks: [catlog_net]
 
+    # 4096 worker_connections needs descriptors to match; the daemon's default of
+    # 1024 makes nginx warn at every start that it cannot keep that promise.
+    ulimits:
+      nofile: {soft: 65535, hard: 65535}
+
     healthcheck:
       # No curl and no wget in the nginx image, and adding one would be a
-      # package installed to answer a question a TCP connect already answers.
-      # bash is part of the Debian base, so /dev/tcp is available.
-      test: ["CMD", "bash", "-c", "printf 'HEAD / HTTP/1.0\\r\\n\\r\\n' > /dev/tcp/127.0.0.1/80"]
+      # package installed to answer a question /dev/tcp already answers (bash is
+      # part of the Debian base). It asks the default server's /nginx-health,
+      # which still answers 200 while catlogd is down — nginx staying up through
+      # a deploy is the whole point — and is excluded from the access log.
+      test: ["CMD", "bash", "-c", "printf 'GET /nginx-health HTTP/1.0\\r\\n\\r\\n' > /dev/tcp/127.0.0.1/80"]
       interval: 15s
       timeout: 5s
       start_period: 10s

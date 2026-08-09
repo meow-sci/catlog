@@ -133,6 +133,7 @@ exec docker run --rm ${TTY_FLAGS[@]+"${TTY_FLAGS[@]}"} \
     ${NGINX_IMAGE:+-e NGINX_IMAGE="$NGINX_IMAGE"} \
     ${CATLOG_IMAGE_ID:+-e CATLOG_IMAGE_ID="$CATLOG_IMAGE_ID"} \
     ${NGINX_IMAGE_ID:+-e NGINX_IMAGE_ID="$NGINX_IMAGE_ID"} \
+    ${ACME_FORCE:+-e ACME_FORCE="$ACME_FORCE"} \
     ${SINCE:+-e SINCE="$SINCE"} \
     -v "$ROOT/infra:/work/infra" \
     -v "$ROOT/diagnostics:/work/diagnostics" \

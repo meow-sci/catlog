@@ -19,6 +19,14 @@
 # and an address it has added has its traffic attributed to the edge instead of
 # to the visitor — which lands in the rate-limit buckets and the access log.
 
+- name: Skip real_ip entirely
+  ansible.builtin.debug:
+    msg: >-
+      catlog_realip_enabled is false — nginx will not be told to trust
+      CF-Connecting-IP. Rate limits and access logs will then name the Cloudflare
+      edge address rather than the visitor, and every visitor shares one bucket.
+  when: not catlog_realip_enabled | bool
+
 - name: Fetch the Cloudflare IPv4 ranges
   ansible.builtin.uri:
     url: "{{ cloudflare_ips_v4_url }}"
@@ -30,6 +38,7 @@
   check_mode: false
   delegate_to: localhost
   become: false
+  when: catlog_realip_enabled | bool
 
 - name: Fetch the Cloudflare IPv6 ranges
   ansible.builtin.uri:
@@ -42,30 +51,41 @@
   check_mode: false
   delegate_to: localhost
   become: false
+  when: catlog_realip_enabled | bool
 
 - name: Fall back to the vendored ranges
+  # `splitlines()`, NOT `split('\n')`. In a YAML folded scalar the backslash-n
+  # reaches Jinja as two literal characters, so `split` finds nothing and returns
+  # the whole response as ONE element — a single "CIDR" containing every line.
+  # The assertion below is what caught it. splitlines() also copes with \r\n,
+  # which a proxy or a future Cloudflare could introduce without warning.
   ansible.builtin.set_fact:
     cloudflare_v4: >-
-      {{ (cf_v4.content | default('')).split('\n') | map('trim') | reject('equalto', '') | list
+      {{ cf_v4.content.splitlines() | map('trim') | reject('equalto', '') | list
          if cf_v4.status | default(0) == 200
          else lookup('file', 'cloudflare-ips-v4.txt').splitlines() | map('trim') | reject('equalto', '') | list }}
     cloudflare_v6: >-
-      {{ (cf_v6.content | default('')).split('\n') | map('trim') | reject('equalto', '') | list
+      {{ cf_v6.content.splitlines() | map('trim') | reject('equalto', '') | list
          if cf_v6.status | default(0) == 200
          else lookup('file', 'cloudflare-ips-v6.txt').splitlines() | map('trim') | reject('equalto', '') | list }}
+  when: catlog_realip_enabled | bool
 
 - name: Say where the ranges came from
   ansible.builtin.debug:
     msg: >-
-      Cloudflare ranges: {{ cloudflare_v4 | length }} v4 + {{ cloudflare_v6 | length }} v6,
+      nginx set_real_ip_from: {{ cloudflare_v4 | length }} v4 + {{ cloudflare_v6 | length }} v6 Cloudflare ranges,
       {{ 'fetched live' if cf_v4.status | default(0) == 200 else 'FROM THE VENDORED FALLBACK — refresh it' }}.
-      These are also the source list for the DigitalOcean firewall, which is
-      maintained by hand — re-check it when this list moves.
+      This is nginx configuration, not a firewall: nothing on this host filters
+      packets. It tells nginx which peers may set CF-Connecting-IP, which is how
+      a rate limit and an access log name the visitor instead of the edge.
+  when: catlog_realip_enabled | bool
 
 - name: Refuse to continue with an implausible range list
-  # A truncated or HTML-ified response would otherwise be written into
+  # A truncated, HTML-ified or unsplit response would otherwise be written into
   # set_real_ip_from, and nginx would stop trusting Cloudflare's headers —
-  # collapsing every visitor into an edge address in the rate limiter and the log.
+  # collapsing every visitor into an edge address in the rate limiter and the
+  # log. It has already earned its keep once, catching a `split('\n')` that
+  # returned the entire body as a single element.
   ansible.builtin.assert:
     that:
       - cloudflare_v4 | length >= 10
@@ -73,10 +93,12 @@
       - cloudflare_v4 | select('search', '/') | list | length == cloudflare_v4 | length
     fail_msg: "The Cloudflare range list does not look like a list of CIDRs. Refusing to apply it."
     quiet: true
+  when: catlog_realip_enabled | bool
 
 - name: Publish the combined range list
   ansible.builtin.set_fact:
     cloudflare_ranges: "{{ cloudflare_v4 + cloudflare_v6 }}"
+  when: catlog_realip_enabled | bool
 
 # ---------------------------------------------------------------------------
 # The configuration
@@ -111,6 +133,23 @@
       nginx will not start until roles/acme has issued one — run `make certs`.
   when: not catlog_cert.stat.exists
 
+- name: Look for the nginx image on this host
+  # A provisioned-but-never-released host has the configuration and no images.
+  # That is a valid state, not an error: `make release && make deploy` is what
+  # puts them here.
+  ansible.builtin.command:
+    cmd: "docker image inspect {{ catlog_nginx_image | default('', true) }}"
+  register: catlog_nginx_image_here
+  changed_when: false
+  failed_when: false
+
+- name: Say that nginx cannot start yet, for want of an image
+  ansible.builtin.debug:
+    msg: >-
+      No nginx image on this host yet — the configuration is in place and nginx
+      starts on the first `make release && make deploy`.
+  when: catlog_nginx_image_here.rc != 0
+
 - name: Check the rendered configuration
   # Validated inside a throwaway container against the real image, so a broken
   # server block is caught before it is loaded rather than after nginx has
@@ -119,11 +158,32 @@
     cmd: docker compose run --rm --no-deps --entrypoint nginx nginx -t
     chdir: /opt/catlog
   changed_when: false
-  when: catlog_cert.stat.exists
+  when:
+    - catlog_cert.stat.exists
+    - catlog_nginx_image_here.rc == 0
 
-- name: Start nginx
-  ansible.builtin.command:
-    cmd: docker compose up -d nginx
-    chdir: /opt/catlog
+- name: Start nginx, recreating it if its mount points are stale
+  # `up -d` REUSES an existing container when the service spec has not changed —
+  # it does not rebuild its rootfs. A container created while a bind-mount source
+  # was missing has a DIRECTORY baked in at that mount point (Docker invents a
+  # missing source as a directory, and runc matches the type). Once the source is
+  # repaired to a file, starting that same container fails forever with
+  #
+  #     error mounting ".../20-realip.conf" ... : not a directory
+  #
+  # Recreating it is the only fix, and it must be the fallback rather than the
+  # default: nginx holds every open SSE stream, and bouncing it on every deploy
+  # would drop them all for no reason.
+  ansible.builtin.shell:
+    cmd: |
+      set -e
+      cd /opt/catlog
+      if docker compose up -d nginx; then exit 0; fi
+      echo "nginx would not start; its container has stale mount points. Recreating." >&2
+      ls -la {{ catlog_data_root }}/nginx/conf/ >&2
+      docker compose rm -sf nginx
+      docker compose up -d nginx
   changed_when: true
-  when: catlog_cert.stat.exists
+  when:
+    - catlog_cert.stat.exists
+    - catlog_nginx_image_here.rc == 0

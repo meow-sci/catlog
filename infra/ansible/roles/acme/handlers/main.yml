@@ -1,11 +1,17 @@
 - name: Reload nginx after renewal
+  # Reloads a RUNNING nginx and does nothing otherwise. It deliberately does not
+  # start one: roles/acme runs before roles/catlog_nginx, so at this point the
+  # server blocks may not be rendered yet — and starting nginx here is what
+  # leaves Docker-invented directories where the config files should be.
+  # Starting it is roles/catlog_nginx's job, after it has written them.
   ansible.builtin.shell:
     cmd: |
       set -e
       cd /opt/catlog
       if [ -n "$(docker compose ps -q --status running nginx)" ]; then
-        docker compose exec -T nginx nginx -t && docker compose exec -T nginx nginx -s reload
+        docker compose exec -T nginx nginx -t
+        docker compose exec -T nginx nginx -s reload
       else
-        docker compose up -d nginx
+        echo "nginx is not running — roles/catlog_nginx starts it once the config exists"
       fi
   changed_when: true

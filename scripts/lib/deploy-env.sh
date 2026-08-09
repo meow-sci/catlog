@@ -28,10 +28,20 @@
 # shellcheck shell=bash
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
-DEPLOY_ENV="$ROOT/infra/deploy.env"
+
+# CATLOG_DEPLOY_ENV points these scripts at a different settings file.
+#
+# It exists so that testing them never involves writing to the real one.
+# infra/deploy.env holds the Cloudflare token, the IdP secrets and the VM's
+# identity; it is gitignored, so there is no copy to restore from, and anything
+# that overwrites it costs somebody an afternoon of re-typing. Exercising the
+# scripts against a throwaway file is the supported way:
+#
+#   CATLOG_DEPLOY_ENV=/tmp/probe.env scripts/ansible.sh --syntax-check …
+DEPLOY_ENV="${CATLOG_DEPLOY_ENV:-$ROOT/infra/deploy.env}"
 
 if [ ! -f "$DEPLOY_ENV" ]; then
-    echo "no infra/deploy.env — run 'make deploy-env' and fill it in" >&2
+    echo "no $DEPLOY_ENV — run 'make deploy-env' and fill it in" >&2
     exit 1
 fi
 

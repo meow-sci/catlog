@@ -333,7 +333,9 @@ precompress: site-build spa-build
 # (gitignored; copy infra/deploy.env.example), which is included and exported
 # here and nowhere else.
 
-DEPLOY_ENV   := infra/deploy.env
+# Overridable so the deployment scripts can be exercised without writing to the
+# real settings file, which holds every secret and has no backup anywhere.
+DEPLOY_ENV   ?= infra/deploy.env
 ANSIBLE_DIR  := infra/ansible
 RELEASE_FILE := infra/.release.env
 DIAG_DIR     := diagnostics
@@ -399,8 +401,10 @@ preflight:
 	$(ANSIBLE) playbooks/preflight.yml
 
 ## images: build catlogd and catlog-nginx for linux/amd64
-# SPA_CHECKS=0 skips the reader's typecheck/lint/format/test inside the build —
-# for local iteration only; `make release` always builds with them on.
+# The reader's typecheck/lint/format/test do NOT run inside the build: `make
+# release` runs them natively via `spa-check`, in a second rather than twenty,
+# with no second copy of the gate to keep in sync. `make images SPA_CHECKS=1`
+# forces them in-build if you ever want that.
 images:
 	docker buildx build --platform linux/amd64 --load \
 	  -f infra/docker/Dockerfile.catlogd \
@@ -410,7 +414,7 @@ images:
 	docker buildx build --platform linux/amd64 --load \
 	  -f infra/docker/Dockerfile.nginx \
 	  --build-arg VERSION=$(CATLOG_VERSION) --build-arg COMMIT=$(CATLOG_COMMIT) \
-	  --build-arg SPA_CHECKS=$(if $(strip $(SPA_CHECKS)),$(SPA_CHECKS),1) \
+	  $(if $(strip $(SPA_CHECKS)),--build-arg SPA_CHECKS=$(SPA_CHECKS),) \
 	  -t $(NGINX_REPO):$(CATLOG_VERSION) -t $(NGINX_REPO):sha-$(CATLOG_COMMIT) .
 	@echo
 	@docker image inspect $(CATLOGD_REPO):$(CATLOG_VERSION) \
@@ -432,7 +436,11 @@ images-ship:
 release:
 	@if [ -n "$$(git status --porcelain)" ] && [ -z "$(ALLOW_DIRTY)" ]; then \
 	  echo "the working tree is dirty — commit first, or 'make release ALLOW_DIRTY=1'" >&2; exit 1; fi
-	@$(MAKE) images SPA_CHECKS=1
+	@# The reader's gates, natively: the same typecheck/lint/format/test the image
+	@# build used to run, in about a second instead of twenty, and without a
+	@# second copy of them to keep in sync.
+	@$(MAKE) spa-check
+	@$(MAKE) images
 	@$(MAKE) images-smoke
 	@$(MAKE) images-ship
 	@echo
@@ -460,9 +468,13 @@ rollback:
 	$(ANSIBLE) playbooks/rollback.yml $(ANSIBLE_ARGS)
 
 ## certs: issue or renew the TLS certificate, then reload nginx if it changed
+# Issues only when there is no certificate or a name is missing from it, and
+# acme.sh independently refuses to renew until within 30 days of expiry.
+# FORCE=1 overrides both — needed when switching from the staging CA to the
+# production one, and rate-limited by Let's Encrypt, so not routine.
 certs:
 	$(NEED_ENV)
-	$(ANSIBLE) playbooks/certs.yml $(ANSIBLE_ARGS)
+	$(if $(strip $(FORCE)),ACME_FORCE=1,) $(ANSIBLE) playbooks/certs.yml $(ANSIBLE_ARGS)
 
 ## ops-status: one screen — containers, version, health, cert expiry, disk, firewall
 ops-status:

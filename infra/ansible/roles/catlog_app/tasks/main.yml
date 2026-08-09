@@ -4,15 +4,17 @@
 # configuration change can be applied without restarting catlogd and taking the
 # database lock with it.
 
-- name: Refuse to continue without the images
-  ansible.builtin.assert:
-    that:
-      - catlog_image | length > 0
-      - catlog_nginx_image | length > 0
-    fail_msg: >-
-      CATLOG_IMAGE and NGINX_IMAGE are unset. `make deploy` exports them from
-      infra/.release.json — run `make release` first, or export them by hand.
-    quiet: true
+# `make provision` runs before anything has ever been built, so this role has to
+# be able to lay down the compose project and the configuration with no images
+# in sight. Everything image-specific below is conditional on there being some.
+- name: Note whether a release has been shipped to this host
+  ansible.builtin.debug:
+    msg: >-
+      {{ 'Release ' ~ catlog_image ~ ' / ' ~ catlog_nginx_image
+         if catlog_image | length > 0 else
+         'No CATLOG_IMAGE/NGINX_IMAGE — configuring the host only. The
+          containers start once `make release && make deploy` has shipped
+          images; nothing here needs them.' }}
 
 - name: Create the project directory
   ansible.builtin.file:
@@ -27,6 +29,41 @@
     src: "{{ playbook_dir }}/../../compose.prod.yaml"
     dest: /opt/catlog/compose.yaml
     mode: "0640"
+
+# ---------------------------------------------------------------------------
+# The bind-mount sources nginx needs must exist, and must be FILES
+# ---------------------------------------------------------------------------
+# compose.prod.yaml now mounts the whole conf DIRECTORY, so this class of
+# failure cannot recur. What remains is cleaning up after the version that
+# mounted individual files: on a host provisioned by it, Docker will have
+# invented `10-catlog.conf` and `20-realip.conf` as directories, and nginx would
+# then die on `include` with
+#
+#     pread() ".../10-catlog.conf" failed (21: Is a directory)
+#
+# It does not heal on its own — the next `template` run fails too, because its
+# destination is a directory — so it is repaired here, early, before anything
+# can start nginx.
+- name: Look at the nginx config paths
+  ansible.builtin.stat:
+    path: "{{ catlog_data_root }}/nginx/conf/{{ item }}"
+  register: catlog_nginx_conf
+  loop:
+    - 10-catlog.conf
+    - 20-realip.conf
+
+- name: Remove nginx config paths that Docker turned into directories
+  ansible.builtin.file:
+    path: "{{ item.stat.path }}"
+    state: absent
+  when: item.stat.isdir | default(false)
+  loop: "{{ catlog_nginx_conf.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+# No placeholder files are created: with the directory mounted, an empty
+# conf/ is valid — the default server baked into nginx.conf answers 503 until
+# roles/catlog_nginx renders the real blocks.
 
 - name: Install the compose environment
   ansible.builtin.template:
@@ -57,6 +94,7 @@
   notify: Restart catlogd
 
 - name: Check both images are on this host
+  when: catlog_image | length > 0
   # Nothing pulls. `make release` streamed them here with
   # `docker save | ssh docker load`, so a missing image means that step did not
   # run — and saying so is worth more than a `compose up` failing with
@@ -71,6 +109,7 @@
     - "{{ catlog_nginx_image }}"
 
 - name: Refuse to deploy an image that is not here
+  when: catlog_image | length > 0
   ansible.builtin.assert:
     that: item.rc == 0
     fail_msg: >-
@@ -78,7 +117,7 @@
       that builds — it streams the images over ssh; there is no registry to pull
       from.
     quiet: true
-  loop: "{{ catlog_image_ids.results }}"
+  loop: "{{ catlog_image_ids.results | default([]) }}"
   loop_control:
     label: "{{ item.item }}"
 
@@ -92,9 +131,12 @@
       {{ catlog_image }} on this host is {{ catlog_image_ids.results[0].stdout | trim }},
       but the release recorded {{ catlog_image_id }}. Re-run `make release`.
     quiet: true
-  when: catlog_image_id | length > 0
+  when:
+    - catlog_image | length > 0
+    - catlog_image_id | length > 0
 
 - name: Read the image's configured user
+  when: catlog_image | length > 0
   ansible.builtin.command:
     cmd: "docker image inspect {{ catlog_image }} --format {% raw %}'{{.Config.User}}'{% endraw %}"
   register: catlog_image_user
@@ -105,10 +147,11 @@
   # and reports a permission error on a directory the play just created —
   # which reads like a bug in catlogd rather than a uid mismatch.
   ansible.builtin.assert:
-    that: catlog_image_user.stdout | trim in ['', 'nonroot', catlog_uid | string, catlog_uid | string ~ ':' ~ catlog_gid | string]
+    that: catlog_image_user.stdout | default('') | trim in ['', 'nonroot', catlog_uid | string, catlog_uid | string ~ ':' ~ catlog_gid | string]
     fail_msg: >-
       {{ catlog_image }} runs as '{{ catlog_image_user.stdout | trim }}' but
       {{ catlog_data_root }}/data is owned by {{ catlog_uid }}:{{ catlog_gid }}.
       Set CATLOG_UID/CATLOG_GID in infra/deploy.env to the image's numeric uid —
       `docker image inspect` on the build machine reports it.
     quiet: true
+  when: catlog_image | length > 0
