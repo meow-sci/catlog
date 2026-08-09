@@ -165,7 +165,11 @@ export const BOARDS: Board[] = [
     from: ["flight.ended"],
     what: "How many kittens you have brought home.",
     how: "The crew count is added, not one — recovering a four-kitten vehicle adds four.",
-    excluded: ["The flight did not end recovered.", "Nobody was aboard.", "The flight was flagged."],
+    excluded: [
+      "The flight did not end recovered.",
+      "Nobody was aboard.",
+      "The flight was flagged.",
+    ],
   },
   {
     stat: "distance_travelled",

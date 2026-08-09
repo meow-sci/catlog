@@ -78,8 +78,7 @@ export const EVENTS: CatlogEvent[] = [
       {
         key: "install",
         unit: "",
-        what:
-          "A random id generated once on this machine. It never leaves your computer in readable form — the server strips it before anything is published.",
+        what: "A random id generated once on this machine. It never leaves your computer in readable form — the server strips it before anything is published.",
       },
     ],
     feeds: [],
@@ -141,8 +140,7 @@ export const EVENTS: CatlogEvent[] = [
       "You teleported the vehicle, refilled or drained its resources, used the terminal's destroy command, or changed the kitten locomotion tuning away from stock. The tuning check is the one that is sampled rather than hooked, because it is a value you can drag in a debug window at any time.",
     source:
       "Each flag comes from the exact action that causes it, not from a guess. Normal play never raises one — walking a kitten out of an airlock teleports it internally, and that path is deliberately not flagged.",
-    gate:
-      "One event per flag per flight, however many times you do it. A flag raised for the whole session is applied to every flight open at the time and to every flight started afterwards.",
+    gate: "One event per flag per flight, however many times you do it. A flag raised for the whole session is applied to every flight open at the time and to every flight started afterwards.",
     fields: [
       {
         key: "flag",
@@ -168,7 +166,11 @@ export const EVENTS: CatlogEvent[] = [
       { key: "from", unit: "", what: "The state last reported." },
       { key: "to", unit: "", what: "The state now." },
       { key: "body", unit: "", what: "The world you are at." },
-      { key: "altitude_m", unit: "m", what: "Height above the body's mean radius — not above the terrain under you." },
+      {
+        key: "altitude_m",
+        unit: "m",
+        what: "Height above the body's mean radius — not above the terrain under you.",
+      },
       { key: "surface_speed_ms", unit: "m/s", what: "Speed relative to the surface." },
       { key: "orbital_speed_ms", unit: "m/s", what: "Speed relative to the body's centre." },
     ],
@@ -184,8 +186,7 @@ export const EVENTS: CatlogEvent[] = [
     cause: "Sampled twice a second; recorded when you cross the atmosphere boundary.",
     source:
       "The atmosphere height the game defines for that body, compared against your altitude. A body with no atmosphere has a height of zero, and moving to one counts as leaving.",
-    gate:
-      "A 2 % dead band around the boundary, so skimming the edge does not produce a stream of entries and exits. Plus a 2-second minimum between reports in each direction.",
+    gate: "A 2 % dead band around the boundary, so skimming the edge does not produce a stream of entries and exits. Plus a 2-second minimum between reports in each direction.",
     fields: [
       { key: "dir", unit: "", what: "`entered` or `exited`." },
       { key: "body", unit: "", what: "The world whose atmosphere it is." },
@@ -201,11 +202,11 @@ export const EVENTS: CatlogEvent[] = [
     ver: 1,
     summary: "You achieved a stable orbit, or escaped one.",
     trigger: "passive",
-    cause: "Sampled twice a second; recorded the moment your orbit clears the bar, and again if you later leave a closed orbit entirely.",
+    cause:
+      "Sampled twice a second; recorded the moment your orbit clears the bar, and again if you later leave a closed orbit entirely.",
     source:
       "Your periapsis altitude, compared against the top of the atmosphere plus 1000 m. Around an airless body the bar is just 1000 m. Whether the orbit is closed at all is the game's own classification of your trajectory.",
-    gate:
-      "Rising edge only — dropping back below the bar re-arms it silently rather than recording anything. 2 seconds minimum between reports.",
+    gate: "Rising edge only — dropping back below the bar re-arms it silently rather than recording anything. 2 seconds minimum between reports.",
     fields: [
       { key: "phase", unit: "", what: "`achieved` or `escaped`." },
       { key: "body", unit: "", what: "The world you are orbiting." },
@@ -248,8 +249,7 @@ export const EVENTS: CatlogEvent[] = [
       {
         key: "cause",
         unit: "",
-        what:
-          "`ground_impact`, `ocean_impact`, `collision`, `excessive_g_force`, `aerodynamic_forces` or `hydrodynamic_forces` — whichever the game blamed.",
+        what: "`ground_impact`, `ocean_impact`, `collision`, `excessive_g_force`, `aerodynamic_forces` or `hydrodynamic_forces` — whichever the game blamed.",
       },
       { key: "peak_g", unit: "g", what: "The highest g-load the vehicle saw." },
       { key: "peak_q_pa", unit: "Pa", what: "The highest dynamic pressure it saw." },
@@ -275,18 +275,20 @@ export const EVENTS: CatlogEvent[] = [
       "The game applies a ground impact or a water splash. Catlog holds the result for one full frame before deciding whether you survived, because destruction is applied after impacts are.",
     source:
       "The game's own impact energy, and for a ground impact its closing speed into the surface. A splash carries no speed of its own, so the number is reconstructed from the energy and the mass.",
-    gate:
-      "An impact within 5 seconds of a teleport is discarded entirely — that is not a landing. Destroying the vehicle yourself in the same frame or the next one also flips `survived` to false, so scuttling after a hard landing does not bank a record.",
+    gate: "An impact within 5 seconds of a teleport is discarded entirely — that is not a landing. Destroying the vehicle yourself in the same frame or the next one also flips `survived` to false, so scuttling after a hard landing does not bank a record.",
     fields: [
       {
         key: "speed_ms",
         unit: "m/s",
-        what:
-          "How fast you went into the surface. For a ground impact this is the closing speed straight into the terrain, not your total speed.",
+        what: "How fast you went into the surface. For a ground impact this is the closing speed straight into the terrain, not your total speed.",
       },
       { key: "energy_j", unit: "J", what: "Kinetic energy delivered to the surface." },
       { key: "survived", unit: "", what: "Whether the vehicle still existed a frame later." },
-      { key: "launch_pad", unit: "", what: "Whether you hit the launch pad. Pad impacts never score." },
+      {
+        key: "launch_pad",
+        unit: "",
+        what: "Whether you hit the launch pad. Pad impacts never score.",
+      },
       { key: "body", unit: "", what: "Where it happened." },
       { key: "crew_count", unit: "", what: "How many kittens were aboard." },
     ],
@@ -299,9 +301,12 @@ export const EVENTS: CatlogEvent[] = [
     ver: 1,
     summary: "You pressed the stage key and the next stage fired.",
     trigger: "event",
-    cause: "The game activates the next sequence on the vehicle. There is exactly one path to that, and it is behind the stage key.",
+    cause:
+      "The game activates the next sequence on the vehicle. There is exactly one path to that, and it is behind the stage key.",
     source: "The index of the stage that just became active.",
-    fields: [{ key: "stage_index", unit: "", what: "Which stage is now active, counting from zero." }],
+    fields: [
+      { key: "stage_index", unit: "", what: "Which stage is now active, counting from zero." },
+    ],
     feeds: ["stagings"],
     page: "vehicle",
   },
@@ -313,7 +318,8 @@ export const EVENTS: CatlogEvent[] = [
     trigger: "event",
     cause:
       "A docking port completes a dock. Catlog hooks the port rather than the physics event, so player-commanded docking counts as well as automatic docking.",
-    source: "Both vehicles are registered first, so each already has its own flight when the dock is recorded.",
+    source:
+      "Both vehicles are registered first, so each already has its own flight when the dock is recorded.",
     fields: [
       {
         key: "other_flight",
@@ -331,7 +337,8 @@ export const EVENTS: CatlogEvent[] = [
     summary: "Two vehicles undocked.",
     trigger: "event",
     cause: "A docking port splits the vehicle in two.",
-    source: "The piece that split off is registered as its own flight before the undock is recorded.",
+    source:
+      "The piece that split off is registered as its own flight before the undock is recorded.",
     fields: [{ key: "other_flight", unit: "", what: "The flight of the piece that split off." }],
     feeds: [],
     page: "vehicle",
@@ -342,11 +349,11 @@ export const EVENTS: CatlogEvent[] = [
     ver: 1,
     summary: "The vehicle's engines lit.",
     trigger: "passive",
-    cause: "Sampled twice a second. Recorded when the vehicle goes from no engines running to at least one.",
+    cause:
+      "Sampled twice a second. Recorded when the vehicle goes from no engines running to at least one.",
     source:
       "Whether any engine on the vehicle is active, plus how many are and the type of the first one found. This is a whole-vehicle reading, not a per-engine one.",
-    gate:
-      "Whole-vehicle. Shutting down one of two engine groups records nothing until the last one stops. A vehicle already burning when you load a save does not report a fresh ignition.",
+    gate: "Whole-vehicle. Shutting down one of two engine groups records nothing until the last one stops. A vehicle already burning when you load a save does not report a fresh ignition.",
     fields: [
       { key: "engine", unit: "", what: "The engine type, or `unknown` when it could not be read." },
       { key: "count", unit: "", what: "How many engines are running." },
@@ -360,8 +367,10 @@ export const EVENTS: CatlogEvent[] = [
     ver: 1,
     summary: "The vehicle's last running engine stopped.",
     trigger: "passive",
-    cause: "Sampled twice a second. Recorded when the vehicle goes from at least one engine running to none.",
-    source: "The same whole-vehicle reading as ignition. `count` here is how many were running a moment ago.",
+    cause:
+      "Sampled twice a second. Recorded when the vehicle goes from at least one engine running to none.",
+    source:
+      "The same whole-vehicle reading as ignition. `count` here is how many were running a moment ago.",
     gate: "Whole-vehicle, exactly as ignition.",
     fields: [
       { key: "engine", unit: "", what: "The engine type, or `unknown`." },
@@ -394,10 +403,15 @@ export const EVENTS: CatlogEvent[] = [
     ver: 1,
     summary: "A kitten stepped outside.",
     trigger: "event",
-    cause: "An EVA door produces a kitten. If the door cannot — no backpack — nothing is recorded, because no egress happened.",
+    cause:
+      "An EVA door produces a kitten. If the door cannot — no backpack — nothing is recorded, because no egress happened.",
     source: "The kitten's name comes from the roster entry the door was handed.",
     fields: [
-      { key: "kid", unit: "", what: "A per-kitten identifier. It is re-labelled per player before publication." },
+      {
+        key: "kid",
+        unit: "",
+        what: "A per-kitten identifier. It is re-labelled per player before publication.",
+      },
       { key: "name", unit: "", what: "The kitten's name, trimmed to 32 characters." },
     ],
     feeds: [],
@@ -479,10 +493,13 @@ export const EVENTS: CatlogEvent[] = [
       {
         key: "kittens[].fastest_ms",
         unit: "m/s",
-        what:
-          "The roster's fastest-speed figure. It is measured against the solar system rather than the body you are at, so it reads about 30 km/s while you stand still on Earth. Recorded for completeness; it is never used for a speed board.",
+        what: "The roster's fastest-speed figure. It is measured against the solar system rather than the body you are at, so it reads about 30 km/s while you stand still on Earth. Recorded for completeness; it is never used for a speed board.",
       },
-      { key: "kittens[].missions", unit: "", what: "Mission count. Aborted pre-launch missions count too." },
+      {
+        key: "kittens[].missions",
+        unit: "",
+        what: "Mission count. Aborted pre-launch missions count too.",
+      },
       {
         key: "kittens[].mission_time_s",
         unit: "s",
@@ -503,8 +520,7 @@ export const EVENTS: CatlogEvent[] = [
       "This is the background telemetry. Catlog samples each live vehicle twice a second and folds 30 game-seconds of samples into one summary — 60 samples in a full window.",
     source:
       "Altitude above mean radius, surface speed, orbital speed and acceleration, each as a minimum, maximum, mean and last value. Peak g and peak dynamic pressure are included only when the game actually computed them.",
-    gate:
-      "A window also closes early when the flight ends, when a vehicle disappears, or when the game shuts down — those windows are short. Loading a save discards the partial window rather than folding two timelines together.",
+    gate: "A window also closes early when the flight ends, when a vehicle disappears, or when the game shuts down — those windows are short. Loading a save discards the partial window rather than folding two timelines together.",
     fields: [
       { key: "t0_sim", unit: "s", what: "Game time of the first sample." },
       { key: "t1_sim", unit: "s", what: "Game time of the last sample." },
@@ -518,8 +534,7 @@ export const EVENTS: CatlogEvent[] = [
         key: "peak_g",
         unit: "g",
         optional: true,
-        what:
-          "Highest g-load in the window. Left out entirely — not set to zero — when the game did not compute one, which is the case whenever your vehicle is on rails or in freefall.",
+        what: "Highest g-load in the window. Left out entirely — not set to zero — when the game did not compute one, which is the case whenever your vehicle is on rails or in freefall.",
       },
       {
         key: "max_q_pa",
