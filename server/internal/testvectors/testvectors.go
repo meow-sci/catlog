@@ -405,15 +405,246 @@ func signProof(key *ecdsa.PrivateKey, claims authz.ProofClaims) (string, error) 
 	return jws, nil
 }
 
-// batch001 is the golden batch: one flight's worth of §4.2 events, covering a
-// null flight (session.started), a nested payload (telemetry.window) and the
-// three field types the envelope carries.
+// batch001 is the golden batch: three flights' worth of §4.2 events, one line
+// each, at the versions and payload shapes the wire is at today.
+//
+// It is a *shape* fixture before it is a narrative one. Every registry type
+// appears at least once, and the lines are chosen so that the shapes a reader
+// can get wrong are all pinned somewhere:
+//
+//   - the envelope's three `flight` cases — always-null (`session.started`,
+//     `kitten.eva_end`, `roster.snapshot`), always-present, and the conditional
+//     null of a `vehicle.docked` whose `other_flight` peeked at nothing;
+//   - omit-don't-zero, in both directions and on the same event type: the first
+//     `telemetry.window` carries `peak_g`, `max_q_pa` and the `radar_alt_m`
+//     aggregate, the second (spent in orbit under 1000× warp) carries none of
+//     the three. A consumer that reads an absent optional as 0 passes on one
+//     line and fails on the other;
+//   - `lat`/`lon` present on `flight.started`, `vehicle.landed`, `vehicle.impact`
+//     and `flight.ended`, and absent on the uncrewed probe's `flight.started`,
+//     on `vehicle.rud` and on the safety-net `flight.ended`. A latitude of 0 is
+//     a place, so the key is left out rather than zeroed (§ wire v2);
+//   - the `kids` array populated (2 kittens) and empty (an uncrewed probe) —
+//     `[]` is "nobody aboard", a missing key is "a ver 1 row";
+//   - `stage_count` 0, which unlike a latitude *is* a real value;
+//   - a nested array of objects (`roster.snapshot.kittens`) and a nested
+//     optional object (`telemetry.window.radar_alt_m`);
+//   - a JSON `null` inside a payload (`vehicle.docked.other_flight`).
+//
+// Determinism: every identifier is a [fixedULID] of a constant, every `wall_t`
+// is derived from the line's index, and the payloads are `map[string]any`, which
+// encoding/json emits in sorted key order. Nothing here reads a clock.
 func batch001() []byte {
 	session := ids.String(fixedULID(ReferenceTime*1000, "session-001"))
-	flight := ids.String(fixedULID(ReferenceTime*1000+10, "flight-001"))
+	// Three flights and one EVA. `mission` is the crewed flight everything
+	// interesting happens on; `probe` splits off it and is closed by the mod's
+	// silent-removal safety net; `wreck` is a flagged flight that is lost.
+	mission := ids.String(fixedULID(ReferenceTime*1000+10, "flight-001"))
+	wreck := ids.String(fixedULID(ReferenceTime*1000+20, "flight-002"))
+	probe := ids.String(fixedULID(ReferenceTime*1000+30, "flight-003"))
+	eva := ids.String(fixedULID(ReferenceTime*1000+40, "flight-eva"))
+
 	// A §4.1 career id: 16 lowercase Crockford base32 characters. Fixed here like
 	// every other identifier in this file, so regeneration stays byte-identical.
 	const career = "b7k2q9x4m0nrt3vz"
+	// Two `kid`s, the same 16-character Crockford shape a career id has (§4.7).
+	const (
+		kidAce    = "c3n7v8k1p5q9r2s6"
+		kidPepper = "d4m8w0j2t6y1z5b3"
+	)
+
+	type spec struct {
+		label   string
+		typ     string
+		ver     int
+		flight  *string
+		simT    float64
+		payload map[string]any
+	}
+
+	agg := func(mn, mx, mean, last float64) map[string]float64 {
+		return map[string]float64{"min": mn, "max": mx, "mean": mean, "last": last}
+	}
+
+	specs := []spec{{
+		label: "ev-1", typ: "session.started", ver: 1, flight: nil, simT: 0,
+		payload: map[string]any{
+			"mod_ver": "0.1.0", "game_build": "2026.8.5.5168",
+			"install": ids.String(fixedULID(ReferenceTime*1000, "install")),
+		},
+	}, {
+		// Crewed launch: `kids` populated, `lat`/`lon` readable, a real stage count.
+		label: "ev-2", typ: "flight.started", ver: 2, flight: &mission, simT: 100.5,
+		payload: map[string]any{
+			"vehicle_name": "Kitten I", "body": "earth",
+			"mass_kg": 12500.5, "part_count": 24, "crew_count": 2,
+			"kids": []string{kidAce, kidPepper}, "stage_count": 3,
+			"lat": 28.5721, "lon": -80.648,
+		},
+	}, {
+		// radar_alt_m PRESENT: the game had a terrain sample under the pad.
+		label: "ev-3", typ: "vehicle.situation", ver: 2, flight: &mission, simT: 102.5,
+		payload: map[string]any{
+			"from": "landed", "to": "maneuvering", "body": "earth",
+			"altitude_m": 12.5, "surface_speed_ms": 3.25, "orbital_speed_ms": 465.1,
+			"radar_alt_m": 2.5,
+		},
+	}, {
+		label: "ev-4", typ: "vehicle.staging", ver: 1, flight: &mission, simT: 103,
+		payload: map[string]any{"stage_index": 0},
+	}, {
+		label: "ev-5", typ: "engine.ignition", ver: 1, flight: &mission, simT: 103.25,
+		payload: map[string]any{"engine": "kitten_booster_v1", "count": 4},
+	}, {
+		// A full 60-sample window under full physics: every optional PRESENT,
+		// including the ver 2 radar_alt_m aggregate.
+		label: "ev-6", typ: "telemetry.window", ver: 2, flight: &mission, simT: 130.5,
+		payload: map[string]any{
+			"t0_sim": 100.5, "t1_sim": 130.5, "n": 60, "body": "earth",
+			"alt_m":            agg(0, 42000.25, 21000.125, 42000.25),
+			"surface_speed_ms": agg(0, 1450.5, 725.25, 1450.5),
+			"orbital_speed_ms": agg(0, 1600.75, 800.375, 1600.75),
+			"accel_ms2":        agg(0, 29.4, 14.7, 12.25),
+			"peak_g":           3.5,
+			"max_q_pa":         38000.5,
+			"mass_kg_last":     9800.25,
+			"radar_alt_m":      agg(0, 41880.5, 20940.25, 41880.5),
+			"warp_max":         1,
+		},
+	}, {
+		label: "ev-7", typ: "vehicle.atmosphere", ver: 1, flight: &mission, simT: 145,
+		payload: map[string]any{
+			"dir": "exited", "body": "earth", "speed_ms": 1850.5, "dyn_pressure_pa": 120.25,
+		},
+	}, {
+		label: "ev-8", typ: "engine.shutdown", ver: 1, flight: &mission, simT: 168.5,
+		payload: map[string]any{"engine": "kitten_booster_v1", "count": 4},
+	}, {
+		label: "ev-9", typ: "vehicle.orbit", ver: 2, flight: &mission, simT: 172.25,
+		payload: map[string]any{
+			"phase": "achieved", "body": "earth",
+			"ap_m": 185000.5, "pe_m": 172400.25, "ecc": 0.0034, "inc_deg": 28.58,
+			"mass_kg": 4820.75,
+		},
+	}, {
+		// The same type as ev-6 with every optional ABSENT: on rails at 1000×
+		// warp there is no StructuralLoad and no terrain below, and `n` is 3
+		// rather than 60 because the window spans 30 *sim* seconds.
+		label: "ev-10", typ: "telemetry.window", ver: 2, flight: &mission, simT: 200.5,
+		payload: map[string]any{
+			"t0_sim": 170.5, "t1_sim": 200.5, "n": 3, "body": "earth",
+			"alt_m":            agg(185010.5, 186220.75, 185615.625, 186220.75),
+			"surface_speed_ms": agg(7602.25, 7640.5, 7621.375, 7640.5),
+			"orbital_speed_ms": agg(7660.5, 7699.25, 7679.875, 7699.25),
+			"accel_ms2":        agg(0, 0.02, 0.01, 0.02),
+			"mass_kg_last":     4820.75,
+			"warp_max":         1000,
+		},
+	}, {
+		label: "ev-11", typ: "vehicle.soi", ver: 1, flight: &mission, simT: 205,
+		payload: map[string]any{"from_body": "earth", "to_body": "duna"},
+	}, {
+		// A documented legal shape neither side pinned before: the peek found no
+		// open flight for the other vehicle, so the key is present and null.
+		label: "ev-12", typ: "vehicle.docked", ver: 1, flight: &mission, simT: 210,
+		payload: map[string]any{"other_flight": nil},
+	}, {
+		// The EVA kitten's own flight, minted by the EVA rather than by a
+		// flight.started (§ kitten.eva_start).
+		label: "ev-13", typ: "kitten.eva_start", ver: 1, flight: &eva, simT: 215,
+		payload: map[string]any{"kid": kidAce, "name": "Ace"},
+	}, {
+		// ver 2 is exactly this: a tumble that names a flight.
+		label: "ev-14", typ: "kitten.tumble", ver: 2, flight: &eva, simT: 218.5,
+		payload: map[string]any{"kid": kidAce, "name": "Ace", "speed_ms": 4.25, "body": "duna"},
+	}, {
+		// `flight` is explicitly null here, asymmetrically with eva_start.
+		label: "ev-15", typ: "kitten.eva_end", ver: 1, flight: nil, simT: 232.75,
+		payload: map[string]any{"kid": kidAce, "name": "Ace", "duration_s": 17.75},
+	}, {
+		// The uncrewed probe that splits off: `kids` EMPTY, `stage_count` 0 (a
+		// real value), `lat`/`lon` ABSENT (not readable, and 0 would be a place).
+		label: "ev-16", typ: "flight.started", ver: 2, flight: &probe, simT: 240,
+		payload: map[string]any{
+			"vehicle_name": "Kitten I Probe", "body": "duna",
+			"mass_kg": 850.75, "part_count": 6, "crew_count": 0,
+			"kids": []string{}, "stage_count": 0,
+		},
+	}, {
+		label: "ev-17", typ: "vehicle.undocked", ver: 1, flight: &mission, simT: 240.5,
+		payload: map[string]any{"other_flight": probe},
+	}, {
+		label: "ev-18", typ: "engine.flameout", ver: 1, flight: &mission, simT: 248.5,
+		payload: map[string]any{"engine": "kitten_lander_v2", "count": 1},
+	}, {
+		// §5.6's worked example of biggest_lithobrake_survived, now with the
+		// wire v2 position keys.
+		label: "ev-19", typ: "vehicle.impact", ver: 2, flight: &mission, simT: 258.25,
+		payload: map[string]any{
+			"speed_ms": 214.5, "energy_j": 2.25e8, "survived": true,
+			"launch_pad": false, "body": "duna", "crew_count": 2,
+			"lat": 12.4405, "lon": -74.8201,
+		},
+	}, {
+		// radar_alt_m ABSENT on the type that usually carries it — the same key
+		// ev-3 carries, so a consumer cannot pass by assuming either shape.
+		label: "ev-20", typ: "vehicle.landed", ver: 1, flight: &mission, simT: 262.5,
+		payload: map[string]any{
+			"body": "duna", "vertical_speed_ms": 4.75, "horizontal_speed_ms": 1.25,
+			"crew_count": 2, "survived": true,
+			"lat": 12.4405, "lon": -74.8201,
+		},
+	}, {
+		label: "ev-21", typ: "flight.ended", ver: 2, flight: &mission, simT: 300,
+		payload: map[string]any{
+			"reason": "recovered", "crew_count": 2,
+			"kids": []string{kidAce, kidPepper}, "body": "duna",
+			"lat": 12.4405, "lon": -74.8201,
+		},
+	}, {
+		// The silent-removal safety net: no vehicle left to read, so `body` is
+		// the literal "unknown", `kids` is `[]`, `crew_count` is 0 and the
+		// position keys are absent (§ flight.ended).
+		label: "ev-22", typ: "flight.ended", ver: 2, flight: &probe, simT: 305,
+		payload: map[string]any{
+			"reason": "despawned", "crew_count": 0,
+			"kids": []string{}, "body": "unknown",
+		},
+	}, {
+		label: "ev-23", typ: "flight.flagged", ver: 1, flight: &wreck, simT: 312.5,
+		payload: map[string]any{"flag": "tuning", "detail": "session-wide flag"},
+	}, {
+		// lat/lon ABSENT: the destruction prefix could not place the vehicle.
+		// peak_g and peak_q_pa are NOT optional here — they come off the
+		// destruction event and are written as 0 rather than omitted.
+		label: "ev-24", typ: "vehicle.rud", ver: 2, flight: &wreck, simT: 318.25,
+		payload: map[string]any{
+			"cause": "ground_impact", "peak_g": 12.5, "peak_q_pa": 74500.25,
+			"speed_ms": 312.75, "altitude_m": 0.5, "body": "earth", "crew_count": 1,
+		},
+	}, {
+		// ver 2 is exactly this: a KIA that names the flight it happened on.
+		// The player scuttled the wreck, which is the only path that sets Kia.
+		label: "ev-25", typ: "kitten.kia", ver: 2, flight: &wreck, simT: 320.5,
+		payload: map[string]any{"kid": kidPepper, "name": "Pepper", "context": "manual_destroy"},
+	}, {
+		label: "ev-26", typ: "flight.ended", ver: 2, flight: &wreck, simT: 321,
+		payload: map[string]any{
+			"reason": "destroyed", "crew_count": 1,
+			"kids": []string{kidPepper}, "body": "earth",
+			"lat": 28.6084, "lon": -80.6043,
+		},
+	}, {
+		// A nested array of objects, and the third always-null `flight`.
+		label: "ev-27", typ: "roster.snapshot", ver: 1, flight: nil, simT: 600,
+		payload: map[string]any{"kittens": []map[string]any{{
+			"kid": kidAce, "name": "Ace", "travelled_m": 4.2e7,
+			"fastest_ms": 29800.5, "missions": 3, "mission_time_s": 18450.25, "kia": false,
+		}, {
+			"kid": kidPepper, "name": "Pepper", "travelled_m": 1.85e7,
+			"fastest_ms": 29790.25, "missions": 2, "mission_time_s": 9600.5, "kia": true,
+		}}},
+	}}
 
 	type env struct {
 		ID      string  `json:"id"`
@@ -427,53 +658,16 @@ func batch001() []byte {
 		Payload any     `json:"payload"`
 	}
 
-	agg := func(mn, mx, mean, last float64) map[string]float64 {
-		return map[string]float64{"min": mn, "max": mx, "mean": mean, "last": last}
-	}
-
-	events := []env{{
-		ID: ids.String(fixedULID(ReferenceTime*1000, "ev-1")), Type: "session.started", Ver: 1,
-		Flight: nil, Session: session, Career: career, SimT: 0, WallT: ReferenceTime * 1000,
-		Payload: map[string]any{
-			"mod_ver": "0.1.0", "game_build": "2026.8.5.5168",
-			"install": ids.String(fixedULID(ReferenceTime*1000, "install")),
-		},
-	}, {
-		ID: ids.String(fixedULID(ReferenceTime*1000+1000, "ev-2")), Type: "flight.started", Ver: 1,
-		Flight: &flight, Session: session, Career: career, SimT: 100.5, WallT: ReferenceTime*1000 + 1000,
-		Payload: map[string]any{
-			"vehicle_name": "Kitten I", "body": "earth",
-			"mass_kg": 12500.5, "part_count": 24, "crew_count": 2,
-		},
-	}, {
-		ID: ids.String(fixedULID(ReferenceTime*1000+2000, "ev-3")), Type: "telemetry.window", Ver: 1,
-		Flight: &flight, Session: session, Career: career, SimT: 130.5, WallT: ReferenceTime*1000 + 2000,
-		Payload: map[string]any{
-			"t0_sim": 100.5, "t1_sim": 130.5, "n": 60, "body": "earth",
-			"alt_m":            agg(0, 42000.25, 21000.125, 42000.25),
-			"surface_speed_ms": agg(0, 1450.5, 725.25, 1450.5),
-			"orbital_speed_ms": agg(0, 1600.75, 800.375, 1600.75),
-			"accel_ms2":        agg(0, 29.4, 14.7, 12.25),
-			"peak_g":           3.5,
-			"max_q_pa":         38000.5,
-			"mass_kg_last":     9800.25,
-		},
-	}, {
-		ID: ids.String(fixedULID(ReferenceTime*1000+3000, "ev-4")), Type: "vehicle.impact", Ver: 1,
-		Flight: &flight, Session: session, Career: career, SimT: 214.75, WallT: ReferenceTime*1000 + 3000,
-		Payload: map[string]any{
-			"speed_ms": 214.5, "energy_j": 2.25e8, "survived": true,
-			"launch_pad": false, "body": "duna", "crew_count": 2,
-		},
-	}, {
-		ID: ids.String(fixedULID(ReferenceTime*1000+4000, "ev-5")), Type: "flight.ended", Ver: 1,
-		Flight: &flight, Session: session, Career: career, SimT: 300, WallT: ReferenceTime*1000 + 4000,
-		Payload: map[string]any{"reason": "recovered", "crew_count": 2},
-	}}
-
 	var buf bytes.Buffer
-	for _, e := range events {
-		b, err := json.Marshal(e)
+	for i, s := range specs {
+		// One second of wall time per line, so `id` and `wall_t` are derived
+		// from the line's position and nothing else.
+		wall := int64(ReferenceTime)*1000 + int64(i)*1000
+		b, err := json.Marshal(env{
+			ID: ids.String(fixedULID(uint64(wall), s.label)), Type: s.typ, Ver: s.ver,
+			Flight: s.flight, Session: session, Career: career,
+			SimT: s.simT, WallT: wall, Payload: s.payload,
+		})
 		if err != nil {
 			panic(err) // impossible: every field is a plain Go value
 		}

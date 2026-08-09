@@ -569,7 +569,7 @@ high-water mark, and only when the career already exists and `max_sim_t > sim_t`
 (`batch.go:394-405`). Comparing only at session boundaries is why the rule needs no epsilon
 (`career.go:32-38`). **The mark excludes nothing and scores nothing.**
 
-**Vectors.** `contracts/testdata/batches/batch-001.ndjson` line 1.
+**Vectors.** `contracts/testdata/batches/batch-001.ndjson` line 1 — the always-null `flight`.
 
 ---
 
@@ -644,7 +644,7 @@ rows of one launch describe the same vehicle rather than four partial views of i
 first fold that reads `kids` must not treat a nil slice as "uncrewed": nil is a `ver` 1 row, `[]` is
 an uncrewed `ver` 2 one.
 
-**Vectors.** `batch-001.ndjson` line 2.
+**Vectors.** `batch-001.ndjson` lines 2 (crewed: `kids` populated, `stage_count` 3, `lat` / `lon` present) and 16 (uncrewed probe: `kids` `[]`, `stage_count` 0, `lat` / `lon` absent).
 
 ---
 
@@ -733,7 +733,7 @@ via `flightFold`, so a flight whose `flight.started` was never folded still has 
 though its `flight.ended` now carries one. Reading it would be a rebuild-only improvement and is out
 of scope for the wire-v2 wave; `kids`, `lat` and `lon` are likewise decoded and read by nothing.
 
-**Vectors.** `batch-001.ndjson` line 5.
+**Vectors.** `batch-001.ndjson` lines 21 (`recovered`, crew and position), 22 (the safety net: `despawned`, `crew_count` 0, `kids` `[]`, `body: "unknown"`, no position) and 26 (`destroyed`).
 
 ---
 
@@ -800,7 +800,7 @@ open would make every future flag a scoring loophole. `scoreable` (`stats/fold.g
 suppresses **every board**, the feed, and the raw event views for that flight. The one exception is
 `distance_travelled`, whose source event carries no flight at all.
 
-**Vectors.** None.
+**Vectors.** `batch-001.ndjson` line 23 — a `tuning` flag on a flight that has no `flight.started`.
 
 ---
 
@@ -876,7 +876,7 @@ change is not a pass over anything.
 **`landed_bodies` stays on this event** now that `vehicle.landed` exists, and that is a decision
 rather than an oversight (PROJ-097). See [Boards](#fold-detail-board-by-board).
 
-**Vectors.** None.
+**Vectors.** `batch-001.ndjson` line 3 — `ver` 2 with `radar_alt_m` present.
 
 ---
 
@@ -930,7 +930,7 @@ matters is the air the vehicle is hitting, not the body's inertial motion — an
 directly comparable with the lithobrake and RUD speeds. Context
 `{"body", "flight", "dyn_pressure_pa"}`.
 
-**Vectors.** None.
+**Vectors.** `batch-001.ndjson` line 7.
 
 ---
 
@@ -1016,7 +1016,7 @@ rather than crowning it. All four share one context `{"body", "flight", "ap_m", 
 "inc_deg"}` — a reader looking at a periapsis wants the apoapsis beside it, and one context shape
 means the four rows of one orbit are the same blob.
 
-**Vectors.** None.
+**Vectors.** `batch-001.ndjson` line 9 — `ver` 2 with `mass_kg`.
 
 ---
 
@@ -1064,7 +1064,7 @@ Sampled at 2 Hz.
 (`batch.go:538-540`). Body names are **never** validated against a list: a `to_body` that cannot be a
 stat key still counts towards `soi_bodies` and still records `first_sim_t`.
 
-**Vectors.** None.
+**Vectors.** `batch-001.ndjson` line 11.
 
 ---
 
@@ -1114,7 +1114,7 @@ then `addCount(rud_<cause>, 1)` when `RUDStat(cause)` yields a legal key. A caus
 stat key (empty, > 40 chars, bad charset, or colliding with a fixed key) contributes to `rud_total`
 **only**. Feed: `"{h} lost a vehicle to {causePhrase} on {body} at {speed} m/s"`.
 
-**Vectors.** None.
+**Vectors.** `batch-001.ndjson` line 24 — `ver` 2 with `lat` / `lon` **absent**, and `peak_g` / `peak_q_pa` written as numbers rather than omitted.
 
 ---
 
@@ -1204,7 +1204,7 @@ next to it, and one blob means the two rows of one crash agree.
 
 Feed: `"{h} lithobraked at {speed} m/s on {body} — and survived"`.
 
-**Vectors.** `batch-001.ndjson` line 4 (`survived: true`, `launch_pad: false`, `body: "duna"`).
+**Vectors.** `batch-001.ndjson` line 19 (`ver` 2: `survived: true`, `launch_pad: false`, `body: "duna"`, `speed_ms: 214.5`, `lat` / `lon` present).
 
 ---
 
@@ -1306,7 +1306,7 @@ crash, and the `vehicle.rud` emitted beside it already announces it.
 
 `radar_alt_m`, `lat` and `lon` are decoded (`*float64`) and read by no fold.
 
-**Vectors.** None.
+**Vectors.** `batch-001.ndjson` line 20 — `lat` / `lon` present, `radar_alt_m` **absent**.
 
 ---
 
@@ -1335,7 +1335,7 @@ and `+1` is "how many stages have fired", the number a player would say out loud
 `> 0` gate**, for the same reason — firing stage 0 is one staging event and is one stage. `body`
 comes from `flight_state` (`flightBody`), because this payload carries none.
 
-**Vectors.** None.
+**Vectors.** `batch-001.ndjson` line 4.
 
 ---
 
@@ -1369,7 +1369,7 @@ installed `Patcher.cs:200-202`, body `:586-608`.
 
 **Server.** `countFold{dockings, "vehicle.docked"}` — +1 on an unflagged flight.
 
-**Vectors.** None.
+**Vectors.** `batch-001.ndjson` line 12 — `"other_flight":null`, the taxonomy's one in-payload null.
 
 ---
 
@@ -1392,7 +1392,7 @@ The split vehicle is `Track`ed — and so gets a `flight.started` — before the
 
 **Server.** Decoded (`stats/payload.go:126-128`) but **counts nothing**. There is no `undockings` board.
 
-**Vectors.** None.
+**Vectors.** `batch-001.ndjson` line 17 — `other_flight` a ULID, the counterpart to the docked line's null.
 
 ---
 
@@ -1443,7 +1443,7 @@ names, because the payload is one type in the mod too. `countFold{engine_ignitio
 keys on the event type, and `engine` / `count` are whole-vehicle readings that would rank a
 two-engine-group vehicle oddly (see the game source above).
 
-**Vectors.** None.
+**Vectors.** `batch-001.ndjson` line 5 (`shutdown` is line 8, `flameout` line 18 — the three share this payload).
 
 ---
 
@@ -1459,7 +1459,7 @@ the **previous** observation, since the engines are now off (`PolledSignals.cs:1
 
 **Server.** Decoded as `stats.Engine`; **no fold reads it**. Deliberate: an ignition is a decision and
 a flameout is a failure, whereas a shutdown is the unremarkable other half of every burn, and
-counting it would be counting `engine_ignitions` twice with a lag. **Vectors.** None.
+counting it would be counting `engine_ignitions` twice with a lag. **Vectors.** `batch-001.ndjson` line 8.
 
 ---
 
@@ -1494,7 +1494,7 @@ Polled at 2 Hz.
 **Classification.** **PASSIVE** (2 Hz poll, two-boolean edge).
 
 **Server.** `countFold{flameouts, "engine.flameout"}` → `flameouts` ("Ran Dry"), +1 per event on an
-unflagged flight. **Vectors.** None.
+unflagged flight. **Vectors.** `batch-001.ndjson` line 18.
 
 ---
 
@@ -1536,7 +1536,7 @@ via `AccessTools.Method(typeof(EVADoor), "CreateKittenEva")` at `Patcher.cs:218-
 applies only when the EVA signal carried a vehicle id** — `flight` is
 `Tracker.FlightFor(eva.VehicleId)` when there is one and `null` otherwise, and `scoreable` passes
 every flightless event. That is a property of the source event, not a decision about the board.
-**Vectors.** None.
+**Vectors.** `batch-001.ndjson` line 13 — the EVA-minted `flight`, distinct from the vehicle's.
 
 ---
 
@@ -1576,7 +1576,7 @@ is `{"kitten"}`. The fold adds a `flight` key when the event carries one, which 
 does; it is there so a future build that fills the key in gets the link rather than a silently
 missing one.
 
-**Vectors.** None.
+**Vectors.** `batch-001.ndjson` line 15 — `flight` explicitly null.
 
 ---
 
@@ -1644,7 +1644,7 @@ the tumble speed gate — the entire definition of a tumble, live-editable in th
 window — scored normally. A `ver` 1 row still does; it names no flight to be excluded by.
 Feed: `"{h}'s kitten {name} took a tumble at {speed} m/s on {body}"`.
 
-**Vectors.** None.
+**Vectors.** `batch-001.ndjson` line 14 — `ver` 2 with a non-null `flight`.
 
 ---
 
@@ -1736,7 +1736,7 @@ only in tests, which constructed the event with a flight (PROJ-092). The rebuild
 **unchanged** and deliberately so: there is no key a null-flight KIA could be indexed under that is
 not a guess. Feed: `"{h} said goodbye to kitten {name}"`.
 
-**Vectors.** None.
+**Vectors.** `batch-001.ndjson` line 25 — `ver` 2 with a non-null `flight`, `context: "manual_destroy"`.
 
 ---
 
@@ -1810,7 +1810,7 @@ over.
 `fastest_ms` is still read by nothing, deliberately: it is the game's ecliptic-frame `FastestSpeed`
 and must never become a speed board.
 
-**Vectors.** None.
+**Vectors.** `batch-001.ndjson` line 27 — two kitten rows, one `kia`, and the always-null `flight`.
 
 ---
 
@@ -1926,8 +1926,11 @@ read by no fold.
 reader wants it, **`0` must be treated as "absent" at the read site** — otherwise that one type's
 upcaster stops being the identity. PROJ-098.
 
-**Vectors.** `batch-001.ndjson` line 3 — the only vector exercising `agg` objects and the (present)
-`peak_g` / `max_q_pa` keys. It is a `ver` 1 line and carries neither wire-v2 key. `n: 60`, `t0_sim: 100.5`, `t1_sim: 130.5` — exactly a 30 s window at 2 Hz.
+**Vectors.** `batch-001.ndjson` lines 6 and 10 — the pair that pins the `agg` objects and the
+omit-don't-zero optionals from both sides. Line 6 is a `ver` 2 ascent with `peak_g`, `max_q_pa` and
+the `radar_alt_m` aggregate all **present**, `warp_max: 1`, `n: 60`, `t0_sim: 100.5`, `t1_sim: 130.5`
+— exactly a 30 s window at 2 Hz. Line 10 is the same type coasting at `warp_max: 1000` with all three
+**absent** and `n: 3`, which is the warp short-window case above made testable.
 
 ---
 
@@ -2659,24 +2662,50 @@ rather than on Go map order, so a rebuild reproduces the incremental `context` b
 
 | File | Pins |
 |---|---|
-| `batches/batch-001.ndjson` | 5 envelopes, one line each |
+| `batches/batch-001.ndjson` | 27 envelopes, one line each |
 | `batches/batch-001.br` | the Brotli body as sent |
-| `batches/batch-001.bh.txt` | `mPBWDmLPC5QrbKto5gJrxmJ3v1tln9l3UGRw0n4ZBHM` — base64url SHA-256 of the compressed body |
+| `batches/batch-001.bh.txt` | `9qWlcOUfLwdKlAHKyBSmoYe21h_-F48E-hUqLWC4WQg` — base64url SHA-256 of the compressed body |
 | `keys/*`, `license/*`, `proofs/*`, `expected/verify-results.json` | the credential / JWS layer, not events |
 
-**Covered by a vector: 5 of 23** — `session.started`, `flight.started`, `telemetry.window`,
-`vehicle.impact`, `flight.ended`. **All five lines are `ver` 1 and carry no wire-v2 key**, so nothing
-in `contracts/testdata/` pins a `ver` 2 payload cross-language yet. That is the same coverage gap the
-uncovered list records, now load-bearing for the five covered types as well.
+**Covered by a vector: 23 of 23.** Every registered type appears at least once, at the `ver` the
+registry stamps for it today, and `Batch001_CoversEveryRegisteredType` fails the moment a type is
+added to `EventTypes` without a line — so this section cannot go stale the way it did through
+wire v2.
 
-**Uncovered: 18** — `flight.flagged`, `vehicle.situation`, `vehicle.atmosphere`, `vehicle.orbit`,
-`vehicle.soi`, `vehicle.rud`, `vehicle.landed`, `vehicle.staging`, `vehicle.docked`,
-`vehicle.undocked`, `engine.ignition`, `engine.shutdown`, `engine.flameout`, `kitten.eva_start`,
-`kitten.eva_end`, `kitten.tumble`, `kitten.kia`, `roster.snapshot`.
+The line count is 27 rather than 23 because reaching 23 was never the point: the set exists to pin
+payload *shapes*, and four types need more than one line to say what they have to say.
+
+| type | lines | why more than once |
+|---|---|---|
+| `telemetry.window` | 6, 10 | line 6 carries `peak_g`, `max_q_pa` **and** the `radar_alt_m` aggregate, `n` 60, `warp_max` 1; line 10 is the same type on rails at 1000× warp with all three **absent** and `n` 3. A consumer that reads an absent optional as `0` passes line 6 and fails line 10. |
+| `flight.started` | 2, 16 | line 2 is crewed — `kids` populated, `stage_count` 3, `lat` / `lon` present; line 16 is an uncrewed probe — `kids` `[]`, `stage_count` 0, `lat` / `lon` **absent**. The pair is what separates "omitted because unreadable" from "`0` because that is the reading". |
+| `flight.ended` | 21, 22, 26 | `recovered` with crew and a position; the silent-removal safety net (`despawned`, `crew_count` 0, `kids` `[]`, `body: "unknown"`, no position); and `destroyed`. |
+| `vehicle.docked` / `vehicle.undocked` | 12, 17 | `other_flight` **null** and `other_flight` a ULID — the one in-payload `null` in the taxonomy. |
+
+Between them the lines pin an array field (`kids`, `roster.snapshot.kittens`), an optional present
+**and** absent for the same field on the same type, a nested object (`agg`), a nested *optional*
+object (`telemetry.window`'s `radar_alt_m`), an in-payload `null`, and all three envelope `flight`
+cases — always non-null, always null, and conditionally null (`kitten.tumble`, `kitten.kia`, both at
+`ver` 2 with a flight named).
 
 Vector-level assertions that apply to every line regardless: every `type` is in the registry, every
-`id` parses as a ULID, the `flight` key is always present, `session` is non-empty, and each line is
-within `Wire.MaxEventLineBytes` (`ContractVectorTests.cs:145-164`).
+`id` parses as a ULID, the `flight` key is always present and is `null` or a ULID, `session` is
+non-empty, `career` is 16 Crockford characters, `payload` is an object, each line is within
+`Wire.MaxEventLineBytes` (`Batch001_IsAllKnownEnvelopeTypes`), and **`ver` equals
+`EventTypes.VersionOf(type)`** (`Batch001_StampsTheRegistrysCurrentVersion`). The last of these is
+the drift check the whole layer exists for — the generator hard-codes `ver` per line, so without it a
+version bump on either side leaves the fixtures pinning a shape nobody emits while both suites stay
+green. The Go half is `projector.TestGoldenBatchIsAtTheCurrentVersions`, which asserts the same
+against `projector.currentVer` and additionally that every type that map overrides appears in a line.
+
+Beyond the envelope, `Batch001_PayloadsRoundTripThroughTheirRecords` deserialises every `payload`
+into its `Payloads.cs` record and re-serialises it with `CatlogJson.Options`, then compares key sets
+and values. It is the only assertion in either suite that looks inside a payload, and it is what
+makes a dropped or invented key a test failure rather than a silent divergence — and what makes the
+present/absent pairs above load-bearing rather than decorative. Key *order* is deliberately not
+compared: the Go generator builds payloads from `map[string]any` so `encoding/json` emits them
+alphabetically, the mod emits declaration order, `bh` hashes the bytes each side actually produced,
+and neither order is normative. See [Known drift](#known-drift).
 
 ---
 
@@ -2770,7 +2799,10 @@ that the code is wrong.**
     end now carries one. Reading it would be a rebuild-only improvement.
 24. **The conformance vector is not byte-representative of mod output.** It is Go-generated and
     alphabetises payload keys; the C# mod emits declaration order. Harmless for `bh`, which hashes
-    whatever bytes are actually sent, but nothing says so.
+    whatever bytes are actually sent, and no longer unstated — [Conformance
+    coverage](#conformance-coverage) says so, and the payload round-trip test deliberately compares
+    key *sets* rather than order. The divergence itself stands: neither order is normative, and
+    making one of them so would buy nothing.
 25. **`Board.Career` carries a `json:"career"` tag but is exposed in no response struct.** Clients
     infer "career board" from `ascending` + `unit == "ms"` + the presence of `rewound`.
 26. **Fixed (2026-08-09).** The ±2 s KIA window and the `tuning` flag were both inert on data the
@@ -2781,16 +2813,17 @@ that the code is wrong.**
     fix was on the mod side, as predicted: both events now attribute a flight and are `ver` 2. See
     MOD-073, MOD-074 and PROJ-092.
 
-    **The residual, smaller:** `contracts/testdata/` still contains no `kitten.tumble` or
-    `kitten.kia` line, so nothing pins the new envelope shape cross-language — the same coverage gap
-    the "Uncovered: 18" list above records, now load-bearing for two events instead of none.
+    **The residual is closed too (2026-08-09):** `batch-001.ndjson` lines 14 and 25 are the `ver` 2
+    `kitten.tumble` and `kitten.kia`, both naming a flight, so the new envelope shape is pinned
+    cross-language.
 
-27. **The conformance vectors are entirely `ver` 1, including for the seven types now at `ver` 2.**
-    `batch-001.ndjson`'s `flight.started`, `flight.ended`, `vehicle.impact` and `telemetry.window`
-    lines carry none of the wire-v2 keys and no `vehicle.landed` line exists, so nothing pins a
-    `ver` 2 payload — or the omit-don't-zero rule for `lat` / `lon` / `radar_alt_m` — across the two
-    implementations. Both suites test it in their own language; neither tests it against the other's
-    bytes. This is drift item 24's problem grown a second head.
+27. **Fixed (2026-08-09).** The conformance vectors were entirely `ver` 1, including for the types
+    already at `ver` 2, so nothing in `contracts/testdata/` pinned a `ver` 2 payload — or the
+    omit-don't-zero rule for `lat` / `lon` / `radar_alt_m` — across the two implementations. The
+    fixture set is now 27 lines covering all 23 registered types at the versions the registries
+    stamp today, and two new assertions stop it drifting again: `ver` must equal the registry's
+    current version for the type, and every registered type must appear in a line. See
+    [Conformance coverage](#conformance-coverage) and INGEST-025.
 
 28. **`telemetry.window.warp_max` decodes as `0`, not `1`, on a `ver` 1 row.** The `ver` 1 default
     is `1` (a stopped clock is not a legal warp) but an identity upcaster cannot synthesize a key,

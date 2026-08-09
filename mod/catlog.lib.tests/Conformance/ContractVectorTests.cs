@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
@@ -146,9 +147,8 @@ public sealed class ContractVectorTests
     public void Batch001_IsAllKnownEnvelopeTypes()
     {
         string root = RequireVectors();
-        string ndjson = Encoding.UTF8.GetString(ReadBytes(root, "batches", "batch-001.ndjson"));
 
-        string[] lines = ndjson.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        string[] lines = BatchLines(root);
         Assert.NotEmpty(lines);
         foreach (string line in lines)
         {
@@ -157,9 +157,171 @@ public sealed class ContractVectorTests
             string type = envelope.GetProperty("type").GetString()!;
             Assert.True(EventTypes.IsKnown(type), $"unknown event type in the vector batch: {type}");
             Assert.True(Ids.IsUlid(envelope.GetProperty("id").GetString()));
-            Assert.True(envelope.TryGetProperty("flight", out _), "the flight key is always present");
+            Assert.True(envelope.TryGetProperty("flight", out JsonElement flight), "the flight key is always present");
+            Assert.True(
+                flight.ValueKind is JsonValueKind.Null ||
+                (flight.ValueKind is JsonValueKind.String && Ids.IsUlid(flight.GetString())),
+                $"{type}: flight must be null or a ULID");
             Assert.NotEmpty(envelope.GetProperty("session").GetString()!);
+            Assert.True(Ids.IsHash16(envelope.GetProperty("career").GetString()), "career is 16 Crockford chars");
+            Assert.Equal(JsonValueKind.Object, envelope.GetProperty("payload").ValueKind);
             Assert.True(Encoding.UTF8.GetByteCount(line) <= Wire.MaxEventLineBytes);
+        }
+    }
+
+    /// <summary>
+    /// Every line's <c>ver</c> must equal what this build stamps for that type.
+    /// </summary>
+    /// <remarks>
+    /// This is the drift the conformance layer exists to catch. The vectors are generated with a
+    /// hard-coded <c>ver</c> per line, so a type that bumps on one side and not in the fixture
+    /// leaves <c>contracts/testdata</c> pinning a payload shape nobody emits any more — which is
+    /// worse than no vector, because both suites keep passing against it. The Go suite asserts the
+    /// mirror of this against <c>projector.currentVer</c>.
+    /// </remarks>
+    [ContractVectorFact]
+    public void Batch001_StampsTheRegistrysCurrentVersion()
+    {
+        string root = RequireVectors();
+
+        foreach (string line in BatchLines(root))
+        {
+            using JsonDocument document = JsonDocument.Parse(line);
+            JsonElement envelope = document.RootElement;
+            string type = envelope.GetProperty("type").GetString()!;
+
+            Assert.Equal(EventTypes.VersionOf(type), envelope.GetProperty("ver").GetInt32());
+        }
+    }
+
+    /// <summary>
+    /// The batch must exercise every registered type, so coverage cannot narrow silently.
+    /// </summary>
+    /// <remarks>
+    /// A type that leaves the vectors leaves the cross-language contract with it: nothing else in
+    /// either suite compares a Go-produced payload of that type against the C# record. Adding a
+    /// type to <see cref="EventTypes"/> therefore fails here until the generator emits a line for
+    /// it, which is the same "ship the registry together" rule the server's unknown-type rejection
+    /// enforces on the wire.
+    /// </remarks>
+    [ContractVectorFact]
+    public void Batch001_CoversEveryRegisteredType()
+    {
+        string root = RequireVectors();
+
+        var covered = new HashSet<string>(StringComparer.Ordinal);
+        foreach (string line in BatchLines(root))
+        {
+            using JsonDocument document = JsonDocument.Parse(line);
+            covered.Add(document.RootElement.GetProperty("type").GetString()!);
+        }
+
+        string[] missing = EventTypes.All.Where(t => !covered.Contains(t)).OrderBy(t => t, StringComparer.Ordinal).ToArray();
+        Assert.True(missing.Length == 0, $"no vector line covers: {string.Join(", ", missing)}");
+    }
+
+    /// <summary>
+    /// Every payload must survive a round trip through its C# record with no key gained or lost.
+    /// </summary>
+    /// <remarks>
+    /// The strongest check in this file, and the only one that looks inside <c>payload</c>. A key
+    /// the record does not know is dropped on the way out; a key the record writes that the wire
+    /// does not carry is gained. Both are silent in every other test, and both are how the two
+    /// implementations drift apart — most sharply on the omit-don't-zero optionals, where the
+    /// vectors deliberately carry the same field present on one line and absent on another
+    /// (<c>telemetry.window</c>'s <c>peak_g</c> / <c>max_q_pa</c> / <c>radar_alt_m</c>, and the
+    /// wire-v2 <c>lat</c> / <c>lon</c>). Key *order* is not compared: it is not a contract, since
+    /// the proof's <c>bh</c> hashes the bytes the mod actually produced.
+    /// </remarks>
+    [ContractVectorFact]
+    public void Batch001_PayloadsRoundTripThroughTheirRecords()
+    {
+        string root = RequireVectors();
+
+        foreach (string line in BatchLines(root))
+        {
+            using JsonDocument document = JsonDocument.Parse(line);
+            JsonElement envelope = document.RootElement;
+            string type = envelope.GetProperty("type").GetString()!;
+            string payload = envelope.GetProperty("payload").GetRawText();
+
+            Type record = PayloadTypes[type];
+            object? decoded = JsonSerializer.Deserialize(payload, record, CatlogJson.Options);
+            Assert.NotNull(decoded);
+            string reencoded = JsonSerializer.Serialize(decoded, record, CatlogJson.Options);
+
+            using JsonDocument before = JsonDocument.Parse(payload);
+            using JsonDocument after = JsonDocument.Parse(reencoded);
+            AssertJsonEqual(before.RootElement, after.RootElement, type);
+        }
+    }
+
+    /// <summary>
+    /// The wire type each <c>type</c> decodes into, mirroring <c>stats.decodePayload</c>.
+    /// </summary>
+    private static readonly IReadOnlyDictionary<string, Type> PayloadTypes = new Dictionary<string, Type>(StringComparer.Ordinal)
+    {
+        [EventTypes.SessionStarted] = typeof(SessionStartedPayload),
+        [EventTypes.FlightStarted] = typeof(FlightStartedPayload),
+        [EventTypes.FlightEnded] = typeof(FlightEndedPayload),
+        [EventTypes.FlightFlagged] = typeof(FlightFlaggedPayload),
+        [EventTypes.VehicleSituation] = typeof(VehicleSituationPayload),
+        [EventTypes.VehicleAtmosphere] = typeof(VehicleAtmospherePayload),
+        [EventTypes.VehicleOrbit] = typeof(VehicleOrbitPayload),
+        [EventTypes.VehicleSoi] = typeof(VehicleSoiPayload),
+        [EventTypes.VehicleRud] = typeof(VehicleRudPayload),
+        [EventTypes.VehicleImpact] = typeof(VehicleImpactPayload),
+        [EventTypes.VehicleLanded] = typeof(VehicleLandedPayload),
+        [EventTypes.VehicleStaging] = typeof(VehicleStagingPayload),
+        [EventTypes.VehicleDocked] = typeof(VehicleDockPayload),
+        [EventTypes.VehicleUndocked] = typeof(VehicleDockPayload),
+        [EventTypes.EngineIgnition] = typeof(EnginePayload),
+        [EventTypes.EngineShutdown] = typeof(EnginePayload),
+        [EventTypes.EngineFlameout] = typeof(EnginePayload),
+        [EventTypes.KittenEvaStart] = typeof(KittenEvaStartPayload),
+        [EventTypes.KittenEvaEnd] = typeof(KittenEvaEndPayload),
+        [EventTypes.KittenTumble] = typeof(KittenTumblePayload),
+        [EventTypes.KittenKia] = typeof(KittenKiaPayload),
+        [EventTypes.RosterSnapshot] = typeof(RosterSnapshotPayload),
+        [EventTypes.TelemetryWindow] = typeof(TelemetryWindowPayload),
+    };
+
+    /// <summary>Structural JSON equality: key sets, values, array order. Key order is ignored.</summary>
+    /// <param name="expected">The wire element.</param>
+    /// <param name="actual">The re-serialized element.</param>
+    /// <param name="path">Where in the payload this comparison is, for the failure message.</param>
+    private static void AssertJsonEqual(JsonElement expected, JsonElement actual, string path)
+    {
+        Assert.True(expected.ValueKind == actual.ValueKind, $"{path}: {expected.ValueKind} became {actual.ValueKind}");
+        switch (expected.ValueKind)
+        {
+            case JsonValueKind.Object:
+                string[] want = expected.EnumerateObject().Select(p => p.Name).OrderBy(n => n, StringComparer.Ordinal).ToArray();
+                string[] got = actual.EnumerateObject().Select(p => p.Name).OrderBy(n => n, StringComparer.Ordinal).ToArray();
+                Assert.True(
+                    want.SequenceEqual(got, StringComparer.Ordinal),
+                    $"{path}: keys on the wire are [{string.Join(", ", want)}], the record writes [{string.Join(", ", got)}]");
+                foreach (JsonProperty property in expected.EnumerateObject())
+                    AssertJsonEqual(property.Value, actual.GetProperty(property.Name), $"{path}.{property.Name}");
+                return;
+            case JsonValueKind.Array:
+                JsonElement[] wantItems = expected.EnumerateArray().ToArray();
+                JsonElement[] gotItems = actual.EnumerateArray().ToArray();
+                Assert.True(wantItems.Length == gotItems.Length, $"{path}: {wantItems.Length} items became {gotItems.Length}");
+                for (int i = 0; i < wantItems.Length; i++)
+                    AssertJsonEqual(wantItems[i], gotItems[i], $"{path}[{i}]");
+                return;
+            case JsonValueKind.Number:
+                // Compared numerically, not textually: 2.25e8 and 225000000 are the same value,
+                // and neither runtime promises the other's rendering.
+                Assert.Equal(expected.GetDouble(), actual.GetDouble());
+                return;
+            case JsonValueKind.String:
+                Assert.Equal(expected.GetString(), actual.GetString());
+                return;
+            default:
+                // True, False and Null carry everything they mean in ValueKind.
+                return;
         }
     }
 
@@ -284,6 +446,13 @@ public sealed class ContractVectorTests
 
     private static byte[] ReadBytes(string root, params string[] parts)
         => File.ReadAllBytes(Path.Combine(new[] { root }.Concat(parts).ToArray()));
+
+    /// <summary>The conformance batch, one NDJSON line per element.</summary>
+    /// <param name="root">The vector directory.</param>
+    /// <returns>The non-empty lines of <c>batch-001.ndjson</c>.</returns>
+    private static string[] BatchLines(string root)
+        => Encoding.UTF8.GetString(ReadBytes(root, "batches", "batch-001.ndjson"))
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries);
 
     private static ECDsa ServerKeyFromJwks(string root)
     {
