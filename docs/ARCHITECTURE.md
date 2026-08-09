@@ -63,7 +63,7 @@ enums are allow-lists (Constitution §6).
 | `spa/` | The React reader: a standalone Vite app over the public read API. Own lockfile, own toolchain, own deployment. | [ui-design.md](ui-design.md), `spa/README.md` |
 | `contracts/` | Cross-language conformance vectors, generated deterministically and consumed by **both** the Go and C# suites. This is what guarantees mod↔server interop without the game. | [ingest-api.md](ingest-api.md) |
 | `docs/` | This directory. The specification, the decisions, the design record. | — |
-| `infra/` | The production deployment: two Dockerfiles, the compose project, the nginx configuration, and the Ansible roles and playbooks that own the VM. Plus the systemd/deploy.sh path being retired. | [operations.md](operations.md) |
+| `infra/` | The production deployment: two Dockerfiles, the compose project, the nginx configuration, and the Ansible roles and playbooks that own the VM. | [operations.md](operations.md) |
 | `scripts/` | `e2e-full.sh` (the whole-stack proof), `db-snapshot.sh`, `precompress.mjs` (build-time brotli/gzip siblings), `container-smoke.sh` (the release gate). | [../DEVELOPMENT.md](../DEVELOPMENT.md) |
 | `data/` | Runtime state, git-ignored: `events.db`, `projections.db`, `keys/`, `archive/`. | — |
 
@@ -234,7 +234,7 @@ A change that makes a document wrong is an incomplete change. In the same commit
 | Handle rules, `user_key`, moderation semantics | [identity.md](identity.md) |
 | A Go package's role, the schema, config keys, admin routes | [server.md](server.md) |
 | A detector rule, the outbox, the shipper, a KSA patch point | [mod.md](mod.md), and [ksa-integration.md](ksa-integration.md) if a patch point moved |
-| nginx, systemd, or the deploy script | [operations.md](operations.md) |
+| The images, the compose project, nginx, or anything under `infra/ansible/` | [operations.md](operations.md) |
 | A Make target, a build flag, a test scenario | [../DEVELOPMENT.md](../DEVELOPMENT.md) |
 | Anything a visitor to the website would notice | [../README.md](../README.md) |
 | Repo layout, ports, or a new top-level directory | this document |

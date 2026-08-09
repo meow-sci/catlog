@@ -7,11 +7,6 @@ Production is **two containers on one Linux x86_64 VM**, fronted by Cloudflare. 
 that box is described by `infra/ansible/`, and everything you do to it is a `make` target run from
 your own machine.
 
-> **The systemd path is being retired.** `infra/systemd/` and `infra/deploy/deploy.sh` still work and
-> are still in the tree, but they are superseded by everything below and will be deleted once the
-> container path has run a full deploy → upgrade → rollback → restore cycle against a real host.
-> They are described at the end, under [The path being retired](#the-path-being-retired).
-
 ---
 
 ## The whole operator surface
@@ -78,7 +73,7 @@ Two files, split along the line of what depends on the domain (OPS-022).
 **`infra/nginx/nginx.conf` is baked into the image.** Compression, the `limit_req`/`limit_conn`
 zones, the `catlogd` upstream and the JSON log format are all domain-independent, so they ship with
 the image and are validated by `nginx -t` **during the build** — which is what catches a brotli
-module compiled against the wrong nginx version, in CI rather than on the VM at 3am.
+module compiled against the wrong nginx version, in the build rather than on the VM at 3am.
 
 **`site.conf.j2` and `realip.conf.j2` are rendered by Ansible** into `/etc/nginx/catlog.d/`. Names,
 certificates and the Cloudflare ranges are the only host-specific things, and they are the only
@@ -132,8 +127,8 @@ directly is **strictly worse than having no rate limiting at all**: any client c
 `CF-Connecting-IP` and choose its bucket. A fresh random value per request makes the limiter
 unreachable; a victim's address makes it a weapon; the spoofed value also lands in the access log.
 
-This used to be a commented-out block with a warning. It is now unconditional and safe, because
-Ansible applies both halves from **one fact, in one run, in the required order**:
+`real_ip` is therefore on unconditionally, which is only safe because Ansible applies both halves
+from **one fact, in one run, in the required order**:
 `roles/cloudflare_firewall` fetches the ranges and restricts 80/443 to them, then
 `roles/catlog_nginx` renders `set_real_ip_from` from the same list — and refuses to render at all if
 the firewall role has not run (OPS-024).
@@ -198,6 +193,11 @@ no compiler — just `ld-linux`, `libc`/`libdl`/`libpthread`/`libm`, `ca-certifi
 
 The static base sets **no** default user, so `USER nonroot` (uid 65532) in the Dockerfile is
 load-bearing. The `20250419` in the tag is a version label, not a build date.
+
+**No write-xor-execute restriction may be applied to catlogd.** purego's FFI shim and the `dlopen`'d
+Turso engine need executable mappings, so the container runs with no seccomp profile beyond Docker's
+default and nothing in `compose.prod.yaml` forbids them. It is the one hardening flag that must not
+be added.
 
 `TURSO_GO_CACHE_DIR` points at `/var/lib/catlog/turso-cache`, a bind mount from the NVMe volume, and
 `roles/storage` proves that filesystem can execute a file rather than trusting `findmnt`. A `noexec`
@@ -408,20 +408,3 @@ key or the pepper is one you have to treat as a secret forever, and you will not
 `make ops-exec CMD='projections rebuild'` and friends reach the admin mux. The catlogd image has no
 shell, which is not an obstacle: `docker compose exec` runs the binary directly. For a real shell,
 `make ops-ssh` then `docker compose exec nginx sh` — nginx is the image that has one.
-
----
-
-## The path being retired
-
-`infra/systemd/catlogd.service`, `infra/systemd/catlog-nightly.{service,timer}` and
-`infra/deploy/deploy.sh` install catlogd as a systemd unit on a hand-managed VPS. They are superseded
-by everything above and will be deleted once the container path has proved itself end to end.
-
-Two things in the unit file are load-bearing and are the same constraints the container path faces,
-which is why they are worth reading even if you never run it: `TURSO_GO_CACHE_DIR` must point inside
-`ReadWritePaths` (`ProtectSystem=strict` plus a possibly-`noexec` `PrivateTmp` is otherwise a
-`dlopen` failure), and `MemoryDenyWriteExecute` must **not** be set (the FFI shim and the dlopen'd
-engine need executable mappings). The container path expresses the first as a bind mount and the
-second as the absence of a seccomp profile.
-
-`deploy.sh` stops before it starts for the same reason `make deploy` does, and for exactly as long.

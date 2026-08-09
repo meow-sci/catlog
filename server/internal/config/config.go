@@ -16,7 +16,7 @@
 //	[idp.discord] client_id  → CATLOG_IDP_DISCORD_CLIENT_ID
 //	[ingest] accepted_htu    → CATLOG_INGEST_ACCEPTED_HTU  (comma-separated)
 //
-// This is what lets the systemd unit (§11) keep secrets out of the config file
+// This is what lets the deployment keep secrets out of the config file
 // and what lets tests point a server at a temp directory.
 package config
 

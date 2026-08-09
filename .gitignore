@@ -21,7 +21,7 @@ data-*/
 *.db-wal
 *.db-shm
 
-# --- deployment (BUILD_PACKAGE_DIST_PLAN.md §8.2) ---
+# --- deployment (docs/operations.md) ---
 #
 # deploy.env holds every secret the deployment needs — IdP client secrets, the
 # Cloudflare API token, the GHCR PAT. It is the ONLY place they exist outside

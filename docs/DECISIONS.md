@@ -29,7 +29,7 @@ commit. See [ARCHITECTURE.md](ARCHITECTURE.md#7-keeping-the-documentation-true) 
 - **[The two frontends](#the-two-frontends)** — `UI-*`, 56 entries
 - **[The mod and its KSA-free core](#the-mod-and-its-ksa-free-core)** — `MOD-*`, 69 entries
 - **[The load harness](#the-load-harness)** — `LOAD-*`, 26 entries
-- **[Containers, nginx & deployment](#containers-nginx--deployment)** — `OPS-*`, 32 entries
+- **[Containers, nginx & deployment](#containers-nginx--deployment)** — `OPS-*`, 23 entries
 - **[Documentation](#documentation)** — `DOCS-*`, 2 entries
 
 ---
@@ -40,7 +40,7 @@ The founding choices. Every one still holds; everything below refines them.
 
 | # | Decision | Detail |
 |---|---|---|
-| D1 | Hosting | DigitalOcean VPS VM, **owner-managed**. We produce deploy assets (§11) but never provision anything. |
+| D1 | Hosting | One Linux x86_64 VM with an NVMe volume, fronted by Cloudflare. Two containers (`catlogd`, `catlog-nginx`); the whole host is described by `infra/ansible/` and driven by `make` from a laptop. |
 | D2 | 100% local dev | Entire system (mod-side, server, site, IdPs) runs and is tested locally. External services are design targets only. |
 | D3 | Backend language | **Go** (1.26.x). Single binary `catlogd` + admin CLI `catlogctl` + `mockidp`. Module `github.com/meow-sci/catlog/server`. |
 | D4 | Database | **Turso embedded, first-class, no shims/abstraction layers.** Driver `turso.tech/database/tursogo` via `database/sql`. Two files: `events.db`, `projections.db`. The mod's local outbox uses `Microsoft.Data.Sqlite` (no Turso C# SDK exists — this is the mod's private spool, not the server DB). |
@@ -210,7 +210,7 @@ Deploy constraint discovered ahead of WP9: `catlogd` cannot ship on `scratch` or
 
 *Accepted · 2026-08-07 · orchestrator.*
 
-Made explicit after the bare-Go dev server was observed serving uncompressed HTML/JSON. The Go server has no compression middleware and gains none: D20 keeps it stdlib-only with no framework, and both `infra/nginx/dev.conf` and `infra/nginx/prod.conf.example` already carry `gzip on` (`text/html`, `application/json`, `text/css`, `application/javascript`, plus `gzip_vary on` in prod) for the page and `/static/` locations, with Cloudflare compressing again at the edge. **Consequences, accepted deliberately:** (1) `make dev` talks straight to Go on `:8080` with no nginx in the path, so responses in a dev browser's network tab are uncompressed — that is expected, not a bug; (2) a deployment with no compressing proxy in front serves uncompressed JSON and HTML, so `spa/` — which is hosted separately and cross-origin — must be pointed at a proxied origin rather than a bare `catlogd`. **Two locations must never gain compression, in nginx or anywhere else:** `/v1/feed/sse`, because gzip buffering defeats streaming and the SSE contract depends on a frame arriving in under a second (§6.3), and `/v1/ingest`, whose request body is hashed and verified byte for byte (`prod.conf.example` carries a standing "never add gunzip/brotli filters or sub_filter here" comment). Unrelated and unaffected: the **inbound** Brotli on `/v1/ingest` request bodies (D18), which is the mod's wire format and has nothing to do with response encoding.
+Made explicit after the bare-Go dev server was observed serving uncompressed HTML/JSON. The Go server has no compression middleware and gains none: D20 keeps it stdlib-only with no framework, and both `infra/nginx/dev.conf` and the production `infra/nginx/nginx.conf` already compress (`text/html`, `application/json`, `text/css`, `application/javascript`, with brotli alongside gzip in production) for the page and `/static/` locations, with Cloudflare compressing again at the edge. **Consequences, accepted deliberately:** (1) `make dev` talks straight to Go on `:8080` with no nginx in the path, so responses in a dev browser's network tab are uncompressed — that is expected, not a bug; (2) a deployment with no compressing proxy in front serves uncompressed JSON and HTML, so `spa/` — which is hosted separately and cross-origin — must be pointed at a proxied origin rather than a bare `catlogd`. **Two locations must never gain compression, in nginx or anywhere else:** `/v1/feed/sse`, because gzip buffering defeats streaming and the SSE contract depends on a frame arriving in under a second (§6.3), and `/v1/ingest`, whose request body is hashed and verified byte for byte (the production server block carries a standing "never add gunzip/brotli filters or sub_filter here" comment, and sets `brotli off; gzip off;` explicitly). Unrelated and unaffected: the **inbound** Brotli on `/v1/ingest` request bodies (D18), which is the mod's wire format and has nothing to do with response encoding.
 
 ### REPO-025 — The root `Makefile` drives `spa/` too, and `make dev` brings up all three servers
 
@@ -248,7 +248,7 @@ The open question was whether tursogo's exclusive whole-file lock would make a w
 
 *Accepted · 2026-08-07 · WP1.*
 
-The one-process-per-file rule is now a test, not a comment. `TestSecondProcessIsLockedOut` re-executes the test binary as a second process and asserts it cannot even `SELECT` from a live database (`Locking error: … File is locked by another process`). Consequences already baked into the code: `catlogctl` never opens a database file (§5.9), and — for WP9 — **rolling/blue-green deploys are impossible**; the old catlogd must fully exit before the new one starts, so plan for a brief hard downtime window in `deploy.sh` and the systemd unit.
+The one-process-per-file rule is now a test, not a comment. `TestSecondProcessIsLockedOut` re-executes the test binary as a second process and asserts it cannot even `SELECT` from a live database (`Locking error: … File is locked by another process`). Consequences already baked into the code: `catlogctl` never opens a database file (§5.9), and **rolling/blue-green deploys are impossible**; the old catlogd must fully exit before the new one starts, so every deploy carries a brief hard downtime window ([OPS-020](#ops-020)).
 
 ### STORE-004 — A1: explicit WAL checkpointing, deviating from §5.4's "WAL is the default; set nothing"
 
@@ -1270,7 +1270,7 @@ Design feedback on the WP3/WP4 interfaces, recorded because it is the kind of th
 
 Observed during this WP: a concurrent `make clean` removed `server/bin/` between `make e2e-full`'s `server-build` prerequisite and the script's use of `catlogctl`, three steps in and after a database had already been created. The script is also meant to be runnable on its own. The guard is one `[[ -x ]]` loop and turns a confusing mid-run failure into a rebuild.
 
-### UI-017 — A second frontend, `spa/`: a Vite + React SPA on GitHub Pages, alongside — not instead of — the datastar site
+### UI-017 — A second frontend, `spa/`: a Vite + React SPA alongside — not instead of — the datastar site
 
 *Accepted · 2026-08-07 · WP-SPA.*
 
@@ -1522,19 +1522,15 @@ The lesson worth keeping: **a test double that quietly ignores a parameter does 
 
 **The comment in `client.ts` asserted that these headers were "ignored by browsers", and that false premise is the whole reason this survived.** It is corrected in place, because a wrong explanation is worse than none — it stops the next reader looking. Pinned by `client.test.ts`, so dropping the option is a failing test rather than a silent regression.
 
-### UI-056 — The React reader moves to `/app/` on the origin, which retires the CORS allow-list in production
+### UI-056 — The React reader is served at `/app/` on the origin, so there is no CORS allow-list in production
 
 *Accepted · 2026-08-08 · WP-CONTAINER.*
 
-[UI-017](#ui-017) chose GitHub Pages for `spa/`. The container deployment serves it from the same nginx that fronts catlogd, at `/app/`, built with `SPA_BASE=/app/` and an **empty** `VITE_CATLOG_API_BASE` — so `src/api/client.ts` keeps the empty string and every request comes out as a relative `/v1/…`.
+The same nginx that fronts catlogd serves it, built with `SPA_BASE=/app/` and an **empty** `VITE_CATLOG_API_BASE` — so `src/api/client.ts` keeps the empty string and every request comes out as a relative `/v1/…`.
 
-UI-017's actual argument survives untouched: the reader is still independently deployable, with its own lockfile, toolchain, build stage and `SPA_BASE`, and can still be pointed at any static host by changing two build arguments. What changes is the default host.
+This costs the reader none of its independence ([UI-017](#ui-017)): it keeps its own lockfile, toolchain, build stage and `SPA_BASE`, and pointing it at a separate static host is two build arguments. What it buys: `[cors] allowed_origins` is **empty** in production, which is strictly safer than any non-empty list; deep links work through `try_files` rather than the `404.html` trick, so they return 200 rather than a 404 browsers happen to render; and the hashed `assets/` can be served `immutable` for a year from the same origin as everything else.
 
-What that buys: `[cors] allowed_origins` is **empty** in production, which is strictly safer than any non-empty list; deep links work through `try_files` rather than the `404.html` trick, so they return 200 rather than a 404 browsers happen to render; and the hashed `assets/` can be served `immutable` for a year from the same origin as everything else.
-
-`make spa-preview` stays. It is the only local target that runs the bundle cross-origin, and the allow-list remains live code for any other deployment of the reader — deleting the target because production stopped needing it would remove the only test of a path that still exists.
-
-`.github/workflows/spa-pages.yml` is deleted.
+`make spa-preview` earns its keep here: it is the only local target that runs the bundle cross-origin, and the allow-list is live code for anyone hosting the reader elsewhere. Deleting it because production does not need it would remove the only test of a path that still exists.
 
 
 ---
@@ -2143,18 +2139,6 @@ Docker Desktop is stopped, `~/.docker/run/docker.sock` does not exist, and testc
 
 `infra/nginx/dev.conf` is §6.1 verbatim, and the two placeholders are substituted differently by each consumer. `infra/compose.yaml` mounts it at `/etc/nginx/templates/nginx.conf.template` and lets the nginx image's envsubst step write `/etc/nginx/nginx.conf` (`NGINX_ENVSUBST_OUTPUT_DIR=/etc/nginx`); `NGINX_ENVSUBST_FILTER=^(UPSTREAM|STATIC_ROOT)$` is load-bearing, because without it envsubst also expands `$binary_remote_addr`, `$proxy_add_x_forwarded_for`, `$scheme` and `$host` into empty strings. The Go suite substitutes in-process instead, and **fails the test if either placeholder has disappeared from the file** — a dev.conf that hardcoded its upstream would otherwise make the suite test a config nobody ships.
 
-### OPS-004 — `prod.conf.example` is a server-block fragment for the distro's `http {}`, not a whole nginx.conf like dev.conf
-
-*Accepted · 2026-08-07 · WP9.*
-
-Consequences documented in its header: the three `limit_req_zone`/`limit_conn_zone` declarations must be installed separately (a zone cannot live in a server block), and the HTTP/2 line is left as an explicit either/or rather than guessed — `http2 on;` needs nginx ≥ 1.25.1 while Debian 12 ships 1.22 and Ubuntu 24.04 ships 1.24, where the `http2` parameter belongs on `listen` instead. Prod zone sizing is `catlog_ingest` 2r/s burst 10 (≈4× a single player's §4.3 budget, so a household NAT is unaffected) and `catlog_web` 20r/s burst 40.
-
-### OPS-005 — §13.7's Cloudflare `real_ip` block ships commented out, with the reason spelled out as a hazard rather than a note
-
-*Accepted · 2026-08-07 · WP9.*
-
-Per-IP zones key on `$binary_remote_addr`, which becomes a Cloudflare edge address once CF fronts the origin, so the zones must switch to `CF-Connecting-IP` via `set_real_ip_from` + `real_ip_header`. Enabling that *before* Cloudflare is in front and 443 is firewalled to CF's ranges is strictly worse than no rate limiting: any client can then pick its own bucket (a random value per request makes the limiter unreachable; a victim's address makes it a weapon), and the spoofed value also lands in `access.log`. The file states the required order — CF in front, firewall 443 to CF ranges, *then* uncomment.
-
 ### OPS-006 — The six §6.3 tests are subtests of one `TestNginxProxy` sharing one container
 
 *Accepted · 2026-08-07 · WP9.*
@@ -2173,48 +2157,6 @@ Two parts of the §6.3 fixture are local stand-ins, and deliberately so. (a) The
 
 The `alias $STATIC_ROOT/;` location is the one directive in dev.conf that can break silently (a 404 looks like a missing build, not a broken proxy), and asserting that the request never reaches Go is the same one-line check the other cases already use.
 
-### OPS-009 — `catlogd.service` sets `TURSO_GO_CACHE_DIR=/var/lib/catlog/turso-cache` and creates it in `ExecStartPre`
-
-*Accepted · 2026-08-07 · WP9.*
-
-This is what makes §11's hardening survivable: tursogo extracts a native `.so` and `dlopen`s it at startup, `ProtectSystem=strict` makes everything outside `ReadWritePaths` read-only, and `PrivateTmp` gives a writable `/tmp` that a hardened host may still mount `noexec` — which would turn a writable directory into a `dlopen` failure. Pointing the driver at a directory already inside `ReadWritePaths` removes both failure modes. Related and equally load-bearing: **`MemoryDenyWriteExecute` must NOT be set** (purego/fakecgo and the dlopen'd engine need executable mappings); the unit carries it commented out with that warning so nobody adds it back as "one more hardening flag".
-
-### OPS-010 — `ReadWritePaths=/var/backups/catlog` belongs on `catlogd.service`, not on the nightly unit
-
-*Accepted · 2026-08-07 · WP9.*
-
-`ReadWritePaths=/var/backups/catlog` belongs on `catlogd.service`, not on the nightly unit. `catlogctl backup` is an admin-API call (§5.9) — the process that quiesces the writer and copies the database is *catlogd*, because a live Turso file cannot be read by another process at all (WP1's `TestSecondProcessIsLockedOut`) and `cp` of a WAL database is not a backup anyway. So the nightly unit writes nothing, needs no `ReadWritePaths`, and is pinned to `IPAddressAllow=localhost` / `IPAddressDeny=any`.
-
-### OPS-011 — `catlog-nightly.service` is correct-but-ahead-of-code and says so in a comment
-
-*Accepted · 2026-08-07 · WP9.*
-
-`catlog-nightly.service` is correct-but-ahead-of-code and says so in a comment: `rebuild` lands in WP4, `archive` and `backup` in WP10, and all three exit non-zero today, so the timer must not be enabled until those are in. Two other notes are recorded in the unit itself: flags follow the verb (`catlogctl backup -config … <dest>`), because catlogctl's global flag set holds only `-version`; and a purge frees pages without shrinking the file — `VACUUM` stays behind the experimental DSN flag §5.4 forbids, so free pages accumulate and the honest reclamation path is restore-from-archive into a fresh database, not vacuuming.
-
-### OPS-012 — `deploy.sh` stops before it starts, and never provisions
-
-*Accepted · 2026-08-07 · WP9.*
-
-The stop is explicit (`systemctl stop`, then poll `is-active` for up to 60 s, then refuse to install) rather than a `restart`, because the guarantee we need is *the old process has exited and released the file lock* — no rolling or blue/green deploy is possible. It keeps one generation (`catlogd.prev`) and prints the rollback command if `/healthz` does not answer within 60 s. `--dry-run` is total: every mutating step goes through one `run` wrapper, so a dry run builds nothing and creates no staging directory (verified). Systemd units install only under an opt-in `--install-units`; the **nginx config is never installed** (it is a `.example` with placeholders and TLS is owner-managed, D1) — it is only rsynced into the staging directory, where the script points out any drift from `/etc/nginx/sites-available/catlog`. Staging lives in `server/bin/deploy/`, which `.gitignore` already covers.
-
-### OPS-013 — §13.1 cross-compile check, executed: `GOOS=linux GOARCH=amd64 go build ./cmd/catlogd` produces a 32 MB `ELF 64-bit LSB executable, x86-64 … dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2`, with `DT_NEEDED = libdl.so.2, libpthread.so.0, libc.so.6`
-
-*Accepted · 2026-08-07 · WP9.*
-
-§13.1 cross-compile check, executed: `GOOS=linux GOARCH=amd64 go build./cmd/catlogd` produces a 32 MB `ELF 64-bit LSB executable, x86-64 … dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2`, with `DT_NEEDED = libdl.so.2, libpthread.so.0, libc.so.6`. `CGO_ENABLED=0` changes nothing — the two builds are byte-identical (same Go BuildID) — which is the concrete proof behind the 2026-08-06 "cannot ship on scratch/distroless-static" entry: a glibc base is not a preference, it is three `DT_NEEDED` entries. **Running the artifact on linux remains unverified on this machine** (no docker), so the §13.1 item stays open until the first real deploy or a docker run.
-
-### OPS-014 — The nginx configs are NOT validated by `nginx -t`
-
-*Accepted · 2026-08-07 · WP9.*
-
-There is no nginx binary on this machine and no usable docker daemon to borrow one from, and pulling an image would be a network call this work package deliberately did not make. What was checked is structural only: balanced braces, every directive line terminated, both placeholders present and substitutable, and every `$nginx_variable` surviving substitution — plus `docker compose -f infra/compose.yaml config`, which parses without a daemon. **First install on the VPS must run `nginx -t` before `systemctl reload nginx`.**
-
-### OPS-015 — `infra/{nginx,systemd,deploy}/.gitkeep` deleted — the directories now hold real files, and a leftover `.gitkeep` invites the next reader to think the directory is still a placeholder
-
-*Accepted · 2026-08-07 · WP9.*
-
-`infra/{nginx,systemd,deploy}/.gitkeep` deleted — the directories now hold real files, and a leftover `.gitkeep` invites the next reader to think the directory is still a placeholder.
-
 ### OPS-016 — Adding testcontainers-go bumped `github.com/ebitengine/purego` v0.9.1 → v0.10.0 for the whole module — including tursogo's FFI path
 
 *Accepted · 2026-08-07 · WP9.*
@@ -2227,7 +2169,7 @@ MVS, not a choice: `tursogo`/`turso-go-platform-libs` v0.7.2 require purego v0.9
 
 Because the only importer of testcontainers-go and moby/moby/client sits behind `//go:build docker`, `go get` recorded both as `// indirect`; `go mod tidy` (which considers all build tags) promotes them to direct requires. Anyone editing `server/go.mod` by hand should tidy afterwards rather than trust an untagged `go build`.
 
-### OPS-018 — Production is two containers on a Docker Hardened Image, and the reason is the blast radius of an RCE
+### OPS-018 — Production is two containers on a hardened base, and the reason is the blast radius of an RCE
 
 *Accepted · 2026-08-08 · WP-CONTAINER.*
 
@@ -2254,7 +2196,7 @@ DT_NEEDED    libdl.so.2  libpthread.so.0  libc.so.6
 
 The driver also extracts a 19 MB native `.so` and `dlopen`s it at first database open, so the runtime needs a writable, **exec-capable** directory too — `roles/storage` proves the filesystem can execute a file rather than trusting `findmnt`.
 
-**The golang non-dev variant was the plan, and measuring it changed the decision.** It is a Go *runtime* image, which means it carries the toolchain:
+**The obvious candidate is the golang non-dev variant, and measuring it is what ruled it out.** It is a Go *runtime* image, which means it carries the toolchain:
 
 | Base | Files | Image | Contains |
 |---|---|---|---|
@@ -2297,25 +2239,27 @@ The one non-obvious property — that `brotli_static` wins over the built-in `gz
 
 `infra/nginx/nginx.conf` (compression, the rate-limit zones, the catlogd upstream, the JSON log format) is **baked** into the image and validated by `nginx -t` **at build time**, which is what catches a brotli module built against the wrong nginx version. `site.conf.j2` and `realip.conf.j2` (names, certificates, Cloudflare ranges) are rendered by Ansible into `/etc/nginx/catlog.d/`.
 
-An image that knew the domain could not be promoted between environments, and a config with a `<PLACEHOLDER>` in it cannot be validated at all — which is why `prod.conf.example` is gone rather than moved.
+An image that knew the domain could not be promoted between environments, and a config carrying a placeholder cannot be validated at all — so nothing here has one.
 
 Individual **files** are bind-mounted, not the directory, so the baked `00-bootstrap.conf` survives: a `default_server` answering 503 with a reason, because "connection refused" and "the config mount is wrong" look identical from outside.
 
-### OPS-023 — Ansible provisions the container host, and D1 is superseded for that target only
+### OPS-023 — Ansible owns the whole host, because a container host's entire state *is* the playbook
 
 *Accepted · 2026-08-08 · WP-CONTAINER.*
 
-[D1](#d1) says catlog produces deploy assets and provisions nothing. `infra/ansible/` provisions: packages, the NVMe mount, users, the firewall, certificates.
+`infra/ansible/` owns packages, the NVMe mount and its directory tree, users, Docker, the firewall, certificates, the compose project and every operational verb. Nothing about the box is hand-managed.
 
-D1's reasoning is that a hand-managed VPS's state belongs to its owner, and that a deploy script straying into provisioning eventually strands the owner between the script's model and the box's reality. **A container host has no such divergence to protect: its entire state *is* the playbook.** The failure D1 guards against is prevented here by having exactly one authority rather than by having none. D1 stands for `infra/deploy/deploy.sh` and the systemd path; it is superseded for the container target.
+The argument against automating host state is that a script and a human end up disagreeing about the box, and the human loses in ways nobody notices until an incident. That failure needs two authorities to exist. Here there is one: everything the VM is, is in a playbook that is idempotent, re-runnable, and reviewable in `git diff`. Rebuilding the host is `make provision`, not archaeology.
+
+The corollary is that a change made by hand on the VM is a bug, and will be silently reverted by the next run. That is the intended behaviour, not a rough edge.
 
 ### OPS-024 — The Cloudflare `real_ip` hazard is resolved by making one fact drive both the firewall and nginx
 
 *Accepted · 2026-08-08 · WP-CONTAINER.*
 
-The old `prod.conf.example` shipped `set_real_ip_from` commented out with a correct warning: enabling it before Cloudflare is in front and 443 is CF-only lets any client choose its own rate-limit bucket by sending `CF-Connecting-IP`.
+Per-IP rate-limit zones key on the remote address, which becomes a Cloudflare edge address the moment CF fronts the origin — so they have to key on `CF-Connecting-IP` instead. But turning `real_ip` on while the origin is still reachable directly is **strictly worse than having no rate limiting at all**: any client can then choose its own bucket by sending that header. A fresh random value per request makes the limiter unreachable, a victim's address makes it a weapon, and the spoofed value lands in the access log too.
 
-`roles/cloudflare_firewall` fetches the ranges, publishes them as `cloudflare_ranges`, and `roles/catlog_nginx` renders `set_real_ip_from` from that same fact — in that order, in one play, with an assertion in the nginx role that refuses to render if the firewall has not run. The required ordering is now enforced rather than remembered.
+`roles/cloudflare_firewall` fetches the ranges, publishes them as `cloudflare_ranges`, and `roles/catlog_nginx` renders `set_real_ip_from` from that same fact — in that order, in one play, with an assertion in the nginx role that refuses to render if the firewall has not run. The ordering is enforced rather than remembered, which is the only reason `real_ip` can be on unconditionally.
 
 **The rules that actually protect 80/443 are in `DOCKER-USER`, not in the host input chain.** Published container ports are DNAT'd and forwarded, so they never traverse INPUT: an nftables ruleset that "blocks everything but 22" leaves 443 open to the internet, silently. `catlog-firewall.service` is `PartOf=docker.service` because restarting Docker re-creates and flushes `DOCKER-USER`, which would take those rules with it.
 

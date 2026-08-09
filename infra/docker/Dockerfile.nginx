@@ -1,4 +1,4 @@
-# catlog-nginx — production reverse proxy + static host (BUILD_PACKAGE_DIST_PLAN.md §5).
+# catlog-nginx — production reverse proxy + static host. See docs/operations.md.
 #
 #   docker build -f infra/docker/Dockerfile.nginx -t catlog-nginx .
 #

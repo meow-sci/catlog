@@ -1,4 +1,4 @@
-# catlog — the production compose project (BUILD_PACKAGE_DIST_PLAN.md §6.2).
+# catlog — the production compose project. See docs/operations.md.
 #
 # Installed by roles/catlog_app at /opt/catlog/compose.yaml, beside a /opt/catlog/.env
 # that Ansible renders with the image digests, the uid/gid and the data root.

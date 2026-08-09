@@ -316,7 +316,7 @@ precompress: site-build spa-build
 	node scripts/precompress.mjs $(if $(strip $(CHECK)),--check,) site/dist spa/dist
 
 # ===========================================================================
-# DEPLOYMENT — build, push, provision, operate.  BUILD_PACKAGE_DIST_PLAN.md §8
+# DEPLOYMENT — build, push, provision, operate.  See docs/operations.md.
 # ===========================================================================
 #
 # The normal release is two commands:

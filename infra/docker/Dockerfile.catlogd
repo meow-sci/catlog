@@ -1,4 +1,4 @@
-# catlogd — production image (BUILD_PACKAGE_DIST_PLAN.md §4).
+# catlogd — production image. See docs/operations.md.
 #
 #   docker build -f infra/docker/Dockerfile.catlogd -t catlogd .
 #

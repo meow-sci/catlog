@@ -62,7 +62,7 @@ A change that leaves a document wrong is an **incomplete change**, not a change 
 | Handle rules, `user_key`, moderation semantics | `docs/identity.md` |
 | A Go package's role, the schema, config keys, admin routes | `docs/server.md` |
 | A detector rule, the outbox, the shipper, a KSA patch point | `docs/mod.md` (+ `docs/ksa-integration.md` if a patch point moved) |
-| nginx, systemd, the deploy script | `docs/operations.md` |
+| The container images, nginx, the compose project, Ansible | `docs/operations.md` |
 | A Make target, a build flag, a test mode | `DEVELOPMENT.md` |
 | Anything a visitor to the website would notice | `README.md` |
 | Repo layout, ports, a new top-level directory | `docs/ARCHITECTURE.md` |
@@ -93,7 +93,7 @@ A change that leaves a document wrong is an **incomplete change**, not a change 
 | `site/` | Datastar site's CSS/JS + the Playwright suite. **HTML templates live in `server/internal/web/templates/`.** | `docs/ui-design.md` |
 | `spa/` | Standalone React reader over the public read API. Own lockfile and deployment. | `spa/README.md` |
 | `contracts/testdata/` | Deterministic cross-language conformance vectors, consumed by both suites. | `docs/ingest-api.md` |
-| `infra/` | nginx, systemd, deploy. | `docs/operations.md` |
+| `infra/` | Dockerfiles, the compose project, nginx config, Ansible roles and playbooks. | `docs/operations.md` |
 | `docs/`, `scripts/`, `data/` | Specification; helper scripts; git-ignored runtime state. | — |
 
 ## Conventions

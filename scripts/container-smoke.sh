@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The gate between `make images` and a push (BUILD_PACKAGE_DIST_PLAN.md §9.2).
+# The gate between `make images` and a push. See docs/operations.md.
 #
 #   scripts/container-smoke.sh <catlogd-image> <nginx-image>
 #
