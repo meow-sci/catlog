@@ -1,0 +1,53 @@
+---
+title: Units and number formatting
+description: >-
+  How catlog renders every number it shows, and the one unit collision worth
+  knowing about.
+sidebar:
+  order: 2
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+Every number catlog displays goes through the same formatter, so the same value
+looks the same everywhere it appears.
+
+## Significant figures
+
+Three, always. `2410` stays `2410`; `0.0472` stays `0.0472`; trailing zeros are
+trimmed, and thousands are grouped with commas.
+
+## Scaling
+
+| Unit                  | Behaviour                                                          | Example                                     |
+| --------------------- | ------------------------------------------------------------------ | ------------------------------------------- |
+| `m`, `J`, `Pa`        | Scaled by SI prefix. No sub-unit prefixes — there is no `mm` here. | `1 820 000 m` → `1.82 Mm`                   |
+| `m/s`                 | **Never scaled.**                                                  | `9450 m/s` stays `9450 m/s`                 |
+| `s`, `ms`             | Rendered as a duration.                                            | `313 s` → `5m 13s`; `3660000 ms` → `1h 01m` |
+| `g` and every counter | Three significant figures plus the label.                          | `6.8 g`, `4 tumbles`                        |
+
+Durations climb a ladder: `450 ms`, `37.5 s`, `5m 13s`, `1h 01m`, `243d 01h`,
+`1y 5d`. A year is treated as a flat 365 days.
+
+<Aside type="caution" title="`_ms` means metres per second. `ms` means milliseconds.">
+A **field name** ending `_ms` — `speed_ms`, `surface_speed_ms`, `fastest_ms` — is
+metres per second.
+
+A **board unit** shown as `ms` — on Fastest to Orbit and every Fastest to
+_&lt;world&gt;_ — is milliseconds, and is rendered as a duration.
+
+They are unrelated. The collision is unfortunate and is not fixable without
+breaking already-recorded data, so it is documented instead.
+
+</Aside>
+
+## Clocks
+
+| Clock                    | What it is                                       | Used for                                                                                    |
+| ------------------------ | ------------------------------------------------ | ------------------------------------------------------------------------------------------- |
+| **Game time**            | Seconds since the career began.                  | Career-time boards, telemetry windows, every threshold and dead band on this site.          |
+| **Wall time (yours)**    | Your machine's clock at the moment of the event. | Recorded. **Never trusted.**                                                                |
+| **Wall time (server's)** | When the server received the batch.              | Every ranking timestamp, the activity feed, and which daily/weekly bucket a value lands in. |
+
+The practical consequence: play offline for a week and sync on Sunday, and every
+one of those events lands in Sunday's bucket. Your all-time boards are unaffected.

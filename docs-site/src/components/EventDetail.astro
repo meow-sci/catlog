@@ -1,0 +1,165 @@
+---
+/**
+ * Renders one event from src/data/events.ts. The family pages call this so the
+ * catalog has exactly one copy of each event's prose — the data module — and the
+ * MDX around it stays about the group as a whole.
+ */
+import { eventByType } from "../data/events";
+import { segments } from "./rich";
+
+interface Props {
+  type: string;
+}
+
+const { type } = Astro.props;
+const event = eventByType(type);
+if (!event) throw new Error(`Unknown event type in EventDetail: ${type}`);
+
+const anchor = event.type.replace(".", "");
+const triggerLabel =
+  event.trigger === "event" ? "Something happened" : "Sampled in the background";
+---
+
+<section class="ev" id={anchor}>
+  <h3 class="ev-h">
+    <code>{event.type}</code>
+    <span class={`ev-pill ev-pill-${event.trigger}`}>{triggerLabel}</span>
+    <span class="ev-pill ev-pill-ver">v{event.ver}</span>
+    {event.droppable && <span class="ev-pill ev-pill-drop">droppable</span>}
+  </h3>
+
+  <p class="ev-summary">{event.summary}</p>
+
+  <dl class="ev-dl">
+    <dt>What causes it</dt>
+    <dd>{segments(event.cause).map((s) => (s.code ? <code>{s.text}</code> : s.text))}</dd>
+    <dt>Where the numbers come from</dt>
+    <dd>{segments(event.source).map((s) => (s.code ? <code>{s.text}</code> : s.text))}</dd>
+    {event.gate && <dt>What stops it firing</dt>}
+    {event.gate && <dd>{segments(event.gate).map((s) => (s.code ? <code>{s.text}</code> : s.text))}</dd>}
+    <dt>What it feeds</dt>
+    <dd>
+      {
+        event.feeds.length > 0 ? (
+          <>
+            {event.feeds.map((f, i) => (
+              <>
+                {i > 0 && ", "}
+                <code>{f}</code>
+              </>
+            ))}
+          </>
+        ) : (
+          "Nothing. It is recorded and kept, but no leaderboard reads it."
+        )
+      }
+    </dd>
+  </dl>
+
+  <div class="ev-table-wrap">
+    <table class="ev-table">
+      <thead>
+        <tr>
+          <th>Field</th>
+          <th>Unit</th>
+          <th>What it is</th>
+        </tr>
+      </thead>
+      <tbody>
+        {
+          event.fields.map((f) => (
+            <tr>
+              <td>
+                <code>{f.key}</code>
+                {f.optional && <span class="ev-opt"> optional</span>}
+              </td>
+              <td>{f.unit === "" ? "—" : f.unit}</td>
+              <td>{segments(f.what).map((s) => (s.code ? <code>{s.text}</code> : s.text))}</td>
+            </tr>
+          ))
+        }
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<style is:global>
+  .ev {
+    margin-block: 2.5rem;
+  }
+
+  .ev-h {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    align-items: baseline;
+  }
+
+  .ev-pill {
+    font-size: var(--sl-text-xs);
+    font-weight: 400;
+    padding: 0.05rem 0.45rem;
+    border-radius: 999px;
+    border: 1px solid var(--sl-color-gray-4);
+    color: var(--sl-color-gray-2);
+    white-space: nowrap;
+  }
+
+  .ev-pill-event {
+    border-color: var(--sl-color-accent);
+    color: var(--sl-color-accent-high);
+  }
+
+  .ev-summary {
+    font-size: var(--sl-text-lg);
+  }
+
+  .ev-dl {
+    display: grid;
+    grid-template-columns: minmax(9rem, max-content) 1fr;
+    gap: 0.35rem 1rem;
+    margin-block: 1rem;
+    font-size: var(--sl-text-sm);
+  }
+
+  .ev-dl dt {
+    font-weight: 600;
+    color: var(--sl-color-gray-2);
+  }
+
+  .ev-dl dd {
+    margin: 0;
+  }
+
+  @media (max-width: 40rem) {
+    .ev-dl {
+      grid-template-columns: 1fr;
+    }
+    .ev-dl dd {
+      margin-block-end: 0.5rem;
+    }
+  }
+
+  .ev-table-wrap {
+    overflow-x: auto;
+  }
+
+  .ev-table {
+    width: 100%;
+    font-size: var(--sl-text-sm);
+    border-collapse: collapse;
+  }
+
+  .ev-table th,
+  .ev-table td {
+    text-align: left;
+    vertical-align: top;
+    padding: 0.35rem 0.6rem;
+    border-block-end: 1px solid var(--sl-color-gray-5);
+  }
+
+  .ev-opt {
+    font-size: var(--sl-text-xs);
+    color: var(--sl-color-gray-3);
+  }
+</style>

@@ -1,0 +1,121 @@
+---
+title: What counts and what doesn't
+description: >-
+  Every rule that keeps a run off the leaderboards, why each one exists, and the
+  three cases where recomputing the boards gives a different answer on purpose.
+sidebar:
+  order: 3
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+If a number you expected is missing, it is one of the rules on this page. They are
+all here.
+
+## The flag rule
+
+Five things mark a flight, and **a marked flight scores nothing at all** — not the
+record it was setting, not the counters, not the activity feed, not the raw event
+views.
+
+| Flag            | Raised when                                                                               |
+| --------------- | ----------------------------------------------------------------------------------------- |
+| `teleport`      | You teleported a vehicle by a player command, including the Set Orbit debug window.       |
+| `refuel`        | The vehicle's consumables were refilled.                                                  |
+| `resource_edit` | The vehicle's consumables were drained.                                                   |
+| `console`       | The terminal's `destroy` command was used on the vehicle.                                 |
+| `tuning`        | The kitten locomotion tuning differs from stock (the tumble speed gate is 6.5 m/s stock). |
+
+Three details:
+
+- **A flag catlog does not recognise still excludes.** If a future version adds a
+  sixth flag and an older server sees it, that flight is excluded anyway. Failing
+  the other way would make every new flag a loophole for as long as servers lag
+  behind mods.
+- **A session-wide flag sticks to everything.** Changing the tumble tuning is not
+  attached to one vehicle, so it applies to every flight open at the time and every
+  flight started afterwards that session.
+- **Distance Travelled is the one exception**, and it is structural rather than a
+  judgement call: it comes from your roster totals, which are not attached to any
+  flight, so there is nothing to flag.
+
+## Impact rules
+
+An impact only becomes a **Biggest Lithobrake Survived** candidate if all of these
+hold:
+
+- The vehicle still existed a frame later.
+- You did not destroy it yourself immediately afterwards — that counts exactly the
+  same as the impact having destroyed it.
+- It was not the launch pad.
+- Somebody was aboard.
+- It was not within 5 seconds of a teleport. The game suppresses impact effects
+  there, and that is not a landing.
+- The flight is not flagged.
+
+<Aside type="caution" title="Why the one-frame wait exists">
+  The game applies every impact for a frame before it applies any destruction, and a destruction you
+  asked for lands later still. Deciding "did it survive" in the same frame would have called every
+  fatal crash a survival.
+</Aside>
+
+## Peak-g rules
+
+A peak-g reading counts only when the game actually computed one. It does that
+while a vehicle is under full physics; on rails or in freefall there is no reading
+at all, and catlog leaves the field out rather than writing a zero.
+
+Writing zeros would have filled the board with entries from vehicles that were not
+being simulated.
+
+## Rebuilding, and the three answers that change
+
+Boards are normally updated as events arrive. Sometimes the whole set is discarded
+and recomputed from the log — after a purge, or a schema change, or when a fold
+gains a rule. **A rebuild can produce a different answer, and that is intended.**
+
+Two rules cannot be evaluated live, because they depend on how a flight _ended_
+and the events are still arriving one at a time:
+
+1. **A lithobrake within 2 seconds of a kitten being lost is dropped.** Live,
+   catlog cannot know a kitten is about to be lost.
+2. **A peak-g reading only counts if the flight ended recovered.** Live, the flight
+   may still be in progress. This is the widest of the three — every flight that
+   ended destroyed or despawned loses its peak-g row on a rebuild.
+
+And one that is about ordering rather than knowledge:
+
+3. **A flag that arrived late.** Live, the events folded before the flag reached
+   the server had already scored. A rebuild sees the completed flight and drops
+   them all.
+
+Rebuilding is always the more correct answer: it is the one computed with the whole
+story in hand.
+
+## Moderation
+
+A banned player disappears from every public surface at once. Their rows still
+exist in the derived tables, but nothing can render them, because every handle is
+resolved from one directory and a banned player is not in it.
+
+- **A ban closes the gap rather than leaving a hole** — ranks are positions among
+  the rows you can see.
+- **Player counts still include them.** "412 players on this board" is the honest
+  row count.
+- **An unknown, retired and banned handle all return the same "not found"**,
+  deliberately: anything else would be a way to test whether somebody was banned.
+
+## What catlog will never check
+
+Anti-cheat here is capped, on purpose. catlog assumes stock game data and stock
+settings, and goes no further. Specifically it will never do physics-plausibility
+scoring, quarantine runs pending review, compute suspicion scores against other
+players, or operate a report queue.
+
+Those were all considered and settled as never-to-be-built. The reasoning is that
+each one converts a hobby leaderboard into a tribunal, and every one of them
+produces false positives against players who did nothing wrong.
+
+What catlog does instead is narrow and checkable: it detects the five specific
+actions above, at the exact point the game performs them, and excludes those
+flights.

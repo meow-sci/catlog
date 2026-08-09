@@ -1,0 +1,108 @@
+.eb-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  align-items: end;
+  margin-block: 1.5rem 0.5rem;
+}
+
+.eb-label {
+  display: block;
+  font-size: var(--sl-text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--sl-color-gray-3);
+  margin-block-end: 0.25rem;
+}
+
+.eb-search {
+  flex: 1 1 16rem;
+}
+
+.eb-search input,
+.eb-select select {
+  width: 100%;
+  padding: 0.4rem 0.6rem;
+  font: inherit;
+  font-size: var(--sl-text-sm);
+  color: var(--sl-color-white);
+  background: var(--sl-color-black);
+  border: 1px solid var(--sl-color-gray-5);
+  border-radius: 0.25rem;
+}
+
+.eb-select {
+  flex: 0 1 12rem;
+}
+
+.eb-count {
+  font-size: var(--sl-text-xs);
+  color: var(--sl-color-gray-3);
+  margin-block: 0.25rem 1rem;
+}
+
+.eb-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 0.75rem;
+}
+
+.eb-item {
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--sl-color-gray-5);
+  border-radius: 0.4rem;
+  background: var(--sl-color-gray-6);
+}
+
+.eb-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.eb-type {
+  font-family: var(--sl-font-mono, ui-monospace, monospace);
+  font-size: var(--sl-text-sm);
+  font-weight: 600;
+}
+
+.eb-pill {
+  font-size: var(--sl-text-xs);
+  padding: 0.05rem 0.45rem;
+  border-radius: 999px;
+  border: 1px solid var(--sl-color-gray-4);
+  color: var(--sl-color-gray-2);
+  white-space: nowrap;
+}
+
+.eb-pill-event {
+  border-color: var(--sl-color-accent);
+  color: var(--sl-color-accent-high);
+}
+
+.eb-summary {
+  margin: 0.4rem 0 0.5rem;
+  font-size: var(--sl-text-sm);
+}
+
+.eb-meta {
+  margin: 0.15rem 0;
+  font-size: var(--sl-text-xs);
+  color: var(--sl-color-gray-2);
+  font-family: var(--sl-font-mono, ui-monospace, monospace);
+}
+
+.eb-meta-k {
+  display: inline-block;
+  min-width: 5rem;
+  color: var(--sl-color-gray-3);
+  font-family: var(--sl-font);
+}
+
+.eb-empty {
+  font-size: var(--sl-text-sm);
+  color: var(--sl-color-gray-3);
+}

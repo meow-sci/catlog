@@ -1,0 +1,63 @@
+---
+title: Kittens
+description: >-
+  EVAs, tumbles, losses, and the periodic roster snapshot that Distance Travelled
+  is built from.
+sidebar:
+  order: 6
+---
+
+import { Aside } from "@astrojs/starlight/components";
+import EventDetail from "../../../components/EventDetail.astro";
+
+<Aside type="note" title="A kitten outside is a vehicle">
+  As far as the game is concerned, a kitten on EVA *is* a vehicle — which means it gets its own
+  flight, its own telemetry windows, and its own ending, exactly like a rocket does. Its crew count
+  is one: itself.
+</Aside>
+
+<EventDetail type="kitten.eva_start" />
+<EventDetail type="kitten.eva_end" />
+<EventDetail type="kitten.tumble" />
+
+## What counts as a tumble
+
+The game decides. A kitten is tumbling when it is touching the ground and moving
+faster than the tumble speed gate, which is **6.5 m/s** in a stock game.
+
+catlog records the transition **into** tumbling and nothing else. A tumble ends by
+righting itself, and counting that too would double every fall.
+
+<Aside type="caution" title="Why changing the tuning flags your flight">
+That 6.5 m/s figure is a single number sitting in a debug window with a drag
+handle on it, and it is the entire definition of a tumble. Lower it and every step
+becomes a tumble; raise it and nothing does.
+
+catlog checks it against stock twice a second and flags the session the moment it
+differs. Without that check, the tumbles board would be a number anybody could set
+to anything.
+
+</Aside>
+
+<EventDetail type="kitten.kia" />
+
+Two things about losses:
+
+**Loading a save that already contains losses does not replay them.** The first
+roster reading after a load establishes a baseline and reports nothing.
+
+**A loss cannot be recorded twice.** The game sets the flag in exactly one place
+and never clears it.
+
+Note also that a vehicle coming apart does **not** kill its crew — the game ends
+their missions instead. That is why a RUD records the crew who were aboard and
+they all live.
+
+<EventDetail type="roster.snapshot" />
+
+<Aside type="caution" title="The roster's own speed figure is not a speed board">
+  `fastest_ms` is measured against the solar system rather than the world you are standing on, so it
+  reads roughly 30 km/s while you stand perfectly still on Earth. It is recorded for completeness
+  and is deliberately never used for anything. The speed boards come from the flight telemetry
+  instead.
+</Aside>

@@ -1,0 +1,46 @@
+---
+title: Engines
+description: >-
+  Ignition, shutdown and flameout — all three read at whole-vehicle level, and
+  none of them feed a leaderboard yet.
+sidebar:
+  order: 5
+---
+
+import { Aside } from "@astrojs/starlight/components";
+import EventDetail from "../../../components/EventDetail.astro";
+
+Three events, all sampled twice a second, all read at **whole-vehicle** level
+rather than per engine.
+
+<Aside type="caution" title="Whole-vehicle means what it says">
+catlog asks the game two questions about the vehicle: is *any* engine running, and
+is *any* propellant available. It does not track engines individually. Shutting
+down one of two engine groups records nothing at all — the event fires when the
+last one stops.
+
+The per-engine reading exists in the game but is not exposed in a form the mod can
+read without reaching into internals it has no business in, so the whole-vehicle
+answer is the honest one.
+
+</Aside>
+
+<EventDetail type="engine.ignition" />
+<EventDetail type="engine.shutdown" />
+<EventDetail type="engine.flameout" />
+
+## Flameout is reconstructed
+
+Kitten Space Agency has no concept called "flameout". What it has is, per engine,
+whether that engine is active and whether propellant is available to it.
+
+catlog rebuilds the idea from the two whole-vehicle answers: engines running,
+propellant gone, and no start or stop this tick. That is a genuine
+approximation — a vehicle with one tank dry and another still feeding will not
+report a flameout — and it is recorded here rather than hidden.
+
+## None of these feed a board
+
+All three are recorded and kept, and nothing reads them. They exist because burn
+timing is the obvious next thing to build something out of, and an event log you
+cannot go back and re-fold is worth much less than one you can.

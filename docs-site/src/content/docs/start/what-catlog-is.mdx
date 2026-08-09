@@ -1,0 +1,101 @@
+---
+title: What catlog is
+description: >-
+  A Kitten Space Agency mod that watches your flights and turns them into
+  community leaderboards, without ever asking you to submit anything.
+sidebar:
+  order: 1
+---
+
+import { Aside, Steps, LinkCard } from "@astrojs/starlight/components";
+
+catlog is a mod for Kitten Space Agency. It watches what happens while you fly,
+writes it down, and periodically sends the record to a small server that folds it
+into community leaderboards.
+
+You never submit a score. There is no "post to leaderboard" button, and there is
+nothing you can type. **Every number on every board is derived on the server from
+what actually happened**, which is the whole point of the project — and the reason
+this site exists at all. A leaderboard whose rules nobody can read is
+indistinguishable from one somebody made up.
+
+## What it records
+
+Two different kinds of thing.
+
+**Something happened.** A stage fired, two vehicles docked, you hit the ground, a
+vehicle came apart, a kitten stepped outside. The mod is told about these directly
+by the game, at the moment they happen.
+
+**Sampled in the background.** Twice a second, the mod looks at every vehicle in
+the world and notes altitude, speeds, acceleration and mass. Most of that is
+folded into a 30-second summary rather than kept sample by sample. A few things —
+crossing into an atmosphere, achieving orbit, arriving at a new world, a kitten
+going over — are noticed by comparing one sample to the last.
+
+Every event carries which category it is in, and this site labels them
+accordingly.
+
+<LinkCard
+  title="Browse every event"
+  href="/catlog/events/browse/"
+  description="All 22, filterable, with what each one records and which boards it moves."
+/>
+
+## What it does not record
+
+- **Your email address.** catlog never asks any identity provider for it, never
+  receives one and never stores one. What is never received cannot leak.
+- **Your save's name**, or anything that identifies it. A career is identified by
+  a hash that is salted per installation, so the server cannot work backwards to a
+  save.
+- **Your machine.** The installation identifier is used locally to salt those
+  hashes, and is stripped from anything published.
+- **Anything you type.** There is no chat, no notes, no free text from you
+  anywhere in the system except the handle you choose.
+
+<Aside type="note" title="Kitten names are yours">
+  Kitten names are recorded — they are part of what makes a feed line readable. Nothing else about
+  them is: the per-kitten identifier is re-labelled per player before it is ever published, so two
+  players' rosters cannot be cross-referenced.
+</Aside>
+
+## How it behaves in your game
+
+<Steps>
+
+1. **It samples twice a second by default**, and folds that into one summary every
+   30 seconds of game time. If the game hitches, missed samples are dropped rather
+   than caught up on.
+
+2. **It spools to a local database first.** Nothing is sent from the game thread.
+   If you play offline, the record waits.
+
+3. **It ships in compressed batches, never more often than every 30 seconds.**
+   That floor is a hard constant enforced in three places.
+
+4. **If the spool grows too large**, the background telemetry summaries are
+   discarded first — they are the only kind of record catlog is willing to lose.
+   Everything that scores is kept.
+
+</Steps>
+
+## What makes a flight not count
+
+Some things a player can do would make a leaderboard meaningless. When catlog sees
+one, it marks that flight, and a marked flight scores nothing at all — not the
+record it was doing at the time, not the counters, nothing.
+
+There are five: teleporting a vehicle, refilling its resources, draining them,
+using the terminal's destroy command, and changing the kitten tumble tuning away
+from stock.
+
+Ordinary play never raises one. Walking a kitten out of an airlock teleports it
+internally, and that path is deliberately excluded — flagging it would have
+disqualified every EVA anybody ever did.
+
+<LinkCard
+  title="What counts and what doesn't"
+  href="/catlog/leaderboards/eligibility/"
+  description="Every rule that disqualifies a run, and why each one exists."
+/>

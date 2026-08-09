@@ -1,0 +1,64 @@
+---
+title: Sessions and flights
+description: >-
+  How catlog frames what you do — sessions, flights, and the five flags that
+  disqualify a flight from every leaderboard.
+sidebar:
+  order: 3
+---
+
+import { Aside } from "@astrojs/starlight/components";
+import EventDetail from "../../../components/EventDetail.astro";
+
+Almost everything catlog records is attached to a **flight**: one vehicle, from
+the moment catlog first sees it to the moment it leaves the world. A **session** is
+one run of the game, or one loaded save — reload and you get a new session, but the
+same flights resume.
+
+<Aside type="note" title="Every vehicle gets a flight">
+  Including ones you did not think of as vehicles. A stage you decoupled is a vehicle. A kitten
+  walking around outside is a vehicle. Both get their own flight, their own telemetry and their own
+  ending.
+</Aside>
+
+<EventDetail type="session.started" />
+<EventDetail type="flight.started" />
+<EventDetail type="flight.ended" />
+
+## The three endings
+
+| `reason`    | When                                                                                                                                    |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `recovered` | You recovered it. This is the only ending that adds to **Kittens Recovered**, and the only one a peak-g record survives a rebuild with. |
+| `destroyed` | It was destroyed — by physics, or because you asked for it.                                                                             |
+| `despawned` | Neither: it merged into another vehicle when docking, a kitten boarded, or the save was torn down.                                      |
+
+<EventDetail type="flight.flagged" />
+
+## The five flags, and why each exists
+
+<Aside type="caution" title="A flagged flight scores nothing at all">
+  Not "the affected record" — everything. Every board, every counter, the activity feed, and the raw
+  event views. There is one exception, and it is structural rather than a judgement call: total
+  distance travelled comes from your roster, which is not attached to any flight, so there is
+  nothing to flag.
+</Aside>
+
+| Flag            | What triggers it                                                                                             | Why                                                                                                   |
+| --------------- | ------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------- |
+| `teleport`      | You teleported a vehicle by a player command, including via the Set Orbit debug window.                      | It makes every speed, altitude and arrival-time board meaningless.                                    |
+| `refuel`        | The vehicle's consumables were refilled.                                                                     | Endurance and distance stop meaning anything.                                                         |
+| `resource_edit` | The vehicle's consumables were drained.                                                                      | Same rule, other direction.                                                                           |
+| `console`       | The terminal's `destroy` command was used on the vehicle.                                                    | Being able to delete a vehicle on demand turns "survived" into a choice.                              |
+| `tuning`        | The kitten locomotion tuning was changed away from stock — the tumble speed gate is 6.5 m/s in a stock game. | That single value is the entire definition of a tumble. It sits in a debug window with a drag handle. |
+
+Two things are worth stating plainly, because they surprise people:
+
+**Normal EVA does not raise `teleport`.** Stepping a kitten out of an airlock
+teleports it internally, and so does splitting a vehicle in the editor. catlog
+watches the _player command_ path specifically, not the underlying move. Flagging
+the underlying move would have disqualified every EVA anybody ever did.
+
+**A flag raised for the whole session sticks to everything.** Changing the tumble
+tuning is not attached to a particular vehicle, so it is applied to every flight
+open at that moment and to every flight started afterwards in that session.

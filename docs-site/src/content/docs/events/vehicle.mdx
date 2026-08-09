@@ -1,0 +1,86 @@
+---
+title: Your vehicle
+description: >-
+  Situation changes, atmosphere crossings, orbits, sphere-of-influence changes,
+  impacts, destruction, staging and docking.
+sidebar:
+  order: 4
+---
+
+import { Aside } from "@astrojs/starlight/components";
+import EventDetail from "../../../components/EventDetail.astro";
+
+Everything catlog records about the vehicle itself. Four of these are sampled
+twice a second and reported when something changes; the rest fire the moment the
+game does the thing.
+
+## Where the altitudes and speeds come from
+
+Three readings appear over and over, and it is worth being precise about them
+once.
+
+| Reading           | What it is                                                                                                                                                                                     |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Altitude**      | Height above the body's **mean radius**, not above the terrain underneath you. Over a mountain your altitude is smaller than your height above sea level would suggest; over a trench, larger. |
+| **Surface speed** | Speed relative to the surface rotating below you.                                                                                                                                              |
+| **Orbital speed** | Speed relative to the body's centre.                                                                                                                                                           |
+
+Surface speed is deliberately **not** whatever your navball is showing — the
+navball changes meaning depending on which mode you have it in, and a leaderboard
+cannot be built on a display setting.
+
+<EventDetail type="vehicle.situation" />
+
+The eight states are the game's own: `maneuvering`, `freefall`, `rolling`,
+`landed`, `sailing`, `floating`, `dragging`, `bottomed`. They are two questions
+combined — what you are touching (nothing, terrain, water, or both) and whether
+you are on rails. A ninth value, `unknown`, appears if a future game build adds a
+state catlog has not seen.
+
+<EventDetail type="vehicle.atmosphere" />
+<EventDetail type="vehicle.orbit" />
+
+<Aside type="note" title="What counts as orbit">
+  Your periapsis has to clear the top of the atmosphere by 1000 m. Around an airless body the bar is
+  1000 m above the mean radius. Dropping back below it does not record anything — the bar simply
+  re-arms, so a marginal orbit that decays and is raised again produces one achievement, not two.
+</Aside>
+
+<EventDetail type="vehicle.soi" />
+
+Sphere-of-influence changes do double duty: they are how **Bodies Visited** counts,
+and they are the arrival times behind every **Fastest to …** board. Both use the
+name of the body directly. **There is no list of allowed worlds anywhere in
+catlog** — a board exists because somebody went there.
+
+<EventDetail type="vehicle.rud" />
+<EventDetail type="vehicle.impact" />
+
+## Impacts, and the frame that decides them
+
+An impact is only interesting alongside whether the vehicle lived. That is harder
+than it sounds, because the game applies every impact for a frame _before_ it
+applies any destruction, and a destruction you asked for lands later still.
+
+So catlog holds an impact for one full frame before deciding. A destruction of that
+vehicle in the frame the impact happened, or the frame after, makes it
+`survived: false`.
+
+<Aside type="caution" title="Scuttling afterwards does not bank a record">
+  Destroying the vehicle yourself right after a hard landing is treated exactly like the landing
+  having destroyed it. Without that, every hard landing could be turned into a survived one.
+</Aside>
+
+Two more impacts that never count:
+
+- **The launch pad.** Recorded, never scored.
+- **Anything within 5 seconds of a teleport.** Discarded outright — the game
+  suppresses the impact effects there, and it is not a landing.
+
+<EventDetail type="vehicle.staging" />
+<EventDetail type="vehicle.docked" />
+<EventDetail type="vehicle.undocked" />
+
+Undocking is recorded but scores nothing. There is no undockings board, and the
+event exists so that the piece which split off has a properly-framed flight of its
+own.

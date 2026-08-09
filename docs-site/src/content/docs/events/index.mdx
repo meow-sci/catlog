@@ -1,0 +1,98 @@
+---
+title: The event catalog
+description: >-
+  Everything catlog can record — 22 event types, what each one stores, where in
+  the game it comes from, and which leaderboards it moves.
+sidebar:
+  order: 1
+---
+
+import { Aside, Card, CardGrid, LinkCard } from "@astrojs/starlight/components";
+
+An **event** is one thing catlog wrote down. Every event has a type — a name like
+`vehicle.impact` or `kitten.tumble` — and that name is unique across the whole
+catalog. There are 22 of them.
+
+<LinkCard
+  title="Browse every event"
+  href="/catlog/events/browse/"
+  description="All 22 in one filterable table, searchable by name, field or board."
+/>
+
+## How to read an entry
+
+Every event on these pages carries the same blocks.
+
+| Block                           | What it tells you                                                                                  |
+| ------------------------------- | -------------------------------------------------------------------------------------------------- |
+| **What causes it**              | The thing in the game that produces the event.                                                     |
+| **Where the numbers come from** | Which readings on your vehicle, kitten or roster the values are taken from.                        |
+| **What stops it firing**        | Thresholds, dead bands and minimum intervals — why a thing you did might not have been recorded.   |
+| **What it feeds**               | The leaderboards this event moves. Several events feed nothing; they are recorded and kept anyway. |
+| The field table                 | Every value stored, its unit, and what it means.                                                   |
+
+## The two kinds of event
+
+<CardGrid>
+  <Card title="Something happened" icon="rocket">
+    The game tells catlog directly, at the moment it happens: a stage fired, a dock completed, a
+    vehicle came apart, a kitten stepped outside. These are exact — there is no sampling and nothing
+    to miss.
+  </Card>
+  <Card title="Sampled in the background" icon="information">
+    catlog looks at every vehicle twice a second and compares this reading against the last.
+    Crossing into an atmosphere, achieving orbit, changing sphere of influence, a kitten going over,
+    and all the flight telemetry work this way.
+  </Card>
+</CardGrid>
+
+A sampled event can be missed if the change happens and reverses inside half a
+second. Most of them have deliberate dead bands and minimum intervals on top of
+that, so skimming a boundary produces one crossing rather than forty.
+
+## Every event carries
+
+|                      |                                                                          |
+| -------------------- | ------------------------------------------------------------------------ |
+| a unique id          | so an event that arrives twice is counted once                           |
+| its type and version | the version changes whenever the shape of that event changes             |
+| a flight             | which vehicle's flight it belongs to, where that makes sense             |
+| a session            | one per time you start the game or load a save                           |
+| a career             | which career it belongs to                                               |
+| a game clock reading | seconds since that career began                                          |
+| a wall clock reading | recorded, but **never trusted** — the server stamps its own arrival time |
+
+<Aside type="tip" title="A note on units">
+  A field name ending `_ms` means **metres per second**. A leaderboard whose unit is shown as `ms`
+  means **milliseconds**. They are genuinely different things, and the overlap is unfortunate.
+</Aside>
+
+## Groups
+
+<CardGrid>
+  <LinkCard
+    title="Sessions and flights"
+    href="/catlog/events/sessions-and-flights/"
+    description="Starting up, loading a save, a vehicle appearing, a vehicle leaving — and the flags that disqualify a flight."
+  />
+  <LinkCard
+    title="Your vehicle"
+    href="/catlog/events/vehicle/"
+    description="Situation changes, atmosphere, orbit, sphere of influence, impacts, destruction, staging and docking."
+  />
+  <LinkCard
+    title="Engines"
+    href="/catlog/events/engines/"
+    description="Ignition, shutdown and flameout — all three read at whole-vehicle level."
+  />
+  <LinkCard
+    title="Kittens"
+    href="/catlog/events/kittens/"
+    description="EVAs, tumbles, losses, and the periodic roster snapshot."
+  />
+  <LinkCard
+    title="Background telemetry"
+    href="/catlog/events/telemetry/"
+    description="The 30-second flight summary that three speed and g-load boards are built from."
+  />
+</CardGrid>

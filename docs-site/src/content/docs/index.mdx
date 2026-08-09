@@ -1,0 +1,49 @@
+---
+title: catlog
+description: >-
+  What the catlog mod records while you play Kitten Space Agency, and how those
+  records become community leaderboards.
+template: splash
+hero:
+  tagline: >-
+    Passive telemetry from Kitten Space Agency, turned into community
+    leaderboards. This is the record of exactly what gets recorded — and what
+    doesn't.
+  actions:
+    - text: What catlog is
+      link: /catlog/start/what-catlog-is/
+      icon: right-arrow
+      variant: primary
+    - text: Browse every event
+      link: /catlog/events/browse/
+      icon: open-book
+      variant: secondary
+---
+
+import { Card, CardGrid, LinkCard } from "@astrojs/starlight/components";
+
+<CardGrid stagger>
+  <Card title="22 events" icon="document">
+    Everything catlog can record about a flight, from a stage separation to a kitten going over.
+    Each one lists what it stores, what in the game it reads, and whether it fires on an event or is
+    sampled in the background.
+  </Card>
+  <Card title="13 boards, plus two families" icon="star">
+    Every leaderboard, the events that feed it, and the exact rules that decide whose number wins —
+    including every rule that disqualifies a run.
+  </Card>
+  <Card title="Nothing is claimed" icon="approve-check">
+    catlog never takes a score from a client. Every number on every board is derived on the server
+    from the recorded events, and this site is what that derivation actually is.
+  </Card>
+  <Card title="No email, ever" icon="seti:lock">
+    catlog never asks an identity provider for your email, never stores one, and never shows
+    anything but the handle you chose.
+  </Card>
+</CardGrid>
+
+<LinkCard
+  title="How a flight becomes a score"
+  href="/catlog/start/flight-to-score/"
+  description="The whole path, from your game to a leaderboard row, in one page."
+/>

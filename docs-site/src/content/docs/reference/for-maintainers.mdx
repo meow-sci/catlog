@@ -1,0 +1,53 @@
+---
+title: For maintainers
+description: >-
+  Where the technical half of this documentation lives, and the rule that keeps
+  the two halves in step.
+sidebar:
+  order: 3
+---
+
+import { Aside, LinkCard } from "@astrojs/starlight/components";
+
+This site is the player-facing half of catlog's event and projection reference.
+The other half is in the repository, and it is the primary one.
+
+**`docs/event-details.md`** carries the same catalog with everything this site
+deliberately leaves out: the exact game types and members each value is read off,
+the patch points and polls behind every detector, the fold implementations, file
+and line citations, and a running list of places the documentation and the code
+have drifted apart.
+
+<Aside type="danger" title="They move together">
+A commit that changes an event, a payload field, a detector, a game reading, a
+fold, a board or an eligibility rule and updates only one of the two is an
+incomplete change. There is no "site follow-up" — the follow-up never happens, and
+this site is what players read.
+
+The rule is stated in the repository's `CLAUDE.md`, in `docs/CONSTITUTION.md` §9.1,
+in `docs/ARCHITECTURE.md` §7, and recorded with its reasoning as `DOCS-003`.
+
+</Aside>
+
+## What lives where
+
+|                                                           | `docs/event-details.md` | this site |
+| --------------------------------------------------------- | ----------------------- | --------- |
+| Every event, every field                                  | ✓                       | ✓         |
+| Every board, every rule                                   | ✓                       | ✓         |
+| Game type and member names                                | ✓                       | never     |
+| Patch points, file:line citations                         | ✓                       | never     |
+| Fold implementation detail                                | ✓                       | never     |
+| Player-checkable explanation of where a number comes from | in passing              | ✓         |
+| Known documentation drift                                 | ✓                       | never     |
+
+`docs-site/src/data/events.ts` and `docs-site/src/data/boards.ts` are typed
+mirrors of that file's tables, so the index, the filter and the cross-links cannot
+silently disagree with themselves. **They are derived data** — `event-details.md`
+wins any conflict, and the mirror is the thing to fix.
+
+<LinkCard
+  title="The catlog repository"
+  href="https://github.com/meow-sci/catlog"
+  description="Source for the mod, the server, both frontends and this site."
+/>

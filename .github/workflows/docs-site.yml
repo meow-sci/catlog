@@ -1,0 +1,109 @@
+name: Deploy docs site to GitHub Pages
+
+# Builds the Astro/Starlight player docs under docs-site/ and publishes them to
+# GitHub Pages. The meow-sci org uses a custom domain (meow.science.fail), so this
+# repo's project site is served at https://meow.science.fail/catlog/ — `base` is
+# '/catlog/' in docs-site/astro.config.mjs and must match the repo name exactly
+# (case-sensitive path segment). Siblings gatOS and flexo publish the same way.
+#
+# Repo one-time setup: Settings -> Pages -> "Build and deployment" -> Source =
+# "GitHub Actions". The Setup Pages step below tries to enable it automatically;
+# if org policy blocks that, do it once by hand.
+
+on:
+  # Only redeploy when the site (or this workflow) actually changes. Every other
+  # path in this repository — server/, mod/, site/, spa/, infra/ — is somebody
+  # else's job, and a docs deploy on every commit is pure waste.
+  #
+  # Note the deliberate asymmetry with docs/event-details.md: a commit that
+  # changes the technical reference is *required* to change docs-site/ too
+  # (CLAUDE.md, CONSTITUTION.md §9.1, DOCS-003), so the path filter cannot miss a
+  # content change that was made correctly.
+  push:
+    branches: ["main"]
+    paths:
+      - "docs-site/**"
+      - ".github/workflows/docs-site.yml"
+  # Build (but do not deploy) on PRs that touch the site, so a broken frontmatter
+  # field or a bad Starlight icon name fails before it reaches main.
+  pull_request:
+    paths:
+      - "docs-site/**"
+      - ".github/workflows/docs-site.yml"
+  # Allow manual runs from the Actions tab.
+  workflow_dispatch:
+
+# Permissions needed to deploy to GitHub Pages via the artifact flow.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One in-flight deployment at a time; let a newer push supersede an older run.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: docs-site
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 11
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: docs-site/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint and format check
+        run: pnpm run lint && pnpm run format:check
+
+      # site + base ('/catlog/') live in astro.config.mjs; output goes to docs-site/dist.
+      # `astro build` also type-checks content collections, so a bad frontmatter
+      # field or an unknown Starlight icon name fails here rather than in a browser.
+      - name: Build
+        run: pnpm run build
+
+      # Enables GitHub Pages for the repo (source = GitHub Actions) if it isn't
+      # already, so the deploy job's create-deployment call doesn't 404. Skipped on
+      # pull requests, which never deploy.
+      - name: Setup Pages
+        if: github.event_name != 'pull_request'
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - name: Upload Pages artifact
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: docs-site/dist
+
+  deploy:
+    # Never deploy from a pull request — a fork PR would otherwise publish to the
+    # live site.
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5

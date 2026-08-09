@@ -1,0 +1,58 @@
+---
+title: Background telemetry
+description: >-
+  The 30-second flight summary — how catlog samples your flight, what it keeps,
+  and why a missing g-load is not a zero.
+sidebar:
+  order: 7
+---
+
+import { Aside } from "@astrojs/starlight/components";
+import EventDetail from "../../../components/EventDetail.astro";
+
+This is the passive half of catlog. Twice a second, every live vehicle is sampled;
+every 30 seconds of game time, those samples are folded into one summary and the
+individual samples are thrown away.
+
+A full window is **60 samples**. Windows do not overlap — a sample at exactly the
+boundary closes one window and opens the next.
+
+<EventDetail type="telemetry.window" />
+
+## When a window is short
+
+Three things close a window early, and all three produce a summary with fewer than
+60 samples:
+
+- **The flight ended.** The partial window is written _before_ the ending, so the
+  seconds leading up to a crash are kept rather than discarded.
+- **The vehicle vanished** without a proper ending — a docking merge, or repeated
+  failed readings.
+- **The game shut down.**
+
+Loading a save is different: the partial window is **discarded**, because it would
+span two different timelines and its averages would mean nothing.
+
+## Why a missing g-load is not zero
+
+`peak_g` and `max_q_pa` are left out of the summary entirely when the game did not
+compute them, rather than being written as zero.
+
+The game only computes structural loads while a vehicle is under full physics. On
+rails, or in freefall, there is simply no reading — and the raw value sitting in
+memory in that case is zero.
+
+<Aside type="danger" title="Writing zero would break the board">
+  If catlog reported those zeros, the **Peak G Survived** board would fill up with entries claiming
+  0 g, and every real reading would have to compete with noise from vehicles that were not being
+  simulated. Leaving the field out says "no data", which is what actually happened.
+</Aside>
+
+## The one thing catlog is willing to lose
+
+Telemetry summaries are the only record catlog will discard. If the local spool
+grows past its limit — a long offline stretch, a server outage — the oldest
+summaries are dropped, oldest first, and everything that scores is kept.
+
+That is a deliberate ordering: losing sample resolution costs you a slightly
+coarser chart; losing a RUD costs you a leaderboard row.

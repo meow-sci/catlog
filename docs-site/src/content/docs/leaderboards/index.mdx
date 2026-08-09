@@ -1,0 +1,94 @@
+---
+title: How boards are built
+description: >-
+  Where leaderboard numbers come from, how ranking and ties work, and why some
+  boards appear only once two people are on them.
+sidebar:
+  order: 1
+---
+
+import { Aside, LinkCard } from "@astrojs/starlight/components";
+
+A **board** is one derived number per player, ranked. Nothing is submitted; every
+value is computed on the server from the recorded events, applying the same rule
+to everybody.
+
+There are four shapes of board.
+
+| Shape           | Rule                                                 | Boards                                                                                       |
+| --------------- | ---------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| **Record**      | The largest value ever seen wins.                    | Biggest Lithobrake Survived, Peak G Survived, Fastest Surface Speed, Fastest Orbital Speed   |
+| **Counter**     | Add up qualifying events.                            | Kitten Tumbles, RUDs, Orbits Achieved, Bodies Visited, Dockings, Stagings, Kittens Recovered |
+| **Total**       | Recompute a sum from your roster.                    | Distance Travelled                                                                           |
+| **Career time** | The _smallest_ time from the start of a career wins. | Fastest to Orbit, and every Fastest to _&lt;world&gt;_                                       |
+
+<LinkCard
+  title="Every board"
+  href="/catlog/leaderboards/catalog/"
+  description="All 13 fixed boards plus the two families, with each one's exact rules."
+/>
+
+## Ties: first there keeps the rank
+
+A record only changes hands on a **strictly** better value. Matching the number
+above you does not take its place.
+
+Counters work the same way — the tie-break is the moment you reached that count, so
+between two players on 40 tumbles, whoever got to 40 first is ahead.
+
+## Boards that create themselves
+
+Two board families have no fixed list behind them.
+
+- **RUDs — _&lt;cause&gt;_** — one per cause of destruction.
+- **Fastest to _&lt;world&gt;_** — one per world anyone has reached.
+
+There is no list of allowed worlds or allowed causes anywhere in catlog. A world
+gets a board because someone went there; a cause a future game build introduces
+gets one automatically. The board's title is derived from the name, not looked up.
+
+<Aside type="note" title="Why a board can be missing">
+  A family board is hidden from the public index until **two** players hold a value on it —
+  otherwise arriving somewhere first would publish a leaderboard with your name as the only row. It
+  is still served if you go to it directly, and it still shows on your profile.
+</Aside>
+
+## Time windows
+
+Every board is also available for today, this week, this month and this year, on
+top of the all-time view. A period is a **view of a board**, not a separate board.
+
+Windowed values are genuinely windowed: for Distance Travelled, "this month" means
+the distance added this month, not your lifetime total wearing a monthly label.
+
+Bucket boundaries are UTC, always. Window membership uses the time the server
+received the event, so playing offline for a week and syncing on Sunday puts
+everything in Sunday's bucket.
+
+## Units, and one confusing overlap
+
+| Unit shown     | Meaning                                                       |
+| -------------- | ------------------------------------------------------------- |
+| `m/s`          | metres per second, never scaled — 2410 m/s stays 2410 m/s     |
+| `m`, `J`, `Pa` | scaled by SI prefix — 1 820 000 m shows as `1.82 Mm`          |
+| `g`            | g-load                                                        |
+| `ms`           | **milliseconds**, rendered as a duration — `5m 13s`, `1h 01m` |
+| counters       | shown with their own label: `tumbles`, `RUDs`, `bodies`       |
+
+<Aside type="caution" title="`_ms` and `ms` are not the same thing">
+  A **field name** ending `_ms` — `speed_ms`, `fastest_ms` — means metres per second. A **board
+  unit** shown as `ms` means milliseconds. The two are unrelated, and the collision is unfortunate
+  but not fixable without breaking recorded data.
+</Aside>
+
+## What a rebuild changes
+
+Boards are normally updated event by event as they arrive. Occasionally the whole
+set is thrown away and recomputed from the log, and a rebuild can produce a
+_different_ answer on purpose.
+
+<LinkCard
+  title="What counts and what doesn't"
+  href="/catlog/leaderboards/eligibility/"
+  description="Every exclusion rule, and the three cases where rebuilding is the more correct answer."
+/>

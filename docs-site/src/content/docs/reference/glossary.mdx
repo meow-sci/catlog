@@ -1,0 +1,27 @@
+---
+title: Glossary
+description: Terms that appear across the catlog site and in the recorded data.
+sidebar:
+  order: 1
+---
+
+| Term                    | Meaning                                                                                                                                        |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Event**               | One thing catlog wrote down. Every event has a unique type name.                                                                               |
+| **Type**                | The event's identifier — `vehicle.impact`, `kitten.tumble`. Unique across the whole catalog.                                                   |
+| **Version** (`ver`)     | Changes whenever the shape of that event type changes, so an old client and a new server disagree loudly rather than silently.                 |
+| **Flight**              | One vehicle, from the moment catlog first sees it to the moment it leaves the world. A decoupled stage and a kitten on EVA each get their own. |
+| **Session**             | One run of the game, or one loaded save. Reloading starts a new session; the flights resume.                                                   |
+| **Career**              | Which save the flight belongs to, identified by a hash that is salted per installation.                                                        |
+| **Flag**                | A mark on a flight saying something happened that makes it ineligible for leaderboards.                                                        |
+| **Board**               | A leaderboard: one derived number per player, ranked.                                                                                          |
+| **Board family**        | A set of boards whose keys come from the data — `rud_<cause>`, `fastest_to_<body>`.                                                            |
+| **Fold**                | The server-side rule that turns events into a board value.                                                                                     |
+| **Rebuild**             | Discarding every derived table and recomputing from the log. Can change answers, on purpose.                                                   |
+| **Lithobrake**          | Slowing down by hitting the ground. A _survived_ lithobrake is one the vehicle came through.                                                   |
+| **RUD**                 | Rapid Unscheduled Disassembly. The vehicle came apart.                                                                                         |
+| **Situation**           | The game's own state for a vehicle: what it is touching, and whether it is on rails.                                                           |
+| **Sphere of influence** | Which body's gravity is the one you are orbiting.                                                                                              |
+| **Window**              | A 30-second summary of a flight's telemetry: 60 samples folded into minimum, maximum, mean and last.                                           |
+| **Rewound**             | A career whose clock went backwards, because an older save was loaded. A label; it excludes nothing.                                           |
+| **Career time**         | Game seconds since a career began. Career-time boards rank on the smallest.                                                                    |

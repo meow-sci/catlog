@@ -1,0 +1,86 @@
+---
+/**
+ * Renders one board from src/data/boards.ts, so the catalog page has exactly one
+ * copy of each board's rules.
+ */
+import { boardByStat } from "../data/boards";
+import { segments } from "./rich";
+
+interface Props {
+  stat: string;
+}
+
+const { stat } = Astro.props;
+const board = boardByStat(stat);
+if (!board) throw new Error(`Unknown board in BoardDetail: ${stat}`);
+
+const anchor = board.stat.replaceAll(/[<>]/g, "");
+const direction = board.ascending ? "Lowest wins" : "Highest wins";
+---
+
+<section class="bd" id={anchor}>
+  <h3 class="bd-h">
+    {board.title}
+    <span class="ev-pill">{direction}</span>
+    <span class="ev-pill">unit: {board.unit}</span>
+    {board.career && <span class="ev-pill">career time</span>}
+  </h3>
+
+  <p class="bd-key"><code>{board.stat}</code></p>
+  <p class="bd-what">{board.what}</p>
+
+  <dl class="ev-dl">
+    <dt>Built from</dt>
+    <dd>
+      {
+        board.from.map((f, i) => (
+          <>
+            {i > 0 && ", "}
+            <code>{f}</code>
+          </>
+        ))
+      }
+    </dd>
+    {board.family && <dt>Where the key comes from</dt>}
+    {board.family && <dd>{segments(board.family.from).map((s) => (s.code ? <code>{s.text}</code> : s.text))}</dd>}
+    <dt>How the number is chosen</dt>
+    <dd>{segments(board.how).map((s) => (s.code ? <code>{s.text}</code> : s.text))}</dd>
+    <dt>What is excluded</dt>
+    <dd>
+      <ul class="bd-ex">
+        {board.excluded.map((x) => <li>{segments(x).map((s) => (s.code ? <code>{s.text}</code> : s.text))}</li>)}
+      </ul>
+    </dd>
+  </dl>
+</section>
+
+<style is:global>
+  .bd {
+    margin-block: 2.5rem;
+  }
+
+  .bd-h {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    align-items: baseline;
+  }
+
+  .bd-key {
+    font-size: var(--sl-text-sm);
+    margin-block: 0.2rem;
+  }
+
+  .bd-what {
+    font-size: var(--sl-text-lg);
+  }
+
+  .bd-ex {
+    margin: 0;
+    padding-inline-start: 1.1rem;
+  }
+
+  .bd-ex li {
+    margin-block: 0.15rem;
+  }
+</style>

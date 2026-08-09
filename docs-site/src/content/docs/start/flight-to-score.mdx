@@ -1,0 +1,94 @@
+---
+title: How a flight becomes a score
+description: >-
+  The whole path from your game to a leaderboard row — sampling, spooling,
+  shipping, folding — and what can change a number after the fact.
+sidebar:
+  order: 2
+---
+
+import { Aside, Steps, LinkCard } from "@astrojs/starlight/components";
+
+<Steps>
+
+1. ### Your game does something
+
+   Either the game tells the mod directly — a docking completed, a vehicle came
+   apart, a stage fired — or the mod notices it by comparing this half-second's
+   sample against the last one.
+
+2. ### The mod writes an event
+
+   One event is one line: a unique id, the event's type, a version number, which
+   flight and which session it belongs to, which career, the game clock, your
+   wall clock, and the data itself.
+
+   The clock from your machine is recorded but **never trusted** — the server
+   stamps its own arrival time, and that is the one every ranking uses.
+
+3. ### It goes into a local spool
+
+   A small database beside your save. Nothing is sent from the game thread, so a
+   slow network cannot cost you frames. If you are offline, it waits.
+
+4. ### It ships in a batch
+
+   When the oldest waiting event is a minute old, or 500 have piled up —
+   and never more often than every 30 seconds. Each batch is compressed and
+   signed, and the server hashes the exact bytes it received.
+
+   A batch that arrives twice is recognised and ignored. So is a single event
+   that arrives twice.
+
+5. ### The server appends it to an immutable log
+
+   Nothing is ever edited. The log is the record; everything else is derived
+   from it and can be thrown away and rebuilt.
+
+6. ### The projector folds it into the boards
+
+   In order: work out which flight it belongs to and whether that flight is
+   flagged, then apply every board rule in turn, then write one activity-feed
+   line if the event is one of the seven the feed shows.
+
+7. ### You read it
+
+   The leaderboards, your profile, the comparison page and the live feed all read
+   the same derived tables. There is no second copy of the ranking logic anywhere.
+
+</Steps>
+
+## Two things that can change a number afterwards
+
+**A flag can arrive late.** Flags are recorded as events, like everything else,
+and one can reach the server after the events it invalidates. Running totals do
+not go backwards on their own; the correction lands when the boards are rebuilt.
+
+**Rebuilding applies rules that need the whole story.** Two rules cannot be
+evaluated while events are still arriving one at a time, because they depend on
+how the flight _ended_:
+
+- A hard landing is only a survived lithobrake if no kitten was lost within two
+  seconds of it.
+- A peak-g reading only counts if that flight ended recovered.
+
+Live, catlog cannot know either yet, so it counts them. On a rebuild it can, and
+some rows disappear. **This is intended behaviour, not a bug** — the alternative
+is refusing to publish anything until a flight is over.
+
+<Aside type="caution" title="So a rebuild can lower your number">
+  It can, and it is meant to. A rebuild is the more correct answer: it is the one computed with the
+  flight's ending in hand.
+</Aside>
+
+## Ties, and why first place stays first
+
+A record only changes hands on a **strictly** better value. Matching somebody
+else's number does not take their place — whoever got there first keeps the rank.
+Counter boards work the same way: the tie-break is who reached that count first.
+
+<LinkCard
+  title="What counts and what doesn't"
+  href="/catlog/leaderboards/eligibility/"
+  description="Every exclusion rule in one place."
+/>

@@ -1,0 +1,78 @@
+---
+title: Every board
+description: >-
+  All 13 fixed leaderboards and the two board families, with the events behind
+  each one and every rule that disqualifies a value.
+sidebar:
+  order: 2
+---
+
+import { Aside } from "@astrojs/starlight/components";
+import BoardDetail from "../../../components/BoardDetail.astro";
+
+Thirteen fixed boards, in the order they are published, then the two families
+whose members appear as people reach new worlds and find new ways to lose a
+vehicle.
+
+## Records
+
+<BoardDetail stat="biggest_lithobrake_survived" />
+<BoardDetail stat="peak_g_survived" />
+<BoardDetail stat="fastest_surface_speed" />
+<BoardDetail stat="fastest_orbital_speed" />
+
+<Aside type="note" title="The speed boards do not use your roster's speed figure">
+  Your roster carries a "fastest speed" per kitten, and it is deliberately never used. It is
+  measured against the solar system rather than the world you are at, so it reads about 30 km/s
+  while you stand still on Earth. The speed boards come from flight telemetry instead.
+</Aside>
+
+## Counters
+
+<BoardDetail stat="kitten_tumbles" />
+<BoardDetail stat="rud_total" />
+<BoardDetail stat="orbits_achieved" />
+<BoardDetail stat="soi_bodies" />
+<BoardDetail stat="dockings" />
+<BoardDetail stat="stagings" />
+<BoardDetail stat="kittens_recovered" />
+
+## Totals
+
+<BoardDetail stat="distance_travelled" />
+
+## Career times
+
+Career-time boards answer a different question from the rest: not _how well_, but
+_how fast from a standing start_. The clock is the game clock, counted from the
+beginning of the career the flight belongs to, and the **lowest** value wins.
+
+Two rules apply to all of them:
+
+- A reading with no career or no clock attached is skipped. An absent time is not
+  treated as zero, which would otherwise win every board instantly.
+- The time is taken **per player**, not per career. Your best across all your
+  careers is your entry.
+
+If a career's clock ever went backwards — you loaded an older save — it is marked
+as rewound beside the row. **The mark excludes nothing.** It is there so a reader
+can see the clock behind the number did not run forwards.
+
+<BoardDetail stat="fastest_to_orbit" />
+
+## The two families
+
+<BoardDetail stat="rud_<cause>" />
+
+The six causes that exist today are `ground_impact`, `ocean_impact`, `collision`,
+`excessive_g_force`, `aerodynamic_forces` and `hydrodynamic_forces`. That is what
+the game currently produces, not a list catlog enforces.
+
+A cause that cannot form a valid board key still counts towards the total board —
+it just does not get a board of its own.
+
+<BoardDetail stat="fastest_to_<body>" />
+
+Likewise: a world whose name cannot form a valid board key still counts towards
+**Bodies Visited** and still has its arrival time recorded. Only the dedicated
+board is skipped.

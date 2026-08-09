@@ -1,0 +1,70 @@
+---
+title: Your identity and your handle
+description: >-
+  What catlog knows about who you are — which is a handle, a hash, and nothing
+  else.
+sidebar:
+  order: 3
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+## The handle is the only public identity
+
+Boards, profiles, comparisons and the activity feed show one thing: the handle you
+claimed. There is no display name, no avatar sourced from anywhere, and no second
+identifier a determined reader could join on.
+
+## catlog never receives an email address
+
+Not "stores it encrypted", not "deletes it after signup" — **never asks for it**.
+The sign-in flow does not request an email scope from any identity provider, so
+there is no email in the database, none in a backup, and none in a dump.
+
+Your player key is a keyed hash of the identity provider's stable subject id. That
+also makes bans stick: an email is something you can change, a provider subject is
+not.
+
+## What is in the recorded data, and what is published
+
+Three identifiers ride along with events, and none of them survives to a public
+response in the form the mod produced.
+
+| In the recorded event | What it is                                         | What you see published  |
+| --------------------- | -------------------------------------------------- | ----------------------- |
+| `install`             | A random id generated once on your machine         | **Removed entirely.**   |
+| `career`              | A hash of your installation id and your save       | Re-labelled per player. |
+| `kid`                 | A hash of your installation id and a kitten's name | Re-labelled per player. |
+
+"Re-labelled per player" means the published label is derived from the player it
+belongs to as well as the value, so the same career or the same kitten name
+produces different labels for different players. Nothing can be cross-referenced
+between two people's rows.
+
+<Aside type="note" title="Kitten names are shown">
+  The name itself appears — "brought Hunter home safely" is the whole point of the feed. It is
+  trimmed to 32 printable characters. The identifier beside it is not what you see.
+</Aside>
+
+## What a ban does
+
+A banned player disappears from every public surface at once, because handles are
+resolved from one in-memory directory and a banned player is simply absent from
+it. Their rows are still in the derived tables, but nothing can render them.
+
+Two consequences worth knowing:
+
+- **A ban closes the gap rather than leaving a hole.** Ranks are positions among
+  the rows you can actually see.
+- **An unknown handle, a retired handle and a banned handle all return the same
+  "not found".** Deliberately — the alternative is a way to test whether somebody
+  was banned.
+
+## The career rewind mark
+
+If you load an older save, the game clock goes backwards. catlog notices at the
+next session boundary and marks that career as rewound.
+
+**The mark excludes nothing and scores nothing.** It is shown beside a
+career-time row so a reader can see that the clock behind it did not run
+forwards. It is a label, not a penalty.
