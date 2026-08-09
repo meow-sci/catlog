@@ -48,8 +48,13 @@ type FlightFlagged struct {
 	Detail string `json:"detail"`
 }
 
-// VehicleSituation is `vehicle.situation`. No board folds it today; it is
-// decoded so the feed and WP5 can use it without a second decoder.
+// VehicleSituation is `vehicle.situation`.
+//
+// From and To are situation *names*, an open set (§4.2). situation.go decodes
+// the surface contact each one implies; nothing here switches on the value.
+// From is the situation last actually reported on the wire rather than the
+// previous 2 Hz sample, which is what makes a debounced transition report the
+// edge a player would describe.
 type VehicleSituation struct {
 	From           string  `json:"from"`
 	To             string  `json:"to"`
@@ -57,6 +62,17 @@ type VehicleSituation struct {
 	AltitudeM      float64 `json:"altitude_m"`
 	SurfaceSpeedMs float64 `json:"surface_speed_ms"`
 	OrbitalSpeedMs float64 `json:"orbital_speed_ms"`
+}
+
+// VehicleAtmosphere is `vehicle.atmosphere`.
+//
+// SpeedMs is surface-relative, not orbital, so `fastest_entry` is comparable
+// with the lithobrake and RUD speeds rather than with an orbital velocity.
+type VehicleAtmosphere struct {
+	Dir           string  `json:"dir"` // entered | exited
+	Body          string  `json:"body"`
+	SpeedMs       float64 `json:"speed_ms"`
+	DynPressurePa float64 `json:"dyn_pressure_pa"`
 }
 
 // VehicleOrbit is `vehicle.orbit`.
@@ -109,6 +125,37 @@ type VehicleStaging struct {
 // VehicleDock is `vehicle.docked` and `vehicle.undocked`.
 type VehicleDock struct {
 	OtherFlight string `json:"other_flight"`
+}
+
+// Engine is `engine.ignition`, `engine.shutdown` and `engine.flameout`. One
+// type for all three because the payload is one type in the mod too: the events
+// differ by wire name alone, and the folds that read them key on the event type
+// rather than on anything in here.
+//
+// The readings are whole-vehicle, not per-engine (docs/ksa-integration.md B3):
+// Engine is the template id of the first active controller found, and Count the
+// number of active ones — so a vehicle that shuts down one of two engine groups
+// reports nothing at all until the last one stops.
+type Engine struct {
+	Engine string `json:"engine"`
+	Count  int    `json:"count"`
+}
+
+// KittenEvaStart is `kitten.eva_start`.
+type KittenEvaStart struct {
+	Kid  string `json:"kid"`
+	Name string `json:"name"`
+}
+
+// KittenEvaEnd is `kitten.eva_end`.
+//
+// DurationS is sim seconds, and is **0.0 when the EVA vehicle's launch time was
+// never readable** — indistinguishable from an instantaneous spacewalk, which
+// is why `longest_eva` requires it to be strictly positive.
+type KittenEvaEnd struct {
+	Kid       string  `json:"kid"`
+	Name      string  `json:"name"`
+	DurationS float64 `json:"duration_s"`
 }
 
 // KittenTumble is `kitten.tumble`.
@@ -188,6 +235,8 @@ func decodePayload(typ string, raw json.RawMessage) (any, error) {
 		return decodeInto[FlightFlagged](raw)
 	case "vehicle.situation":
 		return decodeInto[VehicleSituation](raw)
+	case "vehicle.atmosphere":
+		return decodeInto[VehicleAtmosphere](raw)
 	case "vehicle.orbit":
 		return decodeInto[VehicleOrbit](raw)
 	case "vehicle.soi":
@@ -200,6 +249,12 @@ func decodePayload(typ string, raw json.RawMessage) (any, error) {
 		return decodeInto[VehicleStaging](raw)
 	case "vehicle.docked", "vehicle.undocked":
 		return decodeInto[VehicleDock](raw)
+	case "engine.ignition", "engine.shutdown", "engine.flameout":
+		return decodeInto[Engine](raw)
+	case "kitten.eva_start":
+		return decodeInto[KittenEvaStart](raw)
+	case "kitten.eva_end":
+		return decodeInto[KittenEvaEnd](raw)
 	case "kitten.tumble":
 		return decodeInto[KittenTumble](raw)
 	case "kitten.kia":
@@ -209,7 +264,11 @@ func decodePayload(typ string, raw json.RawMessage) (any, error) {
 	case "telemetry.window":
 		return decodeInto[TelemetryWindow](raw)
 	default:
-		// vehicle.atmosphere, engine.*, kitten.eva_* — no board reads them yet.
+		// Every §4.2 type this build knows has a typed form. What lands here is
+		// a type a *newer* mod introduced: it is still stored verbatim, still
+		// counted by the census and still advances the checkpoint — it simply
+		// has no payload a fold of this build can read. A rebuild after the
+		// decoder lands folds the history that was skipped (§5.6, D22).
 		return nil, nil
 	}
 }

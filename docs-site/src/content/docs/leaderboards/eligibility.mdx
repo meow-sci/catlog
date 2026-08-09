@@ -2,7 +2,7 @@
 title: What counts and what doesn't
 description: >-
   Every rule that keeps a run off the leaderboards, why each one exists, and the
-  three cases where recomputing the boards gives a different answer on purpose.
+  cases where recomputing the boards gives a different answer on purpose.
 sidebar:
   order: 3
 ---
@@ -35,14 +35,20 @@ Three details:
 - **A session-wide flag sticks to everything.** Changing the tumble tuning is not
   attached to one vehicle, so it applies to every flight open at the time and every
   flight started afterwards that session.
-- **Distance Travelled is the one exception**, and it is structural rather than a
-  judgement call: it comes from your roster totals, which are not attached to any
-  flight, so there is nothing to flag.
+- **A few boards are exempt**, and it is structural rather than a judgement call.
+  Distance Travelled, Furthest-Travelled Kitten and Most Missions Flown come from
+  your roster totals, which are not attached to any flight, so there is nothing to
+  flag. Longest Spacewalk is the same: the game tells catlog a spacewalk ended
+  without saying which vehicle it ended at. Spacewalks is a half-exception — the
+  rule applies when catlog could tell which vehicle the kitten stepped out of, and
+  not when it could not. Fixing any of these would mean the mod attaching those
+  moments to a flight, which is not something the server can do for it.
 
 ## Impact rules
 
-An impact only becomes a **Biggest Lithobrake Survived** candidate if all of these
-hold:
+An impact only becomes a **Biggest Lithobrake Survived** or **Biggest Bang
+Survived** candidate if all of these hold. The two boards score the same crashes
+by design, so they can never disagree about which ones counted:
 
 - The vehicle still existed a frame later.
 - You did not destroy it yourself immediately afterwards — that counts exactly the
@@ -59,16 +65,39 @@ hold:
   fatal crash a survival.
 </Aside>
 
-## Peak-g rules
+## Peak-g and max-q rules
 
-A peak-g reading counts only when the game actually computed one. It does that
-while a vehicle is under full physics; on rails or in freefall there is no reading
-at all, and catlog leaves the field out rather than writing a zero.
+A peak-g or max-q reading counts only when the game actually computed one. It does
+that while a vehicle is under full physics; on rails or in freefall there is no
+reading at all, and catlog leaves the field out rather than writing a zero.
 
-Writing zeros would have filled the board with entries from vehicles that were not
-being simulated.
+Writing zeros would have filled both boards with entries from vehicles that were
+not being simulated.
 
-## Rebuilding, and the three answers that change
+Both figures come off the same structural-load reading, so they share every rule
+including the recovered-flight one below. **Highest Altitude deliberately does not
+share it.** An altitude is a position rather than a physics result — it is always
+readable — so a probe that never came home still holds whatever height it reached.
+
+## Zero rules
+
+Several boards refuse a value of exactly zero, and it is always for the same
+reason: **zero is what a reading catlog could not take looks like.** A mass of
+zero is an unreadable vehicle, not a weightless one; an eccentricity of zero is a
+figure that was never written, not a perfect circle; a spacewalk of zero seconds
+is a start time that could not be read.
+
+On the three boards where the **smallest** number wins — Lowest Stable Orbit,
+Roundest Orbit, Softest Touchdown — this matters more than tidiness. A zero there
+would be an unbeatable record held by a failed measurement, and no real flight
+could ever take it back.
+
+Softest Touchdown adds one more of these. It needs to know you were genuinely off
+the ground beforehand, and "catlog could not tell what you were doing" is not the
+same answer as "you were in freefall" — so an unreadable prior state is refused
+rather than accepted as airborne.
+
+## Rebuilding, and the answers that change
 
 Boards are normally updated as events arrive. Sometimes the whole set is discarded
 and recomputed from the log — after a purge, or a schema change, or when a fold
@@ -77,17 +106,31 @@ gains a rule. **A rebuild can produce a different answer, and that is intended.*
 Two rules cannot be evaluated live, because they depend on how a flight _ended_
 and the events are still arriving one at a time:
 
-1. **A lithobrake within 2 seconds of a kitten being lost is dropped.** Live,
-   catlog cannot know a kitten is about to be lost.
-2. **A peak-g reading only counts if the flight ended recovered.** Live, the flight
-   may still be in progress. This is the widest of the three — every flight that
-   ended destroyed or despawned loses its peak-g row on a rebuild.
+1. **An impact within 2 seconds of a kitten being lost is dropped.** Live, catlog
+   cannot know a kitten is about to be lost. This applies to both impact boards.
+2. **A peak-g or max-q reading only counts if the flight ended recovered.** Live,
+   the flight may still be in progress. This is the widest of them — every flight
+   that ended destroyed or despawned loses both rows on a rebuild.
 
-And one that is about ordering rather than knowledge:
+One is about ordering rather than knowledge:
 
 3. **A flag that arrived late.** Live, the events folded before the flag reached
    the server had already scored. A rebuild sees the completed flight and drops
    them all.
+
+And one is about catlog itself changing:
+
+4. **A board that did not exist when your flight happened.** Every event catlog has
+   ever received is kept, including the ones nothing was reading at the time. When
+   a new board is added, the events that would have fed it are already in the log —
+   but the live path has long since gone past them, so it can only score what
+   arrives from now on. A rebuild replays the whole log through the new rules and
+   fills the board in from your actual history.
+
+   This is not hypothetical: the boards for atmospheric entry, spacewalks, engine
+   ignitions and flameouts were added to a log that had been quietly collecting
+   those events all along. Until a rebuild runs, they show only what has happened
+   since.
 
 Rebuilding is always the more correct answer: it is the one computed with the whole
 story in hand.

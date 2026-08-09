@@ -24,7 +24,7 @@ commit. See [ARCHITECTURE.md](ARCHITECTURE.md#7-keeping-the-documentation-true) 
 - **[Storage — Turso, schema & compression](#storage--turso-schema--compression)** — `STORE-*`, 16 entries
 - **[Ingest, auth & the conformance vectors](#ingest-auth--the-conformance-vectors)** — `INGEST-*`, 24 entries
 - **[Identity, handles & moderation](#identity-handles--moderation)** — `IDENT-*`, 15 entries
-- **[Projector, boards & the read API](#projector-boards--the-read-api)** — `PROJ-*`, 84 entries
+- **[Projector, boards & the read API](#projector-boards--the-read-api)** — `PROJ-*`, 91 entries
 - **[Archive & restore](#archive--restore)** — `ARCH-*`, 13 entries
 - **[The two frontends](#the-two-frontends)** — `UI-*`, 56 entries
 - **[The mod and its KSA-free core](#the-mod-and-its-ksa-free-core)** — `MOD-*`, 71 entries
@@ -1095,6 +1095,76 @@ The assembly is about twenty small queries, which is more than a public page sho
 *Accepted · 2026-08-08 · WP-CENSUS.*
 
 Headline tiles, the four rolling windows each broken down by type, a 90-day daily series, every event type with its share, and the collection census. Deliberately not a leaderboard — no records, no ranking, nobody's handle — and the SPA's copy is a lazy chunk for the same reason Compare and Events are: it is reached on purpose rather than landed on, and the front page should not carry it. The daily series draws only days that carried an event, because a day catlog was switched off is not a zero anybody measured.
+
+### PROJ-085 — The six event types nobody decoded were the highest-value change available, because every player was already paying for them
+
+*Accepted · 2026-08-09 · WP-BOARDS.*
+
+`vehicle.atmosphere`, `engine.ignition`, `engine.shutdown`, `engine.flameout`, `kitten.eva_start` and `kitten.eva_end` had **no decoder at all**: `decodePayload` named them in its `default:` arm and returned `(nil, nil)`. They were nevertheless kind 1, which means they are never pruned from the mod's outbox, they occupy a slot in every batch that carries them, they are signed, compressed, shipped, stored forever and counted by the census — and then read by nothing. That is the entire cost of a feature with none of the benefit, paid by every player on every flight, and it had been paid since the first event ever shipped.
+
+So the choice was not "what board would be nice" but "what is already on the wire and unread". Six types plus a handful of decoded-but-unread fields turned into 22 boards without a single change to the mod, the envelope, any `ver`, or the outbox. **The alternative considered and rejected was demoting the four passive ones to kind 0** so they could be dropped under outbox pressure. That would have been cheaper per flight and strictly worse: it makes the log lossy for exactly the events a future fold would want, and D22's whole promise is that a build which gains a decoder can go back and fold what it skipped. Deleting the data to avoid reading it forecloses that; reading it does not.
+
+The `default:` arm now says what it actually means — what reaches it is a type from a *newer* mod, not a type this build declined to handle.
+
+### PROJ-086 — Twenty-two boards, and not one of them needed a new field on the wire
+
+*Accepted · 2026-08-09 · WP-BOARDS.*
+
+Fixed boards go 13 → 35. Every value comes from a payload key §4.2 already carried: the four orbit-shape boards from `ap_m` / `pe_m` / `ecc` / `inc_deg`, the three launch boards from `mass_kg` / `part_count` / `crew_count`, `most_stages` from a `stage_index` this document had recorded as "decoded and **unused**", `highest_altitude` and `max_q_survived` from a `telemetry.window` whose other aggregates were already scoring, the three situation boards from a `vehicle.situation` nothing read, and the two per-kitten records from a `kitten` table whose read surface was a `SUM`.
+
+**The shape of the implementation is the load-bearing part.** Where two boards share an eligibility they now share *the function*, not a copy of it: `survivedImpact` for the two impact boards, `survivedLoad` for the two structural-load boards. That is not tidiness — those pairs must agree about which crash and which reading counted, and two hand-maintained copies of a five-clause rule agree only until the first person edits one. For the same reason `orbitRecordFold` and `launchFold` are single types registered four and three times with a field selector, exactly as `speedFold` already was: identical eligibility, different field, different direction, one place to change it.
+
+Rejected: a generic table-driven "record over field X of event Y" fold covering all of them. Each of these boards has one real rule that is not a field selector — `entryFold`'s `dir == "entered"`, `stagesFold`'s `+1`, `touchdownFold`'s two-sided situation test — and a table with an escape hatch per row is a worse `switch`.
+
+### PROJ-087 — Three boards carry an empty unit, and a fourth one is a test failure on purpose
+
+*Accepted · 2026-08-09 · WP-BOARDS.*
+
+`roundest_orbit` is an eccentricity, which is a ratio and has no unit; `most_parts` and `most_stages` are bare counts of a thing the title already names. `units.Split("")` renders the number alone, which is exactly right, and inventing a label — "parts", "stages", "ecc" — would put the word on the page twice for the first two and invent a fake unit for the third.
+
+Two existing tests asserted *every board has a non-empty unit*, and the tempting move was to delete the assertion. Instead both were **narrowed to allow exactly these three keys** (`stats_test.go`, `readapi_test.go`). The assertion was worth keeping: a unit label is the only thing standing between a board page and a bare number whose meaning the reader has to guess, and `_ms` versus `ms` is proof that catlog gets units wrong when nothing is watching. Narrowing means a *fourth* unitless board is still a build failure and therefore still a decision somebody has to argue for, which is the property the test had all along.
+
+### PROJ-088 — Every ascending board refuses a zero, because a zero from an unread value would be an unbeatable record
+
+*Accepted · 2026-08-09 · WP-BOARDS.*
+
+catlog had two ascending boards, both career times, both already gated on "absent is not zero" (PROJ-024). This change adds three ascending boards that are *not* career times — `lowest_orbit`, `roundest_orbit`, `softest_touchdown` — and on all three the gate stops being defensive and becomes the rule that makes the board possible at all.
+
+The reason is that §4.2 mostly **writes zero rather than omitting**, and each zero means "could not read": `ap_m` is written 0.0 whenever the conic is not Bound; `ecc` and `inc_deg` are 0 when the orbit read failed; `mass_kg`, `part_count` and `crew_count` are 0 when the vehicle read failed; `duration_s` is 0.0 when an EVA's launch time was unreadable. On a **descending** board a spurious zero is harmless — it loses to everything. On an **ascending** board it wins, permanently, and no real flight can ever take the record back. So `roundest_orbit` must refuse a perfectly-circular-looking 0 rather than crown it, and `lowest_orbit` must refuse a `pe_m ≤ 0` that is really a periapsis underground.
+
+`softest_touchdown` needs a second gate of the same kind, and it is worth spelling out because "no surface contact" was not enough: the mod emits the literal `"unknown"` for a situation it could not read, and `contactOf("unknown")` reports no contact, so a contact-free test alone would have accepted a touchdown measured from a state nobody could read — again onto an ascending board. Hence `knownSituation(from)` **and** `!hasSurfaceContact(from)`, which are different questions.
+
+One deliberate extension beyond what was asked: `biggest_impact_energy` is gated on `energy_j > 0` even though it is a descending board and the request specified only `lithobrakeFold`'s eligibility. A splash with zero reconstructed energy would otherwise put a player on the board at 0, which is what every other record board's `> 0` gate exists to prevent — and what `lithobrakeFold` itself already does with `speed_ms`.
+
+### PROJ-089 — `stats/situation.go` is a port of the mod's table, and catlog now has a second two-sided table
+
+*Accepted · 2026-08-09 · WP-BOARDS.*
+
+Three boards have to decide what a `vehicle.situation` transition *means* — is the vehicle on the ground, in water, or neither — and §4.2 makes `situation` an **open set**, so there is no enum to switch on. `mod/catlog.lib/Telemetry/SituationInfo.cs` already re-derives the game's packed `(SurfaceContact << 1) | onRails` enum from the wire *names*, precisely so `catlog.lib` needs no KSA reference. The server now keeps the same eight rows, contact column only; the rails bit is not ported because no board reads it, and porting an unread field is how a port starts drifting.
+
+The alternative was to put the classification on the wire — a `contact` key on the payload. Rejected: it is a `ver` bump and a re-ship for information the server can derive from a name it already receives, and it would make every already-stored `vehicle.situation` event unclassifiable, which is exactly the history these boards exist to fold.
+
+**The consequence is a maintenance rule, and it goes in the same box as `units.go` ↔ `units.ts`.** catlog now has exactly two two-sided tables, and a row changed on one side and not the other is a silent divergence between two implementations that are supposed to agree: with `units` the same number renders differently on two frontends, and here a board lands on one side of a landing and not the other. Both copies are total by construction — an unknown name reports no contact rather than guessing — so a ninth situation from a future build stays *off* a board instead of arriving on one under the wrong reading.
+
+### PROJ-090 — A rebuild is the migration, and that is the whole migration
+
+*Accepted · 2026-08-09 · WP-BOARDS.*
+
+`docs/event-details.md` listed "a build that gained a decoder folds on rebuild what it skipped before" as the fifth rebuild-versus-incremental divergence, and until now it was hypothetical. It is now the live one. Every `vehicle.atmosphere`, `engine.*` and `kitten.eva_*` event already in `events.db` will produce board rows on the next rebuild that the incremental path never produced and never can, because the incremental path has already passed them and the checkpoint only moves forward. On a server that has not rebuilt since this change, `fastest_entry`, `evas`, `flameouts`, `engine_ignitions` and `longest_eva` are short by their entire history, and the boards fed by decoded-but-unread fields are short by theirs.
+
+**No migration was written, and none should be.** A projection is rebuildable by definition (D8, D22) — that is the property the whole two-file split exists to buy — so a one-off backfill script would be a second, less-tested implementation of `catlogctl rebuild` that has to be kept level with the folds forever. Rebuild is already admin-triggered, already nightly, already the correctness backstop, already tested to reproduce the incremental result. Using it is cheaper and the failure mode is better: a backfill that disagrees with the folds is a wrong number nobody notices, while a rebuild that disagrees is the thing `TestSeedIsWhatARebuildProduces` fails on.
+
+Two divergences also widened rather than appeared, and both because the shared eligibility of PROJ-086 is shared *including its rebuild refinement*: the ±2 s KIA window now applies to `biggest_lithobrake_survived` **and** `biggest_impact_energy`, and `ended_reason == 'recovered'` now applies to `peak_g_survived` **and** `max_q_survived`. The latter remains the broadest divergence catlog has and is now twice as broad. Nothing new diverges: `landed_bodies` uses `AddBody`'s row-novelty report exactly as `soi_bodies` does, and `KittenTops` breaks ties on `kid` rather than on Go's randomised map order, so a rebuild reproduces the incremental `context` byte for byte.
+
+### PROJ-091 — Four of the new boards have no flag exclusion, and that is recorded rather than papered over
+
+*Accepted · 2026-08-09 · WP-BOARDS.*
+
+`scoreable` passes every event that carries no flight, and §4.1 sends `flight: null` for `roster.snapshot` and `kitten.eva_end`. So `top_kitten_distance`, `top_kitten_missions` and `longest_eva` inherit `distance_travelled`'s exemption (PROJ-001), and `evas` has the exclusion only when the EVA signal carried a vehicle id. A kitten who did all her travelling on a teleported flight still holds the record.
+
+This was not a decision about those boards — it is a property of their source events — and there were two ways to hide it. **Refusing to build the boards** costs three genuinely good boards to avoid an edge case that requires the player to have been flagged, which the flag machinery already reports on every other board. **Faking an attribution server-side** — guessing which open flight a roster total belongs to — is exactly the kind of inference `CONSTITUTION.md` §8 rules out, and it would be wrong most of the time. So the boards ship, the gap is stated in the fold's own comment, in `event-details.md`'s board table, in the suppression matrix and on the player-facing site, and the fix is named: the mod attributing those events to the flights that earned them.
+
+The same audit turned up something worse and unrelated to this change, recorded in `event-details.md`'s known drift: `kitten.kia` and `kitten.tumble` are *also* `flight: null`, so the rebuild's KIA index is always empty on shipped data and the `tuning` flag — which `stats/flight.go` documents as existing specifically to protect `kitten_tumbles` — protects nothing in practice. Both fire only in tests, which construct the events with a flight. Recorded rather than quietly dropping two rows of the suppression matrix; the fix is on the mod side.
 
 ---
 

@@ -42,10 +42,11 @@ The game only computes structural loads while a vehicle is under full physics. O
 rails, or in freefall, there is simply no reading — and the raw value sitting in
 memory in that case is zero.
 
-<Aside type="danger" title="Writing zero would break the board">
-  If catlog reported those zeros, the **Peak G Survived** board would fill up with entries claiming
-  0 g, and every real reading would have to compete with noise from vehicles that were not being
-  simulated. Leaving the field out says "no data", which is what actually happened.
+<Aside type="danger" title="Writing zero would break two boards">
+  If catlog reported those zeros, **Peak G Survived** and **Max Q Survived** would fill up with
+  entries claiming nothing at all, and every real reading would have to compete with noise from
+  vehicles that were not being simulated. Leaving the field out says "no data", which is what
+  actually happened.
 </Aside>
 
 ## The one thing catlog is willing to lose

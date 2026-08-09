@@ -660,6 +660,39 @@ func (b *Batch) KittenDistance(ctx context.Context, playerID int64) (float64, er
 	return total, nil
 }
 
+// KittenTop is one kitten's claim on a per-kitten board: the value and whose it
+// is.
+type KittenTop struct {
+	Name  string
+	Value float64
+}
+
+// KittenTops reports the leader of each `kitten` column a record board reads —
+// the furthest-travelled kitten and the most-flown one — for
+// `top_kitten_distance` and `top_kitten_missions`.
+//
+// Ties are broken by `kid`, and that is not a nicety: the winner's *name* lands
+// in the board row's context, Go randomises map iteration order, and a rebuild
+// has to reproduce the incremental context byte for byte (see encodeContext in
+// fold.go). Two kittens on the same number would otherwise disagree between
+// runs of the same log.
+func (b *Batch) KittenTops(ctx context.Context, playerID int64) (travelled, missions KittenTop, err error) {
+	m, err := b.playerKittens(ctx, playerID)
+	if err != nil {
+		return KittenTop{}, KittenTop{}, err
+	}
+	for _, kid := range slices.Sorted(maps.Keys(m)) {
+		e := m[kid]
+		if e.travelledM > travelled.Value {
+			travelled = KittenTop{Name: e.name, Value: e.travelledM}
+		}
+		if v := float64(e.missions); v > missions.Value {
+			missions = KittenTop{Name: e.name, Value: v}
+		}
+	}
+	return travelled, missions, nil
+}
+
 func (b *Batch) flushKittens(ctx context.Context) error {
 	if len(b.dirtyKittens) == 0 {
 		return nil

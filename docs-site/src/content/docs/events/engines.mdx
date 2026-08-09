@@ -2,7 +2,7 @@
 title: Engines
 description: >-
   Ignition, shutdown and flameout — all three read at whole-vehicle level, and
-  none of them feed a leaderboard yet.
+  two of the three feed a leaderboard.
 sidebar:
   order: 5
 ---
@@ -39,8 +39,14 @@ propellant gone, and no start or stop this tick. That is a genuine
 approximation — a vehicle with one tank dry and another still feeding will not
 report a flameout — and it is recorded here rather than hidden.
 
-## None of these feed a board
+## Two of the three feed a board
 
-All three are recorded and kept, and nothing reads them. They exist because burn
-timing is the obvious next thing to build something out of, and an event log you
-cannot go back and re-fold is worth much less than one you can.
+Ignition feeds **Engines Lit** and flameout feeds **Ran Dry**, one count each.
+Shutdown is recorded and scores nothing: it is the unremarkable other half of
+every burn, so counting it would just be counting ignitions again with a lag.
+
+These three events were collected for a long time before anything read them, and
+the boards were added afterwards, to a log that already held every ignition anyone
+had ever shipped. That is the whole argument for keeping events you are not using
+yet — and for [rebuilding](/catlog/leaderboards/eligibility/), which is what
+turns that history into board rows.

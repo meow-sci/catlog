@@ -1,7 +1,7 @@
 ---
 title: Every board
 description: >-
-  All 13 fixed leaderboards and the two board families, with the events behind
+  All 35 fixed leaderboards and the two board families, with the events behind
   each one and every rule that disqualifies a value.
 sidebar:
   order: 2
@@ -10,16 +10,34 @@ sidebar:
 import { Aside } from "@astrojs/starlight/components";
 import BoardDetail from "../../../components/BoardDetail.astro";
 
-Thirteen fixed boards, in the order they are published, then the two families
+Thirty-five fixed boards, in the order they are published, then the two families
 whose members appear as people reach new worlds and find new ways to lose a
 vehicle.
 
-## Records
+## Records — how much you survived
+
+These four are the same question asked four ways: how much punishment did the
+vehicle take, and was anyone still aboard afterwards.
 
 <BoardDetail stat="biggest_lithobrake_survived" />
 <BoardDetail stat="peak_g_survived" />
+<BoardDetail stat="max_q_survived" />
+<BoardDetail stat="biggest_impact_energy" />
+
+<Aside type="note" title="Two boards from one crash, and two from one reading">
+  Biggest Lithobrake Survived and Biggest Bang Survived score the same impacts, and they never
+  disagree about which ones count. They differ only in what they measure: speed favours the fast
+  little probe, energy favours the heavy lander. Peak G Survived and Max Q Survived are the same
+  arrangement one level up — one reading of how hard the structure was loaded, split into how hard
+  it was squeezed and how hard the air was pushing.
+</Aside>
+
+## Records — how fast and how high
+
 <BoardDetail stat="fastest_surface_speed" />
 <BoardDetail stat="fastest_orbital_speed" />
+<BoardDetail stat="fastest_entry" />
+<BoardDetail stat="highest_altitude" />
 
 <Aside type="note" title="The speed boards do not use your roster's speed figure">
   Your roster carries a "fastest speed" per kitten, and it is deliberately never used. It is
@@ -27,19 +45,61 @@ vehicle.
   while you stand still on Earth. The speed boards come from flight telemetry instead.
 </Aside>
 
+## Records — the orbit you reached
+
+All four read the same moment — the point at which a flight settled into a stable
+orbit — and describe a different property of it. A path that never closed into an
+orbit is on none of them.
+
+<BoardDetail stat="highest_apoapsis" />
+<BoardDetail stat="lowest_orbit" />
+<BoardDetail stat="roundest_orbit" />
+<BoardDetail stat="steepest_orbit" />
+
+<Aside type="caution" title="Why zero never wins">
+  Lowest Stable Orbit and Roundest Orbit are boards where the **smallest** number wins, and a figure
+  the game never wrote comes through as zero. So both refuse a zero outright. Otherwise the first
+  unreadable orbit anybody flew would sit at the top of the board forever, and nobody could ever
+  beat it — the record would belong to a failed measurement rather than to a flight.
+</Aside>
+
+## Records — the flight itself
+
+<BoardDetail stat="softest_touchdown" />
+<BoardDetail stat="heaviest_launch" />
+<BoardDetail stat="most_parts" />
+<BoardDetail stat="biggest_crew" />
+<BoardDetail stat="biggest_recovery" />
+<BoardDetail stat="most_stages" />
+<BoardDetail stat="longest_eva" />
+
 ## Counters
 
 <BoardDetail stat="kitten_tumbles" />
 <BoardDetail stat="rud_total" />
 <BoardDetail stat="orbits_achieved" />
 <BoardDetail stat="soi_bodies" />
+<BoardDetail stat="landed_bodies" />
 <BoardDetail stat="dockings" />
 <BoardDetail stat="stagings" />
+<BoardDetail stat="splashdowns" />
+<BoardDetail stat="evas" />
+<BoardDetail stat="flameouts" />
+<BoardDetail stat="engine_ignitions" />
 <BoardDetail stat="kittens_recovered" />
 
 ## Totals
 
 <BoardDetail stat="distance_travelled" />
+
+## Per-kitten records
+
+The two boards above and below answer different questions about the same roster:
+Distance Travelled is how good your whole crew is, and these are how good your
+best individual cat is. The row names her.
+
+<BoardDetail stat="top_kitten_distance" />
+<BoardDetail stat="top_kitten_missions" />
 
 ## Career times
 

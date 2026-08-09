@@ -106,7 +106,7 @@ export const EVENTS: CatlogEvent[] = [
         what: "How many kittens are aboard — occupied seats, not seats fitted.",
       },
     ],
-    feeds: [],
+    feeds: ["heaviest_launch", "most_parts", "biggest_crew"],
     page: "sessions-and-flights",
   },
   {
@@ -127,7 +127,7 @@ export const EVENTS: CatlogEvent[] = [
       },
       { key: "crew_count", unit: "", what: "How many kittens were aboard at the end." },
     ],
-    feeds: ["kittens_recovered"],
+    feeds: ["kittens_recovered", "biggest_recovery"],
     page: "sessions-and-flights",
   },
   {
@@ -174,7 +174,7 @@ export const EVENTS: CatlogEvent[] = [
       { key: "surface_speed_ms", unit: "m/s", what: "Speed relative to the surface." },
       { key: "orbital_speed_ms", unit: "m/s", what: "Speed relative to the body's centre." },
     ],
-    feeds: [],
+    feeds: ["softest_touchdown", "landed_bodies", "splashdowns"],
     page: "vehicle",
   },
   {
@@ -193,7 +193,7 @@ export const EVENTS: CatlogEvent[] = [
       { key: "speed_ms", unit: "m/s", what: "Surface-relative speed at the crossing." },
       { key: "dyn_pressure_pa", unit: "Pa", what: "Dynamic pressure at the crossing." },
     ],
-    feeds: [],
+    feeds: ["fastest_entry"],
     page: "vehicle",
   },
   {
@@ -215,7 +215,14 @@ export const EVENTS: CatlogEvent[] = [
       { key: "ecc", unit: "", what: "Eccentricity." },
       { key: "inc_deg", unit: "°", what: "Inclination, in degrees." },
     ],
-    feeds: ["orbits_achieved", "fastest_to_orbit"],
+    feeds: [
+      "orbits_achieved",
+      "highest_apoapsis",
+      "lowest_orbit",
+      "roundest_orbit",
+      "steepest_orbit",
+      "fastest_to_orbit",
+    ],
     page: "vehicle",
   },
   {
@@ -292,7 +299,7 @@ export const EVENTS: CatlogEvent[] = [
       { key: "body", unit: "", what: "Where it happened." },
       { key: "crew_count", unit: "", what: "How many kittens were aboard." },
     ],
-    feeds: ["biggest_lithobrake_survived"],
+    feeds: ["biggest_lithobrake_survived", "biggest_impact_energy"],
     page: "vehicle",
   },
   {
@@ -307,7 +314,7 @@ export const EVENTS: CatlogEvent[] = [
     fields: [
       { key: "stage_index", unit: "", what: "Which stage is now active, counting from zero." },
     ],
-    feeds: ["stagings"],
+    feeds: ["stagings", "most_stages"],
     page: "vehicle",
   },
   {
@@ -358,7 +365,7 @@ export const EVENTS: CatlogEvent[] = [
       { key: "engine", unit: "", what: "The engine type, or `unknown` when it could not be read." },
       { key: "count", unit: "", what: "How many engines are running." },
     ],
-    feeds: [],
+    feeds: ["engine_ignitions"],
     page: "engines",
   },
   {
@@ -394,7 +401,7 @@ export const EVENTS: CatlogEvent[] = [
       { key: "engine", unit: "", what: "The engine type, or `unknown`." },
       { key: "count", unit: "", what: "How many engines are running." },
     ],
-    feeds: [],
+    feeds: ["flameouts"],
     page: "engines",
   },
   {
@@ -414,7 +421,7 @@ export const EVENTS: CatlogEvent[] = [
       },
       { key: "name", unit: "", what: "The kitten's name, trimmed to 32 characters." },
     ],
-    feeds: [],
+    feeds: ["evas"],
     page: "kittens",
   },
   {
@@ -430,7 +437,7 @@ export const EVENTS: CatlogEvent[] = [
       { key: "name", unit: "", what: "The kitten's name." },
       { key: "duration_s", unit: "s", what: "How long the kitten was outside, in game seconds." },
     ],
-    feeds: [],
+    feeds: ["longest_eva"],
     page: "kittens",
   },
   {
@@ -507,7 +514,7 @@ export const EVENTS: CatlogEvent[] = [
       },
       { key: "kittens[].kia", unit: "", what: "Whether this kitten has been lost." },
     ],
-    feeds: ["distance_travelled"],
+    feeds: ["distance_travelled", "top_kitten_distance", "top_kitten_missions"],
     page: "kittens",
   },
   {
@@ -544,7 +551,13 @@ export const EVENTS: CatlogEvent[] = [
       },
       { key: "mass_kg_last", unit: "kg", what: "Mass at the end of the window." },
     ],
-    feeds: ["peak_g_survived", "fastest_surface_speed", "fastest_orbital_speed"],
+    feeds: [
+      "peak_g_survived",
+      "max_q_survived",
+      "fastest_surface_speed",
+      "fastest_orbital_speed",
+      "highest_altitude",
+    ],
     droppable: true,
     page: "telemetry",
   },

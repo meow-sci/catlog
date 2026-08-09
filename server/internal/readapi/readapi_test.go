@@ -181,9 +181,20 @@ func TestBoardsListsEveryBoardEvenTheEmptyOnes(t *testing.T) {
 	if len(got.Boards) != len(stats.FixedBoards()) {
 		t.Fatalf("%d boards, want %d — an empty board is still a board", len(got.Boards), len(stats.FixedBoards()))
 	}
+	// Three boards carry no unit on purpose — an eccentricity and two counts of
+	// a thing the title already names — so the index must publish the empty
+	// string rather than invent a label. stats.FixedBoards owns that list.
+	unitless := map[string]bool{
+		stats.StatRoundestOrbit: true,
+		stats.StatMostParts:     true,
+		stats.StatMostStages:    true,
+	}
 	for _, b := range got.Boards {
-		if b.Title == "" || b.Unit == "" {
-			t.Errorf("board %q has no title or unit", b.Stat)
+		if b.Title == "" {
+			t.Errorf("board %q has no title", b.Stat)
+		}
+		if b.Unit == "" && !unitless[b.Stat] {
+			t.Errorf("board %q has no unit", b.Stat)
 		}
 		switch b.Stat {
 		case stats.StatKittenTumbles:

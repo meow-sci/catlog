@@ -298,9 +298,11 @@ func TestRetentionDropsWindowsThatHaveAgedOut(t *testing.T) {
 	apply(t, proj, history, 0, false)
 
 	got := readPeriods(t, proj)
+	// Only this board's windows: vehicle.staging also feeds `most_stages`, and
+	// each board is trimmed to the horizon on its own.
 	var daily []string
 	for key := range got {
-		if k := key; len(k) > 0 && contains(k, "/daily/") {
+		if k := key; len(k) > 0 && contains(k, "/stagings/daily/") {
 			daily = append(daily, k)
 		}
 	}

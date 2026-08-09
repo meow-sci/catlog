@@ -177,7 +177,7 @@ byte-identical across events. Rows written either way stay readable, so the swit
 | `proj_checkpoint` | One shared cursor for every fold |
 | `player_stat` | `(player_id, stat) → value, context, updated_seq` — every board row |
 | `flight_state` | Per flight: `flags` bitfield, `ended_reason`, crew, body |
-| `player_body` | Distinct bodies per player and kind, plus first-arrival times |
+| `player_body` | Distinct bodies per player and `kind` — `'soi'` (entered) and `'landed'` (touched down) — plus first-arrival times, which only `'soi'` rows carry |
 | `kitten` | Per-kitten totals folded from `roster.snapshot` |
 | `feed` | The activity feed, capped at 500 rows |
 | `event_census` | One row per `(type, period, bucket)` — what makes `GET /v1/stats` affordable |
@@ -223,9 +223,25 @@ holds it honest: the projection may not depend on where the batch boundaries fel
 
 ### The boards
 
-Fixed keys, one per fold: `biggest_lithobrake_survived`, `peak_g_survived`, `fastest_surface_speed`,
-`fastest_orbital_speed`, `kitten_tumbles`, `rud_total`, `orbits_achieved`, `soi_bodies`, `dockings`,
-`stagings`, `kittens_recovered`, `distance_travelled`, `fastest_to_orbit`.
+Thirty-five fixed keys, in publish order — which is the order `FixedBoards()` returns and therefore
+the order `GET /v1/leaderboards` lists them, grouped by kind rather than by source event:
+
+- **records** — `biggest_lithobrake_survived`, `peak_g_survived`, `max_q_survived`,
+  `biggest_impact_energy`, `fastest_surface_speed`, `fastest_orbital_speed`, `fastest_entry`,
+  `highest_altitude`, `highest_apoapsis`, `lowest_orbit`, `roundest_orbit`, `steepest_orbit`,
+  `softest_touchdown`, `heaviest_launch`, `most_parts`, `biggest_crew`, `biggest_recovery`,
+  `most_stages`, `longest_eva`;
+- **counters** — `kitten_tumbles`, `rud_total`, `orbits_achieved`, `soi_bodies`, `landed_bodies`,
+  `dockings`, `stagings`, `splashdowns`, `evas`, `flameouts`, `engine_ignitions`,
+  `kittens_recovered`;
+- **derived totals and per-kitten records** — `distance_travelled`, `top_kitten_distance`,
+  `top_kitten_missions`;
+- **career time** — `fastest_to_orbit`.
+
+`docs/event-details.md` carries the canonical table: title, unit, direction, source event and fold
+kind for every one of them, plus the eligibility rule board by board. Three of them
+(`roundest_orbit`, `most_parts`, `most_stages`) have an **empty** unit on purpose — an eccentricity is
+dimensionless, and a bare count of a thing the title already names does not need the word twice.
 
 **Two families are not fixed:** `rud_<cause>` and `fastest_to_<body>` take their second half from the
 event stream, because KSA's celestial systems are content that mods extend and `body` is opaque to
@@ -242,7 +258,16 @@ and cause regardless, so lowering the threshold publishes history that is alread
 
 **Rules every fold obeys:** flagged flights score nothing (all of them, not only the record boards —
 a counter board on a cheated flight is just as wrong); ties keep the earliest `updated_seq`; and
-`ascending` boards exist, on the career-time families, where the smallest value wins.
+`ascending` boards exist, where the smallest value wins. Ascending is **no longer only** a career-time
+property: `lowest_orbit`, `roundest_orbit` and `softest_touchdown` are ascending records, which is why
+each of them refuses a zero — on a board where small wins, a zero from a value the game never wrote is
+an unbeatable record nobody flew.
+
+**The flag exclusion is structural, not universal.** `scoreable` passes every event that carries no
+flight, and the wire sends `flight: null` for `roster.snapshot` and `kitten.eva_end`. So
+`distance_travelled`, `top_kitten_distance`, `top_kitten_missions` and `longest_eva` have no flag
+exclusion at all, and `evas` has one only when the EVA signal carried a vehicle id. That is a property
+of the source events; the fix would be on the mod side.
 
 **Rolling windows** are a dimension of a board, not a board. Daily / weekly / monthly / yearly
 buckets hang off the four write helpers, so they compose with the dynamic families for free. Buckets
@@ -255,11 +280,18 @@ Admin-triggered and nightly. It builds into a fresh file from seq 0 and swaps it
 passes**: pass 1 folds flight state and collects the `kitten.kia` index; pass 2 folds the boards
 against a flight state that is already complete for all of history.
 
-That is what heals the three things the incremental path cannot know at fold time: a `flight.flagged`
-that arrives *after* its flight scored, the ±2 s KIA window on the lithobrake board, and the
-`ended_reason == 'recovered'` condition on `peak_g_survived`. So **rebuild ≠ incremental whenever a
-history contains a late flag, a scuttled kitten, or a flight that did not end recovered** — that is
-the point of the design, not a defect.
+That is what heals the things the incremental path cannot know at fold time: a `flight.flagged` that
+arrives *after* its flight scored, the ±2 s KIA window on the two impact boards, and the
+`ended_reason == 'recovered'` condition on the two structural-load boards. So **rebuild ≠ incremental
+whenever a history contains a late flag, a scuttled kitten, or a flight that did not end recovered** —
+that is the point of the design, not a defect. Feed rows are a fourth divergence: they resolve the
+handle from the live directory at fold time and pass 2 re-renders them, so a player banned since is
+absent from a rebuilt feed and present in an incremental one.
+
+**A rebuild is also the migration whenever a build gains a decoder or a fold.** Events already in
+`events.db` that no fold read produce board rows on the next rebuild and never on the incremental
+path, because the incremental path has already passed them. The board expansion is exactly that case:
+until a server rebuilds, the boards fed by the newly-decoded types are short by their whole history.
 
 The swap keeps the old file until the reopen succeeds: close → delete the stale `-wal`/`-shm` →
 rename live to `.old` → rename the rebuild in → reopen → delete `.old`, restoring `.old` on failure.

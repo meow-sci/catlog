@@ -24,6 +24,29 @@ const (
 	StatKittensRecovered          = "kittens_recovered"
 	StatDistanceTravelled         = "distance_travelled"
 	StatFastestToOrbit            = "fastest_to_orbit"
+
+	StatMaxQSurvived        = "max_q_survived"
+	StatBiggestImpactEnergy = "biggest_impact_energy"
+	StatFastestEntry        = "fastest_entry"
+	StatHighestAltitude     = "highest_altitude"
+	StatHighestApoapsis     = "highest_apoapsis"
+	StatLowestOrbit         = "lowest_orbit"
+	StatRoundestOrbit       = "roundest_orbit"
+	StatSteepestOrbit       = "steepest_orbit"
+	StatSoftestTouchdown    = "softest_touchdown"
+	StatHeaviestLaunch      = "heaviest_launch"
+	StatMostParts           = "most_parts"
+	StatBiggestCrew         = "biggest_crew"
+	StatBiggestRecovery     = "biggest_recovery"
+	StatMostStages          = "most_stages"
+	StatLongestEVA          = "longest_eva"
+	StatLandedBodies        = "landed_bodies"
+	StatSplashdowns         = "splashdowns"
+	StatEVAs                = "evas"
+	StatFlameouts           = "flameouts"
+	StatEngineIgnitions     = "engine_ignitions"
+	StatTopKittenDistance   = "top_kitten_distance"
+	StatTopKittenMissions   = "top_kitten_missions"
 )
 
 // Board is the metadata `GET /v1/leaderboards` publishes for one stat (§4.8).
@@ -46,28 +69,61 @@ type Board struct {
 }
 
 // fixedBoards is the §5.6 table, in display order: the "how did you survive
-// that" records first, then the speed records, then the counters, then the one
-// career-time board whose key is a constant.
+// that" records first, then the speed and shape records, then what was on the
+// pad, then the counters, then the one career-time board whose key is a
+// constant.
 //
 // Every entry here is a board because a fold with that name exists, so the list
 // is a property of the build. The two *families* below are not: their keys come
 // out of the data.
+//
+// Three boards have an **empty unit** — `roundest_orbit` (an eccentricity),
+// `most_parts` and `most_stages` (bare counts of a thing whose name is already
+// in the title). An empty unit is a real answer here rather than a missing one:
+// units.Split renders it as the number alone, and inventing a label like
+// "parts" would put it on the page twice.
 var fixedBoards = func() []Board {
 	rec := func(stat, title, unit string) Board { return Board{Stat: stat, Title: title, Unit: unit} }
+	// best is rec's mirror: a board where a *smaller* value ranks higher.
+	best := func(stat, title, unit string) Board {
+		return Board{Stat: stat, Title: title, Unit: unit, Ascending: true}
+	}
 
 	return []Board{
 		rec(StatBiggestLithobrakeSurvived, "Biggest Lithobrake Survived", "m/s"),
 		rec(StatPeakGSurvived, "Peak G Survived", "g"),
+		rec(StatMaxQSurvived, "Max Q Survived", "Pa"),
+		rec(StatBiggestImpactEnergy, "Biggest Bang Survived", "J"),
 		rec(StatFastestSurfaceSpeed, "Fastest Surface Speed", "m/s"),
 		rec(StatFastestOrbitalSpeed, "Fastest Orbital Speed", "m/s"),
+		rec(StatFastestEntry, "Fastest Atmospheric Entry", "m/s"),
+		rec(StatHighestAltitude, "Highest Altitude", "m"),
+		rec(StatHighestApoapsis, "Highest Apoapsis", "m"),
+		best(StatLowestOrbit, "Lowest Stable Orbit", "m"),
+		best(StatRoundestOrbit, "Roundest Orbit", ""),
+		rec(StatSteepestOrbit, "Most Inclined Orbit", "deg"),
+		best(StatSoftestTouchdown, "Softest Touchdown", "m/s"),
+		rec(StatHeaviestLaunch, "Heaviest Launch", "kg"),
+		rec(StatMostParts, "Most Parts", ""),
+		rec(StatBiggestCrew, "Biggest Crew", "kittens"),
+		rec(StatBiggestRecovery, "Most Kittens Home At Once", "kittens"),
+		rec(StatMostStages, "Most Stages", ""),
+		rec(StatLongestEVA, "Longest Spacewalk", "s"),
 		rec(StatKittenTumbles, "Kitten Tumbles", "tumbles"),
 		rec(StatRUDTotal, "Rapid Unscheduled Disassemblies", "RUDs"),
 		rec(StatOrbitsAchieved, "Orbits Achieved", "orbits"),
 		rec(StatSOIBodies, "Bodies Visited", "bodies"),
+		rec(StatLandedBodies, "Bodies Landed On", "bodies"),
 		rec(StatDockings, "Dockings", "dockings"),
 		rec(StatStagings, "Stagings", "stagings"),
+		rec(StatSplashdowns, "Splashdowns", "splashdowns"),
+		rec(StatEVAs, "Spacewalks", "EVAs"),
+		rec(StatFlameouts, "Ran Dry", "flameouts"),
+		rec(StatEngineIgnitions, "Engines Lit", "ignitions"),
 		rec(StatKittensRecovered, "Kittens Recovered", "kittens"),
 		rec(StatDistanceTravelled, "Distance Travelled", "m"),
+		rec(StatTopKittenDistance, "Furthest-Travelled Kitten", "m"),
+		rec(StatTopKittenMissions, "Most Missions Flown", "missions"),
 		{Stat: StatFastestToOrbit, Title: "Fastest to Orbit", Unit: "ms", Ascending: true, Career: true},
 	}
 }()
@@ -321,46 +377,129 @@ func familyOf(stat string) (family, bool) {
 
 // --- record folds ------------------------------------------------------------
 
-// lithobrakeFold implements `biggest_lithobrake_survived` (§5.6): the fastest
-// `vehicle.impact` the crew walked away from.
+// survivedImpact reports whether a `vehicle.impact` may score, which is the
+// whole eligibility rule `biggest_lithobrake_survived` and
+// `biggest_impact_energy` share — they are the same crash read two ways, and
+// they must agree about which crashes count.
 //
 // §4.2's BEST-GUESS (D11) rule is `survived && crew_count ≥ 1 && !launch_pad`
 // plus "no kitten.kia for the same flight within ±2.0 s". The last clause needs
 // events that arrive after the impact, so the incremental path accepts the
 // impact as-is and a rebuild applies the window (§5.6).
+func survivedImpact(ctx context.Context, b *Batch, ev Event, p VehicleImpact) (bool, error) {
+	if !p.Survived || p.LaunchPad || p.CrewCount < 1 {
+		return false, nil
+	}
+	ok, err := scoreable(ctx, ev, b)
+	if err != nil || !ok {
+		return false, err
+	}
+	if b.Refined() && ev.HasSimTime && b.KIANear(ev.FlightID, ev.SimTime) {
+		// A kitten died within the window: whatever this was, it was not
+		// "survived with crew" (§4.2).
+		return false, nil
+	}
+	return true, nil
+}
+
+// impactContext is the shared context of both impact boards: whichever figure
+// is not this board's value is the one a reader wants next to it.
+func impactContext(ev Event, p VehicleImpact) map[string]any {
+	return map[string]any{
+		"body":     p.Body,
+		"flight":   ids.String(ev.FlightID),
+		"speed_ms": p.SpeedMs,
+		"energy_j": p.EnergyJ,
+	}
+}
+
+// lithobrakeFold implements `biggest_lithobrake_survived` (§5.6): the fastest
+// `vehicle.impact` the crew walked away from.
 type lithobrakeFold struct{}
 
 func (lithobrakeFold) Name() string { return StatBiggestLithobrakeSurvived }
 
 func (lithobrakeFold) Apply(ctx context.Context, b *Batch, ev Event) error {
 	p, ok := payloadOf[VehicleImpact](ev)
-	if !ok || !p.Survived || p.LaunchPad || p.CrewCount < 1 || p.SpeedMs <= 0 {
+	if !ok || p.SpeedMs <= 0 {
 		return nil
 	}
-	ok, err := scoreable(ctx, ev, b)
+	ok, err := survivedImpact(ctx, b, ev, p)
 	if err != nil || !ok {
 		return err
 	}
-	if b.Refined() && ev.HasSimTime && b.KIANear(ev.FlightID, ev.SimTime) {
-		// A kitten died within the window: whatever this was, it was not
-		// "survived with crew" (§4.2).
-		return nil
-	}
-	return putRecord(ctx, b, ev, StatBiggestLithobrakeSurvived, p.SpeedMs, map[string]any{
-		"body":     p.Body,
-		"flight":   ids.String(ev.FlightID),
-		"energy_j": p.EnergyJ,
-	})
+	return putRecord(ctx, b, ev, StatBiggestLithobrakeSurvived, p.SpeedMs, impactContext(ev, p))
 }
 
-// peakGFold implements `peak_g_survived` (§5.6): the largest `telemetry.window`
-// peak_g the flight lived through.
+// impactEnergyFold implements `biggest_impact_energy`: the same survived crash
+// measured in joules rather than in metres per second.
+//
+// Not a duplicate of the board above. `speed_ms` is a **closing normal speed**
+// for a ground impact and a reconstructed √(2E/m) scalar for a splash, so it
+// says nothing about how much vehicle was moving; `energy_j` is the game's own
+// ImpactKineticEnergy and therefore ranks a heavy lander touching down hard
+// above a probe hitting fast (docs/ksa-integration.md).
+type impactEnergyFold struct{}
+
+func (impactEnergyFold) Name() string { return StatBiggestImpactEnergy }
+
+func (impactEnergyFold) Apply(ctx context.Context, b *Batch, ev Event) error {
+	p, ok := payloadOf[VehicleImpact](ev)
+	if !ok || p.EnergyJ <= 0 {
+		return nil
+	}
+	ok, err := survivedImpact(ctx, b, ev, p)
+	if err != nil || !ok {
+		return err
+	}
+	return putRecord(ctx, b, ev, StatBiggestImpactEnergy, p.EnergyJ, impactContext(ev, p))
+}
+
+// survivedLoad reports whether a `telemetry.window` structural-load reading may
+// score. It is the eligibility `peak_g_survived` and `max_q_survived` share,
+// and they share it because they are the same reading: both come off
+// `Vehicle.StructuralLoad`, both are `*float64`, and both are boards about
+// living through something.
+//
+// Absent is not zero. StructuralLoad is only written under full physics, so a
+// missing reading means "no data this window" and must not score — a nil
+// treated as a real 0 would fill an ascending-looking record board with fake
+// minima (docs/ksa-integration.md).
 //
 // The incremental path takes the simpler rule §5.6 sanctions — any window of an
 // unflagged flight — because a window is folded long before its flight ends. A
 // rebuild adds the condition §5.6 actually wants, `ended_reason == 'recovered'`,
 // which it can evaluate because its first pass built flight_state for the whole
 // history before any board was scored.
+func survivedLoad(ctx context.Context, b *Batch, ev Event, reading *float64) (bool, error) {
+	if reading == nil || *reading <= 0 {
+		return false, nil
+	}
+	st, found, err := b.Flight(ctx, ev.FlightID)
+	if err != nil {
+		return false, err
+	}
+	if found && st.Flagged() {
+		return false, nil
+	}
+	if b.Refined() && !(found && st.Recovered()) {
+		return false, nil
+	}
+	return true, nil
+}
+
+// windowContext is the shared context of every board sourced from a
+// `telemetry.window`: which body, which flight, and when the window closed.
+func windowContext(ev Event, p TelemetryWindow) map[string]any {
+	return map[string]any{
+		"body":   p.Body,
+		"flight": ids.String(ev.FlightID),
+		"t1_sim": p.T1Sim,
+	}
+}
+
+// peakGFold implements `peak_g_survived` (§5.6): the largest `telemetry.window`
+// peak_g the flight lived through.
 type peakGFold struct{}
 
 func (peakGFold) Name() string { return StatPeakGSurvived }
@@ -370,27 +509,35 @@ func (peakGFold) Apply(ctx context.Context, b *Batch, ev Event) error {
 	if !ok {
 		return nil
 	}
-	// Absent, not zero: StructuralLoad is only written under full physics, so a
-	// missing peak_g means "no reading this window" and must not score
-	// (docs/ksa-integration.md).
-	if p.PeakG == nil || *p.PeakG <= 0 {
-		return nil
-	}
-	st, found, err := b.Flight(ctx, ev.FlightID)
-	if err != nil {
+	ok, err := survivedLoad(ctx, b, ev, p.PeakG)
+	if err != nil || !ok {
 		return err
 	}
-	if found && st.Flagged() {
+	return putRecord(ctx, b, ev, StatPeakGSurvived, *p.PeakG, windowContext(ev, p))
+}
+
+// maxQFold implements `max_q_survived`: the largest dynamic pressure a flight
+// came home from, in pascals.
+//
+// The g board's twin in every respect, [survivedLoad] included — same source
+// struct, same omit-don't-zero rule on the wire, same rebuild-only requirement
+// that the flight ended `recovered`. Peak g is how hard the airframe was
+// squeezed; max q is how hard the air was pushing, and an ascent profile can be
+// brutal on one and gentle on the other.
+type maxQFold struct{}
+
+func (maxQFold) Name() string { return StatMaxQSurvived }
+
+func (maxQFold) Apply(ctx context.Context, b *Batch, ev Event) error {
+	p, ok := payloadOf[TelemetryWindow](ev)
+	if !ok {
 		return nil
 	}
-	if b.Refined() && !(found && st.Recovered()) {
-		return nil
+	ok, err := survivedLoad(ctx, b, ev, p.MaxQPa)
+	if err != nil || !ok {
+		return err
 	}
-	return putRecord(ctx, b, ev, StatPeakGSurvived, *p.PeakG, map[string]any{
-		"body":   p.Body,
-		"flight": ids.String(ev.FlightID),
-		"t1_sim": p.T1Sim,
-	})
+	return putRecord(ctx, b, ev, StatMaxQSurvived, *p.MaxQPa, windowContext(ev, p))
 }
 
 // speedFold implements `fastest_surface_speed` and `fastest_orbital_speed`
@@ -422,10 +569,290 @@ func (f speedFold) Apply(ctx context.Context, b *Batch, ev Event) error {
 	if err != nil || !ok {
 		return err
 	}
+	return putRecord(ctx, b, ev, f.stat, value, windowContext(ev, p))
+}
+
+// altitudeFold implements `highest_altitude`: the highest a vehicle got above
+// its parent's mean radius.
+//
+// Barometric altitude, not radar altitude — `alt_m` is
+// `PositionCci.Length() - Parent.MeanRadius`, so a mountaintop landing scores
+// its elevation and a low pass over a canyon does not
+// (docs/ksa-integration.md). It takes the plain flag exclusion rather than
+// [survivedLoad]'s recovered-flight rule: an altitude is a position, always
+// sampled and always meaningful, and a probe that never came back still got
+// there.
+type altitudeFold struct{}
+
+func (altitudeFold) Name() string { return StatHighestAltitude }
+
+func (altitudeFold) Apply(ctx context.Context, b *Batch, ev Event) error {
+	p, ok := payloadOf[TelemetryWindow](ev)
+	if !ok || p.AltM.Max <= 0 {
+		return nil
+	}
+	ok, err := scoreable(ctx, ev, b)
+	if err != nil || !ok {
+		return err
+	}
+	return putRecord(ctx, b, ev, StatHighestAltitude, p.AltM.Max, windowContext(ev, p))
+}
+
+// entryFold implements `fastest_entry`: the fastest a vehicle was moving as it
+// crossed into an atmosphere.
+//
+// `exited` is ignored. Leaving an atmosphere fast is an ascent, which the speed
+// boards already rank; entering one fast is the part that usually ends in
+// `rud_aerodynamic_forces`, and that is the board.
+//
+// The speed is surface-relative (`curr.SurfaceSpeedMs`), which is the right
+// frame for an entry: what matters is the air the vehicle is hitting, not the
+// body's inertial motion.
+type entryFold struct{}
+
+func (entryFold) Name() string { return StatFastestEntry }
+
+func (entryFold) Apply(ctx context.Context, b *Batch, ev Event) error {
+	p, ok := payloadOf[VehicleAtmosphere](ev)
+	if !ok || p.Dir != "entered" || p.SpeedMs <= 0 {
+		return nil
+	}
+	ok, err := scoreable(ctx, ev, b)
+	if err != nil || !ok {
+		return err
+	}
+	return putRecord(ctx, b, ev, StatFastestEntry, p.SpeedMs, map[string]any{
+		"body":            p.Body,
+		"flight":          ids.String(ev.FlightID),
+		"dyn_pressure_pa": p.DynPressurePa,
+	})
+}
+
+// orbitRecordFold implements the four boards that describe the *shape* of an
+// orbit a player actually reached: `highest_apoapsis`, `lowest_orbit`,
+// `roundest_orbit` and `steepest_orbit`.
+//
+// One type registered four times rather than four types, for the reason
+// speedFold is registered twice: the eligibility is identical and only the
+// field and the direction differ.
+//
+// Every value is gated on `> 0`, and that gate is doing real work rather than
+// being defensive. `ap_m` is written as 0.0 whenever the conic is not Bound;
+// an `ecc` or `inc_deg` of exactly 0 is what a failed or unwritten read leaves
+// behind; and `pe_m` is computed unconditionally, so it can legitimately be
+// negative for an orbit whose periapsis is underground (docs/ksa-integration.md).
+// On the two ascending boards a zero would be an unbeatable record that nobody
+// flew, which is why `roundest_orbit` must refuse a perfectly circular-looking
+// 0 rather than crown it.
+type orbitRecordFold struct {
+	stat string
+	// best makes this a min-record: rounder and lower are smaller numbers.
+	best bool
+	// value picks this board's field out of the orbit.
+	value func(VehicleOrbit) float64
+}
+
+func (f orbitRecordFold) Name() string { return f.stat }
+
+func (f orbitRecordFold) Apply(ctx context.Context, b *Batch, ev Event) error {
+	p, ok := payloadOf[VehicleOrbit](ev)
+	if !ok || p.Phase != "achieved" {
+		return nil
+	}
+	value := f.value(p)
+	if value <= 0 {
+		return nil
+	}
+	ok, err := scoreable(ctx, ev, b)
+	if err != nil || !ok {
+		return err
+	}
+	// The whole orbit, on all four boards. A reader looking at a periapsis
+	// wants the apoapsis beside it, and carrying one context shape means the
+	// four rows of one orbit are the same blob rather than four partial views
+	// of it.
+	cx := map[string]any{
+		"body":    p.Body,
+		"flight":  ids.String(ev.FlightID),
+		"ap_m":    p.ApM,
+		"pe_m":    p.PeM,
+		"ecc":     p.Ecc,
+		"inc_deg": p.IncDeg,
+	}
+	if f.best {
+		return putBest(ctx, b, ev, f.stat, value, cx)
+	}
+	return putRecord(ctx, b, ev, f.stat, value, cx)
+}
+
+// launchFold implements the three boards about what was on the pad:
+// `heaviest_launch`, `most_parts` and `biggest_crew`.
+//
+// All three read `flight.started`, all three are gated on `> 0`, and for the
+// two integer fields that gate *is* §4.2's `>= 1`. Zero is what every one of
+// them reports when the read failed — mass, part count and crew count are all
+// written as 0 rather than omitted — so a zero is an unreadable vehicle, not an
+// empty one.
+type launchFold struct {
+	stat  string
+	value func(FlightStarted) float64
+}
+
+func (f launchFold) Name() string { return f.stat }
+
+func (f launchFold) Apply(ctx context.Context, b *Batch, ev Event) error {
+	p, ok := payloadOf[FlightStarted](ev)
+	if !ok {
+		return nil
+	}
+	value := f.value(p)
+	if value <= 0 {
+		return nil
+	}
+	ok, err := scoreable(ctx, ev, b)
+	if err != nil || !ok {
+		return err
+	}
 	return putRecord(ctx, b, ev, f.stat, value, map[string]any{
-		"body":   p.Body,
+		"body":       p.Body,
+		"flight":     ids.String(ev.FlightID),
+		"vehicle":    p.VehicleName,
+		"mass_kg":    p.MassKg,
+		"part_count": p.PartCount,
+		"crew_count": p.CrewCount,
+	})
+}
+
+// recoveryFold implements `biggest_recovery`: the most kittens brought home by
+// one flight.
+//
+// The counterpart of `kittens_recovered`, which sums crew over every recovered
+// flight. This one is the single best trip, which is a different achievement:
+// forty solo recoveries and one nine-seat station crew return are the same
+// number on that board and very different on this one.
+type recoveryFold struct{}
+
+func (recoveryFold) Name() string { return StatBiggestRecovery }
+
+func (recoveryFold) Apply(ctx context.Context, b *Batch, ev Event) error {
+	p, ok := payloadOf[FlightEnded](ev)
+	if !ok || p.Reason != "recovered" || p.CrewCount < 1 {
+		return nil
+	}
+	ok, err := scoreable(ctx, ev, b)
+	if err != nil || !ok {
+		return err
+	}
+	body, err := flightBody(ctx, b, ev)
+	if err != nil {
+		return err
+	}
+	return putRecord(ctx, b, ev, StatBiggestRecovery, float64(p.CrewCount), map[string]any{
+		"body":   body,
 		"flight": ids.String(ev.FlightID),
-		"t1_sim": p.T1Sim,
+	})
+}
+
+// stagesFold implements `most_stages`: the highest stage number a vehicle ever
+// reached.
+//
+// `stage_index` is zero-based and is read in the postfix, so it is the sequence
+// that just became active — the value is therefore `stage_index + 1`, which is
+// "how many stages have fired", the number a player would say out loud. There
+// is no `> 0` gate for the same reason: firing stage 0 is one staging event and
+// counts as one stage.
+type stagesFold struct{}
+
+func (stagesFold) Name() string { return StatMostStages }
+
+func (stagesFold) Apply(ctx context.Context, b *Batch, ev Event) error {
+	p, ok := payloadOf[VehicleStaging](ev)
+	if !ok {
+		return nil
+	}
+	ok, err := scoreable(ctx, ev, b)
+	if err != nil || !ok {
+		return err
+	}
+	body, err := flightBody(ctx, b, ev)
+	if err != nil {
+		return err
+	}
+	return putRecord(ctx, b, ev, StatMostStages, float64(p.StageIndex+1), map[string]any{
+		"body":   body,
+		"flight": ids.String(ev.FlightID),
+	})
+}
+
+// evaDurationFold implements `longest_eva`: the longest single spacewalk.
+//
+// `duration_s` is 0.0 when the EVA vehicle's launch time was never readable,
+// which is indistinguishable on the wire from an EVA that ended in the frame it
+// began — hence the strict `> 0`, which costs nothing real and keeps a failed
+// read off the board.
+//
+// §4.1 sends `kitten.eva_end` with **flight: null**, asymmetrically with
+// `kitten.eva_start`. So there is nothing here for the flag exclusion to check
+// (scoreable passes every flightless event) and no flight to name in the
+// context; the kitten is what identifies the row.
+type evaDurationFold struct{}
+
+func (evaDurationFold) Name() string { return StatLongestEVA }
+
+func (evaDurationFold) Apply(ctx context.Context, b *Batch, ev Event) error {
+	p, ok := payloadOf[KittenEvaEnd](ev)
+	if !ok || p.DurationS <= 0 {
+		return nil
+	}
+	ok, err := scoreable(ctx, ev, b)
+	if err != nil || !ok {
+		return err
+	}
+	cx := map[string]any{"kitten": p.Name}
+	if ev.HasFlight() {
+		// Not reachable from the shipped mod; here so a future build that fills
+		// the key in gets the link rather than a silently missing one.
+		cx["flight"] = ids.String(ev.FlightID)
+	}
+	return putRecord(ctx, b, ev, StatLongestEVA, p.DurationS, cx)
+}
+
+// touchdownFold implements `softest_touchdown`: the gentlest arrival on a
+// surface.
+//
+// Two conditions make this a landing rather than a bump. The destination must
+// be a surface-contact situation, and the *origin* must be one of the two
+// situations that are known to be off the ground — `freefall` or `maneuvering`.
+// Requiring the origin to be **known** and not merely contact-free is the whole
+// difference between a landing and an unreadable transition: `"unknown"` also
+// reports no contact, and a touchdown measured from a state nobody could read
+// is not a measurement (situation.go).
+//
+// It also excludes the transitions that would otherwise dominate the board:
+// `rolling` → `landed` as a rover stops, or `landed` → `dragging` on a slope,
+// are surface-to-surface at almost zero speed and are not touchdowns.
+type touchdownFold struct{}
+
+func (touchdownFold) Name() string { return StatSoftestTouchdown }
+
+func (touchdownFold) Apply(ctx context.Context, b *Batch, ev Event) error {
+	p, ok := payloadOf[VehicleSituation](ev)
+	if !ok || !hasSurfaceContact(p.To) || p.SurfaceSpeedMs <= 0 {
+		return nil
+	}
+	if !knownSituation(p.From) || hasSurfaceContact(p.From) {
+		return nil
+	}
+	ok, err := scoreable(ctx, ev, b)
+	if err != nil || !ok {
+		return err
+	}
+	return putBest(ctx, b, ev, StatSoftestTouchdown, p.SurfaceSpeedMs, map[string]any{
+		"body":       p.Body,
+		"flight":     ids.String(ev.FlightID),
+		"from":       p.From,
+		"to":         p.To,
+		"altitude_m": p.AltitudeM,
 	})
 }
 
@@ -522,6 +949,64 @@ func (soiFold) Apply(ctx context.Context, b *Batch, ev Event) error {
 	return addCount(ctx, b, ev, StatSOIBodies, 1)
 }
 
+// landedBodiesFold implements `landed_bodies`: how many distinct bodies the
+// player has put something down on.
+//
+// The set-backed shape of `soi_bodies`, and for the same reason (PROJ-011):
+// `AddBody` reports whether the `player_body` row was new, so the counter
+// advances only on a new row and the board never needs a `count(*)` and stays
+// correct under replay. It writes `kind = 'landed'` alongside soiFold's
+// `'soi'`, which the table's (player_id, kind, body) key already allows for.
+//
+// "Landed on" is any surface contact — terrain, ocean or both — because
+// splashing down on a body is arriving at it. `splashdowns` is the board that
+// distinguishes them.
+type landedBodiesFold struct{}
+
+func (landedBodiesFold) Name() string { return StatLandedBodies }
+
+func (landedBodiesFold) Apply(ctx context.Context, b *Batch, ev Event) error {
+	p, ok := payloadOf[VehicleSituation](ev)
+	if !ok || p.Body == "" || !hasSurfaceContact(p.To) {
+		return nil
+	}
+	ok, err := scoreable(ctx, ev, b)
+	if err != nil || !ok {
+		return err
+	}
+	added, err := b.AddBody(ctx, ev.PlayerID, "landed", p.Body, ev.Seq)
+	if err != nil || !added {
+		return err // an err, or a body already landed on
+	}
+	return addCount(ctx, b, ev, StatLandedBodies, 1)
+}
+
+// splashdownFold implements `splashdowns`: arrivals in water.
+//
+// `to` must be pure ocean contact — `sailing` or `floating` — rather than any
+// ocean contact, because `dragging` and `bottomed` touch terrain as well and
+// are a hull on a shoreline rather than a capsule under a parachute.
+//
+// `from` must be contact-free, which is what makes this an *arrival*. Without
+// it a boat bobbing across the `sailing` ↔ `floating` boundary as it goes on
+// and off rails would count a splashdown every time, and the 2 s situation
+// debounce only rate-limits that — it does not stop it.
+type splashdownFold struct{}
+
+func (splashdownFold) Name() string { return StatSplashdowns }
+
+func (splashdownFold) Apply(ctx context.Context, b *Batch, ev Event) error {
+	p, ok := payloadOf[VehicleSituation](ev)
+	if !ok || contactOf(p.To) != contactOcean || hasSurfaceContact(p.From) {
+		return nil
+	}
+	ok, err := scoreable(ctx, ev, b)
+	if err != nil || !ok {
+		return err
+	}
+	return addCount(ctx, b, ev, StatSplashdowns, 1)
+}
+
 // recoveredFold implements `kittens_recovered` (§5.6): the sum of
 // `flight.ended.crew_count` over flights that ended `recovered`.
 type recoveredFold struct{}
@@ -566,6 +1051,36 @@ func (distanceFold) Apply(ctx context.Context, b *Batch, ev Event) error {
 		}
 	}
 
+	// Two per-kitten records off the same roster: the furthest one kitten has
+	// ever gone, and the most missions one kitten has ever flown. Both are
+	// "who is your best cat", where `distance_travelled` is "how good is your
+	// whole roster", and they are folded here because this is the only fold
+	// that has ever written the `kitten` table.
+	//
+	// **They inherit distance_travelled's exemption from the flag exclusion**,
+	// because roster.snapshot carries no flight (§4.1 sends flight: null) and
+	// scoreable passes every flightless event. So a kitten who did all her
+	// travelling on a teleported flight still holds the record. That is a
+	// property of the source event, not a decision about these boards, and it
+	// is not fixable here — the fix would be the mod attributing roster totals
+	// to the flights that earned them. Recorded rather than papered over.
+	travelled, missions, err := b.KittenTops(ctx, ev.PlayerID)
+	if err != nil {
+		return err
+	}
+	if travelled.Value > 0 {
+		if err := putRecord(ctx, b, ev, StatTopKittenDistance, travelled.Value,
+			map[string]any{"kitten": travelled.Name}); err != nil {
+			return err
+		}
+	}
+	if missions.Value > 0 {
+		if err := putRecord(ctx, b, ev, StatTopKittenMissions, missions.Value,
+			map[string]any{"kitten": missions.Name}); err != nil {
+			return err
+		}
+	}
+
 	total, err := b.KittenDistance(ctx, ev.PlayerID)
 	if err != nil {
 		return err
@@ -574,6 +1089,21 @@ func (distanceFold) Apply(ctx context.Context, b *Batch, ev Event) error {
 		return nil
 	}
 	return setValue(ctx, b, ev, StatDistanceTravelled, total)
+}
+
+// flightBody is the body a flight's `flight.started` reported, for the record
+// boards whose own payload carries none.
+//
+// It costs nothing: every caller has already been through scoreable, which
+// loaded the same flight_state row into the batch's cache. An empty string is
+// the honest answer for a flight whose `flight.started` has not been folded yet
+// — a batch can be split — and is what the payload itself would have said.
+func flightBody(ctx context.Context, b *Batch, ev Event) (string, error) {
+	st, ok, err := b.Flight(ctx, ev.FlightID)
+	if err != nil || !ok {
+		return "", err
+	}
+	return st.Body, nil
 }
 
 // --- career-time folds --------------------------------------------------------

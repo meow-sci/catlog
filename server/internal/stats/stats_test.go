@@ -232,10 +232,21 @@ func TestLithobrakeRecordAndItsExclusions(t *testing.T) {
 			SpeedMs: 900, Survived: true, LaunchPad: true, Body: "kerbin", CrewCount: 2,
 		}},
 	})
-	want(t, got, map[string]float64{"1/biggest_lithobrake_survived": 214})
+	want(t, got, map[string]float64{
+		"1/biggest_lithobrake_survived": 214,
+		// The same impact, ranked by energy instead — one eligibility rule, two
+		// boards (survivedImpact).
+		"1/biggest_impact_energy": 4.8e7,
+		// f1's flight.started put one kitten on the pad.
+		"1/biggest_crew": 1,
+	})
 
-	if cx := got["1/biggest_lithobrake_survived"].Context; cx != `{"body":"duna","energy_j":48000000,"flight":"`+ids.String(flightN(1))+`"}` {
+	wantCx := `{"body":"duna","energy_j":48000000,"flight":"` + ids.String(flightN(1)) + `","speed_ms":214}`
+	if cx := got["1/biggest_lithobrake_survived"].Context; cx != wantCx {
 		t.Errorf("context = %s", cx)
+	}
+	if cx := got["1/biggest_impact_energy"].Context; cx != wantCx {
+		t.Errorf("energy board context = %s, want the same blob as the speed board", cx)
 	}
 }
 
@@ -372,6 +383,7 @@ func TestSpeedBoardsComeFromTelemetryWindows(t *testing.T) {
 		"1/fastest_orbital_speed": 9450,
 		"1/peak_g_survived":       6.8,
 		"1/distance_travelled":    1000,
+		"1/top_kitten_distance":   1000,
 	})
 }
 
@@ -429,6 +441,11 @@ func TestOrbitsCountOnlyAchieved(t *testing.T) {
 		// The first achieved orbit is also this career's fastest-to-orbit; the
 		// input has no simT, so it lands at 0.
 		"1/fastest_to_orbit": 0,
+		// The shape boards read the same events. `ecc` and `inc_deg` are 0 here,
+		// which is what an unreadable orbit looks like, so neither
+		// roundest_orbit nor steepest_orbit may score.
+		"1/highest_apoapsis": 320000,
+		"1/lowest_orbit":     295000,
 	})
 }
 
@@ -468,7 +485,11 @@ func TestKittensRecoveredSumsOnlyRecoveredFlights(t *testing.T) {
 		{flight: f1, typ: "flight.ended", payload: stats.FlightEnded{Reason: "recovered", CrewCount: 3}},
 		{flight: f2, typ: "flight.ended", payload: stats.FlightEnded{Reason: "destroyed", CrewCount: 2}},
 		{flight: f3, typ: "flight.ended", payload: stats.FlightEnded{Reason: "recovered", CrewCount: 1}},
-	}), map[string]float64{"1/kittens_recovered": 4})
+	}), map[string]float64{
+		"1/kittens_recovered": 4,
+		// The sum is 4; the biggest single trip home is 3.
+		"1/biggest_recovery": 3,
+	})
 }
 
 func TestDistanceTravelledSumsPerKittenMaxima(t *testing.T) {
@@ -485,7 +506,11 @@ func TestDistanceTravelledSumsPerKittenMaxima(t *testing.T) {
 			{Kid: "k2", Name: "Nimbus", TravelledM: 100, Missions: 1},
 		}}},
 	}, 0, false)
-	want(t, readStats(t, proj), map[string]float64{"1/distance_travelled": 3000})
+	want(t, readStats(t, proj), map[string]float64{
+		"1/distance_travelled":  3000,
+		"1/top_kitten_distance": 2500,
+		"1/top_kitten_missions": 2,
+	})
 
 	var travelled float64
 	if err := proj.Reader().QueryRowContext(t.Context(),
@@ -688,13 +713,24 @@ func TestFeedSkipsNonEventsAndFlaggedFlights(t *testing.T) {
 func TestBoardMetadataCoversEveryStatAFoldWrites(t *testing.T) {
 	// Every board key a fold can produce must describe, or the read API would
 	// hold a row it can neither title nor serve.
+	// The three boards whose unit is deliberately empty: an eccentricity, and
+	// two counts of a thing the title already names. Everything else must carry
+	// a label, or a value column would be a bare number nobody can read.
+	unitless := map[string]bool{
+		stats.StatRoundestOrbit: true,
+		stats.StatMostParts:     true,
+		stats.StatMostStages:    true,
+	}
 	declared := map[string]bool{}
 	for _, b := range stats.FixedBoards() {
 		if declared[b.Stat] {
 			t.Errorf("duplicate board %q", b.Stat)
 		}
-		if b.Title == "" || b.Unit == "" {
-			t.Errorf("board %q has no title or unit", b.Stat)
+		if b.Title == "" {
+			t.Errorf("board %q has no title", b.Stat)
+		}
+		if b.Unit == "" && !unitless[b.Stat] {
+			t.Errorf("board %q has no unit", b.Stat)
 		}
 		declared[b.Stat] = true
 	}
@@ -706,6 +742,17 @@ func TestBoardMetadataCoversEveryStatAFoldWrites(t *testing.T) {
 		stats.StatSOIBodies, stats.StatDockings, stats.StatStagings,
 		stats.StatKittensRecovered, stats.StatDistanceTravelled,
 		stats.StatFastestToOrbit,
+		stats.StatMaxQSurvived, stats.StatBiggestImpactEnergy,
+		stats.StatFastestEntry, stats.StatHighestAltitude,
+		stats.StatHighestApoapsis, stats.StatLowestOrbit,
+		stats.StatRoundestOrbit, stats.StatSteepestOrbit,
+		stats.StatSoftestTouchdown, stats.StatHeaviestLaunch,
+		stats.StatMostParts, stats.StatBiggestCrew,
+		stats.StatBiggestRecovery, stats.StatMostStages,
+		stats.StatLongestEVA, stats.StatLandedBodies,
+		stats.StatSplashdowns, stats.StatEVAs, stats.StatFlameouts,
+		stats.StatEngineIgnitions, stats.StatTopKittenDistance,
+		stats.StatTopKittenMissions,
 	}
 	for _, stat := range fixed {
 		if !declared[stat] {

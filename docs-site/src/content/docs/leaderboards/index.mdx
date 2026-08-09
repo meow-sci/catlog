@@ -15,17 +15,28 @@ to everybody.
 
 There are four shapes of board.
 
-| Shape           | Rule                                                 | Boards                                                                                       |
-| --------------- | ---------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| **Record**      | The largest value ever seen wins.                    | Biggest Lithobrake Survived, Peak G Survived, Fastest Surface Speed, Fastest Orbital Speed   |
-| **Counter**     | Add up qualifying events.                            | Kitten Tumbles, RUDs, Orbits Achieved, Bodies Visited, Dockings, Stagings, Kittens Recovered |
-| **Total**       | Recompute a sum from your roster.                    | Distance Travelled                                                                           |
-| **Career time** | The _smallest_ time from the start of a career wins. | Fastest to Orbit, and every Fastest to _&lt;world&gt;_                                       |
+| Shape           | Rule                                                 | Boards                                                                                                                                                                         |
+| --------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Record**      | The best single value ever seen wins.                | Nineteen of them, plus two per-kitten boards — everything from Biggest Lithobrake Survived to Softest Touchdown, Heaviest Launch and Longest Spacewalk                         |
+| **Counter**     | Add up qualifying events.                            | Twelve of them — Kitten Tumbles, RUDs, Orbits Achieved, Bodies Visited, Bodies Landed On, Dockings, Stagings, Splashdowns, Spacewalks, Ran Dry, Engines Lit, Kittens Recovered |
+| **Total**       | Recompute a sum from your roster.                    | Distance Travelled                                                                                                                                                             |
+| **Career time** | The _smallest_ time from the start of a career wins. | Fastest to Orbit, and every Fastest to _&lt;world&gt;_                                                                                                                         |
+
+**"Best" is not always "largest".** Most records are won by the biggest number,
+but three are won by the smallest: **Lowest Stable Orbit**, **Roundest Orbit** and
+**Softest Touchdown**. Every board says which way it reads, on its own page and in
+the API, so you never have to guess.
+
+<Aside type="caution" title="On a board where small wins, a zero is dangerous">
+  A figure the game never managed to write comes through as zero, and zero would beat every real
+  entry on a board where the smallest number wins. So each of those boards refuses a zero outright —
+  a record that belonged to a failed reading rather than to a flight would be unbeatable, forever.
+</Aside>
 
 <LinkCard
   title="Every board"
   href="/catlog/leaderboards/catalog/"
-  description="All 13 fixed boards plus the two families, with each one's exact rules."
+  description="All 35 fixed boards plus the two families, with each one's exact rules."
 />
 
 ## Ties: first there keeps the rank
