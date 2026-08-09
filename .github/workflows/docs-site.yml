@@ -6,9 +6,11 @@ name: Deploy docs site to GitHub Pages
 # '/catlog/' in docs-site/astro.config.mjs and must match the repo name exactly
 # (case-sensitive path segment). Siblings gatOS and flexo publish the same way.
 #
-# Repo one-time setup: Settings -> Pages -> "Build and deployment" -> Source =
-# "GitHub Actions". The Setup Pages step below tries to enable it automatically;
-# if org policy blocks that, do it once by hand.
+# Repo one-time setup, already done: Pages is enabled with source = "GitHub
+# Actions" (`gh api -X POST repos/meow-sci/catlog/pages -f build_type=workflow`).
+# The workflow does NOT try to enable it itself — `configure-pages` with
+# `enablement: true` needs a permission the workflow token does not have here,
+# and it fails the build rather than degrading.
 
 on:
   # Only redeploy when the site (or this workflow) actually changes. Every other
@@ -79,14 +81,13 @@ jobs:
       - name: Build
         run: pnpm run build
 
-      # Enables GitHub Pages for the repo (source = GitHub Actions) if it isn't
-      # already, so the deploy job's create-deployment call doesn't 404. Skipped on
-      # pull requests, which never deploy.
+      # Resolves the Pages base URL for the deploy job. Pages itself is enabled
+      # out of band (see the header) — this step must not try, because the
+      # workflow token cannot create a Pages site on this repo and the action
+      # treats that as fatal. Skipped on pull requests, which never deploy.
       - name: Setup Pages
         if: github.event_name != 'pull_request'
-        uses: actions/configure-pages@v5
-        with:
-          enablement: true
+        uses: actions/configure-pages@v6
 
       - name: Upload Pages artifact
         if: github.event_name != 'pull_request'
