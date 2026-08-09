@@ -39,6 +39,9 @@ public sealed class PolledSignals
     private readonly Dictionary<string, bool> _kia = new(StringComparer.Ordinal);
     private readonly HashSet<string> _live = new(StringComparer.Ordinal);
 
+    // Reused across ticks, like _live: the KIA scan runs at the sample rate and must not allocate.
+    private readonly List<RosterKia> _rosterKia = [];
+
     private double _lastRosterSimT = double.NegativeInfinity;
     private double _lastManualDestroySimT = double.NegativeInfinity;
     private bool _rosterSeeded;
@@ -248,15 +251,20 @@ public sealed class PolledSignals
             + $"stock is {VehicleTelemetry.StockTumbleSpeedGate.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)}"));
     }
 
+    // Two cadences, two reads. The KIA diff below runs on every sample tick and must stay that
+    // responsive — a death that took ten minutes to notice would be attributed to the wrong flight
+    // and, past the manual-destroy window, to the wrong cause. The roster.snapshot PAYLOAD is due
+    // once every RosterIntervalSeconds, so it is built only when it is about to be emitted; the
+    // scan that feeds the diff carries no payload fields and allocates nothing.
     private void PollRoster(double simT, long wallMs, List<GameSignal> into)
     {
-        IReadOnlyList<RosterKitten> roster = VehicleTelemetry.SampleRoster();
-        if (roster.Count == 0)
+        VehicleTelemetry.SampleRosterKia(_rosterKia);
+        if (_rosterKia.Count == 0)
             return;
 
         bool manualDestroyNearby = simT - _lastManualDestroySimT <= ManualDestroyWindowSeconds;
 
-        foreach (RosterKitten kitten in roster)
+        foreach (RosterKia kitten in _rosterKia)
         {
             bool wasKia = _kia.TryGetValue(kitten.Name, out bool previous) && previous;
             _kia[kitten.Name] = kitten.Kia;
@@ -276,6 +284,11 @@ public sealed class PolledSignals
         _rosterSeeded = true;
 
         if (simT - _lastRosterSimT < RosterIntervalSeconds)
+            return;
+
+        // Now, and only now, pay for the full payload read.
+        IReadOnlyList<RosterKitten> roster = VehicleTelemetry.SampleRoster();
+        if (roster.Count == 0)
             return;
 
         _lastRosterSimT = simT;

@@ -27,7 +27,7 @@ commit. See [ARCHITECTURE.md](ARCHITECTURE.md#7-keeping-the-documentation-true) 
 - **[Projector, boards & the read API](#projector-boards--the-read-api)** — `PROJ-*`, 84 entries
 - **[Archive & restore](#archive--restore)** — `ARCH-*`, 13 entries
 - **[The two frontends](#the-two-frontends)** — `UI-*`, 56 entries
-- **[The mod and its KSA-free core](#the-mod-and-its-ksa-free-core)** — `MOD-*`, 70 entries
+- **[The mod and its KSA-free core](#the-mod-and-its-ksa-free-core)** — `MOD-*`, 71 entries
 - **[The load harness](#the-load-harness)** — `LOAD-*`, 26 entries
 - **[Containers, nginx & deployment](#containers-nginx--deployment)** — `OPS-*`, 25 entries
 - **[Documentation](#documentation)** — `DOCS-*`, 4 entries
@@ -1984,6 +1984,22 @@ Two rules are off solution-wide (S125 "remove commented-out code", which cannot 
 **The fix itself is two lines.** `EndRows` now closes what `BeginRows` opened, in reverse order — `ImGui.EndTable()` then `ImGui.PopStyleVar()` — which is what the asymmetry with `BeginRows`'s own failure path (it pops before returning false) always implied.
 
 **The transferable point is about where the untested surface is.** catlog's testing strategy is deliberate and correct: keep everything testable in `catlog.lib`, keep `mod/catlog` a thin KSA-facing shell. The consequence is that the shell is precisely where a bug survives, so it needs a compensating control that is not a test — and the control has to be checked against the bug it is supposed to catch, not assumed.
+
+### MOD-071 — The game thread's steady-state tick now allocates nothing, and quitting the game costs 2 seconds, not 9
+
+*Accepted · 2026-08-09 · mod.*
+
+An audit of the "nothing that costs the player frames runs on the game thread" requirement found the **steady state already correct** — JSON, SQLite, Brotli, SHA-256/ES256 and HTTP are all provably on the worker or the shipper, and the game thread's only cross-thread act is an unbounded `Channel.TryWrite` plus a volatile reference swap, neither of which can block. Every defect was at an edge the design had not been measured at.
+
+**Quitting the game froze it for about nine seconds.** `Dispose` waited up to 5 s for the worker to drain, then up to 2 s for the shipper to stop, then up to 2 s for `FinalShip` — three independent timeouts that summed, on the game thread. MOD-069 says `FinalShip` is "one attempt, bounded at 2 seconds", and that was true of `FinalShip` in isolation and false of the thing the player experiences. The three stages now share **one 2-second deadline**; if the drain spends it, the courtesy flush is skipped. MOD-069's guarantee is unchanged — still exactly one attempt, still abandoned rather than allowed to hold the game open.
+
+**The roster was rebuilt on the game thread 2× a second and used 2× per 20 minutes.** `PollRoster` needs a roster read every tick for the KIA diff — a death noticed late is attributed past the manual-destroy window and gets the wrong cause — but it was reading the *whole `roster.snapshot` payload*, allocating a list plus a record per kitten, and throwing it away 1,199 times out of 1,200. Split in two: an allocation-free scan into a reused buffer for the diff at the unchanged cadence, and the full payload read only on the tick it is emitted.
+
+The rest were smaller and the same shape — paying every tick for something used rarely or never. `VehicleTelemetry.Sample` computed the lowercase body name twice and re-sanitised an immutable vehicle id on every tick, per vehicle; `SnapshotStore.Publish` allocated a `TaskCompletionSource` per tick that the shipped worker never awaits (88 B/tick → 0); `SubsystemHealth` took a monitor 3–5 times per *frame* on a lock the worker also holds, now a copy-on-write latch table that is lock-free on the healthy path. Off-thread but still wrong: `OutboxDb.Prune` re-measured the whole table after every 128-row delete, making a prune quadratic exactly when the outbox was already under pressure, and `PendingCount` ran a `COUNT(*)` after every append.
+
+**The guard is the part worth keeping.** `GameThreadAllocationTests` asserts the steady-state tick path allocates **zero** bytes over 2,000 ticks, and was verified to fail at ~176,000 bytes against the old code. It is honest about its reach: `VehicleTelemetry.Sample`, `PolledSignals.Poll` and the roster scan live in `mod/catlog`, which references KSA and cannot be loaded by the test assembly (`AssemblyGuardTests`), so those keep their guarantees by construction — reused buffers, memoised per-vehicle constants, a payload built only when emitted — and the test says so rather than implying coverage it does not have.
+
+**Why a byte budget rather than a timing benchmark:** a wall-clock assertion on a shared CI runner is a flaky test, and the thing that actually costs frames here is not CPU in the tick, it is the collector coming back for the garbage *during* one. Bytes are exact, thread-local, and deterministic.
 
 ## The load harness
 

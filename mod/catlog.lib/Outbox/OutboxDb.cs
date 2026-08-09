@@ -260,6 +260,16 @@ public sealed class OutboxDb : IDisposable
     /// <c>telemetry.window</c> costs resolution on a graph, losing a <c>vehicle.impact</c> costs a
     /// leaderboard entry.
     /// </summary>
+    /// <remarks>
+    /// The running total is measured once and then <b>decremented by what each batch actually
+    /// removed</b>, rather than re-measured per batch. <see cref="TotalBytes"/> is a full-table
+    /// <c>SUM(LENGTH(...))</c>, so re-asking it after every 128-row delete made the whole prune
+    /// quadratic in the size of the outbox — the one place where a cap that has just been exceeded
+    /// by a long session is exactly when the table is biggest. The shipper may delete rows on a
+    /// <c>200</c> while this runs, which can only make the true total smaller than the running one;
+    /// the cost is at worst a few extra passive rows dropped on that pass, and passive rows are the
+    /// ones this method exists to drop.
+    /// </remarks>
     /// <param name="capBytes">Target size in bytes.</param>
     /// <returns>How many rows were dropped.</returns>
     public int Prune(long capBytes)
@@ -267,23 +277,49 @@ public sealed class OutboxDb : IDisposable
         if (capBytes <= 0)
             return 0;
 
+        long total = TotalBytes;
         int dropped = 0;
-        while (TotalBytes > capBytes)
+        while (total > capBytes)
         {
+            // Measure and bound the batch in one indexed pass (idx_outbox_kind_id covers both), so
+            // the delete below is a range on the same index rather than a subquery re-run.
+            (long batchBytes, long lastId) = OldestDroppable(128);
+            if (lastId < 0)
+                break; // Nothing droppable left: the outbox is all scoring events.
+
             using SqliteCommand cmd = _connection.CreateCommand();
-            cmd.CommandText =
-                """
-                DELETE FROM outbox_event WHERE id IN (
-                    SELECT id FROM outbox_event WHERE kind = 0 ORDER BY id LIMIT 128
-                )
-                """;
+            cmd.CommandText = "DELETE FROM outbox_event WHERE kind = 0 AND id <= $id";
+            cmd.Parameters.AddWithValue("$id", lastId);
             int deleted = cmd.ExecuteNonQuery();
             if (deleted == 0)
-                break; // Nothing droppable left: the outbox is all scoring events.
+                break;
+
             dropped += deleted;
+            total -= batchBytes;
         }
 
         return dropped;
+    }
+
+    /// <summary>
+    /// The size and highest id of the oldest droppable (<c>kind = 0</c>) rows, capped at
+    /// <paramref name="limit"/> rows. <c>lastId</c> is <c>-1</c> when there are none.
+    /// </summary>
+    /// <param name="limit">How many rows the batch may cover.</param>
+    /// <returns>The batch's byte total and its highest row id.</returns>
+    private (long Bytes, long LastId) OldestDroppable(int limit)
+    {
+        using SqliteCommand cmd = _connection.CreateCommand();
+        cmd.CommandText =
+            """
+            SELECT COALESCE(SUM(LENGTH(CAST(body AS BLOB))), 0), COALESCE(MAX(id), -1) FROM (
+                SELECT id, body FROM outbox_event WHERE kind = 0 ORDER BY id LIMIT $limit
+            )
+            """;
+        cmd.Parameters.AddWithValue("$limit", limit);
+
+        using SqliteDataReader reader = cmd.ExecuteReader();
+        return reader.Read() ? (reader.GetInt64(0), reader.GetInt64(1)) : (0, -1);
     }
 
     /// <summary>Reads a <c>shipper_state</c> value.</summary>

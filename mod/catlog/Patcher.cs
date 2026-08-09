@@ -657,9 +657,19 @@ public static class Patcher
 
     private static void TeleportPrefix(ref InputEvents.TeleportInputData __instance)
     {
-        Vehicle? vehicle = __instance.Vehicle;
-        if (vehicle is not null)
-            Flag(vehicle, FlightFlag.Teleport, "the vehicle was teleported by a player command");
+        // The read is inside the try like every other patch body's: Flag catches its own work, but
+        // __instance.Vehicle is a KSA read on the far side of a Harmony trampoline, and a patch
+        // body that throws is a hard failure in the game rather than a logged one in catlog.
+        try
+        {
+            Vehicle? vehicle = __instance.Vehicle;
+            if (vehicle is not null)
+                Flag(vehicle, FlightFlag.Teleport, "the vehicle was teleported by a player command");
+        }
+        catch (Exception ex)
+        {
+            NoteBodyError(ex);
+        }
     }
 
     private static void RefillConsumablesPrefix(Vehicle __instance)

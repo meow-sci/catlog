@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using KSA;
 using MeowSci.Catlog.Lib.Events;
@@ -6,6 +7,14 @@ using MeowSci.Catlog.Lib.Telemetry;
 using MeowSci.Catlog.Lib.Util;
 
 namespace MeowSci.Catlog;
+
+/// <summary>
+/// One roster row reduced to what KIA detection diffs. A struct, so a full roster scan on the game
+/// thread costs one reused buffer and no allocations at all.
+/// </summary>
+/// <param name="Name">The kitten's name, as the game holds it.</param>
+/// <param name="Kia">True when the roster says the kitten is dead.</param>
+public readonly record struct RosterKia(string Name, bool Kia);
 
 /// <summary>
 /// <b>Every KSA read in the mod lives here.</b> Nothing else in <c>mod/catlog</c> — not
@@ -38,6 +47,23 @@ public static class VehicleTelemetry
     /// <c>kitten.tumble</c>. Any deviation from this constant flags the session.
     /// </remarks>
     public const float StockTumbleSpeedGate = 6.5f;
+
+    // Two memo tables for values that are pure functions of a string the game hands back unchanged
+    // on every tick: the lowercase form of a parent body id, and the sanitized form of a vehicle id.
+    // Both were being recomputed — and re-allocated — per vehicle, twice a second, on the game
+    // thread, for a result that cannot change while the object exists.
+    //
+    // Neither is an allow-list. Both are filled from whatever names the data actually contains; a
+    // miss computes and stores, and an unknown body is as ordinary here as a known one. The cap is
+    // there so a session that somehow invents thousands of distinct ids stops growing the table
+    // rather than leaking — past it, the value is still computed, just not remembered.
+    //
+    // ConcurrentDictionary rather than Dictionary because Harmony patch bodies reach these helpers
+    // from whatever thread KSA calls them on, and a torn Dictionary is a hang rather than an
+    // exception. Its reads take no lock, which is the only property the game thread cares about.
+    private const int NameCacheCap = 1024;
+    private static readonly ConcurrentDictionary<string, string> BodyNames = new(StringComparer.Ordinal);
+    private static readonly ConcurrentDictionary<string, string> VehicleNames = new(StringComparer.Ordinal);
 
     private static string _gameBuild = string.Empty;
 
@@ -139,12 +165,18 @@ public static class VehicleTelemetry
 
             OrbitClass conic = ClassifyOrbit(orbit);
 
+            // Once, not twice: body and parent_body_id are the same string by construction, and
+            // deriving it a second time only bought a second identical allocation per vehicle per
+            // tick. They stay two fields on the wire — that is the contract — not two computations.
+            string id = vehicle.Id;
+            string body = BodyName(parent);
+
             return new TelemetrySnapshot(
-                VehicleId: vehicle.Id,
-                VehicleName: Ids.SanitizeVehicleName(vehicle.Id),
+                VehicleId: id,
+                VehicleName: SanitizedVehicleName(id),
                 SimT: simT,
                 WallMs: wallMs,
-                Body: BodyName(parent),
+                Body: body,
                 Situation: SituationName(vehicle.Situation),
                 AltitudeM: Sanitize.Finite(vehicle.GetBarometricAltitude()),
                 SurfaceSpeedMs: Sanitize.Finite(vehicle.GetSurfaceSpeed()),
@@ -152,7 +184,7 @@ public static class VehicleTelemetry
                 AccelMs2: Sanitize.Finite(vehicle.AccelerationBody.Length()),
                 MassKg: Sanitize.Finite(vehicle.TotalMass))
             {
-                ParentBodyId = BodyName(parent),
+                ParentBodyId = body,
                 AtmoHeightM = AtmosphereHeightM(parent),
                 DynPressurePa = Sanitize.Finite(PhysicalAtmosphereReference.GetDynamicPressure(vehicle)),
                 Ecc = Sanitize.Finite(orbit.Eccentricity),
@@ -267,7 +299,37 @@ public static class VehicleTelemetry
     public static string BodyName(IParentBody? parent)
     {
         string? id = parent?.Id;
-        return string.IsNullOrEmpty(id) ? "unknown" : id.ToLowerInvariant();
+        if (string.IsNullOrEmpty(id))
+            return "unknown";
+
+        if (BodyNames.TryGetValue(id, out string? lowered))
+            return lowered;
+
+        lowered = id.ToLowerInvariant();
+        if (BodyNames.Count < NameCacheCap)
+            BodyNames.TryAdd(id, lowered);
+        return lowered;
+    }
+
+    /// <summary>
+    /// The vehicle's wire-safe display name, memoised on the id it is derived from.
+    /// </summary>
+    /// <remarks>
+    /// KSA has no display name separate from the id, and an id does not change while the vehicle
+    /// exists — so this is a per-vehicle constant that the sample pass was rebuilding twice a
+    /// second, character by character, for every vehicle in the system.
+    /// </remarks>
+    /// <param name="vehicleId">The vehicle id.</param>
+    /// <returns>The sanitized name.</returns>
+    private static string SanitizedVehicleName(string vehicleId)
+    {
+        if (VehicleNames.TryGetValue(vehicleId, out string? name))
+            return name;
+
+        name = Ids.SanitizeVehicleName(vehicleId);
+        if (VehicleNames.Count < NameCacheCap)
+            VehicleNames.TryAdd(vehicleId, name);
+        return name;
     }
 
     /// <summary>The lowercase parent body name of a vehicle, safe against an uninitialized orbit.</summary>
@@ -701,6 +763,47 @@ public static class VehicleTelemetry
         {
             Faults.Note(ex);
             return [];
+        }
+    }
+
+    /// <summary>
+    /// Fills <paramref name="into"/> with one (name, KIA) row per roster entry — the whole input to
+    /// the KIA diff, and nothing more.
+    /// </summary>
+    /// <remarks>
+    /// Split out of <see cref="SampleRoster"/> because the two have different cadences and only one
+    /// of them is cheap. <c>kitten.kia</c> is detected by diffing the roster on <b>every</b> sample
+    /// tick, while the <c>roster.snapshot</c> payload is due once every
+    /// <see cref="PolledSignals.RosterIntervalSeconds"/> sim seconds — so building the full payload
+    /// per tick allocated a list and a record per kitten, on the game thread, and threw all of it
+    /// away 1199 ticks out of 1200. This one writes structs into a buffer the caller owns and
+    /// reuses the game's own name strings, so a steady-state tick allocates nothing.
+    /// </remarks>
+    /// <param name="into">The caller's reusable buffer; cleared first, and left empty when the roster cannot be read.</param>
+    [KsaAnchor("Universe.KittenRoster.Kittens (List<KittenRosterEntryData>); Name/Kia",
+        SourceFile = "KSA/Universe.cs:94 / KSA/KittenRosterData.cs:13 / KSA/KittenRosterEntryData.cs:23-35",
+        Verified = "2026-08-07", GameVersion = "2026.8.5.5168", Risk = ChurnRisk.Low,
+        Notes = "Same surface as SampleRoster, minus the DistanceReference/SimTimeReference unwrapping. "
+                + "The roster OBJECT is swapped wholesale on save-load (Universe.cs:2178) and new game "
+                + "(:176) — ksa-integration B8 — so it is re-resolved on every call and never cached.")]
+    public static void SampleRosterKia(List<RosterKia> into)
+    {
+        into.Clear();
+        try
+        {
+            List<KittenRosterEntryData> kittens = Universe.KittenRoster.Kittens;
+            foreach (KittenRosterEntryData kitten in kittens)
+            {
+                if (!string.IsNullOrEmpty(kitten.Name))
+                    into.Add(new RosterKia(kitten.Name, kitten.Kia));
+            }
+        }
+        catch (Exception ex)
+        {
+            // An unreadable roster is an empty one, exactly as in SampleRoster: the caller then
+            // does nothing this tick rather than diffing against a half-filled scan.
+            Faults.Note(ex);
+            into.Clear();
         }
     }
 

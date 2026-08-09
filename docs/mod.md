@@ -157,8 +157,11 @@ sources (comments stripped) and assert the shipped assembly never names the cloc
 environment variable or command line at all.
 
 The one exemption is `FinalShip`, the courtesy flush at game unload: exactly one attempt, run on the
-thread pool, waited on for at most **2 seconds**, then cancelled and abandoned — because a hung
-connection must never hold the game open. It is exempt because it fires at most once per session, and
+thread pool, and abandoned the moment the shutdown budget runs out — because a hung connection must
+never hold the game open. **That budget is 2 seconds for the whole of `Dispose`, not for `FinalShip`
+alone**: draining the worker, stopping the shipper and the courtesy flush share one deadline, and if
+the drain consumes it the flush is skipped outright. Three independent 2-second waits would have
+meant a ~9-second freeze at quit, which is what MOD-071 fixed. It is exempt because it fires at most once per session, and
 abusing it means actually quitting and relaunching KSA. The exempt request is still stamped, so it
 buys one batch on the way out rather than a reset.
 
@@ -171,7 +174,7 @@ The only code that touches KSA, and deliberately thin: everything else is a call
 | `Mod.cs` | Lifecycle, config load, the status window (F10) |
 | `Patcher.cs` | The Harmony patches, each carrying its `ksa-integration.md` table row as a comment |
 | `VehicleTelemetry.cs` | **Every** KSA read, each with a `[KsaAnchor]` |
-| `PolledSignals.cs` | The 2 Hz poll, vehicle tracking, the roster diff |
+| `PolledSignals.cs` | The 2 Hz poll, vehicle tracking, and the roster read at **two cadences** — an allocation-free KIA scan every tick, the `roster.snapshot` payload only when one is due |
 | `CatlogRuntime.cs`, `ModPaths.cs`, `KsaAnchor.cs` | Wiring, paths, the anchor attribute |
 
 **Every KSA read carries a `[KsaAnchor]`** naming the `file:line` it was verified against and the

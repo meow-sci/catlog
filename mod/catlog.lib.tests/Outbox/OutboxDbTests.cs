@@ -173,6 +173,26 @@ public sealed class OutboxDbTests
         Assert.DoesNotContain(EventTypes.TelemetryWindow, types);
     }
 
+    /// <summary>
+    /// Prune tracks its own running total instead of re-measuring the whole table per 128-row
+    /// batch (which made it quadratic). This pins the property that made re-measuring look
+    /// necessary: it stops at the cap, and it stops there having dropped only what it needed to.
+    /// </summary>
+    [Fact]
+    public void Prune_StopsAtTheCapWithoutEmptyingTheOutbox()
+    {
+        using var dir = new TempDir();
+        using OutboxDb outbox = OutboxDb.Open(dir.File("outbox.db"));
+        outbox.Append(TestData.Envelopes(1_000, EventTypes.TelemetryWindow));
+
+        long before = outbox.TotalBytes;
+        int dropped = outbox.Prune(before / 2);
+
+        Assert.True(outbox.TotalBytes <= before / 2, "the cap must actually be met");
+        Assert.True(dropped > 0 && dropped < 1_000, $"dropped {dropped} of 1000 — it over-pruned");
+        Assert.Equal(1_000 - dropped, outbox.PendingCount);
+    }
+
     [Fact]
     public void Prune_StopsWhenOnlyScoringEventsRemain()
     {

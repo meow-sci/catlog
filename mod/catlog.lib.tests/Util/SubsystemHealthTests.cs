@@ -76,6 +76,26 @@ public sealed class SubsystemHealthTests
         Assert.False(health.IsDead("outbox"));
     }
 
+    /// <summary>
+    /// The latch table is copy-on-write so the game thread's reads take no lock, and the property
+    /// that buys is exactly this: a snapshot handed out is a value, not a live view. A reader
+    /// iterating it while a background task faults must not see the collection change underneath.
+    /// </summary>
+    [Fact]
+    public void ASnapshotIsUnaffectedByLaterFaultsAndClears()
+    {
+        var health = new SubsystemHealth();
+        health.Fault("outbox", "disk full");
+
+        IReadOnlyList<SubsystemFault> taken = health.Snapshot();
+        health.Fault("shipper", "license revoked");
+        health.Reset();
+
+        Assert.Single(taken);
+        Assert.Equal("outbox", taken[0].Subsystem);
+        Assert.Empty(health.Snapshot());
+    }
+
     [Fact]
     public void FaultCarriesTheException()
     {

@@ -154,8 +154,10 @@ CREATE TABLE schema_version (version INTEGER PRIMARY KEY);
 - `kind` comes from `EventTypes.KindOf` (`Events/EventTypes.cs:141-142`). **`telemetry.window` is the
   only kind-0 type**; the other 21 are kind 1, explicitly including `roster.snapshot` because it
   carries totals that move boards (`EventTypes.cs:136-139`).
-- `Prune` deletes oldest kind-0 rows in batches of 128 until the cap is met, and stops when only
-  kind-1 rows remain (`:264-286`).
+- `Prune` deletes oldest kind-0 rows until the cap is met, and stops when only kind-1 rows remain.
+  It tracks the running total across the deletes rather than re-measuring the whole table after each
+  one — the re-measure made pruning quadratic in the number of rows dropped, which mattered exactly
+  when the outbox was already under pressure.
 - `NextBatch` reads oldest-first `ORDER BY id` (`:213`). Rows are deleted **only** on a `200`
   (`MarkShipped`, `:244-254`).
 
@@ -1361,9 +1363,15 @@ Roster entries with an empty `Name` are **skipped** (`VehicleTelemetry.cs:687-68
 
 **Game source — two emission paths.**
 
-1. **Periodic**: `PolledSignals.PollRoster` (`:278-282`) fires when `simT - _lastRosterSimT >= 600.0`
-   **sim** seconds, evaluated on every 2 Hz tick. Skipped entirely when the roster is empty
-   (`:254-255`). Under time warp these arrive far more often in wall time.
+1. **Periodic**: `PolledSignals.PollRoster` fires when `simT - _lastRosterSimT >= 600.0` **sim**
+   seconds. Under time warp these arrive far more often in wall time.
+
+   **Two cadences, two reads.** The KIA diff below runs on *every* 2 Hz tick and reads the roster
+   through an allocation-free scan (`VehicleTelemetry.SampleRosterKia`, name and KIA flag only) — a
+   death noticed ten minutes late would be attributed past the manual-destroy window and get the
+   wrong cause. The `roster.snapshot` **payload** is built only on the tick it is about to be
+   emitted. Rebuilding the full payload every tick and discarding it 1,199 times out of 1,200 was
+   the largest per-tick allocation on the game thread (MOD-071). An empty roster skips the tick.
 2. **Session end**: `PolledSignals.EmitRoster` (`:144-150`) from `CatlogRuntime.Dispose` **before**
    the signal channel is completed (`CatlogRuntime.cs:378-392`). This is **process unload only** — a
    save-load boundary calls `PolledSignals.Reset()` and emits **no** closing roster for the session

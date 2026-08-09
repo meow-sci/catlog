@@ -48,12 +48,18 @@ public sealed class CatlogRuntime : IDisposable
     private const string WorkerSubsystem = "worker";
     private const string SamplerSubsystem = "sampler";
 
-    private static readonly TimeSpan WorkerDrainBudget = TimeSpan.FromSeconds(5);
-
-    // Tight on purpose: this is the longest the game can sit still because of catlog while it is
-    // closing. A batch that has not left in two seconds is not worth holding the process for.
-    private static readonly TimeSpan FinalShipBudget = TimeSpan.FromSeconds(2);
+    // Tight on purpose, and it covers the WHOLE of Dispose rather than one stage of it: this is the
+    // longest the game can sit still because of catlog while it is closing. Three stages with a
+    // timeout each — drain the worker, stop the shipper, flush what is left — add up, and the sum
+    // is what the player feels; a shared deadline cannot. Whatever a stage does not spend, the next
+    // one may, and a stage that arrives with the budget already gone simply does not wait. Nothing
+    // here is a correctness requirement: the outbox is on disk and its rows are deleted only on a
+    // 200, so every stage is an optimisation and the next run picks up whatever it did not finish.
+    private static readonly TimeSpan ShutdownBudget = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan PruneInterval = TimeSpan.FromSeconds(30);
+
+    // How often the pending-event readout is re-counted. See RefreshPending.
+    private static readonly TimeSpan PendingRefreshInterval = TimeSpan.FromSeconds(1);
 
     private readonly GameBridge _bridge = new();
     private readonly SubsystemHealth _health = new();
@@ -75,6 +81,7 @@ public sealed class CatlogRuntime : IDisposable
     private Task? _workerTask;
     private Task? _shipperTask;
     private long _lastPruneTimestamp;
+    private long _pendingRefreshTimestamp;
 
     private long _eventsAppended;
     private long _pendingEvents;
@@ -135,7 +142,7 @@ public sealed class CatlogRuntime : IDisposable
     /// <summary>How many envelopes the pipeline has produced and the outbox accepted this session.</summary>
     public long EventsAppended => Interlocked.Read(ref _eventsAppended);
 
-    /// <summary>How many events are waiting to ship, as of the last append.</summary>
+    /// <summary>How many events are waiting to ship, as of the last refresh (see RefreshPending).</summary>
     public long PendingEvents => Interlocked.Read(ref _pendingEvents);
 
     /// <summary>How many vehicles the last sample pass published.</summary>
@@ -391,10 +398,16 @@ public sealed class CatlogRuntime : IDisposable
 
         _bridge.Complete();
 
+        // One deadline, shared by everything below. See ShutdownBudget.
+        long deadline = Stopwatch.GetTimestamp() + (long)(Stopwatch.Frequency * ShutdownBudget.TotalSeconds);
+
         try
         {
-            if (_workerTask is { } worker && !worker.Wait(WorkerDrainBudget))
-                ModLog.Log.Warn("catlog: the worker did not drain within 5 s at unload; some events may be unsaved.");
+            if (_workerTask is { } worker && !worker.Wait(RemainingBudget(deadline)))
+            {
+                ModLog.Log.Warn(
+                    "catlog: the worker did not drain within the shutdown budget; some events may be unsaved.");
+            }
         }
         catch (Exception ex)
         {
@@ -407,14 +420,14 @@ public sealed class CatlogRuntime : IDisposable
         _cts.Cancel();
         try
         {
-            _shipperTask?.Wait(TimeSpan.FromSeconds(2));
+            _shipperTask?.Wait(RemainingBudget(deadline));
         }
         catch (Exception)
         {
             // A cancelled shipper faults its task; that is the expected shutdown path.
         }
 
-        FinalShip();
+        FinalShip(RemainingBudget(deadline));
 
         // Defensive: FinalShip may have abandoned a request that is still unwinding on a pool
         // thread, and a disposal racing it must not throw out of the host's unload path.
@@ -423,6 +436,14 @@ public sealed class CatlogRuntime : IDisposable
         Close(_workerOutbox);
         Close(_credential);
         Close(_cts);
+    }
+
+    // What is left of the shutdown budget, never negative — Task.Wait throws on a negative timeout
+    // and TimeSpan.Zero is the honest expression of "do not wait, you are out of time".
+    private static TimeSpan RemainingBudget(long deadline)
+    {
+        long left = deadline - Stopwatch.GetTimestamp();
+        return left <= 0 ? TimeSpan.Zero : TimeSpan.FromSeconds((double)left / Stopwatch.Frequency);
     }
 
     private static void Close(IDisposable? disposable)
@@ -558,7 +579,7 @@ public sealed class CatlogRuntime : IDisposable
         {
             _workerOutbox.Append(envelopes);
             Interlocked.Add(ref _eventsAppended, envelopes.Count);
-            Interlocked.Exchange(ref _pendingEvents, _workerOutbox.PendingCount);
+            RefreshPending(_workerOutbox);
         }
         catch (Exception ex)
         {
@@ -566,6 +587,23 @@ public sealed class CatlogRuntime : IDisposable
             ModLog.Log.Error(
                 "catlog: the outbox stopped accepting events; collection is disabled for this session.", ex);
         }
+    }
+
+    // PendingCount is a COUNT(*) — a full scan of the outbox — and Append runs once per signal and
+    // once per frame, so it was being asked several times a second for a number that exists to fill
+    // one line in the status window. It is refreshed at a human rate instead of an event rate; the
+    // readout can lag by up to a second, which is invisible next to the 2 Hz sample cadence.
+    private void RefreshPending(OutboxDb outbox)
+    {
+        long now = Stopwatch.GetTimestamp();
+        if (_pendingRefreshTimestamp != 0
+            && now - _pendingRefreshTimestamp < Stopwatch.Frequency * PendingRefreshInterval.TotalSeconds)
+        {
+            return;
+        }
+
+        _pendingRefreshTimestamp = now;
+        Interlocked.Exchange(ref _pendingEvents, outbox.PendingCount);
     }
 
     private void MaybePrune()
@@ -588,7 +626,8 @@ public sealed class CatlogRuntime : IDisposable
         }
     }
 
-    // ONE ship attempt at unload, hard-bounded, and then the game closes whatever happened.
+    // ONE ship attempt at unload, hard-bounded by whatever is left of the shutdown budget, and then
+    // the game closes whatever happened.
     //
     // It is a courtesy, not a guarantee: outbox.db is on disk and its rows are deleted only on a
     // 200, so anything that does not go out here is picked up by the next run with nothing lost.
@@ -596,12 +635,15 @@ public sealed class CatlogRuntime : IDisposable
     // retry ladder here would risk the game appearing to hang on quit in exchange for an
     // optimisation we do not need. BatchShipper.FinalShip owns the timeout and never throws; this
     // logs one line and proceeds to disposal regardless.
-    private void FinalShip()
+    private void FinalShip(TimeSpan budget)
     {
-        if (_shipper is null)
+        // Out of budget means the drain above spent it: starting an attempt only to abandon it in
+        // the same breath buys nothing, and the rows are still in the outbox for the next run. That
+        // keeps MOD-069 exactly as it was — at most one attempt per session, never a second.
+        if (_shipper is null || budget <= TimeSpan.Zero)
             return;
 
-        ShipAttempt attempt = _shipper.FinalShip(FinalShipBudget);
+        ShipAttempt attempt = _shipper.FinalShip(budget);
         if (attempt.Outcome is ShipOutcome.Accepted or ShipOutcome.Replayed)
         {
             ModLog.Log.Info($"catlog: shipped {attempt.EventsShipped} event(s) on the way out.");
