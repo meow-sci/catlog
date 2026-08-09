@@ -223,12 +223,12 @@ to pick from, both optional:
 ### F2 — The ±2 s KIA window is nearly a no-op, and now overlaps a mod-side check (S7) · **Borderline**
 
 > **2026-08-09 update.** Everything below was written about a check that could not fire *at all*:
-> `kitten.kia` carried no flight, so pass 1's index was always empty on shipped data (MOD-073,
-> PROJ-092). It now fires, on scuttles with crew aboard where the mod could attribute the death. The
-> cost/benefit verdict — **keep** — is unchanged, and so is the residual-gap analysis, because the
-> impact correlator (M8) still catches the same-frame and next-frame case earlier and better. What
-> changes is that "nearly a no-op" is now a statement about frequency rather than about a mechanism
-> that never ran.
+> `kitten.kia` carried no flight, so pass 1's index could never hold anything (MOD-073, PROJ-092). It
+> now fires, on scuttles with crew aboard where the mod could attribute the death. The cost/benefit
+> verdict — **keep** — is unchanged, and so is the residual-gap analysis, because the impact
+> correlator (M8) still catches the same-frame and next-frame case earlier and better. What changes
+> is that "nearly a no-op" is now a statement about frequency rather than about a mechanism that
+> never ran.
 
 **What it does.** During a rebuild, pass 1 indexes every `kitten.kia` by `(flight, sim_t)`; pass 2
 refuses a `biggest_lithobrake_survived` record if a KIA landed within ±2 s of the impact. It is
@@ -342,9 +342,9 @@ nobody has to re-derive it, and nobody builds one on a quiet afternoon.
 | 5. Statistical outliers — per-metric robust z-scores, suspicion multipliers for new accounts and for first-upload-is-a-world-record | Not built | **Do not build.** This is the literal thing the principle names — "esoteric patterns". It also punishes exactly the honest player who installs catlog and immediately does something spectacular, which is the best day this project can have |
 | 6. Quotas + community reporting feeding the quarantine queue | Partly built, differently | Quotas exist and are identity abuse controls, not anti-cheat (see above). **Do not build** a report queue as an anti-cheat pipeline. A "something's wrong here" mail link into ordinary moderation (§7) is fine and is not this |
 
-**Wire v2 handed three new temptations to layer 2, and all three are refused.** The wave added
-position (`lat` / `lon`), terrain clearance (`radar_alt_m`) and time-warp context (`warp_max`) to the
-log, and every one of them looks like an input to a plausibility check.
+**Three fields in the log look like inputs to layer 2, and all three are refused.** Position
+(`lat` / `lon`), terrain clearance (`radar_alt_m`) and time-warp context (`warp_max`) are each one
+step away from a plausibility check, and each step is one this project does not take.
 
 - **`warp_max` is not a cheat signal.** Time warp is a shipped, universally available feature used
   for the reason everyone uses it. Rejecting or weighting a record because it was set under warp

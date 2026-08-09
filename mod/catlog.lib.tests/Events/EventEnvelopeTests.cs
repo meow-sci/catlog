@@ -23,7 +23,7 @@ public sealed class EventEnvelopeTests
 
         Assert.Equal("01J9V5M3E8Z0FAKEULID26CHR", root.GetProperty("id").GetString());
         Assert.Equal("vehicle.rud", root.GetProperty("type").GetString());
-        Assert.Equal(2, root.GetProperty("ver").GetInt32());
+        Assert.Equal(1, root.GetProperty("ver").GetInt32());
         Assert.Equal("01J9V5M3E8Z0FAKEFLIGHT001", root.GetProperty("flight").GetString());
         Assert.Equal("01J9V5M3E8Z0FAKESESSION01", root.GetProperty("session").GetString());
         Assert.Equal(12345.678, root.GetProperty("sim_t").GetDouble());

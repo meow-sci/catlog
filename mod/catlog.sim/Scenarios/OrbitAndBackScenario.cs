@@ -41,9 +41,9 @@ public sealed class OrbitAndBackScenario : IScenario
 
     /// <summary>
     /// The value `fastest_to_orbit` must end at. The board publishes career time in
-    /// <b>milliseconds</b> while `sim_t` stays seconds on the wire: the log is immutable and has no
-    /// envelope-level upcaster, so the unit conversion lives in the projection, which is
-    /// rebuildable (docs/DECISIONS.md, WP-CLOCK).
+    /// <b>milliseconds</b> while `sim_t` stays seconds on the wire: the log is immutable, so the
+    /// unit conversion lives in the projection, which is rebuildable
+    /// (docs/DECISIONS.md, WP-CLOCK).
     /// </summary>
     private const double OrbitAchievedMs = OrbitAchievedSimT * 1000.0;
 

@@ -242,11 +242,10 @@ the order `GET /v1/leaderboards` lists them, grouped by kind rather than by sour
 kind for every one of them, plus the eligibility rule board by board. Four of them
 (`roundest_orbit`, `most_parts`, `most_stages`, `biggest_stack`) have an **empty** unit on purpose —
 an eccentricity is dimensionless, and a bare count of a thing the title already names does not need
-the word twice. `units.ForKey("stage_count")` falls through to `""`, which is correct and is why the
-wire-v2 wave needed no `units` change and therefore no `spa/src/ui/units.ts` port edit.
+the word twice. `units.ForKey("stage_count")` falls through to `""`, which is correct.
 
-**The five wire-v2 boards, and the pairing that justifies each one.** Every one of them exists
-because it answers a question its nearest neighbour cannot:
+**Five boards sit next to a near neighbour, and each pairing is deliberate.** Every one of them
+exists because it answers a question its neighbour cannot:
 
 | board | source | not the same as | because |
 |---|---|---|---|
@@ -301,7 +300,7 @@ from a value the game never wrote is an unbeatable record nobody flew. On the tw
 literal rather than theoretical: 0 m/s of descent is an unreadable state-vector decomposition, and
 0 m of ground clearance is where every vehicle sits on the pad.
 
-**Two rules the wire-v2 boards do *not* get, and must not.** There is no plausibility check on a
+**Two rules the landing and warp boards do *not* get, and must not.** There is no plausibility check on a
 landing — a one-metre hop is a landing, and filtering on "was that real" infers intent from data
 shape, which Constitution §8 forbids. And `telemetry.window.warp_max` is descriptive only: it may
 inform a reader, weight or annotate a value, but it must never reject or disqualify a record, and it
@@ -332,20 +331,10 @@ that is the point of the design, not a defect. Feed rows are a fourth divergence
 handle from the live directory at fold time and pass 2 re-renders them, so a player banned since is
 absent from a rebuilt feed and present in an incremental one.
 
-**A rebuild is also the migration whenever a build gains a decoder or a fold.** Events already in
-`events.db` that no fold read produce board rows on the next rebuild and never on the incremental
-path, because the incremental path has already passed them. The board expansion is exactly that case:
-until a server rebuilds, the boards fed by the newly-decoded types are short by their whole history.
-
-**The wire-v2 boards are the *other* case, and the two are easy to confuse.** They read keys that
-were never sent, not keys that were sent and ignored, so a `ver` 1 payload replayed through the new
-decoders yields the same 0 or the same absence and every gate refuses it; `vehicle.landed` was
-rejected outright at ingest until this build, so it has no history at all. **All five start empty and
-fill from the first wire-v2 batch.** A rebuild recovers exactly one thing here: events a `ver` 2 mod
-shipped to a server whose projector still folded `ver` 1, which were skipped as a future version and
-are sitting in the log unfolded. `launchFold`'s context blob also gained `stage_count`, so rows
-written before this build keep the five-key shape until they are beaten or the projection is rebuilt;
-both paths produce the six-key shape, so this is not a divergence.
+**A rebuild is also what makes a new fold retroactive.** Events already in `events.db` that no fold
+read produce board rows on the next rebuild and never on the incremental path, because the
+incremental path has already passed them. Adding a board is therefore a rebuild, not a backfill
+script — and only a rebuild, because nothing else re-reads history.
 
 The swap keeps the old file until the reopen succeeds: close → delete the stale `-wal`/`-shm` →
 rename live to `.old` → rename the rebuild in → reopen → delete `.old`, restoring `.old` on failure.
@@ -353,25 +342,16 @@ rename live to `.old` → rename the rebuild in → reopen → delete `.old`, re
 **An event the projector cannot decode is skipped and the checkpoint still advances** — one event
 from a newer mod must never wedge every projection behind it. The skip log is deduplicated per
 `(type, ver)` and carries no payload, because payloads are player-supplied and unbounded.
-`projector.Upcasters` holds **nine** entries, and every one of them is the **identity**.
-`kitten.tumble` and `kitten.kia` are `ver: 2` because both gained a non-null `flight` — an envelope
-change, with the payload bytes unmoved. The seven wire-v2 types are `ver: 2` for the mirror-image
-reason: each `ver` 2 payload is its `ver` 1 payload *plus* keys, in that order, with nothing renamed,
-retyped, re-unitted or removed, so a `ver` 1 event still folds correctly and simply says less. That
-is what let all seven move in one commit. The prediction the empty registry was built on has now held
-twice — a version bump is a `Register` line, not a migration — and the entries are still required,
-since `Apply` refuses to fold a row it cannot bring to the current version.
-
-The identity is only *safe* because each new key's absence is refused **downstream** rather than read
-as a zero, which is where the three `> 0` gates above earn their keep. `vehicle.landed` gets no entry
-at all: it is new at `ver: 1`, which is already `CurrentVer`.
+`projector.Upcasters` is **empty**, and stays empty until a payload shape actually changes: every
+§4.2 type is at `ver: 1`, so there is nothing to convert. The registry exists so that the first bump
+is a `Register` line rather than a migration project (PROJ-100).
 
 `currentVer` must equal the mod's `EventTypes.Versions` exactly, or a newer mod's events are skipped
-as a future version until this build catches up and a rebuild runs (PROJ-092). `knownTypes` must
-equal the mod's registry name for name and index for index — 23 entries since `vehicle.landed` was
-added between `vehicle.impact` and `vehicle.staging`. Until a type is in that list the server answers
-`400 malformed_batch` for the **whole batch**, so a wire-v2 mod shipping to a wire-v1 server loses
-everything, not just landings: the mod change and the server change have to merge together (PROJ-093).
+as a future version until this build catches up and a rebuild runs. `knownTypes` must equal the mod's
+registry name for name and index for index — 23 entries. Until a type is in that list the server
+answers `400 malformed_batch` for the **whole batch**, so a mod that emits a type its server does not
+know loses everything in the batch, not just the new type: the mod change and the server change have
+to merge together (PROJ-093).
 
 ## §5.7 The server-rendered site
 

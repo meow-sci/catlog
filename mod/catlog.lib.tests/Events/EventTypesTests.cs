@@ -15,27 +15,11 @@ public sealed partial class EventTypesTests
         // engine.* variants.
         Assert.Equal(23, EventTypes.All.Count);
 
-        // The server mirrors these numbers in projector.currentVer; a type this side calls ver 2
-        // and that side still folds at ver 1 is skipped there as a future version, so the whole
-        // set is pinned here rather than left to a blanket "all ver 1". vehicle.landed is new in
-        // wire v2 and therefore starts at 1 — there is no ver 0 to upcast from.
-        string[] atVersionTwo =
-        [
-            EventTypes.FlightStarted,
-            EventTypes.FlightEnded,
-            EventTypes.VehicleSituation,
-            EventTypes.VehicleOrbit,
-            EventTypes.VehicleRud,
-            EventTypes.VehicleImpact,
-            EventTypes.TelemetryWindow,
-            EventTypes.KittenTumble,
-            EventTypes.KittenKia,
-        ];
-
-        Assert.All(atVersionTwo, static type => Assert.Equal(2, EventTypes.VersionOf(type)));
-        Assert.All(
-            EventTypes.All.Where(type => !atVersionTwo.Contains(type)),
-            static type => Assert.Equal(1, EventTypes.VersionOf(type)));
+        // Every type is at ver 1: there is one shape of every event. The server's
+        // projector.currentVer is correspondingly empty. A bump here is half a change — the
+        // other half is an upcaster on the server for every version in between — so the whole
+        // set is pinned rather than left implicit.
+        Assert.All(EventTypes.All, static type => Assert.Equal(1, EventTypes.VersionOf(type)));
     }
 
     [Fact]

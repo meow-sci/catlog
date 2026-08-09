@@ -209,7 +209,7 @@ field on the wire; `kind` exists **only** as a local SQLite column in the mod's 
 |---|---|---|---|---|
 | `id` | string | required | `EventEnvelope.cs:14-15`, minted `:93` via `Ids.NewUlid()` (`Util/Ids.cs:21`) | 26-char ULID. Server: `ids.Parse` or `400 malformed_batch` (`ingest/decode.go:219-222`). Dedup key is `(player, event_id)` (D19). |
 | `type` | string | required | `:18-19`, set from the `EventTypes` constant at the call site | Namespaced lowercase `[a-z0-9_.]`. Must be one of the 22 registry names or the **whole batch** is rejected (`decode.go:223-227`, `ingest/types.go:16-39`). |
-| `ver` | int | always emitted | `:22-23`, from `EventTypes.VersionOf(type)` at `:95` | **20 of the 22 types are `ver: 1`; `kitten.tumble` and `kitten.kia` are `ver: 2`** (`EventTypes.cs:91-120`). Server requires present and ≥ 1 (`decode.go:228-233`); unknown-but-higher is accepted and stored. |
+| `ver` | int | always emitted | `:22-23`, from `EventTypes.VersionOf(type)` at `:95` | **Every registry type is `ver: 1`** (`EventTypes.cs`). Server requires present and ≥ 1 (`decode.go:228-233`); unknown-but-higher is accepted and stored. |
 | `flight` | string \| null | **key always present** | `:29-30`; no `JsonIgnore` (`Util/CatlogJson.cs:16-21`) | ULID when non-null; validated as a ULID when present (`decode.go:239-244`). Always null on `session.started`, `roster.snapshot` and `kitten.eva_end`; **conditionally** null on `kitten.tumble` and `kitten.kia`, which name a flight whenever the mod can resolve one (see those entries). |
 | `session` | string | required | `:33-34` | ULID. Minted by the `FlightTracker` ctor (`Detect/FlightTracker.cs:45`) and re-minted at every save-load boundary (`FlightTracker.NewSession`, `:71-78`). |
 | `career` | string | required | `:41-42` | Exactly **16 lowercase Crockford base32** chars (`0-9 a-z` minus `i l o u`). Alphabet `Ids.Crockford` (`Ids.cs:14`), validator `Ids.IsHash16` (`:71-82`), server `validCareer` (`decode.go:283+`). |
@@ -412,27 +412,25 @@ patch bodies and must never kill the worker (`EventPipeline.cs:311-314`).
 `mod/catlog.lib/Events/EventTypes.cs` (names), its `Versions` map (versions). Server mirror
 `server/internal/ingest/types.go`'s `knownTypes` for the names, `projector/upcast.go`'s `CurrentVer` +
 `currentVer` for the versions. **The two lists agree exactly** — 23 names, same spelling, same
-order — and the two version maps must too: a type the mod stamps `ver` 2 while the server still
-folds `ver` 1 is skipped as a future version, which is silent data loss for that type until the
-server catches up and a rebuild runs.
+order — and the two version maps must too: a type the mod stamps at a version the server does not
+fold is skipped as a future version, which is silent data loss for that type until the server catches
+up and a rebuild runs.
 
-**Nine types are at `ver` 2.** `kitten.tumble` and `kitten.kia` because they began carrying a flight,
-and the seven the wire-v2 wave gave new payload keys. See
-[Wire v2](events.md#wire-v2--the-spatial-terrain-and-landing-wave-2026-08-09) for the contract and
-[DECISIONS.md](DECISIONS.md) MOD-075…MOD-080 / PROJ-093…PROJ-099 for the reasoning.
+**Every type is at `ver` 1.** There is one shape of every event, so `projector.currentVer` is empty
+and `projector.Upcasters` has nothing registered (PROJ-100).
 
 | # | `type` | `ver` | outbox kind | Disableable? | Trigger | Feeds |
 |---|---|---|---|---|---|---|
 | 1 | `session.started` | 1 | 1 | **no — locked** | event | `career` (rewind mark) |
-| 2 | `flight.started` | **2** | 1 | **no — locked** | polled-discovery | `flight_state`, `heaviest_launch`, `most_parts`, `biggest_crew`, `biggest_stack` |
-| 3 | `flight.ended` | **2** | 1 | **no — locked** | event (+ passive net) | `flight_state`, `kittens_recovered`, `biggest_recovery`, feed |
+| 2 | `flight.started` | 1 | 1 | **no — locked** | polled-discovery | `flight_state`, `heaviest_launch`, `most_parts`, `biggest_crew`, `biggest_stack` |
+| 3 | `flight.ended` | 1 | 1 | **no — locked** | event (+ passive net) | `flight_state`, `kittens_recovered`, `biggest_recovery`, feed |
 | 4 | `flight.flagged` | 1 | 1 | **no — locked** | event (4 of 5) / passive (`tuning`) | `flight_state` → **excludes everything** |
-| 5 | `vehicle.situation` | **2** | 1 | yes | passive | `softest_touchdown`, `landed_bodies`, `splashdowns`, `player_body` |
+| 5 | `vehicle.situation` | 1 | 1 | yes | passive | `softest_touchdown`, `landed_bodies`, `splashdowns`, `player_body` |
 | 6 | `vehicle.atmosphere` | 1 | 1 | yes | passive | `fastest_entry` |
-| 7 | `vehicle.orbit` | **2** | 1 | yes | passive | `orbits_achieved`, `highest_apoapsis`, `lowest_orbit`, `roundest_orbit`, `steepest_orbit`, `heaviest_to_orbit`, `fastest_to_orbit`, feed |
+| 7 | `vehicle.orbit` | 1 | 1 | yes | passive | `orbits_achieved`, `highest_apoapsis`, `lowest_orbit`, `roundest_orbit`, `steepest_orbit`, `heaviest_to_orbit`, `fastest_to_orbit`, feed |
 | 8 | `vehicle.soi` | 1 | 1 | yes | passive | `soi_bodies`, `fastest_to_<body>`, `player_body`, feed |
-| 9 | `vehicle.rud` | **2** | 1 | yes | event | `rud_total`, `rud_<cause>`, feed |
-| 10 | `vehicle.impact` | **2** | 1 | yes | event (1-frame hold) | `biggest_lithobrake_survived`, `biggest_impact_energy`, feed |
+| 9 | `vehicle.rud` | 1 | 1 | yes | event | `rud_total`, `rud_<cause>`, feed |
+| 10 | `vehicle.impact` | 1 | 1 | yes | event (1-frame hold) | `biggest_lithobrake_survived`, `biggest_impact_energy`, feed |
 | 11 | `vehicle.landed` | 1 | 1 | yes | passive (1-frame hold) | `softest_landing`, `landings`, feed |
 | 12 | `vehicle.staging` | 1 | 1 | yes | event | `stagings`, `most_stages` |
 | 13 | `vehicle.docked` | 1 | 1 | yes | event | `dockings` |
@@ -442,20 +440,10 @@ and the seven the wire-v2 wave gave new payload keys. See
 | 17 | `engine.flameout` | 1 | 1 | yes | passive | `flameouts` |
 | 18 | `kitten.eva_start` | 1 | 1 | yes | event | `evas` |
 | 19 | `kitten.eva_end` | 1 | 1 | yes | event | `longest_eva` |
-| 20 | `kitten.tumble` | **2** | 1 | yes | passive | `kitten_tumbles`, feed |
-| 21 | `kitten.kia` | **2** | 1 | **no — locked** | passive | the impact-board KIA window (rebuild), feed |
+| 20 | `kitten.tumble` | 1 | 1 | yes | passive | `kitten_tumbles`, feed |
+| 21 | `kitten.kia` | 1 | 1 | **no — locked** | passive | the impact-board KIA window (rebuild), feed |
 | 22 | `roster.snapshot` | 1 | **1** | yes | passive (+1 event) | `distance_travelled`, `top_kitten_distance`, `top_kitten_missions`, `kitten` |
-| 23 | `telemetry.window` | **2** | **0** | yes | passive | `peak_g_survived`, `max_q_survived`, `fastest_surface_speed`, `fastest_orbital_speed`, `highest_altitude`, `lowest_pass` |
-
-`kitten.tumble` and `kitten.kia` are at `ver` 2 because both gained a non-null `flight`; the
-payload bytes did not move, so the server registers an **identity upcaster** for `ver` 1 of each
-(`projector/upcast.go`) and old rows keep folding exactly as they did. The bump is not cosmetic —
-the two versions score differently, and the stored `ver` is the only field that tells them apart.
-
-The seven wire-v2 types are at `ver` 2 for the opposite reason: the payload bytes *did* move, but
-only by gaining keys, so **their upcasters are the identity too** — nine identity transforms are
-registered in total. `vehicle.landed` is new at `ver` 1, which is already `CurrentVer`, so it needs
-neither an override nor an upcaster; `projector.currentVer` carries no entry for it.
+| 23 | `telemetry.window` | 1 | **0** | yes | passive | `peak_g_survived`, `max_q_survived`, `fastest_surface_speed`, `fastest_orbital_speed`, `highest_altitude`, `lowest_pass` |
 
 `vehicle.landed` is **not** in `AlwaysReported` — a player may switch it off like any other
 non-spine type — and it is `KindEvent`, the default for everything except `telemetry.window`.
@@ -575,7 +563,7 @@ high-water mark, and only when the career already exists and `max_sim_t > sim_t`
 
 ### `flight.started`
 
-**Wire.** `"flight.started"` (`EventTypes.cs`), **`ver` 2**, kind 1. `flight` = the newly minted (or
+**Wire.** `"flight.started"` (`EventTypes.cs`), `ver` 1, kind 1. `flight` = the newly minted (or
 re-resolved) flight ULID.
 
 **Payload** — `FlightStartedPayload`, `Payloads.cs:45-59`
@@ -587,10 +575,10 @@ re-resolved) flight ULID.
 | `mass_kg` | number | kg | `VehicleTelemetry.MassKg` ← `Vehicle.TotalMass` (a **float**, `KSA/Vehicle.cs:551`), `Sanitize.Finite`d. 0 when unreadable. |
 | `part_count` | int | count | `Vehicle.Parts.Count` (`KSA/PartTree.cs:89`). 0 when unreadable. |
 | `crew_count` | int | count | **Occupied** seats, not seat count: iterates `Vehicle.Crew` (`ReadOnlySpan<IVASeat>`, `KSA/Vehicle.cs:373`) counting `seat.AssignedKittenHash != KeyHash.Zero` (`VehicleTelemetry.cs:637`). **A `KittenEva` always returns 1**. |
-| `kids` | array of string | — | **`ver` 2.** `VehicleTelemetry.CrewNames` — the same seat walk as `crew_count`, resolved through `Universe.KittenRoster.Find(KeyHash)`, then hashed to a 16-char `kid` per §4.7. In seat order. **Always present**; `[]` when uncrewed, so a reader never has to tell "nobody aboard" from "the mod did not say". Read **once per vehicle on first sight**, in `PolledSignals.Track`, not per tick. |
-| `stage_count` | int | count | **`ver` 2.** `Vehicle.Parts.SequenceList.Count` (`KSA/PartTree.cs:29`, `KSA/SequenceList.cs:99`). `0` when unreadable, which is a real value here rather than a lie — a vehicle genuinely can have no sequences. **Churn risk High**: `SequenceList` was very nearly rewritten in 5168. |
-| `lat` | number | degrees | **`ver` 2, OPTIONAL — the key is absent when unreadable.** `Celestial.GetLatitudeFromCce(Vehicle.GetPositionCce())` (`KSA/Celestial.cs:698`, `KSA/Vehicle.cs:2414`), already in degrees. Requires `Orbit.Parent is Celestial` — the method is declared on `Celestial`, not on `IParentBody`, so the type test is mandatory rather than defensive. |
-| `lon` | number | degrees | **`ver` 2, OPTIONAL.** `Celestial.GetLongitudeFromCce` (`KSA/Celestial.cs:733`), same rule. |
+| `kids` | array of string | — | `VehicleTelemetry.CrewNames` — the same seat walk as `crew_count`, resolved through `Universe.KittenRoster.Find(KeyHash)`, then hashed to a 16-char `kid` per §4.7. In seat order. **Always present**; `[]` when uncrewed, so a reader never has to tell "nobody aboard" from "the mod did not say". Read **once per vehicle on first sight**, in `PolledSignals.Track`, not per tick. |
+| `stage_count` | int | count | `Vehicle.Parts.SequenceList.Count` (`KSA/PartTree.cs:29`, `KSA/SequenceList.cs:99`). `0` when unreadable, which is a real value here rather than a lie — a vehicle genuinely can have no sequences. **Churn risk High**: `SequenceList` was very nearly rewritten in 5168. |
+| `lat` | number | degrees | **OPTIONAL — the key is absent when unreadable.** `Celestial.GetLatitudeFromCce(Vehicle.GetPositionCce())` (`KSA/Celestial.cs:698`, `KSA/Vehicle.cs:2414`), already in degrees. Requires `Orbit.Parent is Celestial` — the method is declared on `Celestial`, not on `IParentBody`, so the type test is mandatory rather than defensive. |
+| `lon` | number | degrees | **OPTIONAL.** `Celestial.GetLongitudeFromCce` (`KSA/Celestial.cs:733`), same rule. |
 
 `LaunchGameTime` rides on the signal (`GameSignal.cs:180`) but is **not** on the payload — it is half
 of the flight identity only.
@@ -631,18 +619,17 @@ or a flag is adopted rather than replaced.
 **Server.** `flightFold` → `StartFlight(crew_count, body, seq)` (`stats/flight.go:113`), creating
 the `flight_state` row every board consults. `launchFold` (`stats/boards.go`), registered **four**
 times, then takes the same payload onto `heaviest_launch` (`mass_kg`), `most_parts` (`part_count`),
-`biggest_crew` (`crew_count`) and — new in wire v2 — `biggest_stack` (`stage_count`). Each is gated
+`biggest_crew` (`crew_count`) and `biggest_stack` (`stage_count`). Each is gated
 `> 0`, and for the three integer fields that gate **is** §4.2's `>= 1`: all four values are written
 as 0 rather than omitted when the read failed, so a zero is an unreadable vehicle and not an empty
-one. The gate matters most on `stage_count`, which is both the highest-risk read of the four and
-absent altogether on a `ver` 1 row; both fall out through the same door, which is why the board reads
-`> 0` rather than `ver >= 2` (PROJ-094). One shared context, now six keys —
+one. The gate matters most on `stage_count`, the highest-risk read of the four, which is why the board reads
+a value rather than the envelope (PROJ-094). One shared context, now six keys —
 `{"body", "flight", "vehicle", "mass_kg", "part_count", "crew_count", "stage_count"}` — so the four
 rows of one launch describe the same vehicle rather than four partial views of it.
 
 `kids`, `lat` and `lon` are decoded (`[]string`, `*float64`, `*float64`) and read by no fold. The
 first fold that reads `kids` must not treat a nil slice as "uncrewed": nil is a `ver` 1 row, `[]` is
-an uncrewed `ver` 2 one.
+an uncrewed one.
 
 **Vectors.** `batch-001.ndjson` lines 2 (crewed: `kids` populated, `stage_count` 3, `lat` / `lon` present) and 16 (uncrewed probe: `kids` `[]`, `stage_count` 0, `lat` / `lon` absent).
 
@@ -650,7 +637,7 @@ an uncrewed `ver` 2 one.
 
 ### `flight.ended`
 
-**Wire.** `"flight.ended"` (`EventTypes.cs`), **`ver` 2**, kind 1. `flight` = the flight being closed.
+**Wire.** `"flight.ended"` (`EventTypes.cs`), `ver` 1, kind 1. `flight` = the flight being closed.
 
 **Payload** — `FlightEndedPayload`, `Payloads.cs:72-83`
 
@@ -658,9 +645,9 @@ an uncrewed `ver` 2 one.
 |---|---|---|
 | `reason` | string | `"recovered"` \| `"destroyed"` \| `"despawned"` (`EventTypes.ToWire(FlightEndReason)`) |
 | `crew_count` | int | occupied seats at the moment it ended (`Patcher.cs:538`). **0** on the silent-removal safety-net path (`PolledSignals.cs:228`), indistinguishable on the wire from a genuinely empty vehicle. |
-| `kids` | array of string | **`ver` 2.** Who was aboard at the end, in seat order. Always present; `[]` when nobody was, and `[]` on the safety-net path for the same reason `crew_count` is 0 there. |
-| `body` | string | **`ver` 2.** Lowercase parent body, or the literal `"unknown"`. |
-| `lat` / `lon` | number | **`ver` 2, OPTIONAL** — degrees, absent when unreadable. |
+| `kids` | array of string | Who was aboard at the end, in seat order. Always present; `[]` when nobody was, and `[]` on the safety-net path for the same reason `crew_count` is 0 there. |
+| `body` | string | Lowercase parent body, or the literal `"unknown"`. |
+| `lat` / `lon` | number | **OPTIONAL** — degrees, absent when unreadable. |
 
 **Why the event gained a `body` at all.** Without one a landing site is unplaceable: the flight's last
 `telemetry.window` may be a whole window old and the vehicle may have changed SOI since. The reads are
@@ -731,7 +718,7 @@ loaded that row into the batch cache.
 **`flight.ended.body` is decoded and unused.** `flight_state.body` still comes from `flight.started`
 via `flightFold`, so a flight whose `flight.started` was never folded still has an empty body even
 though its `flight.ended` now carries one. Reading it would be a rebuild-only improvement and is out
-of scope for the wire-v2 wave; `kids`, `lat` and `lon` are likewise decoded and read by nothing.
+of scope; `kids`, `lat` and `lon` are likewise decoded and read by nothing.
 
 **Vectors.** `batch-001.ndjson` lines 21 (`recovered`, crew and position), 22 (the safety net: `despawned`, `crew_count` 0, `kids` `[]`, `body: "unknown"`, no position) and 26 (`destroyed`).
 
@@ -806,7 +793,7 @@ suppresses **every board**, the feed, and the raw event views for that flight. T
 
 ### `vehicle.situation`
 
-**Wire.** `"vehicle.situation"` (`EventTypes.cs`), **`ver` 2**, kind 1. Detector kind
+**Wire.** `"vehicle.situation"` (`EventTypes.cs`), `ver` 1, kind 1. Detector kind
 `DetectKind.Situation = 0` (`EventDetector.cs:11-12`).
 
 **Payload** — `VehicleSituationPayload`, `Payloads.cs:103-113`
@@ -819,7 +806,7 @@ suppresses **every board**, the feed, and the raw event views for that flight. T
 | `altitude_m` | number | metres above the parent's **mean radius** | `Vehicle.GetBarometricAltitude()` (`KSA/Vehicle.cs:2840-2843` = `PositionCci.Length() - Parent.MeanRadius`). **Not terrain-relative** — that is `GetRadarAltitude()` at `:2845`. |
 | `surface_speed_ms` | number | m/s | `Vehicle.GetSurfaceSpeed()` (`KSA/Vehicle.cs:2759`). **Never `NavBallData.Speed`** — that is frame-dependent on the player's navball mode (`VehicleTelemetry.cs:436-437`). |
 | `orbital_speed_ms` | number | m/s | `Vehicle.OrbitalSpeed` (`KSA/Vehicle.cs:581` = `GetVelocityCci().Length()`), body-centred inertial |
-| `radar_alt_m` | number | metres above **the terrain or ocean surface directly beneath** | **`ver` 2, OPTIONAL — absent when unreadable.** The companion to `altitude_m` and deliberately *not* `Vehicle.GetRadarAltitude()`; see [ksa-integration.md](ksa-integration.md) §1 for why, and for the three guards that each yield *absent* rather than 0. |
+| `radar_alt_m` | number | metres above **the terrain or ocean surface directly beneath** | **OPTIONAL — absent when unreadable.** The companion to `altitude_m` and deliberately *not* `Vehicle.GetRadarAltitude()`; see [ksa-integration.md](ksa-integration.md) §1 for why, and for the three guards that each yield *absent* rather than 0. |
 
 **Detector** — `EventDetector.CheckSituation` (`:236-304`):
 
@@ -873,10 +860,10 @@ than switching on the names:
 that *does* score is the aggregate on `telemetry.window`, which `lowest_pass` reads — one situation
 change is not a pass over anything.
 
-**`landed_bodies` stays on this event** now that `vehicle.landed` exists, and that is a decision
-rather than an oversight (PROJ-097). See [Boards](#fold-detail-board-by-board).
+**`landed_bodies` reads this event rather than `vehicle.landed`**, and that is a decision rather
+than an oversight (PROJ-097). See [Boards](#fold-detail-board-by-board).
 
-**Vectors.** `batch-001.ndjson` line 3 — `ver` 2 with `radar_alt_m` present.
+**Vectors.** `batch-001.ndjson` line 3 — `radar_alt_m` present.
 
 ---
 
@@ -936,7 +923,7 @@ directly comparable with the lithobrake and RUD speeds. Context
 
 ### `vehicle.orbit`
 
-**Wire.** `"vehicle.orbit"` (`EventTypes.cs`), **`ver` 2**, kind 1. Detector kinds
+**Wire.** `"vehicle.orbit"` (`EventTypes.cs`), `ver` 1, kind 1. Detector kinds
 `OrbitAchieved = 3`, `OrbitEscaped = 4` (`EventDetector.cs:20-24`), independent debounce timers.
 
 **Payload** — `VehicleOrbitPayload`, `Payloads.cs:137-144`
@@ -949,7 +936,7 @@ directly comparable with the lithobrake and RUD speeds. Context
 | `pe_m` | number | metres of altitude | `Sanitize.RadiusToAltitude(orbit.Periapsis, meanRadius)`, computed **unconditionally** (`:165`) — so it can legitimately be negative. |
 | `ecc` | number | — | `orbit.Eccentricity` (`KSA/Orbit.cs:1154`), `Sanitize.Finite`d |
 | `inc_deg` | number | **degrees** | `orbit.Inclination * (180/π)` (`VehicleTelemetry.cs:166`). **The game stores radians** (`KSA/Orbit.cs:1160`). |
-| `mass_kg` | number | kg | **`ver` 2.** `Vehicle.TotalMass` at the instant the milestone fired — the same read `flight.started.mass_kg` takes, sampled again. Non-optional; `0` when unreadable, and `0` on every stored `ver` 1 row. |
+| `mass_kg` | number | kg | `Vehicle.TotalMass` at the instant the milestone fired — the same read `flight.started.mass_kg` takes, sampled again. Non-optional; `0` when unreadable. |
 
 **Detector — two independent rules.**
 
@@ -1016,7 +1003,7 @@ rather than crowning it. All four share one context `{"body", "flight", "ap_m", 
 "inc_deg"}` — a reader looking at a periapsis wants the apoapsis beside it, and one context shape
 means the four rows of one orbit are the same blob.
 
-**Vectors.** `batch-001.ndjson` line 9 — `ver` 2 with `mass_kg`.
+**Vectors.** `batch-001.ndjson` line 9 — carries `mass_kg`.
 
 ---
 
@@ -1070,7 +1057,7 @@ stat key still counts towards `soi_bodies` and still records `first_sim_t`.
 
 ### `vehicle.rud`
 
-**Wire.** `"vehicle.rud"` (`EventTypes.cs`), **`ver` 2**, kind 1.
+**Wire.** `"vehicle.rud"` (`EventTypes.cs`), `ver` 1, kind 1.
 
 **Payload** — `VehicleRudPayload`, `Payloads.cs:163-176`
 
@@ -1083,7 +1070,7 @@ stat key still counts towards `soi_bodies` and still records `first_sim_t`.
 | `altitude_m` | number | m above mean radius | `GetBarometricAltitude()` (`:401`) |
 | `body` | string | — | `VehicleTelemetry.BodyOf(vehicle)` (`:402`) |
 | `crew_count` | int | count | `VehicleTelemetry.CrewCount(vehicle)` (`:405`). **Per D11 all of them survive** — the physics destruction path calls `EndAllCrewMissions` and never `KillCrew` (`:403-404`). |
-| `lat` / `lon` | number | degrees | **`ver` 2, OPTIONAL — absent when unreadable.** Read in the same prefix, while the vehicle is still intact. Decoded as `*float64` and read by no fold; they are there so the log can say *where* a vehicle was lost. |
+| `lat` / `lon` | number | degrees | **OPTIONAL — absent when unreadable.** Read in the same prefix, while the vehicle is still intact. Decoded as `*float64` and read by no fold; they are there so the log can say *where* a vehicle was lost. |
 
 `peak_g` / `peak_q_pa` here are **not** the nullable `StructuralLoad`-derived telemetry values. They
 come off the destruction event itself and land in non-nullable payload fields, so a **0 is emitted
@@ -1114,13 +1101,13 @@ then `addCount(rud_<cause>, 1)` when `RUDStat(cause)` yields a legal key. A caus
 stat key (empty, > 40 chars, bad charset, or colliding with a fixed key) contributes to `rud_total`
 **only**. Feed: `"{h} lost a vehicle to {causePhrase} on {body} at {speed} m/s"`.
 
-**Vectors.** `batch-001.ndjson` line 24 — `ver` 2 with `lat` / `lon` **absent**, and `peak_g` / `peak_q_pa` written as numbers rather than omitted.
+**Vectors.** `batch-001.ndjson` line 24 — `lat` / `lon` **absent**, and `peak_g` / `peak_q_pa` written as numbers rather than omitted.
 
 ---
 
 ### `vehicle.impact`
 
-**Wire.** `"vehicle.impact"` (`EventTypes.cs`), **`ver` 2**, kind 1.
+**Wire.** `"vehicle.impact"` (`EventTypes.cs`), `ver` 1, kind 1.
 
 **Payload** — `VehicleImpactPayload`, `Payloads.cs:187-200`
 
@@ -1132,7 +1119,7 @@ stat key (empty, > 40 chars, bad charset, or colliding with a fixed key) contrib
 | `launch_pad` | bool | — | `GroundImpactEvent.IsLaunchPad` (`KSA/GroundImpactEvent.cs:19`, `Patcher.cs:438`). **Always `false` for a splash** (`ImpactCorrelator.cs:48-59`). |
 | `body` | string | — | `VehicleTelemetry.BodyOf(vehicle)` |
 | `crew_count` | int | count | `VehicleTelemetry.CrewCount(vehicle)` |
-| `lat` / `lon` | number | degrees | **`ver` 2, OPTIONAL — absent when unreadable.** Read in the impact/splash postfix. Decoded and read by no fold. |
+| `lat` / `lon` | number | degrees | **OPTIONAL — absent when unreadable.** Read in the impact/splash postfix. Decoded and read by no fold. |
 
 **Detector** — `ImpactCorrelator` (`Detect/ImpactCorrelator.cs`). One generic two-slot `Hold<,>` —
 `_pending` (this frame) and `_held` (last frame) — instantiated **twice**: once for impacts and once
@@ -1189,8 +1176,8 @@ verdict is final. No debounce; the only rate limiting is the game's own inside
 **Server.** Two boards, one crash read two ways. `survivedImpact` (`stats/boards.go:389-403`) is the
 eligibility both share, and they share it because they must agree about which crashes count:
 `Survived && !LaunchPad && CrewCount >= 1`, then `scoreable`, then — **rebuild only** — no
-`kitten.kia` for the same flight within ±2.0 s of `ev.SimTime`. That last clause was inert until
-`kitten.kia` began naming a flight (`ver` 2, MOD-073).
+`kitten.kia` for the same flight within ±2.0 s of `ev.SimTime`. That last clause depends on
+`kitten.kia` naming a flight (MOD-073).
 
 - `lithobrakeFold` (`:416-432`) → `biggest_lithobrake_survived`, max `speed_ms`, gated `> 0`.
 - `impactEnergyFold` (`:442-456`) → `biggest_impact_energy`, max `energy_j`, gated `> 0`.
@@ -1204,13 +1191,13 @@ next to it, and one blob means the two rows of one crash agree.
 
 Feed: `"{h} lithobraked at {speed} m/s on {body} — and survived"`.
 
-**Vectors.** `batch-001.ndjson` line 19 (`ver` 2: `survived: true`, `launch_pad: false`, `body: "duna"`, `speed_ms: 214.5`, `lat` / `lon` present).
+**Vectors.** `batch-001.ndjson` line 19 (`survived: true`, `launch_pad: false`, `body: "duna"`, `speed_ms: 214.5`, `lat` / `lon` present).
 
 ---
 
 ### `vehicle.landed`
 
-**Wire.** `"vehicle.landed"` (`EventTypes.cs`), `ver` 1 — **new in wire v2**, kind 1. `flight` is
+**Wire.** `"vehicle.landed"` (`EventTypes.cs`), `ver` 1, kind 1. `flight` is
 **always non-null**: a landing is minted only against a flight the tracker can already name. Detector
 kind `DetectKind.Landing = 6` (`EventDetector.cs:40`), which exists for legibility only —
 `CanFire` is never called with it.
@@ -1637,14 +1624,14 @@ mutable public static the game's own debug window live-edits — which is why an
 baseline seed emits nothing.
 
 **Server.** `countFold{kitten_tumbles, "kitten.tumble"}` — +1 per event on an unflagged flight. **No
-payload field is read at all**; the event type alone is the signal. That "on an unflagged flight" is
-new with `ver` 2 and is the whole point of the bump: `scoreable` passes any event with no flight, so
-a `ver` 1 tumble could never inherit the `tuning` flag raised on its flight, and a player who lowered
-the tumble speed gate — the entire definition of a tumble, live-editable in the game's own debug
-window — scored normally. A `ver` 1 row still does; it names no flight to be excluded by.
+payload field is read at all**; the event type alone is the signal. That "on an unflagged flight"
+depends entirely on the envelope's `flight`: `scoreable` passes any event with no flight, so a
+flightless tumble could never inherit the `tuning` flag raised on its flight, and a player who
+lowered the tumble speed gate — the entire definition of a tumble, live-editable in the game's own
+debug window — would score normally.
 Feed: `"{h}'s kitten {name} took a tumble at {speed} m/s on {body}"`.
 
-**Vectors.** `batch-001.ndjson` line 14 — `ver` 2 with a non-null `flight`.
+**Vectors.** `batch-001.ndjson` line 14 — a tumble with a non-null `flight`.
 
 ---
 
@@ -1730,13 +1717,11 @@ one disqualification that should have happened. See MOD-073.
 **Server.** No board counts it directly. It feeds **rebuild pass 1**, which builds
 `kia map[flightID][]simT` from `kitten.kia` events that carry a flight and a sim time
 (`projector/rebuild.go:163-165`) — and that map is what disqualifies a
-`biggest_lithobrake_survived` **and** a `biggest_impact_energy` claim within ±2.0 s. Before `ver` 2
-the event never carried a flight, so that map was always empty on shipped data and the window fired
-only in tests, which constructed the event with a flight (PROJ-092). The rebuild condition is
-**unchanged** and deliberately so: there is no key a null-flight KIA could be indexed under that is
-not a guess. Feed: `"{h} said goodbye to kitten {name}"`.
+`biggest_lithobrake_survived` **and** a `biggest_impact_energy` claim within ±2.0 s. A KIA that
+names no flight is absent from that map, deliberately: there is no key a null-flight KIA could be
+indexed under that is not a guess (MOD-073). Feed: `"{h} said goodbye to kitten {name}"`.
 
-**Vectors.** `batch-001.ndjson` line 25 — `ver` 2 with a non-null `flight`, `context: "manual_destroy"`.
+**Vectors.** `batch-001.ndjson` line 25 — a non-null `flight`, `context: "manual_destroy"`.
 
 ---
 
@@ -1816,7 +1801,7 @@ and must never become a speed board.
 
 ### `telemetry.window`
 
-**Wire.** `"telemetry.window"` (`EventTypes.cs`), **`ver` 2**, **the only kind-0 (passive, droppable)
+**Wire.** `"telemetry.window"` (`EventTypes.cs`), `ver` 1, **the only kind-0 (passive, droppable)
 type**. `flight` = `tracker.FlightFor(window.VehicleId)`.
 **`sim_t` = `window.Payload.T1Sim`**, the sim time of the window's *last sample*, not the emission
 instant (`EventFactory.FromWindow`, `:32-40`) — which is why in-session emission is slightly out of
@@ -1838,8 +1823,8 @@ order by design.
 | `peak_g` | number | g | **YES — omitted entirely** when no sample carried a reading | `[JsonIgnore(WhenWritingNull)]`, `Payloads.cs:355-357`; fold `WindowAccumulator.cs:140-141` |
 | `max_q_pa` | number | Pa | **YES — omitted** under the same rule | `Payloads.cs:358-360`; `WindowAccumulator.cs:142-143` |
 | `mass_kg_last` | number | kg | no | mass at the **end** of the window |
-| `radar_alt_m` | **agg** | m above the surface beneath | **YES — omitted entirely** when no sample carried a reading | **`ver` 2.** `Payloads.cs:362-364`. Folded over **only** the samples that had a terrain reading — the `peak_g` rule, applied to an aggregate. |
-| `warp_max` | number | × | no | **`ver` 2.** The highest `Universe.SimulationSpeed` (`KSA/Universe.cs:100`) seen in the window. **`1` is real time, and `1` is also the unreadable fallback — never `0`**, because an unreadable warp is not a stopped clock. |
+| `radar_alt_m` | **agg** | m above the surface beneath | **YES — omitted entirely** when no sample carried a reading | `Payloads.cs:362-364`. Folded over **only** the samples that had a terrain reading — the `peak_g` rule, applied to an aggregate. |
+| `warp_max` | number | × | no | The highest `Universe.SimulationSpeed` (`KSA/Universe.cs:100`) seen in the window. **`1` is real time, and `1` is also the unreadable fallback — never `0`**, because an unreadable warp is not a stopped clock. |
 
 **`radar_alt_m`'s population is not `n`.** `n` remains the total sample count; the aggregate is
 folded only over the samples that carried a reading, and the key is absent altogether when none did —
@@ -1921,13 +1906,13 @@ All six share `windowContext` (`:493-499`) — `{"body", "flight", "t1_sim"}`, `
 `alt_m.max` / `surface_speed_ms.max` / `orbital_speed_ms.max` / `radar_alt_m.min` are decoded and
 read by no fold.
 
-**`warp_max` decodes as `0`, not `1`, on a `ver` 1 row.** An identity upcaster cannot synthesize the
-`ver` 1 default, and nothing reads the field today, so this is currently invisible. If a future
-reader wants it, **`0` must be treated as "absent" at the read site** — otherwise that one type's
-upcaster stops being the identity. PROJ-098.
+**`warp_max` decodes as `0` when a payload does not carry it, not as `1`.** The intended default is
+`1` — a stopped clock is not a legal warp — but Go's zero value for the field is `0` and nothing reads
+it today, so this is currently invisible. If a future reader wants it, **`0` must be treated as
+"absent" at the read site**. PROJ-098.
 
 **Vectors.** `batch-001.ndjson` lines 6 and 10 — the pair that pins the `agg` objects and the
-omit-don't-zero optionals from both sides. Line 6 is a `ver` 2 ascent with `peak_g`, `max_q_pa` and
+omit-don't-zero optionals from both sides. Line 6 is an ascent with `peak_g`, `max_q_pa` and
 the `radar_alt_m` aggregate all **present**, `warp_max: 1`, `n: 60`, `t0_sim: 100.5`, `t1_sim: 130.5`
 — exactly a 30 s window at 2 Hz. Line 10 is the same type coasting at `warp_max: 1000` with all three
 **absent** and `n: 3`, which is the warp short-window case above made testable.
@@ -2219,11 +2204,9 @@ Together the two are the only honest efficiency-shaped number reachable **withou
 propellant** — which is why the mod put `mass_kg` on `vehicle.orbit` rather than letting a reader diff
 a launch mass against a telemetry window that may be half a window stale. PROJ-093.
 
-**Zero rule.** `mass_kg` did not exist before wire v2, so every stored `ver` 1 orbit decodes as 0 kg,
-and 0 kg is not a payload. The gate is what keeps a pre-bump history off the board, and it also
-catches a failed read. It is `> 0` rather than `ver >= 2` deliberately: the two are the same
-predicate here, and `> 0` matches every other gate in `boards.go`, so a reader does not have to know
-that one board consults the envelope (PROJ-094). Context `{"body", "flight", "ap_m", "pe_m"}` — not
+**Zero rule.** `mass_kg` is written as 0 when the read failed, and 0 kg is not a payload, so the
+board gates on `> 0` exactly as the four launch boards do — a gate on the value rather than on the
+envelope, which is what keeps every board in `boards.go` reading the same way (PROJ-094). Context `{"body", "flight", "ap_m", "pe_m"}` — not
 the shared four-board shape blob, because this board ranks the *vehicle* and the apsides are what say
 where it got to.
 
@@ -2540,7 +2523,7 @@ fold writes. Surfaced as `collection.projected` / `collection.lag` and `projecto
 | A flagged flight scores nothing — every board, including counters | `scoreable` → `flight_state.flags == 0` | `stats/fold.go:205-220`; PROJ-001 |
 | The `roster.snapshot` and flightless-`kitten.*` boards are exempt — `distance_travelled`, `top_kitten_distance`, `top_kitten_missions`, `longest_eva`, and `evas` whenever the EVA signal carried no vehicle id | `!ev.HasFlight()` → true | `stats/fold.go:226-228` |
 | An **unknown** flag value still excludes | `FlagOther`, bit 5 | `stats/flight.go:29,34-48`; PROJ-002 |
-| A `tuning`-flagged flight's tumbles do not count — the exclusion the flag exists for, live only since `kitten.tumble` gained a flight at `ver` 2 | `scoreable` on a flight-bearing tumble | `stats/fold.go:120,205-228`; MOD-073 |
+| A `tuning`-flagged flight's tumbles do not count — the exclusion the flag exists for, which works only because `kitten.tumble` names a flight | `scoreable` on a flight-bearing tumble | `stats/fold.go:120,205-228`; MOD-073 |
 | Launch-pad impacts never score — on **both** impact boards | `!LaunchPad` | `stats/boards.go:390` |
 | Crewless impacts never score — on **both** impact boards | `CrewCount >= 1` | `stats/boards.go:390` |
 | An impact within 5 s of a teleport is not recorded at all | `Vehicle.IsImpactFxSuppressed()` | `Patcher.cs:423-424,455-456` |
@@ -2556,7 +2539,7 @@ fold writes. Surfaced as `collection.projected` / `collection.lag` and `projecto
 | A `dragging` or `bottomed` arrival is not a splashdown — those touch terrain too | `contactOf(to) == contactOcean` | `stats/boards.go:1000` |
 | A zero-length EVA does not count — `duration_s == 0.0` is an unreadable launch time | `DurationS > 0` | `stats/boards.go:803` |
 | A zero-mass, zero-part, crewless or stage-less launch does not count | `> 0` on all **four** launch boards | `launchFold` |
-| An unwritten orbital mass does not count — every `ver` 1 `vehicle.orbit` decodes as 0 kg | `mass_kg > 0` on `heaviest_to_orbit` | `orbitMassFold`; PROJ-094 |
+| An unreadable orbital mass does not count — `mass_kg` is written as 0 when the read failed | `mass_kg > 0` on `heaviest_to_orbit` | `orbitMassFold`; PROJ-094 |
 | A window with **no** terrain reading never scores — the aggregate is absent, not zeroed | `RadarAltM == nil` refused before the value is read | `lowestPassFold`; PROJ-095 |
 | A terrain minimum of 0 does not count — that is a vehicle on the ground, and on an ascending board an unbeatable record | `RadarAltM.Min > 0` | `lowestPassFold`; PROJ-088 |
 | A landing the vehicle did not walk away from scores nothing — on **both** landing boards | `survived`, via the shared `survivedLanding`; taken from the mod's one-full-frame hold, never re-derived | `survivedLanding`; PROJ-096 |
@@ -2596,56 +2579,29 @@ always answers false then. **This is D22, not a bug.** The divergences, exhausti
    a rebuild sees the completed `flight_state` on pass 2 and drops them all (PROJ-004).
 2. **The ±2.0 s KIA window on the two impact boards** — `biggest_lithobrake_survived` and
    `biggest_impact_energy`, which share `survivedImpact` and therefore share the divergence. Applied
-   only when `b.Refined()`. **This one only became a real divergence when `kitten.kia` gained a
-   flight** (`ver` 2): until then the pass-1 index was always empty on shipped data, the rebuild
-   agreed with the incremental path by accident, and the tests that "covered" it built the event with
-   a flight the mod never sent. It now fires on a scuttle with crew aboard, on the attributable
-   deaths only.
+   only when `b.Refined()`. It is a real divergence **because `kitten.kia` names a flight**: an
+   index keyed by flight over events that carried none would always be empty, and the rebuild would
+   agree with the incremental path by accident. It fires on a scuttle with crew aboard, on the
+   attributable deaths only.
 3. **`ended_reason == 'recovered'` on the two structural-load boards** — `peak_g_survived` and
    `max_q_survived`, which share `survivedLoad`. Applied only when `b.Refined()`. This is still the
-   **broadest** divergence, and it is now twice as broad: every `destroyed` / `despawned` /
-   still-open flight loses both rows on rebuild.
+   **broadest** divergence: every `destroyed` / `despawned` / still-open flight loses both rows on
+   rebuild.
 4. **Feed rows.** `feedRow` resolves the handle from the *live* directory at fold time, and rebuild
    pass 2 re-renders them. A player banned since the events were folded therefore keeps feed rows
    incrementally (until the 500-row cap ages them out) but produces none on rebuild.
-5. **Undecodable events.** A build that gained a decoder folds on rebuild what it skipped before.
-   **This one is live right now, and it is operationally important.** `vehicle.atmosphere`, all three
-   `engine.*` and both `kitten.eva_*` had no decoder before this change and are all kind 1, so every
-   one of them that a player has ever shipped is still sitting in `events.db` having produced
-   nothing. Incrementally they only start scoring from the events that arrive *after* the upgrade, so
-   on a server that has not rebuilt since, `fastest_entry`, `evas`, `flameouts`, `engine_ignitions`
-   and `longest_eva` are empty or short by their whole history.
-
-   **A rebuild is the migration.** There is no other one and none is needed: `catlogctl` rebuild
-   replays the log through the new decoders and the boards populate from history. The same applies to
-   every board sourced from a field that was decoded but unread — the orbit-shape boards, the launch
-   boards, `most_stages`, `landed_bodies`, `splashdowns`, `softest_touchdown`, `highest_altitude`,
-   `max_q_survived`, `biggest_impact_energy` and both kitten boards.
-
-   **The five wire-v2 boards sit here too, and none of them is rescued by a rebuild the way the
-   list above is.** The distinction matters and it is easy to get backwards. The boards above read
-   fields that *were in the log all along* and that nothing decoded, so replaying the log through the
-   new decoders populates them from history. The wire-v2 boards read fields that **were never sent**:
-   `mass_kg`, `stage_count` and `radar_alt_m` do not exist on any `ver` 1 payload, so a rebuild
-   decodes the same 0 or the same absence it would have decoded before, and all three gates refuse
-   it. `softest_landing` and `landings` are starker still — the server answered
-   `400 malformed_batch` on `vehicle.landed` until this change, so there is no history to replay at
-   all.
-
-   **All five therefore start empty and fill from the first wire-v2 batch, and no migration exists
-   or is needed.** A rebuild is still worth running for one reason: a mod shipping `ver` 2 to a
-   server whose projector still folded `ver` 1 had those events *skipped as a future version*, and
-   they are sitting in `events.db` unfolded. That version-skew window is the only history a rebuild
-   recovers here.
-
-**One change to an existing projection, and it does not diverge.** `launchFold`'s context blob gained
-`stage_count`, so `heaviest_launch`, `most_parts` and `biggest_crew` rows now carry six keys instead
-of five. Both paths produce the new shape, so rebuild still equals incremental — but rows written
-before this build keep the old blob until they are beaten or the projection is rebuilt.
+5. **Undecodable events.** A build that gained a decoder, a fold or a board folds on rebuild what it
+   skipped or ignored before. Incrementally the new fold only sees events arriving after the upgrade,
+   because the checkpoint has already passed everything older; a rebuild replays the log from seq 0
+   and the board fills from history. **That is the whole of it — there is no backfill script and none
+   is needed.** The one thing a rebuild cannot invent is a field the wire never carried: a fold
+   reading a key no stored payload holds decodes the same zero or the same absence on both paths, and
+   the `> 0` gates refuse it either way.
 
 Things that deliberately **do not** diverge: rolling-window buckets (derived from `ev.RecvTime`, never
 the wall clock — PROJ-043), retention trims (gated on `ev.Seq % 512`), and the census. Nor do the
-newest boards add a sixth divergence — none of the five wire-v2 folds calls `b.Refined()` or
+newest boards add a sixth divergence — none of `heaviest_to_orbit`, `softest_landing`, `landings`,
+`lowest_pass` or `biggest_stack` calls `b.Refined()` or
 `b.KIANear`, and none derives anything from the wall clock or from map order:
 `heaviest_to_orbit` / `biggest_stack` / `lowest_pass` are pure record-and-best folds over one
 payload, `landings` uses `addCount` so its tie-break is "whoever reached N first" under replay, and
@@ -2669,8 +2625,7 @@ rather than on Go map order, so a rebuild reproduces the incremental `context` b
 
 **Covered by a vector: 23 of 23.** Every registered type appears at least once, at the `ver` the
 registry stamps for it today, and `Batch001_CoversEveryRegisteredType` fails the moment a type is
-added to `EventTypes` without a line — so this section cannot go stale the way it did through
-wire v2.
+added to `EventTypes` without a line — so this section cannot go stale.
 
 The line count is 27 rather than 23 because reaching 23 was never the point: the set exists to pin
 payload *shapes*, and four types need more than one line to say what they have to say.
@@ -2685,8 +2640,8 @@ payload *shapes*, and four types need more than one line to say what they have t
 Between them the lines pin an array field (`kids`, `roster.snapshot.kittens`), an optional present
 **and** absent for the same field on the same type, a nested object (`agg`), a nested *optional*
 object (`telemetry.window`'s `radar_alt_m`), an in-payload `null`, and all three envelope `flight`
-cases — always non-null, always null, and conditionally null (`kitten.tumble`, `kitten.kia`, both at
-`ver` 2 with a flight named).
+cases — always non-null, always null, and conditionally null (`kitten.tumble`, `kitten.kia`, both
+naming a flight).
 
 Vector-level assertions that apply to every line regardless: every `type` is in the registry, every
 `id` parses as a ULID, the `flight` key is always present and is `null` or a ULID, `session` is
@@ -2694,8 +2649,8 @@ non-empty, `career` is 16 Crockford characters, `payload` is an object, each lin
 `Wire.MaxEventLineBytes` (`Batch001_IsAllKnownEnvelopeTypes`), and **`ver` equals
 `EventTypes.VersionOf(type)`** (`Batch001_StampsTheRegistrysCurrentVersion`). The last of these is
 the drift check the whole layer exists for — the generator hard-codes `ver` per line, so without it a
-version bump on either side leaves the fixtures pinning a shape nobody emits while both suites stay
-green. The Go half is `projector.TestGoldenBatchIsAtTheCurrentVersions`, which asserts the same
+version bump on either side would leave the fixtures pinning a shape nobody emits while both suites
+stay green. The Go half is `projector.TestGoldenBatchIsAtTheCurrentVersions`, which asserts the same
 against `projector.currentVer` and additionally that every type that map overrides appears in a line.
 
 Beyond the envelope, `Batch001_PayloadsRoundTripThroughTheirRecords` deserialises every `payload`
@@ -2789,7 +2744,7 @@ that the code is wrong.**
     `accel_ms2` / `mass_kg_last` / `n` / `t0_sim` and every aggregate member no board takes, and
     `session.started.*` are all decoded and read by no fold.
 
-    **Wire v2 adds to the list rather than shortening it**, and every one of these is deliberate:
+    **The list is long and every entry on it is deliberate**, including the spatial keys:
     `kids` on both flight events, every `lat` / `lon`, `flight.ended.body`,
     `vehicle.situation.radar_alt_m`, `telemetry.window.warp_max`, and `vehicle.landed`'s
     `radar_alt_m` / `lat` / `lon` are decoded and read by nothing. They are recorded because the
@@ -2805,31 +2760,25 @@ that the code is wrong.**
     making one of them so would buy nothing.
 25. **`Board.Career` carries a `json:"career"` tag but is exposed in no response struct.** Clients
     infer "career board" from `ascending` + `unit == "ms"` + the presence of `rewound`.
-26. **Fixed (2026-08-09).** The ±2 s KIA window and the `tuning` flag were both inert on data the
-    shipped mod produced, because `kitten.tumble` and `kitten.kia` were emitted with `flight: null`
-    and neither the rebuild's KIA index nor `scoreable`'s flag gate can act on an event that names no
-    flight. Both mechanisms passed their tests, which constructed the events *with* a flight the mod
-    never sent — **a guard whose test data is shaped differently from real data is not a guard.** The
-    fix was on the mod side, as predicted: both events now attribute a flight and are `ver` 2. See
-    MOD-073, MOD-074 and PROJ-092.
+26. **Fixed (2026-08-09).** The ±2 s KIA window and the `tuning` flag were both inert, because
+    `kitten.tumble` and `kitten.kia` named no flight and neither the rebuild's KIA index nor
+    `scoreable`'s flag gate can act on an event that names one. Both mechanisms passed their tests,
+    which constructed the events *with* a flight the mod did not send — **a guard whose test data is
+    shaped differently from real data is not a guard.** The fix was on the mod side: both events
+    attribute a flight. `batch-001.ndjson` lines 14 and 25 pin that envelope shape cross-language.
+    See MOD-073.
 
-    **The residual is closed too (2026-08-09):** `batch-001.ndjson` lines 14 and 25 are the `ver` 2
-    `kitten.tumble` and `kitten.kia`, both naming a flight, so the new envelope shape is pinned
-    cross-language.
-
-27. **Fixed (2026-08-09).** The conformance vectors were entirely `ver` 1, including for the types
-    already at `ver` 2, so nothing in `contracts/testdata/` pinned a `ver` 2 payload — or the
-    omit-don't-zero rule for `lat` / `lon` / `radar_alt_m` — across the two implementations. The
-    fixture set is now 27 lines covering all 23 registered types at the versions the registries
-    stamp today, and two new assertions stop it drifting again: `ver` must equal the registry's
-    current version for the type, and every registered type must appear in a line. See
+27. **Fixed (2026-08-09).** The conformance vectors covered five types on five lines, so nothing in
+    `contracts/testdata/` pinned the omit-don't-zero rule for `lat` / `lon` / `radar_alt_m` across
+    the two implementations. The fixture set is now 27 lines covering all 23 registered types, and
+    two assertions stop it drifting again: `ver` must equal the registry's current version for the
+    type, and every registered type must appear in a line. See
     [Conformance coverage](#conformance-coverage) and INGEST-025.
 
-28. **`telemetry.window.warp_max` decodes as `0`, not `1`, on a `ver` 1 row.** The `ver` 1 default
-    is `1` (a stopped clock is not a legal warp) but an identity upcaster cannot synthesize a key,
-    and the Go zero value for the field is `0`. Nothing reads it today, so it is invisible; the first
-    reader must treat `0` as "absent" at the read site, or that one type's upcaster stops being the
-    identity. Recorded in a comment on the field and in PROJ-098.
+28. **`telemetry.window.warp_max` decodes as `0` when a payload omits it, not as `1`.** The intended
+    default is `1` (a stopped clock is not a legal warp) but the Go zero value for the field is `0`.
+    Nothing reads it today, so it is invisible; the first reader must treat `0` as "absent" at the
+    read site. Recorded in a comment on the field and in PROJ-098.
 
 29. **`vehicle.landed` emits from a frame boundary, not from `ProcessFrame`.** It is detected on the
     worker like every other frame-derived event, but its envelope is minted by whichever correlator

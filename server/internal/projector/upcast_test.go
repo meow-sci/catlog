@@ -9,11 +9,11 @@ import (
 
 func TestUpcastPassesThroughTheCurrentVersion(t *testing.T) {
 	u := NewUpcasters()
-	if u.Len() != 9 {
-		t.Fatalf("the registry has %d entries, want 9 — kitten.tumble, kitten.kia and the seven wire-v2 types", u.Len())
+	if u.Len() != 0 {
+		t.Fatalf("the launch registry has %d entries, want 0 — every §4.2 type is ver 1", u.Len())
 	}
-	raw := json.RawMessage(`{"dir":"entered","speed_ms":3200}`)
-	got, err := u.Apply("vehicle.atmosphere", 1, raw)
+	raw := json.RawMessage(`{"speed_ms":214}`)
+	got, err := u.Apply("vehicle.impact", 1, raw)
 	if err != nil {
 		t.Fatalf("ver 1: %v", err)
 	}
@@ -22,75 +22,12 @@ func TestUpcastPassesThroughTheCurrentVersion(t *testing.T) {
 	}
 }
 
-// TestWireV2UpcastersAreTheIdentity is the server half of the contract in
-// mod/catlog.lib/Events/EventTypes.cs: seven types went to ver 2 by *adding*
-// keys, so a ver 1 row has to reach the folds byte for byte — unknown keys
-// included (§4.1) — and a ver 2 row has to pass straight through.
-func TestWireV2UpcastersAreTheIdentity(t *testing.T) {
-	u := NewUpcasters()
-	for typ, raw := range map[string]json.RawMessage{
-		"flight.started":    json.RawMessage(`{"vehicle_name":"A","body":"kerbin","mass_kg":412000,"future_key":7}`),
-		"flight.ended":      json.RawMessage(`{"reason":"recovered","crew_count":3}`),
-		"vehicle.situation": json.RawMessage(`{"from":"freefall","to":"landed","body":"mun"}`),
-		"vehicle.orbit":     json.RawMessage(`{"phase":"achieved","body":"kerbin","ap_m":320000}`),
-		"vehicle.rud":       json.RawMessage(`{"cause":"collision","speed_ms":90}`),
-		"vehicle.impact":    json.RawMessage(`{"speed_ms":214,"survived":true}`),
-		"telemetry.window":  json.RawMessage(`{"n":60,"body":"duna"}`),
-	} {
-		for _, ver := range []int{1, 2} {
-			got, err := u.Apply(typ, ver, raw)
-			if err != nil {
-				t.Fatalf("%s ver %d: %v", typ, ver, err)
-			}
-			if string(got) != string(raw) {
-				t.Errorf("%s ver %d payload was rewritten:\n got %s\nwant %s", typ, ver, got, raw)
-			}
-		}
-		if _, err := u.Apply(typ, 3, raw); !errors.Is(err, ErrFutureVersion) {
-			t.Errorf("%s ver 3 error = %v, want ErrFutureVersion", typ, err)
-		}
-	}
-
-	// vehicle.landed is new in wire v2 and starts at ver 1, so it needs no
-	// upcaster at all — and must not have acquired one.
-	raw := json.RawMessage(`{"body":"mun","vertical_speed_ms":1.4,"survived":true}`)
-	if got, err := u.Apply("vehicle.landed", 1, raw); err != nil || string(got) != string(raw) {
-		t.Errorf("vehicle.landed ver 1 = (%s, %v), want the payload untouched and no error", got, err)
-	}
-	if _, err := u.Apply("vehicle.landed", 2, raw); !errors.Is(err, ErrFutureVersion) {
-		t.Error("vehicle.landed ver 2 folded; this build knows only ver 1")
-	}
-}
-
-func TestUpcastLeavesTheFlightBumpedPayloadsAlone(t *testing.T) {
-	// `kitten.tumble` and `kitten.kia` went to ver 2 when they began carrying a
-	// flight. Nothing in the payload moved, so a stored ver 1 row has to reach
-	// the folds byte for byte — including keys this build does not know (§4.1).
-	u := NewUpcasters()
-	for _, typ := range []string{"kitten.tumble", "kitten.kia"} {
-		raw := json.RawMessage(`{"kid":"k1","name":"Comet","future_key":7}`)
-		got, err := u.Apply(typ, 1, raw)
-		if err != nil {
-			t.Fatalf("%s ver 1: %v", typ, err)
-		}
-		if string(got) != string(raw) {
-			t.Errorf("%s ver 1 payload was rewritten: %s", typ, got)
-		}
-		if got, err = u.Apply(typ, 2, raw); err != nil || string(got) != string(raw) {
-			t.Errorf("%s ver 2 = (%s, %v), want the payload untouched and no error", got, err, raw)
-		}
-		if _, err := u.Apply(typ, 3, raw); !errors.Is(err, ErrFutureVersion) {
-			t.Errorf("%s ver 3 error = %v, want ErrFutureVersion", typ, err)
-		}
-	}
-}
-
 func TestUpcastRefusesAFutureVersion(t *testing.T) {
 	// §4.1 accepts and stores an unknown-but-higher ver; the projector skips it
 	// and logs once. This is the "skip" half.
-	_, err := NewUpcasters().Apply("vehicle.impact", 3, json.RawMessage(`{}`))
+	_, err := NewUpcasters().Apply("vehicle.impact", 2, json.RawMessage(`{}`))
 	if !errors.Is(err, ErrFutureVersion) {
-		t.Fatalf("ver 3 error = %v, want ErrFutureVersion", err)
+		t.Fatalf("ver 2 error = %v, want ErrFutureVersion", err)
 	}
 }
 

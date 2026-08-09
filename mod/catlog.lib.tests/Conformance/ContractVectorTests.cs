@@ -229,8 +229,8 @@ public sealed class ContractVectorTests
     /// does not carry is gained. Both are silent in every other test, and both are how the two
     /// implementations drift apart — most sharply on the omit-don't-zero optionals, where the
     /// vectors deliberately carry the same field present on one line and absent on another
-    /// (<c>telemetry.window</c>'s <c>peak_g</c> / <c>max_q_pa</c> / <c>radar_alt_m</c>, and the
-    /// wire-v2 <c>lat</c> / <c>lon</c>). Key *order* is not compared: it is not a contract, since
+    /// (<c>telemetry.window</c>'s <c>peak_g</c> / <c>max_q_pa</c> / <c>radar_alt_m</c>, and
+    /// <c>lat</c> / <c>lon</c>). Key *order* is not compared: it is not a contract, since
     /// the proof's <c>bh</c> hashes the bytes the mod actually produced.
     /// </remarks>
     [ContractVectorFact]

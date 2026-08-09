@@ -169,9 +169,8 @@ and the events are still arriving one at a time:
 
 1. **An impact within 2 seconds of a kitten being lost is dropped.** Live, catlog
    cannot know a kitten is about to be lost. This applies to both impact boards.
-   The rule needs to know _whose flight_ the kitten died on, and losses only began
-   carrying that — so a crash that killed a kitten now stops being a survived
-   landing, which is what this rule always said it did.
+   The rule needs to know _whose flight_ the kitten died on, which is why a loss
+   names its flight whenever catlog can prove one.
 2. **A peak-g or max-q reading only counts if the flight ended recovered.** Live,
    the flight may still be in progress. This is the widest of them — every flight
    that ended destroyed or despawned loses both rows on a rebuild.
@@ -191,24 +190,10 @@ And one is about catlog itself changing:
    arrives from now on. A rebuild replays the whole log through the new rules and
    fills the board in from your actual history.
 
-   This is not hypothetical: the boards for atmospheric entry, spacewalks, engine
-   ignitions and flameouts were added to a log that had been quietly collecting
-   those events all along. Until a rebuild runs, they show only what has happened
-   since.
-
-5. **A board that reads a figure your older flights never recorded.** This is the
-   sharper version of the case above, and it applies to the newest boards.
-   **Heaviest Payload To Orbit**, **Most Stages Built** and **Lowest Pass** each
-   read something the mod did not use to send — what the vehicle weighed as it
-   made orbit, how many stages it was built with, and how high you were above the
-   ground. Flights recorded before that change carry no such figure, so they read
-   as zero, and all three boards refuse a zero. **They score nothing for your
-   older flights, and a rebuild does not rescue them** — the number was never in
-   the log to begin with. What a rebuild does fix is everything recorded since.
-
-   **Softest Landing** and **Landings** are simpler: landing was not a thing
-   catlog recorded at all before, so those two have no history whatsoever and
-   start from your first flight with the new mod.
+   The one thing a rebuild cannot do is invent a figure the mod never sent. A
+   board that reads something absent from your older flights reads it as zero, and
+   every such board refuses a zero — so those flights score nothing there, on
+   either path.
 
 Rebuilding is always the more correct answer: it is the one computed with the whole
 story in hand.

@@ -12,46 +12,10 @@ import (
 // an entry in currentVer below.
 const CurrentVer = 1
 
-// currentVer overrides [CurrentVer] per type. Adding a key here is half of a
-// version bump, the other half being an [Upcaster] for every version between the
-// old one and the new. It must equal the mod's EventTypes.Versions exactly: a
-// type the mod stamps ver 2 while this map still says 1 is skipped here as a
-// future version, which is silent data loss for that type until a rebuild.
-var currentVer = map[string]int{
-	// Both gained a non-null `flight` in ver 2 (mod: EventPipeline's tumble and
-	// KIA attribution). The payload did not change — see the identity upcasters
-	// in [NewUpcasters] — but what the server does with the event did: at ver 1
-	// neither could name a flight, so `kitten.tumble` could not inherit its
-	// flight's `tuning` flag and `kitten.kia` could not disqualify an impact
-	// under the ±2 s window. The stored `ver` is what tells those rows apart.
-	"kitten.tumble": 2,
-	"kitten.kia":    2,
-
-	// Wire v2: seven types gained payload keys in one wave, and every one of
-	// them only *added* — no key was renamed, retyped, re-unitted or removed —
-	// so every upcaster below is the identity and a ver 1 row still folds
-	// exactly as it always did. What each one gained:
-	//
-	//	flight.started    + kids, stage_count, lat, lon
-	//	flight.ended      + kids, body, lat, lon
-	//	vehicle.situation + radar_alt_m
-	//	vehicle.orbit     + mass_kg
-	//	vehicle.rud       + lat, lon
-	//	vehicle.impact    + lat, lon
-	//	telemetry.window  + radar_alt_m, warp_max
-	//
-	// A ver 1 row simply says less, and the boards built on the new keys refuse
-	// its absent-as-zero readings on their own: `heaviest_to_orbit` needs
-	// `mass_kg > 0`, `biggest_stack` needs `stage_count > 0`, and `lowest_pass`
-	// scores nothing without a `radar_alt_m` object at all.
-	"flight.started":    2,
-	"flight.ended":      2,
-	"vehicle.situation": 2,
-	"vehicle.orbit":     2,
-	"vehicle.rud":       2,
-	"vehicle.impact":    2,
-	"telemetry.window":  2,
-}
+// currentVer overrides [CurrentVer] per type. Empty at launch; adding a key here
+// is half of a payload version bump, the other half being an [Upcaster] for
+// every version between the old one and the new.
+var currentVer = map[string]int{}
 
 // Errors the version resolution can produce. Neither is fatal to the projector:
 // §4.1 says an event it cannot decode is skipped and logged once, because the
@@ -87,39 +51,9 @@ type Upcasters struct {
 	m map[upcastKey]Upcaster
 }
 
-// NewUpcasters returns the registry this build folds with.
-//
-// Every entry is the identity today, for two different reasons that happen to
-// meet at the same transform. `kitten.tumble` and `kitten.kia` bumped on an
-// *envelope* change (those events now carry a flight), so their ver 1 payload
-// is already exactly what the ver 2 folds read. The seven wire-v2 types bumped
-// on a payload change that only added keys, so their ver 1 payload is a ver 2
-// payload with those keys absent — which is precisely what the wire means by
-// omitting them.
-//
-// The entries are still required — [Apply] refuses to fold a row it cannot
-// bring to the current version — and they are what keeps the old rows scoring
-// as they always did: a flightless `kitten.tumble` still counts, it simply
-// cannot be excluded by a flag it never named, and a ver 1 `vehicle.orbit`
-// still ranks on every orbit-shape board, it simply cannot say what it weighed.
-func NewUpcasters() *Upcasters {
-	u := &Upcasters{m: map[upcastKey]Upcaster{}}
-	u.Register("kitten.tumble", 1, identityUpcast)
-	u.Register("kitten.kia", 1, identityUpcast)
-	u.Register("flight.started", 1, identityUpcast)
-	u.Register("flight.ended", 1, identityUpcast)
-	u.Register("vehicle.situation", 1, identityUpcast)
-	u.Register("vehicle.orbit", 1, identityUpcast)
-	u.Register("vehicle.rud", 1, identityUpcast)
-	u.Register("vehicle.impact", 1, identityUpcast)
-	u.Register("telemetry.window", 1, identityUpcast)
-	return u
-}
-
-// identityUpcast is the transform for a version bump that did not touch the
-// payload. It returns the stored bytes untouched, which also preserves the
-// unknown keys §4.1 promises survive.
-func identityUpcast(raw json.RawMessage) (json.RawMessage, error) { return raw, nil }
+// NewUpcasters returns the launch registry, which is empty: every §4.2 type is
+// at ver 1 and needs no conversion.
+func NewUpcasters() *Upcasters { return &Upcasters{m: map[upcastKey]Upcaster{}} }
 
 // Register adds the transform from version ver to ver+1 for one event type.
 func (u *Upcasters) Register(typ string, ver int, fn Upcaster) {

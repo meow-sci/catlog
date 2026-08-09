@@ -423,9 +423,9 @@ func signProof(key *ecdsa.PrivateKey, claims authz.ProofClaims) (string, error) 
 //   - `lat`/`lon` present on `flight.started`, `vehicle.landed`, `vehicle.impact`
 //     and `flight.ended`, and absent on the uncrewed probe's `flight.started`,
 //     on `vehicle.rud` and on the safety-net `flight.ended`. A latitude of 0 is
-//     a place, so the key is left out rather than zeroed (§ wire v2);
+//     a place, so the key is left out rather than zeroed;
 //   - the `kids` array populated (2 kittens) and empty (an uncrewed probe) —
-//     `[]` is "nobody aboard", a missing key is "a ver 1 row";
+//     `[]` is "nobody aboard", a missing key is "the mod could not say";
 //   - `stage_count` 0, which unlike a latitude *is* a real value;
 //   - a nested array of objects (`roster.snapshot.kittens`) and a nested
 //     optional object (`telemetry.window.radar_alt_m`);
@@ -474,7 +474,7 @@ func batch001() []byte {
 		},
 	}, {
 		// Crewed launch: `kids` populated, `lat`/`lon` readable, a real stage count.
-		label: "ev-2", typ: "flight.started", ver: 2, flight: &mission, simT: 100.5,
+		label: "ev-2", typ: "flight.started", ver: 1, flight: &mission, simT: 100.5,
 		payload: map[string]any{
 			"vehicle_name": "Kitten I", "body": "earth",
 			"mass_kg": 12500.5, "part_count": 24, "crew_count": 2,
@@ -483,7 +483,7 @@ func batch001() []byte {
 		},
 	}, {
 		// radar_alt_m PRESENT: the game had a terrain sample under the pad.
-		label: "ev-3", typ: "vehicle.situation", ver: 2, flight: &mission, simT: 102.5,
+		label: "ev-3", typ: "vehicle.situation", ver: 1, flight: &mission, simT: 102.5,
 		payload: map[string]any{
 			"from": "landed", "to": "maneuvering", "body": "earth",
 			"altitude_m": 12.5, "surface_speed_ms": 3.25, "orbital_speed_ms": 465.1,
@@ -497,8 +497,8 @@ func batch001() []byte {
 		payload: map[string]any{"engine": "kitten_booster_v1", "count": 4},
 	}, {
 		// A full 60-sample window under full physics: every optional PRESENT,
-		// including the ver 2 radar_alt_m aggregate.
-		label: "ev-6", typ: "telemetry.window", ver: 2, flight: &mission, simT: 130.5,
+		// including the radar_alt_m aggregate.
+		label: "ev-6", typ: "telemetry.window", ver: 1, flight: &mission, simT: 130.5,
 		payload: map[string]any{
 			"t0_sim": 100.5, "t1_sim": 130.5, "n": 60, "body": "earth",
 			"alt_m":            agg(0, 42000.25, 21000.125, 42000.25),
@@ -520,7 +520,7 @@ func batch001() []byte {
 		label: "ev-8", typ: "engine.shutdown", ver: 1, flight: &mission, simT: 168.5,
 		payload: map[string]any{"engine": "kitten_booster_v1", "count": 4},
 	}, {
-		label: "ev-9", typ: "vehicle.orbit", ver: 2, flight: &mission, simT: 172.25,
+		label: "ev-9", typ: "vehicle.orbit", ver: 1, flight: &mission, simT: 172.25,
 		payload: map[string]any{
 			"phase": "achieved", "body": "earth",
 			"ap_m": 185000.5, "pe_m": 172400.25, "ecc": 0.0034, "inc_deg": 28.58,
@@ -530,7 +530,7 @@ func batch001() []byte {
 		// The same type as ev-6 with every optional ABSENT: on rails at 1000×
 		// warp there is no StructuralLoad and no terrain below, and `n` is 3
 		// rather than 60 because the window spans 30 *sim* seconds.
-		label: "ev-10", typ: "telemetry.window", ver: 2, flight: &mission, simT: 200.5,
+		label: "ev-10", typ: "telemetry.window", ver: 1, flight: &mission, simT: 200.5,
 		payload: map[string]any{
 			"t0_sim": 170.5, "t1_sim": 200.5, "n": 3, "body": "earth",
 			"alt_m":            agg(185010.5, 186220.75, 185615.625, 186220.75),
@@ -554,8 +554,8 @@ func batch001() []byte {
 		label: "ev-13", typ: "kitten.eva_start", ver: 1, flight: &eva, simT: 215,
 		payload: map[string]any{"kid": kidAce, "name": "Ace"},
 	}, {
-		// ver 2 is exactly this: a tumble that names a flight.
-		label: "ev-14", typ: "kitten.tumble", ver: 2, flight: &eva, simT: 218.5,
+		// A tumble that names the flight it happened on.
+		label: "ev-14", typ: "kitten.tumble", ver: 1, flight: &eva, simT: 218.5,
 		payload: map[string]any{"kid": kidAce, "name": "Ace", "speed_ms": 4.25, "body": "duna"},
 	}, {
 		// `flight` is explicitly null here, asymmetrically with eva_start.
@@ -564,7 +564,7 @@ func batch001() []byte {
 	}, {
 		// The uncrewed probe that splits off: `kids` EMPTY, `stage_count` 0 (a
 		// real value), `lat`/`lon` ABSENT (not readable, and 0 would be a place).
-		label: "ev-16", typ: "flight.started", ver: 2, flight: &probe, simT: 240,
+		label: "ev-16", typ: "flight.started", ver: 1, flight: &probe, simT: 240,
 		payload: map[string]any{
 			"vehicle_name": "Kitten I Probe", "body": "duna",
 			"mass_kg": 850.75, "part_count": 6, "crew_count": 0,
@@ -577,9 +577,9 @@ func batch001() []byte {
 		label: "ev-18", typ: "engine.flameout", ver: 1, flight: &mission, simT: 248.5,
 		payload: map[string]any{"engine": "kitten_lander_v2", "count": 1},
 	}, {
-		// §5.6's worked example of biggest_lithobrake_survived, now with the
-		// wire v2 position keys.
-		label: "ev-19", typ: "vehicle.impact", ver: 2, flight: &mission, simT: 258.25,
+		// §5.6's worked example of biggest_lithobrake_survived, with the
+		// position keys present.
+		label: "ev-19", typ: "vehicle.impact", ver: 1, flight: &mission, simT: 258.25,
 		payload: map[string]any{
 			"speed_ms": 214.5, "energy_j": 2.25e8, "survived": true,
 			"launch_pad": false, "body": "duna", "crew_count": 2,
@@ -595,7 +595,7 @@ func batch001() []byte {
 			"lat": 12.4405, "lon": -74.8201,
 		},
 	}, {
-		label: "ev-21", typ: "flight.ended", ver: 2, flight: &mission, simT: 300,
+		label: "ev-21", typ: "flight.ended", ver: 1, flight: &mission, simT: 300,
 		payload: map[string]any{
 			"reason": "recovered", "crew_count": 2,
 			"kids": []string{kidAce, kidPepper}, "body": "duna",
@@ -605,7 +605,7 @@ func batch001() []byte {
 		// The silent-removal safety net: no vehicle left to read, so `body` is
 		// the literal "unknown", `kids` is `[]`, `crew_count` is 0 and the
 		// position keys are absent (§ flight.ended).
-		label: "ev-22", typ: "flight.ended", ver: 2, flight: &probe, simT: 305,
+		label: "ev-22", typ: "flight.ended", ver: 1, flight: &probe, simT: 305,
 		payload: map[string]any{
 			"reason": "despawned", "crew_count": 0,
 			"kids": []string{}, "body": "unknown",
@@ -617,18 +617,18 @@ func batch001() []byte {
 		// lat/lon ABSENT: the destruction prefix could not place the vehicle.
 		// peak_g and peak_q_pa are NOT optional here — they come off the
 		// destruction event and are written as 0 rather than omitted.
-		label: "ev-24", typ: "vehicle.rud", ver: 2, flight: &wreck, simT: 318.25,
+		label: "ev-24", typ: "vehicle.rud", ver: 1, flight: &wreck, simT: 318.25,
 		payload: map[string]any{
 			"cause": "ground_impact", "peak_g": 12.5, "peak_q_pa": 74500.25,
 			"speed_ms": 312.75, "altitude_m": 0.5, "body": "earth", "crew_count": 1,
 		},
 	}, {
-		// ver 2 is exactly this: a KIA that names the flight it happened on.
+		// A KIA that names the flight it happened on.
 		// The player scuttled the wreck, which is the only path that sets Kia.
-		label: "ev-25", typ: "kitten.kia", ver: 2, flight: &wreck, simT: 320.5,
+		label: "ev-25", typ: "kitten.kia", ver: 1, flight: &wreck, simT: 320.5,
 		payload: map[string]any{"kid": kidPepper, "name": "Pepper", "context": "manual_destroy"},
 	}, {
-		label: "ev-26", typ: "flight.ended", ver: 2, flight: &wreck, simT: 321,
+		label: "ev-26", typ: "flight.ended", ver: 1, flight: &wreck, simT: 321,
 		payload: map[string]any{
 			"reason": "destroyed", "crew_count": 1,
 			"kids": []string{kidPepper}, "body": "earth",

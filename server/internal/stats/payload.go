@@ -19,8 +19,8 @@ import (
 // them rather than reporting zero, and a fold that treated a missing reading as
 // a real 0 would poison the peak_g board (see docs/ksa-integration.md).
 //
-// Wire v2's position keys obey the same rule and need it more, because their
-// zero is a *place*: `lat`/`lon` 0 is a point in the ocean south of Ghana and
+// The position keys obey the same rule and need it more, because their zero is
+// a *place*: `lat`/`lon` 0 is a point in the ocean south of Ghana and
 // `radar_alt_m` 0 is the ground. The mod omits the key entirely when the read
 // failed — it never sends null and never sends 0 — so every one of them is a
 // pointer here and a nil is "the mod could not say", not "sea level at the
@@ -38,8 +38,9 @@ type Agg struct {
 //
 // Kids is the pseudonymous id of every kitten aboard at launch, in seat order.
 // It is always present on the wire and is `[]` for an uncrewed flight, so a nil
-// slice here means a ver 1 row rather than an empty cabin — a distinction no
-// fold needs today and every fold would need if it were ever collapsed.
+// slice here means the key was absent rather than an empty cabin — a
+// distinction no fold needs today and every fold would need if it were ever
+// collapsed.
 //
 // StageCount is 0 when the read failed, which is the same thing MassKg,
 // PartCount and CrewCount do; `biggest_stack` therefore gates on `> 0` exactly
@@ -119,11 +120,10 @@ type VehicleOrbit struct {
 	PeM    float64 `json:"pe_m"`
 	Ecc    float64 `json:"ecc"`
 	IncDeg float64 `json:"inc_deg"`
-	// MassKg is the mass at the instant the milestone fired, and is **absent —
-	// therefore 0 — on every ver 1 row**, because wire v2 added it. That is why
-	// `heaviest_to_orbit` gates on `> 0` rather than trusting the field: a
-	// history folded before the bump must not fill the board with zero-tonne
-	// payloads.
+	// MassKg is the mass at the instant the milestone fired, and is written as
+	// 0 when the read failed — the same thing FlightStarted.MassKg does. That
+	// is why `heaviest_to_orbit` gates on `> 0` rather than trusting the field:
+	// an unreadable vehicle must not rank as a zero-tonne payload.
 	MassKg float64 `json:"mass_kg"`
 }
 
@@ -160,7 +160,7 @@ type VehicleImpact struct {
 }
 
 // VehicleLanded is `vehicle.landed` — a vehicle touched a surface it was not
-// touching before. New in wire v2, so there is no ver 0 and no upcaster.
+// touching before.
 //
 // It is emitted off the same detection as the `vehicle.situation` beside it
 // (contact-free → surface contact, sharing that rule's 2 s debounce), so it is
@@ -293,9 +293,8 @@ type TelemetryWindow struct {
 	// sample count from it.
 	RadarAltM *Agg `json:"radar_alt_m"`
 	// WarpMax is the highest simulation speed seen in the window; 1 is real
-	// time and 0 is a ver 1 row that never carried the key. **Descriptive
-	// only** (Constitution §8): it may annotate a row, and it may never reject
-	// or disqualify one. It is not a cheat signal.
+	// time. **Descriptive only** (Constitution §8): it may annotate a row, and
+	// it may never reject or disqualify one. It is not a cheat signal.
 	WarpMax float64 `json:"warp_max"`
 }
 

@@ -638,7 +638,7 @@ public sealed class EventPipelineTests
         Assert.Equal(flight, ended.Flight);
     }
 
-    // ----- wire v2: the landing edge ---------------------------------------------------------
+    // ----- the landing edge -------------------------------------------------------------------
 
     /// <summary>
     /// The golden landing shape: one contact-free → contact transition produces
@@ -726,7 +726,7 @@ public sealed class EventPipelineTests
         Assert.Empty(pipeline.Tracker.ActiveVehicleIds);
     }
 
-    // ----- wire v2: crew identity, body and position on the flight events ---------------------
+    // ----- crew identity, body and position on the flight events ------------------------------
 
     [Fact]
     public void FlightStarted_CarriesTheCrewAsKidsPlusStagesAndPosition()
@@ -817,7 +817,7 @@ public sealed class EventPipelineTests
         Assert.Equal(22_500, Assert.IsType<VehicleOrbitPayload>(orbit.Payload).MassKg);
     }
 
-    // ----- wire v2: absent means absent, on the wire -------------------------------------------
+    // ----- absent means absent, on the wire ---------------------------------------------------
 
     /// <summary>
     /// The rule the whole optional-field design exists for: a position that could not be read is

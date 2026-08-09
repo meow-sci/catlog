@@ -2,12 +2,9 @@ package ingest
 
 import "slices"
 
-// knownTypes is the §4.2 event taxonomy — the launch set plus `vehicle.landed`,
-// which wire v2 added. Nine of them are at `ver: 2`: `kitten.tumble` and
-// `kitten.kia` since they began carrying a flight, and the seven wire-v2 types
-// that gained payload keys (projector.currentVer holds the per-type versions;
-// ingest validates only that `ver` is ≥ 1, because §4.1 accepts and stores an
-// unknown-but-higher version rather than rejecting the batch).
+// knownTypes is the §4.2 event taxonomy. Every type is at `ver: 1`; ingest
+// validates only that `ver` is ≥ 1, because §4.1 accepts and stores an
+// unknown-but-higher version rather than rejecting the batch.
 //
 // This registry is a contract, not a convenience: §4.1 rejects a whole batch
 // carrying an unknown `type`, on the grounds that the mod and the server ship

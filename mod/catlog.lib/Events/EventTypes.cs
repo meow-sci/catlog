@@ -94,29 +94,15 @@ public static class EventTypes
     private static readonly Dictionary<string, int> Versions = new(StringComparer.Ordinal)
     {
         [SessionStarted] = 1,
-        // ---- wire v2 -------------------------------------------------------------------------
-        // Seven types gained keys in one wave, and every one of them is a payload change rather
-        // than a semantic one: each ver 2 payload is its ver 1 payload plus fields. That makes the
-        // server's upcaster identity in every case — a ver 1 event still folds correctly, it simply
-        // says less — which is exactly why they could all move together.
-        //
-        //   flight.started    + kids, stage_count, lat, lon
-        //   flight.ended      + kids, body, lat, lon
-        //   vehicle.situation + radar_alt_m
-        //   vehicle.orbit     + mass_kg
-        //   vehicle.rud       + lat, lon
-        //   vehicle.impact    + lat, lon
-        //   telemetry.window  + radar_alt_m, warp_max
-        [FlightStarted] = 2,
-        [FlightEnded] = 2,
+        [FlightStarted] = 1,
+        [FlightEnded] = 1,
         [FlightFlagged] = 1,
-        [VehicleSituation] = 2,
+        [VehicleSituation] = 1,
         [VehicleAtmosphere] = 1,
-        [VehicleOrbit] = 2,
+        [VehicleOrbit] = 1,
         [VehicleSoi] = 1,
-        [VehicleRud] = 2,
-        [VehicleImpact] = 2,
-        // New in wire v2: there is no ver 0 to upcast from.
+        [VehicleRud] = 1,
+        [VehicleImpact] = 1,
         [VehicleLanded] = 1,
         [VehicleStaging] = 1,
         [VehicleDocked] = 1,
@@ -126,15 +112,13 @@ public static class EventTypes
         [EngineFlameout] = 1,
         [KittenEvaStart] = 1,
         [KittenEvaEnd] = 1,
-        // ver 2: both gained a non-null `flight`. The payload bytes are unchanged, but the
-        // envelope contract is not, and the change is one a reader of the immutable log has to be
-        // able to see — a ver 1 kitten.tumble can never be excluded by its flight's `tuning` flag
-        // (it names no flight), and a ver 1 kitten.kia can never disqualify an impact under the
-        // ±2 s window, so the two versions score differently and the log has to say which is which.
-        [KittenTumble] = 2,
-        [KittenKia] = 2,
+        // Both carry a non-null `flight`, and that envelope field is load-bearing rather than
+        // decorative: without it a kitten.tumble could not be excluded by its flight's `tuning`
+        // flag, and a kitten.kia could not disqualify an impact under the ±2 s window.
+        [KittenTumble] = 1,
+        [KittenKia] = 1,
         [RosterSnapshot] = 1,
-        [TelemetryWindow] = 2,
+        [TelemetryWindow] = 1,
     };
 
     // The five types a player cannot switch off in catlog.toml. Each one is load-bearing for

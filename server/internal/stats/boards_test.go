@@ -477,7 +477,7 @@ func TestTheOnceUndecodedTypesNowDecode(t *testing.T) {
 	}
 }
 
-// --- the wire-v2 boards ---------------------------------------------------------
+// --- the landing, altitude and mass boards ---------------------------------------
 
 func TestLandingBoardsRankTheDescentRate(t *testing.T) {
 	f := flightN(1)
@@ -589,7 +589,7 @@ func TestHeaviestToOrbitRanksThePayloadNotTheRocket(t *testing.T) {
 		// An escape is not an orbit anybody reached, however heavy.
 		{flight: f2, typ: "vehicle.orbit", payload: stats.VehicleOrbit{
 			Phase: "escaped", Body: "kerbin", MassKg: 9e6}},
-		// A ver 1 row carries no mass at all, and 0 kg is not a payload.
+		// An unreadable mass reads 0, and 0 kg is not a payload.
 		{flight: f2, typ: "vehicle.orbit", payload: stats.VehicleOrbit{
 			Phase: "achieved", Body: "mun", ApM: 10000, PeM: 9000, Ecc: 0.05, IncDeg: 2}},
 	})

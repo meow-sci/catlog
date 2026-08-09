@@ -58,8 +58,8 @@ type Options struct {
 	// Notify is the ingest writer's wake-up channel (§5.5). Optional; without
 	// it the projector runs on its ticker alone.
 	Notify <-chan struct{}
-	// Upcasters is the (type, ver) registry. Optional; nil means [NewUpcasters],
-	// the registry this build folds with.
+	// Upcasters is the (type, ver) registry. Optional; nil means the launch
+	// registry, which is empty.
 	Upcasters *Upcasters
 	// StoreOptions are passed to [store.OpenProjections] when a rebuild opens
 	// the scratch database and reopens the live one.

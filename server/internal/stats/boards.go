@@ -47,15 +47,11 @@ const (
 	StatEngineIgnitions     = "engine_ignitions"
 	StatTopKittenDistance   = "top_kitten_distance"
 	StatTopKittenMissions   = "top_kitten_missions"
-
-	// The wire-v2 boards. Three read keys that did not exist before
-	// (`mass_kg` on an orbit, `stage_count` on a launch, `radar_alt_m` on a
-	// window) and two read the event wire v2 added.
-	StatHeaviestToOrbit = "heaviest_to_orbit"
-	StatSoftestLanding  = "softest_landing"
-	StatLandings        = "landings"
-	StatLowestPass      = "lowest_pass"
-	StatBiggestStack    = "biggest_stack"
+	StatHeaviestToOrbit     = "heaviest_to_orbit"
+	StatSoftestLanding      = "softest_landing"
+	StatLandings            = "landings"
+	StatLowestPass          = "lowest_pass"
+	StatBiggestStack        = "biggest_stack"
 )
 
 // Board is the metadata `GET /v1/leaderboards` publishes for one stat (§4.8).
@@ -742,9 +738,9 @@ func (f orbitRecordFold) Apply(ctx context.Context, b *Batch, ev Event) error {
 // window stale.
 //
 // `escaped` is excluded exactly as it is on the four shape boards: an escape is
-// not an orbit anybody reached. The `> 0` gate is what keeps ver 1 history off
-// the board — `mass_kg` did not exist before wire v2, so every stored orbit
-// older than the bump decodes as 0, and 0 kg is not a payload.
+// not an orbit anybody reached. The `> 0` gate is the rule the launch boards
+// use, for the same reason: `mass_kg` is written as 0 when the read failed, and
+// 0 kg is not a payload.
 type orbitMassFold struct{}
 
 func (orbitMassFold) Name() string { return StatHeaviestToOrbit }
@@ -776,9 +772,8 @@ func (orbitMassFold) Apply(ctx context.Context, b *Batch, ev Event) error {
 // them reports when the read failed — mass, part count, crew count and stage
 // count are all written as 0 rather than omitted — so a zero is an unreadable
 // vehicle, not an empty one. `stage_count` is the highest-risk read of the four
-// (it walks `Vehicle.Parts.SequenceList`), which makes the gate matter most
-// there and is also why a ver 1 row, which carries no stage count at all, falls
-// out through the same door.
+// (it walks `Vehicle.Parts.SequenceList`), which is what makes the gate matter
+// most there.
 type launchFold struct {
 	stat  string
 	value func(FlightStarted) float64
@@ -1137,18 +1132,16 @@ func (soiFold) Apply(ctx context.Context, b *Batch, ev Event) error {
 // splashing down on a body is arriving at it. `splashdowns` is the board that
 // distinguishes them.
 //
-// **It stays on `vehicle.situation` now that `vehicle.landed` exists**, and
-// that is a decision rather than an oversight. Three reasons, in order of
-// weight. (1) `vehicle.landed` fires only on the contact-free → contact edge,
-// while this board asks whether the player has anything *on* a surface: a
-// vehicle already on the ground when a save loads never produces a landing
-// event, and a rover that then goes `rolling` → `landed` would put its body on
-// the board through the situation and through nothing else. (2) Every
-// `landed_bodies` row in every existing log was written from a
-// `vehicle.situation`, and no `vehicle.landed` exists before wire v2 — moving
-// the source would silently empty the board on the next rebuild, which is data
-// loss dressed as a refactor. (3) The two events come off the *same* detection,
-// so switching would buy no new edges; it would only lose the ones above.
+// **It reads `vehicle.situation` rather than `vehicle.landed`**, and that is a
+// decision rather than an oversight. `vehicle.landed` fires only on the
+// contact-free → contact edge, while this board asks whether the player has
+// anything *on* a surface: a vehicle already on the ground when a save loads
+// never produces a landing event, and a rover that goes `rolling` → `landed`
+// would put its body on the board through the situation and through nothing
+// else. The two events come off the *same* detection, so switching would buy no
+// new edges — it would only lose those two. `survived`, the one field
+// `vehicle.landed` adds, says nothing this board asks: a body you crashed onto
+// is still a body you reached.
 //
 // The corollary is the rule against double counting: `landings` and
 // `softest_landing` read `vehicle.landed` and never touch `player_body`, so a
@@ -1342,9 +1335,9 @@ func careerTime(ctx context.Context, ev Event, b *Batch) (float64, bool, error) 
 // carries to the milliseconds the boards publish.
 //
 // `sim_t` stays seconds on the wire and in `player_body.first_sim_t`: stored
-// events are immutable and there is no envelope-level upcaster, so changing the
-// unit of a logged field would strand every event already written in a unit
-// nothing could identify (docs/DECISIONS.md, WP-CLOCK). A projection has no such
+// events are immutable, so changing the unit of a logged field would strand
+// every event already written in a unit nothing could identify
+// (docs/DECISIONS.md, WP-CLOCK). A projection has no such
 // problem — it is rebuildable by definition — so the conversion happens here, at
 // the one place a career time becomes a board value.
 func careerMillis(seconds float64) float64 { return seconds * 1000 }
