@@ -64,6 +64,7 @@ enums are allow-lists (Constitution §6).
 | `contracts/` | Cross-language conformance vectors, generated deterministically and consumed by **both** the Go and C# suites. This is what guarantees mod↔server interop without the game. | [ingest-api.md](ingest-api.md) |
 | `docs/` | This directory. The specification, the decisions, the design record. | — |
 | `infra/` | The production deployment: two Dockerfiles, the compose project, the nginx configuration, and the Ansible roles and playbooks that own the VM. | [operations.md](operations.md) |
+| `docs-site/` | The **player-facing** documentation site: Astro 7 + Starlight + React, published to GitHub Pages at `https://meow.science.fail/catlog/`. Own lockfile, own toolchain, own deployment. Not to be confused with `site/`. | [event-details.md](event-details.md), `docs-site/README.md` |
 | `scripts/` | `e2e-full.sh` (the whole-stack proof), `db-snapshot.sh`, `precompress.mjs` (build-time brotli/gzip siblings), `container-smoke.sh` (the release gate), `ansible.sh` (runs Ansible in a container so nothing is installed locally). | [../DEVELOPMENT.md](../DEVELOPMENT.md) |
 | `data/` | Runtime state, git-ignored: `events.db`, `projections.db`, `keys/`, `archive/`. | — |
 
@@ -228,11 +229,13 @@ A change that makes a document wrong is an incomplete change. In the same commit
 
 | If you change… | You must update… |
 |---|---|
-| An event, envelope field or payload | [events.md](events.md), **and bump `ver`** on the affected event |
+| An event, envelope field or payload | [events.md](events.md), **and bump `ver`** on the affected event — **and [event-details.md](event-details.md) + `docs-site/`** |
 | An HTTP endpoint, status, header or error code | [ingest-api.md](ingest-api.md) |
 | The credential file's shape | [credential.md](credential.md), **and bump `format`** |
 | Handle rules, `user_key`, moderation semantics | [identity.md](identity.md) |
 | A Go package's role, the schema, config keys, admin routes | [server.md](server.md) |
+| A fold, a board key, an eligibility rule, a projection | [event-details.md](event-details.md) **+ `docs-site/`** |
+| A detector's game source, threshold, or event-vs-passive nature | [event-details.md](event-details.md) **+ `docs-site/`** |
 | A detector rule, the outbox, the shipper, a KSA patch point | [mod.md](mod.md), and [ksa-integration.md](ksa-integration.md) if a patch point moved |
 | The images, the compose project, nginx, or anything under `infra/ansible/` | [operations.md](operations.md) |
 | A Make target, a build flag, a test scenario | [../DEVELOPMENT.md](../DEVELOPMENT.md) |
@@ -249,6 +252,9 @@ Two further rules:
 - **Never leave a document describing something that is gone.** Delete the passage or mark it
   superseded. A stale paragraph is worse than a missing one, because it is believed.
 - **Never mint a new `§` number** (§5 above).
+- **[event-details.md](event-details.md) and `docs-site/` move together.** The technical event and
+  projection reference and its player-facing publication are two halves of one document; updating
+  one without the other is an incomplete change (Constitution §9.1, DOCS-003).
 
 `AGENTS`-facing detail, including where to look first for a given kind of task, is in
 [../CLAUDE.md](../CLAUDE.md).

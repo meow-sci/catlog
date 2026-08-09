@@ -51,16 +51,53 @@ A change that leaves a document wrong is an **incomplete change**, not a change 
 7. **Do not re-litigate a locked decision (D1–D22) or a recorded one** without reading its entry
    first. Nearly every one exists because the obvious alternative was tried, measured or reasoned
    through, and lost.
+8. **The event/projection reference is [`docs/event-details.md`](docs/event-details.md), and it does
+   not move alone.** See the rule immediately below — it is not optional and it has no deferred form.
+
+### The event & projection reference — `docs/event-details.md` + `docs-site/`
+
+**[`docs/event-details.md`](docs/event-details.md) is THE reference for the event catalog and the
+read projections.** One entry per event type — wire identity, every payload key, the game object the
+value is read off, the Harmony patch point or poll that produces it, whether it is event-driven or
+passive, its thresholds and debounces, and the boards it moves. One entry per projection — the events
+that feed it, the fold, the eligibility rules, the units. `docs/events.md` remains the wire
+*specification*; `event-details.md` is the joined, maintained view, and it is the one to update
+first.
+
+**`docs-site/` MUST be updated in tandem, in the same commit.** The Astro/Starlight site under
+[`docs-site/`](docs-site/) is the player-facing half of exactly the same information: same events,
+same projections, same rules, written for someone who plays Kitten Space Agency rather than someone
+who builds it. It is published at <https://meow.science.fail/catlog/> and players will trust it.
+
+**A commit that changes an event, a payload field, a detector, a game read, a fold, a board, an
+eligibility rule or a unit and updates only one of the two is an incomplete change.** There is no
+"docs-site follow-up" — the follow-up never happens, and the site is what players read.
+
+| You touched… | `docs/event-details.md` | `docs-site/` |
+|---|---|---|
+| a payload field, a `ver`, an emission rule | that event's section | its family page + `src/data/events.ts` |
+| where a value is read from in the game | that event's **Game source** block | its "Where it comes from" prose, in player terms |
+| event-driven ↔ passive, a threshold, a debounce | that event's **Classification** block | the event's `trigger` in `src/data/events.ts` |
+| a new event type | a new section + the registry table | `src/data/events.ts` + the right family page |
+| a board's fold, eligibility, unit or title | **Boards** | `leaderboards/catalog.mdx` + `src/data/boards.ts` |
+| a rebuild-vs-incremental divergence | **Rebuild ≠ incremental** | `leaderboards/eligibility.mdx` |
+
+The site's prose explains *where in the game* a number comes from **in player-relatable terms** — "the
+number your navball shows as surface speed", not "`Vehicle.GetSurfaceSpeed()`". Code identifiers,
+file paths and patch points belong in `event-details.md` and nowhere on the site.
 
 ### What to update when
 
 | If you change… | Update |
 |---|---|
-| An event, envelope field or payload | `docs/events.md` **+ bump `ver`** |
+| An event, envelope field or payload | `docs/events.md` **+ bump `ver`** — **and `docs/event-details.md` + `docs-site/`** |
 | An HTTP endpoint, status, header, error code | `docs/ingest-api.md` |
 | The credential file's shape | `docs/credential.md` **+ bump `format`** |
 | Handle rules, `user_key`, moderation semantics | `docs/identity.md` |
 | A Go package's role, the schema, config keys, admin routes | `docs/server.md` |
+| A fold, a board key, an eligibility rule, a projection | **`docs/event-details.md` + `docs-site/`** |
+| A detector's game source, threshold, or event-vs-passive nature | **`docs/event-details.md` + `docs-site/`** |
+| Anything a player reads about what catlog records | **`docs-site/`** (see the rule above) |
 | A detector rule, the outbox, the shipper, a KSA patch point | `docs/mod.md` (+ `docs/ksa-integration.md` if a patch point moved) |
 | The container images, nginx, the compose project, Ansible | `docs/operations.md` |
 | A Make target, a build flag, a test mode | `DEVELOPMENT.md` |
@@ -82,6 +119,8 @@ A change that leaves a document wrong is an **incomplete change**, not a change 
 | What are we optimising for | [`docs/CONSTITUTION.md`](docs/CONSTITUTION.md) |
 | How do I build/run/test X | [`DEVELOPMENT.md`](DEVELOPMENT.md) |
 | What's the wire contract | `docs/{events,ingest-api,identity,credential}.md` |
+| What does event X contain, where does it come from, what board does it move | [`docs/event-details.md`](docs/event-details.md) |
+| What do players get told about all that | [`docs-site/`](docs-site/) — the published site |
 | What's not built / never will be | [`docs/ROADMAP.md`](docs/ROADMAP.md) |
 
 ## Layout
@@ -94,6 +133,7 @@ A change that leaves a document wrong is an **incomplete change**, not a change 
 | `spa/` | Standalone React reader over the public read API. Own lockfile and deployment. | `spa/README.md` |
 | `contracts/testdata/` | Deterministic cross-language conformance vectors, consumed by both suites. | `docs/ingest-api.md` |
 | `infra/` | Dockerfiles, the compose project, nginx config, Ansible roles and playbooks. | `docs/operations.md` |
+| `docs-site/` | Astro 7 + Starlight + React. The **player-facing** docs site, published to GitHub Pages at `/catlog/`. Own lockfile, own deployment. | `docs-site/README.md` |
 | `docs/`, `scripts/`, `data/` | Specification; helper scripts; git-ignored runtime state. | — |
 
 ## Conventions
@@ -106,7 +146,7 @@ A change that leaves a document wrong is an **incomplete change**, not a change 
 - **C#**: `ImplicitUsings` disabled (every `using` explicit), nullable enabled,
   `TreatWarningsAsErrors`, immutable records, per-subsystem dead-latch error handling. **`catlog.lib`
   must never reference KSA** — a guard test enforces it.
-- **TypeScript (`spa/`)**: React Compiler is on, so the Rules of React are mandatory and
+- **TypeScript (`spa/`, `docs-site/`)**: React Compiler is on, so the Rules of React are mandatory and
   hand-written `useMemo`/`useCallback`/`memo` are **forbidden** (a manual memo makes the compiler bail
   out of the whole component). Anything that navigates is an `<a href>`.
 - **Every change keeps `make test` green** and adds tests for what it changed.

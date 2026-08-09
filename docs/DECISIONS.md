@@ -30,7 +30,7 @@ commit. See [ARCHITECTURE.md](ARCHITECTURE.md#7-keeping-the-documentation-true) 
 - **[The mod and its KSA-free core](#the-mod-and-its-ksa-free-core)** — `MOD-*`, 69 entries
 - **[The load harness](#the-load-harness)** — `LOAD-*`, 26 entries
 - **[Containers, nginx & deployment](#containers-nginx--deployment)** — `OPS-*`, 25 entries
-- **[Documentation](#documentation)** — `DOCS-*`, 2 entries
+- **[Documentation](#documentation)** — `DOCS-*`, 4 entries
 
 ---
 
@@ -2440,3 +2440,27 @@ The constitution says what catlog optimises for (privacy, cost, the player's fra
 **So the numbering moved instead of dying.** `docs/` is the successor spec and each document declares which `§` it now owns; [ARCHITECTURE.md](ARCHITECTURE.md#5-the--section-index) carries the index that maps every section number a comment can cite to the document that now defines it. A `§4.5.3` in a Go comment resolves in one lookup, exactly as before, and the document it lands in is one that is maintained. Sections that only ever described work sequencing — the work-package breakdown, the risk register — are gone rather than rehomed; what survived of them is in [ROADMAP.md](ROADMAP.md).
 
 **The rule this creates:** a new `§` number is never minted. The numbering is a stable citation space inherited from the plan, and it is frozen. New material gets a document and a heading, and code cites it by name.
+
+### DOCS-003 — [event-details.md](event-details.md) is the primary event & projection reference, and [`docs-site/`](../docs-site/) is its mandatory player-facing half
+
+*Accepted · 2026-08-09 · docs.*
+
+Until now the answer to "what does `vehicle.impact` contain, where does `speed_ms` come from in the game, and which board does it move" was assembled by reading four documents and two codebases. [events.md](events.md) has the wire shape but not the game source; [mod.md](mod.md) has the detectors but not the payloads; [ksa-integration.md](ksa-integration.md) has the patch points but not what they emit; [server.md](server.md) has the folds but not the events. Nothing joined them, so the join was re-derived — differently — every time anybody needed it, and the survey that produced this entry turned up **twenty-five** places where a document disagreed with the code or where load-bearing behaviour was written down nowhere (listed under "Known drift" in the new file). Every one of those is a symptom of the same missing document.
+
+**So `event-details.md` is that join, and it is primary.** One section per event type carrying wire identity, every payload key with units and optionality, the exact KSA type and member each value is read off, the Harmony patch point or the poll that produces it, the event-driven-vs-passive classification with its thresholds and debounces, the dedup semantics, and the boards it feeds. One section per projection carrying its feeding events, its fold, its eligibility predicates and its units. `events.md` stays the wire *specification* — normative, versioned, what the two implementations are built against. `event-details.md` is the maintained *reference*, and it is the one a change touches first.
+
+**And the site is not a nice-to-have.** [`docs-site/`](../docs-site/) — Astro/Starlight, published at <https://meow.science.fail/catlog/> — carries the same catalog in player language. The rule is that a commit changing an event, a payload field, a detector, a game read, a fold, a board or an eligibility rule updates **both**, in that commit. The alternative was tried implicitly and lost: a "documentation follow-up" issue is a documentation deletion with extra steps, and a player-facing page that is six weeks stale is worse than no page, because it is believed.
+
+**Why a player-facing site at all**, when the repository is public: constitution §6 says every number is derived, never claimed. From the outside, a board whose rules live only in `stats/boards.go` is indistinguishable from one somebody made up. Publishing what is recorded, when it is recorded, and what disqualifies a run is what makes "derived, never claimed" checkable by the people it is a promise to. It also pre-empts the support burden — "why didn't my 300 m/s landing count" is answered by a page instead of by the owner.
+
+**The obvious alternative — generate the site from the code — is refused for now.** A generator would need to read C# attributes, Go fold bodies and KSA decompiled sources, and the interesting content (why a threshold is 6.5 m/s, why an impact is held a full frame, what a splash's `speed_ms` actually means) is exactly the part no generator can extract. What *is* mechanised is the small part that can be: `docs-site/src/data/events.ts` and `boards.ts` mirror this file's tables as typed data, so the site's index, filter and cross-links cannot silently disagree with themselves. Those two files are derived data — `event-details.md` wins any conflict.
+
+### DOCS-004 — `docs-site/` is a standalone Astro project deployed by its own workflow, modelled on meow-sci/gatOS
+
+*Accepted · 2026-08-09 · docs.*
+
+The site is its own pnpm project with its own lockfile, exactly as `spa/` is — not a workspace member, not built by the root `Makefile`'s `site-build` (which belongs to the datastar frontend in `site/` and would be a permanent source of confusion if it grew a second meaning). Versions are pinned to the same set the sibling project [gatOS](https://github.com/meow-sci/gatOS) runs, because the two are maintained by the same person and a shared version floor is one fewer thing to reason about: Astro 7.0.6, `@astrojs/starlight` 0.41.2, oxlint/oxfmt rather than eslint/prettier, `site` + `base` set so GitHub Pages serves it under the org's custom domain at `/catlog/`.
+
+**React is added over the gatOS baseline.** gatOS carries the React Compiler lint rules but no React integration; here the event catalog wants one genuinely interactive surface — a filterable, cross-linked table over all 22 event types — and reimplementing that in vanilla JS to avoid a dependency would cost more than the dependency. React Compiler is on, so `docs-site/` inherits `spa/`'s rule: hand-written `useMemo`/`useCallback`/`memo` are forbidden, because a manual memo makes the compiler bail out of the whole component.
+
+**Deployment is path-filtered.** `.github/workflows/docs-site.yml` fires only on pushes touching `docs-site/**` or the workflow itself. This repository had no `.github/` at all before this change, so the workflow is also the first: nothing else is wired to CI yet, and a docs deploy that runs on every commit to a repository this size would be pure waste. The artifact flow (`configure-pages` → `upload-pages-artifact` → `deploy-pages`) is used rather than a `gh-pages` branch, so the built site never enters the repository's history.

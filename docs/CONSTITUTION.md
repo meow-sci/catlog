@@ -157,6 +157,33 @@ is deleted or marked superseded, never left. And **a contract change carries its
 event or payload bumps `ver`, an endpoint bumps `ver`, the credential file bumps `format`. Those
 bumps are what let a client and a server disagree loudly rather than silently.
 
+### 9.1 The event and projection reference has two halves, and they move together
+
+**[event-details.md](event-details.md) is the primary reference** for what catlog records and what it
+derives: one entry per event type — wire identity, every payload key, the game object each value is
+read off, the patch point or poll behind it, event-driven or passive, thresholds and debounces — and
+one entry per projection — feeding events, fold, eligibility, units. It is the document a maintainer
+updates *first*, in the same commit as the code.
+
+**[`docs-site/`](../docs-site/) is the player-facing half of the same content, and it is not
+optional.** Published at <https://meow.science.fail/catlog/>, it says the same things about the same
+events and the same boards, in the language of someone who plays the game rather than someone who
+builds it. A change that updates one half and not the other is an **incomplete change** under §9 —
+there is no deferred form of this and no follow-up commit.
+
+*Why:* catlog's whole proposition is that its numbers are derived from what actually happened, and a
+player can only trust a derived number if they can find out what it was derived from. A leaderboard
+whose rules live only in `stats/boards.go` is indistinguishable, from the outside, from one somebody
+made up. The site is the argument for principle 6 (**every number is derived, never claimed**) being
+true rather than merely asserted, and the technical half is what keeps the site honest — two
+documents written from the same survey drift far more slowly than one document written from memory.
+
+*The split, precisely:* code identifiers, file paths, patch points, line citations and game type
+names live in `event-details.md` and **never** on the site. The site explains where a number comes
+from in terms a player can check — "the surface speed your navball shows", not
+`Vehicle.GetSurfaceSpeed()`. Neither half may state a rule the other contradicts; when they disagree,
+`event-details.md` wins and the site is the thing to fix.
+
 ---
 
 ## Applying this
