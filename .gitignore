@@ -21,6 +21,14 @@ data-*/
 *.db-wal
 *.db-shm
 
+# ...with one carve-out. `data/` above is unanchored on purpose — it has to be, or
+# the next tool to invent `data-whatever/` slips through. The cost is that it also
+# matches any directory named `data` at any depth, and docs-site/ has one holding
+# the site's typed event and board tables. That is source, not runtime state, and
+# it is re-included by naming the directory itself (git cannot re-include a file
+# whose parent directory is still excluded).
+!docs-site/src/data/
+
 # --- deployment (docs/operations.md) ---
 #
 # deploy.env holds every secret the deployment needs — the IdP client secrets,

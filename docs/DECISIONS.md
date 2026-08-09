@@ -20,7 +20,7 @@ commit. See [ARCHITECTURE.md](ARCHITECTURE.md#7-keeping-the-documentation-true) 
 
 ## Contents
 
-- **[Repository, toolchain & dependencies](#repository-toolchain--dependencies)** — `REPO-*`, 25 entries
+- **[Repository, toolchain & dependencies](#repository-toolchain--dependencies)** — `REPO-*`, 26 entries
 - **[Storage — Turso, schema & compression](#storage--turso-schema--compression)** — `STORE-*`, 16 entries
 - **[Ingest, auth & the conformance vectors](#ingest-auth--the-conformance-vectors)** — `INGEST-*`, 24 entries
 - **[Identity, handles & moderation](#identity-handles--moderation)** — `IDENT-*`, 15 entries
@@ -227,6 +227,18 @@ Made explicit after the bare-Go dev server was observed serving uncompressed HTM
 **`spa-deps` is a guard, not a build step.** It fails with the fix in the message when `spa/node_modules` is missing, because vite's own failure would otherwise scroll past inside a three-process `make dev` and look like the server broke.
 
 ---
+
+### REPO-026 — `.gitignore`'s unanchored `data/` needs exactly one carve-out, and it is `docs-site/src/data/`
+
+*Accepted · 2026-08-09 · repo.*
+
+`data/` and `data-*/` are unanchored deliberately (REPO-007's reasoning): the runtime state directory holds the pepper, the session key and the license signing key, and every new tool that takes a `--data-dir` invents another name for it — `data-e2e/`, `data-e2e-full/`, `data-loadgen/` — so enumerating them had already missed one. An unanchored pattern is the only version that stays correct as tools are added.
+
+Unanchored also means "a directory called `data` at **any** depth", and `docs-site/src/data/` is one: the typed event and board tables the site renders from. They were silently untracked, the local build was green because the files existed on disk, and **CI was the first thing to see the repository as it actually is** — the deploy failed on `Could not resolve '../data/boards'`.
+
+**Fixed by re-including the one directory rather than by anchoring the pattern.** Anchoring `data/` to `/data/` would have made the security-motivated rule weaker for a cosmetic gain; a future nested runtime directory would then be committed. Git cannot re-include a file whose parent directory is still excluded, so the carve-out names the directory itself (`!docs-site/src/data/`), which is the narrowest form that works.
+
+**The transferable lesson is about the failure mode, not the pattern.** A file that exists locally and is ignored by git produces a green local build and a red CI build, and nothing in between warns you. `git status` is clean, the dev server works, the production build works. Any directory in a new subproject whose name collides with a runtime-state pattern will do this again; the check is `git ls-files <dir>` after adding a subproject, not `git status`.
 
 ## Storage — Turso, schema & compression
 
