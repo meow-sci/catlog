@@ -30,7 +30,7 @@ export interface Board {
   family?: { pattern: string; from: string };
 }
 
-/** The 35 fixed boards, in the order the site publishes them. */
+/** The 40 fixed boards, in the order the site publishes them. */
 export const BOARDS: Board[] = [
   {
     stat: "biggest_lithobrake_survived",
@@ -146,6 +146,21 @@ export const BOARDS: Board[] = [
     excluded: ["The altitude was zero or below.", "The flight was flagged."],
   },
   {
+    stat: "lowest_pass",
+    title: "Lowest Pass",
+    unit: "m",
+    ascending: true,
+    career: false,
+    from: ["telemetry.window"],
+    what: "The closest you came to the ground without ending up on it.",
+    how: "The smallest height above whatever was directly underneath you, across every 30-second telemetry window. Lowest wins. This is deliberately the opposite altitude from Highest Altitude, which is measured from the world's average radius: a run down a canyon reads as high there and low here, and a hover over a mountaintop reads the other way round. A landing is not a pass — Softest Landing is the board for arriving.",
+    excluded: [
+      "The window carried no ground reading at all. In orbit there is nothing underneath to measure against, and catlog leaves the figure out entirely rather than calling it zero — the same rule peak g follows. Every window recorded before catlog started sending it is in the same position, so flights older than that score nothing here.",
+      "A reading of zero or below. Zero is where a vehicle sitting on the ground reads, so every flight would tie on it before it ever left the pad, and on a board where the smallest number wins nobody could beat that.",
+      "The flight was flagged.",
+    ],
+  },
+  {
     stat: "highest_apoapsis",
     title: "Highest Apoapsis",
     unit: "m",
@@ -218,6 +233,21 @@ export const BOARDS: Board[] = [
     ],
   },
   {
+    stat: "softest_landing",
+    title: "Softest Landing",
+    unit: "m/s",
+    ascending: true,
+    career: false,
+    from: ["vehicle.landed"],
+    what: "Your gentlest touchdown, measured by descent rate alone.",
+    how: "How fast you were coming down at the moment catlog saw you touch, and nothing else. Lowest wins. Softest Touchdown ranks the same moment by your whole speed relative to the ground: a rover arriving at 8 m/s across a plain and a lander arriving at 8 m/s straight down are the same number there and very different flying. This board is the vertical half on its own — the one you are actually managing on the way in.",
+    excluded: [
+      "The vehicle did not survive. That is a crash, and the impact boards are where a crash belongs.",
+      "The descent rate came out as exactly zero, which is what an unreadable measurement leaves behind. A real touchdown is never exactly zero — catlog looks twice a second and the vehicle is still settling — and on a board where the smallest number wins, a zero would be unbeatable.",
+      "The flight was flagged.",
+    ],
+  },
+  {
     stat: "heaviest_launch",
     title: "Heaviest Launch",
     unit: "kg",
@@ -232,6 +262,21 @@ export const BOARDS: Board[] = [
     ],
   },
   {
+    stat: "heaviest_to_orbit",
+    title: "Heaviest Payload To Orbit",
+    unit: "kg",
+    ascending: false,
+    career: false,
+    from: ["vehicle.orbit"],
+    what: "The heaviest thing you have ever put into a stable orbit around anything.",
+    how: "What the vehicle weighed at the instant it settled into orbit. The pairing with Heaviest Launch is the point of it: what left the pad includes the propellant that will be burned getting off it, and what is still there when the orbit milestone fires is the payload.",
+    excluded: [
+      "You escaped rather than orbited. An escape is not an orbit anybody reached.",
+      "The mass came out as zero or below. That is also what every orbit recorded before catlog started sending this figure looks like, so flights older than that score nothing here — and a rebuild cannot rescue them, because the number was never written down.",
+      "The flight was flagged.",
+    ],
+  },
+  {
     stat: "most_parts",
     title: "Most Parts",
     unit: "",
@@ -241,6 +286,20 @@ export const BOARDS: Board[] = [
     what: "Your most elaborate machine, counted in parts.",
     how: "The largest part count of any vehicle you have started a flight with. The number is shown on its own, because the title already says what is being counted.",
     excluded: ["The part count read as zero.", "The flight was flagged."],
+  },
+  {
+    stat: "biggest_stack",
+    title: "Most Stages Built",
+    unit: "",
+    ascending: false,
+    career: false,
+    from: ["flight.started"],
+    what: "The tallest stack you have ever flown, counted in stages.",
+    how: "How many stages the vehicle was built with, read as the flight starts. Most Stages is the highest stage you ever actually fired: a five-stage rocket that comes apart on stage two scores five here and two there. The number is shown on its own, because the title already says what is being counted.",
+    excluded: [
+      "The stage count read as zero. That is also what every flight recorded before catlog started sending this figure looks like, so flights older than that score nothing here, and a rebuild cannot rescue them.",
+      "The flight was flagged.",
+    ],
   },
   {
     stat: "biggest_crew",
@@ -347,8 +406,22 @@ export const BOARDS: Board[] = [
     career: false,
     from: ["vehicle.situation"],
     what: "How many different worlds you have put something down on.",
-    how: "One per world, the first time you touch its surface. Touching down there again changes nothing. Water counts: splashing down on a world is still arriving at it, and Splashdowns is the board that tells the two apart.",
+    how: "One per world, the first time you touch its surface. Touching down there again changes nothing. Water counts: splashing down on a world is still arriving at it, and Splashdowns is the board that tells the two apart. It asks whether you have anything standing on a surface there, which is a wider question than Landings: a vehicle already sitting on the ground when a save loads counts here, and so does a rover that rolls to a stop, and neither of those is a landing.",
     excluded: ["The world's name could not be read.", "The flight was flagged."],
+  },
+  {
+    stat: "landings",
+    title: "Landings",
+    unit: "landings",
+    ascending: false,
+    career: false,
+    from: ["vehicle.landed"],
+    what: "How many times you have put something down and had it survive.",
+    how: "One per landing, at any speed — a landing is a landing. Bodies Landed On counts the worlds instead, and asks the wider question: whether you have anything on a surface there at all. The two count different things, and a touchdown never reaches both through the same door.",
+    excluded: [
+      "The vehicle did not survive. That is a crash, not a landing.",
+      "The flight was flagged.",
+    ],
   },
   {
     stat: "dockings",

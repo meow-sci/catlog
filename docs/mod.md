@@ -93,12 +93,40 @@ changes and phantom orbit-achieved edges, and those score.
   are not discarded.
 - **`peak_g` and `max_q_pa` are omitted, never zeroed**, when the frame carried no reading. The game
   writes that struct only under full physics, so an all-zero reading means "no data this step" — and
-  reporting zero would corrupt the board with fake minima.
+  reporting zero would corrupt the board with fake minima. **`lat`, `lon` and `radar_alt_m` follow
+  the same rule for the opposite reason**: not because zero is meaningless but because zero is a real
+  reading. A latitude of 0 is the equator and a radar altitude of 0 is the ground, so writing 0 for
+  "could not read" produces a wrong record rather than a missing one.
 - **An impact is held one full frame.** All impacts land before all physics destructions in a frame,
   but a *manual* destroy lands in the game's later input-apply pass — so an impact seen in frame N is
   resolved at the end of frame N+1, and a destruction in either frame flips `survived` to false.
   Ending a flight also resolves that vehicle's outstanding impacts immediately, because the verdict
   cannot change once the flight is over.
+- **A landing is the same edge as a situation change, not a second detector.** `vehicle.landed` is
+  emitted from inside `CheckSituation`, immediately after `vehicle.situation`, whenever the
+  transition runs from a **known contact-free** situation (`freefall`, `maneuvering`) to a **known
+  surface-contact** one (`landed`, `rolling`, `sailing`, `floating`, `dragging`, `bottomed`). Both
+  sides must be known, so a ninth situation a future build adds cannot be mistaken for flight. There
+  is one detector and one pair of events, in that order.
+- **The landing has no debounce of its own, deliberately.** It is emitted inside the situation rule's
+  gate and never marks a timer, so it *inherits* the 2 s debounce. A bouncing lander alternating
+  `freefall`/`landed` at 2 Hz would otherwise mint a record every 500 ms; a suppressed landing is not
+  lost, because the latch is only advanced when the pair actually fires and the edge is still pending
+  on the next sample; and a separate timer could fire a `vehicle.landed` whose `vehicle.situation`
+  was suppressed, leaving a landing in the log with nothing beside it to explain it. `DetectKind`
+  has a `Landing` member for legibility; `CanFire` is never called with it. Baseline still emits
+  nothing, so a vehicle already on the ground at save-load does not "land".
+- **A landing's `survived` goes through the same hold as an impact's**, not through an inference. The
+  correlator is one generic two-slot hold instantiated twice, and all three of its drains return
+  *both* kinds together — one advance settles both, so a caller cannot strand one. Without the hold,
+  scuttling a craft that fell over on touchdown would bank the landing. The one asymmetry: a landing
+  is detected on the worker while processing frame N's telemetry, which happens just *after* frame
+  N's boundary was consumed, so it settles a frame later than an impact raised inside frame N. That
+  is strictly the safer direction and is not special-cased.
+- **Neither landing speed exists on the game object.** KSA publishes a surface-speed magnitude and
+  nothing else, so the vector is reconstructed from the same two terms that method uses and split
+  into a radial and a tangential component. The radial one is negated so a landing reads *positive* —
+  the sign a player means by "came down at 4 m/s".
 
 ### The outbox
 

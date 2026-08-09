@@ -58,7 +58,7 @@ The mark **excludes nothing and scores nothing**. The row is ranked normally and
 - a career that has never been saved gets a fresh id at every game start, and its events are unlinked from the save it is later written to only for the part before that first save;
 - if the mod cannot read the save name at all, the career stays whatever it was and the mark simply never fires.
 
-## Event taxonomy (launch set `ver: 1`, except `kitten.tumble` and `kitten.kia` at `ver: 2`)
+## Event taxonomy (23 types; nine at `ver: 2`)
 
 Aggregate object `agg` = `{"min": f, "max": f, "mean": f, "last": f}`.
 `body` = lowercase celestial body name string (opaque to server). `situation` = lowercased KSA enum name, opaque to server (known values incl. `landed`, `rolling`, `floating`, `sailing`, `dragging`, `bottomed`, plus airborne states — treat as open set).
@@ -66,19 +66,22 @@ Aggregate object `agg` = `{"min": f, "max": f, "mean": f, "last": f}`.
 **"Opaque to server" is load-bearing, and the stats layer honours it.** KSA's celestial systems are hand-authored content that ships as data and that mods extend or replace, so the server holds no list of bodies: the `fastest_to_<body>` boards come into existence because a body appeared in the event stream, and their titles are derived from the name. The same now goes for `vehicle.rud.cause` — the six values in the table below are the ones the game ships today, not an allow-list, and a cause a future build introduces gets its own `rud_<cause>` board rather than disappearing into `rud_total`. The only thing a name has to satisfy is that it can *be* a stat key: lowercase, starting `[a-z0-9]`, then `[a-z0-9._-]`, at most 40 characters — because a stat key is a URL path segment. A name that cannot still counts towards `soi_bodies` / `rud_total` and still keeps its arrival time; it simply gets no board.
 
 **Why a board for somewhere new may not appear immediately.** Such a board is *listed* by `GET /v1/leaderboards` once at least **2 distinct players** hold a value on it (configurable, `[boards] min_players`). Before that it still exists, is still served at its own URL, and still shows on the profile of whoever is on it — a leaderboard with a single entrant is not a leaderboard, and the threshold is also what stops one modified client filling the public index with invented place names. Nothing is lost while waiting: the per-player value is recorded for **every** body and every cause regardless, so a body sitting at one player is published the moment a second player gets there, and changing the threshold publishes history that is already in the projection.
+A trailing `?` on a type — `f?`, `agg?` — marks an **optional** key: when the value is unreadable the key is **absent from the object entirely**, never `null` and never `0`. See "Optional keys" below.
+
 Kitten identity: `kid` = lowercase Crockford base32 of the first 10 bytes of `SHA-256("catlog-kitten:" + install_id + ":" + roster_name)` (16 chars); `name` = roster display name sanitized to printable US-ASCII, max 32 chars (moderation surface — purge path covers it).
 
 | type | payload |
 |---|---|
 | `session.started` | `{"mod_ver": "0.1.0", "game_build": "2026.8.5.5168", "install": "<ulid>"}` |
-| `flight.started` | `{"vehicle_name": s(≤64 ascii), "body": s, "mass_kg": f, "part_count": i, "crew_count": i}` |
-| `flight.ended` | `{"reason": "recovered"\|"destroyed"\|"despawned", "crew_count": i}` |
-| `vehicle.situation` | `{"from": s, "to": s, "body": s, "altitude_m": f, "surface_speed_ms": f, "orbital_speed_ms": f}` |
+| `flight.started` | **`ver: 2`** `{"vehicle_name": s(≤64 ascii), "body": s, "mass_kg": f, "part_count": i, "crew_count": i, "kids": [s], "stage_count": i, "lat": f?, "lon": f?}` |
+| `flight.ended` | **`ver: 2`** `{"reason": "recovered"\|"destroyed"\|"despawned", "crew_count": i, "kids": [s], "body": s, "lat": f?, "lon": f?}` — `body` may be the literal `"unknown"` |
+| `vehicle.situation` | **`ver: 2`** `{"from": s, "to": s, "body": s, "altitude_m": f, "surface_speed_ms": f, "orbital_speed_ms": f, "radar_alt_m": f?}` |
 | `vehicle.atmosphere` | `{"dir": "entered"\|"exited", "body": s, "speed_ms": f, "dyn_pressure_pa": f}` |
-| `vehicle.orbit` | `{"phase": "achieved"\|"escaped", "body": s, "ap_m": f, "pe_m": f, "ecc": f, "inc_deg": f}` |
+| `vehicle.orbit` | **`ver: 2`** `{"phase": "achieved"\|"escaped", "body": s, "ap_m": f, "pe_m": f, "ecc": f, "inc_deg": f, "mass_kg": f}` — `mass_kg` is the mass at the instant the milestone fired |
 | `vehicle.soi` | `{"from_body": s, "to_body": s}` |
-| `vehicle.rud` | `{"cause": "ground_impact"\|"ocean_impact"\|"collision"\|"excessive_g_force"\|"aerodynamic_forces"\|"hydrodynamic_forces", "peak_g": f, "peak_q_pa": f, "speed_ms": f, "altitude_m": f, "body": s, "crew_count": i}` |
-| `vehicle.impact` | `{"speed_ms": f, "energy_j": f, "survived": b, "launch_pad": b, "body": s, "crew_count": i}` — `survived` = no destruction of same vehicle in same frame (mod-computed, §7.2) |
+| `vehicle.rud` | **`ver: 2`** `{"cause": "ground_impact"\|"ocean_impact"\|"collision"\|"excessive_g_force"\|"aerodynamic_forces"\|"hydrodynamic_forces", "peak_g": f, "peak_q_pa": f, "speed_ms": f, "altitude_m": f, "body": s, "crew_count": i, "lat": f?, "lon": f?}` |
+| `vehicle.impact` | **`ver: 2`** `{"speed_ms": f, "energy_j": f, "survived": b, "launch_pad": b, "body": s, "crew_count": i, "lat": f?, "lon": f?}` — `survived` = no destruction of the same vehicle in that frame **or the next** (mod-computed, §7.2) |
+| `vehicle.landed` | `{"body": s, "vertical_speed_ms": f, "horizontal_speed_ms": f, "crew_count": i, "survived": b, "radar_alt_m": f?, "lat": f?, "lon": f?}` — `vertical_speed_ms` is **positive downwards**; `survived` is the same one-full-frame hold as `vehicle.impact` |
 | `vehicle.staging` | `{"stage_index": i}` |
 | `vehicle.docked` / `vehicle.undocked` | `{"other_flight": "<ulid>"}` |
 | `engine.ignition` / `engine.shutdown` / `engine.flameout` | `{"engine": s(template name), "count": i}` |
@@ -88,7 +91,88 @@ Kitten identity: `kid` = lowercase Crockford base32 of the first 10 bytes of `SH
 | `kitten.kia` | `{"kid": s, "name": s, "context": "rud"\|"manual_destroy"\|"unknown"}` |
 | `roster.snapshot` | `{"kittens": [{"kid": s, "name": s, "travelled_m": f, "fastest_ms": f, "missions": i, "mission_time_s": f, "kia": b}]}` — every 10 min of play, and on session end |
 | `flight.flagged` | `{"flag": "teleport"\|"refuel"\|"resource_edit"\|"console"\|"tuning", "detail": s}` |
-| `telemetry.window` | `{"t0_sim": f, "t1_sim": f, "n": i, "body": s, "alt_m": agg, "surface_speed_ms": agg, "orbital_speed_ms": agg, "accel_ms2": agg, "peak_g": f, "max_q_pa": f, "mass_kg_last": f}` — one per vehicle per 30 s sim-time of active flight |
+| `telemetry.window` | **`ver: 2`** `{"t0_sim": f, "t1_sim": f, "n": i, "body": s, "alt_m": agg, "surface_speed_ms": agg, "orbital_speed_ms": agg, "accel_ms2": agg, "peak_g": f?, "max_q_pa": f?, "mass_kg_last": f, "radar_alt_m": agg?, "warp_max": f}` — one per vehicle per 30 s sim-time of active flight |
+
+### Wire v2 — the spatial, terrain and landing wave (2026-08-09)
+
+Seven types bumped to `ver: 2` in one change and one type was added, closing the five gaps catlog
+was built without: **no position**, **no terrain-relative altitude**, **no landing**, **no crew
+identity**, **no warp context**.
+
+| type | gained |
+|---|---|
+| `flight.started` | `kids`, `stage_count`, `lat`, `lon` |
+| `flight.ended` | `kids`, `body`, `lat`, `lon` |
+| `vehicle.situation` | `radar_alt_m` |
+| `vehicle.orbit` | `mass_kg` |
+| `vehicle.rud` | `lat`, `lon` |
+| `vehicle.impact` | `lat`, `lon` |
+| `telemetry.window` | `radar_alt_m`, `warp_max` |
+| `vehicle.landed` | **new type at `ver: 1`** |
+
+**Every one of these bumps is a payload change and not a semantic one**: each `ver: 2` payload is its
+`ver: 1` payload *plus* keys, in that order, with nothing renamed, retyped, re-unitted or removed.
+The server's upcaster is therefore the **identity** for all seven, and a `ver: 1` event still folds
+correctly — it simply says less. That is what let them all move in one commit. `vehicle.landed` is
+new, so there is no `ver: 0` to upcast from.
+
+The identity is only *safe* because absence is refused at the fold rather than read as a zero. Three
+of the new keys would otherwise have poisoned a board, and each is gated:
+
+| key absent on `ver: 1` | decodes as | what stops it scoring |
+|---|---|---|
+| `vehicle.orbit.mass_kg` | `0` | `heaviest_to_orbit` requires `> 0` |
+| `flight.started.stage_count` | `0` | `biggest_stack` requires `> 0` |
+| `telemetry.window.radar_alt_m` | absent | `lowest_pass` refuses the absent aggregate, then requires `min > 0` |
+
+**Optional keys — omit, never zero.** `lat`, `lon` and `radar_alt_m` (on `vehicle.situation`,
+`vehicle.landed` and as an aggregate on `telemetry.window`) join `peak_g` / `max_q_pa` under the
+omit-don't-zero rule, and for the same reason stated the other way round: **a zero is a real
+reading**. Latitude 0 is the equator, longitude 0 is a meridian, and a radar altitude of 0 is the
+ground. Writing 0 for "could not read" produces a *wrong* record rather than a missing one, so the
+key is left out of the object and a decoder must read these into an optional, never a plain float.
+`vehicle.rud`'s `peak_g` / `peak_q_pa` remain the exception: they come off the destruction event
+itself, are non-nullable, and are emitted as 0.
+
+**`kids` is always present and always an array**, possibly empty — an uncrewed flight sends `[]`, not
+a missing key, so a reader never has to tell "nobody aboard" from "the mod did not say". It carries
+one 16-character `kid` per kitten aboard, in seat order, under the same per-player relabelling every
+other `kid` gets. A `ver: 1` row has no `kids` key at all, and that absence must not be read as
+"uncrewed".
+
+**`flight.ended.body` may be the literal `"unknown"`.** The event carried no body at all before,
+which made a landing site unplaceable — the flight's last `telemetry.window` may be a whole window
+old and the vehicle may have changed SOI since. Every ordinary end path reads a real body, because
+the mod hooks the single removal choke point *before* the vehicle is torn down. The one path that
+cannot is the poll's silent-removal safety net, where there is no vehicle object left to ask; it
+sends `"unknown"`, matching the `crew_count: 0` that path already reports. `body` is an open set with
+no allow-list, so `"unknown"` is an ordinary member of it — but there must be no `landed_on_unknown`
+board, and it is excluded wherever a real body is required.
+
+**`telemetry.window.radar_alt_m` has a different population from `n`.** It is folded over *only* the
+samples that carried a reading — the `peak_g` rule — and is absent entirely when none did, which is
+every window spent in orbit. `n` remains the total sample count. Nothing may reconstruct a count from
+the aggregate.
+
+**`warp_max` is descriptive only** — the highest simulation speed seen in the window, `1` for real
+time and never `0`. Under Constitution §8 it may inform, weight or annotate a reading; it must not
+reject or disqualify a record, and it is not a cheat signal. A window samples at 2 Hz *wall* clock
+but spans 30 *sim* seconds, so under warp its aggregates are drawn from a handful of samples rather
+than the nominal 60, and nothing else in the payload says so.
+
+**`vehicle.landed`** is the transition into a surface-contact situation (`landed`, `rolling`,
+`sailing`, `floating`, `dragging`, `bottomed`) from a contact-free one (`freefall`, `maneuvering`),
+both sides required to be *known* situations. It is detected on the **same edge** `vehicle.situation`
+already detects — one detector, two events emitted off one transition, in that order — and it
+inherits that rule's 2 s debounce rather than carrying a timer of its own. `survived` goes through
+the **same one-full-frame hold** as `vehicle.impact.survived`, so scuttling after a bad landing
+cannot bank a record; it is authoritative and must never be re-derived from a nearby `vehicle.rud` or
+`flight.ended`. `vertical_speed_ms` is **positive downwards** (a soft touchdown is a small positive
+number) and `horizontal_speed_ms` is a magnitude, always ≥ 0.
+
+**There is no plausibility rule on a landing, and there must not be one.** A one-metre hop is a
+landing. Filtering on "was that a *real* landing" infers intent from data shape, which
+Constitution §8 forbids.
 
 **`flight` on the two kitten scoring events — `ver: 2` (2026-08-09).** `kitten.tumble` and `kitten.kia` were emitted at `ver: 1` with `flight: null`; both now name the flight they belong to, and are `ver: 2`. **The payload bytes did not change** — the bump records that the two versions *score differently*, which is the only thing that tells the rows apart in a log that is immutable forever:
 

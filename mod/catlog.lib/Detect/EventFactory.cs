@@ -72,7 +72,41 @@ public static class EventFactory
                 Survived: impact.Survived,
                 LaunchPad: impact.Signal.LaunchPad,
                 Body: impact.Signal.Body,
-                CrewCount: impact.Signal.CrewCount));
+                CrewCount: impact.Signal.CrewCount,
+                Lat: impact.Signal.Lat,
+                Lon: impact.Signal.Lon));
+
+    /// <summary>
+    /// Wraps a touchdown whose survival verdict is now known, onto an explicitly supplied flight.
+    /// </summary>
+    /// <remarks>
+    /// The flight is always passed in, never looked up here: a landing settles either at a frame
+    /// boundary — where the vehicle is by definition still in telemetry and its flight open — or as
+    /// the flight ends, where minting would produce exactly the phantom
+    /// <see cref="EventPipeline.Flush"/>'s peek semantics exist to prevent. The two call sites want
+    /// different policies, so neither is baked in here.
+    /// </remarks>
+    /// <param name="tracker">Supplies the career id and the session ULID.</param>
+    /// <param name="landing">The resolved landing.</param>
+    /// <param name="flight">The flight ULID to attribute the landing to.</param>
+    /// <returns>The envelope.</returns>
+    public static EventEnvelope FromResolvedLanding(FlightTracker tracker, ResolvedLanding landing, string flight)
+        => EventEnvelope.Create(
+            EventTypes.VehicleLanded,
+            tracker.SessionId,
+            tracker.CareerId,
+            flight,
+            landing.Landing.SimT,
+            landing.Landing.WallMs,
+            new VehicleLandedPayload(
+                Body: landing.Landing.Body,
+                VerticalSpeedMs: landing.Landing.VerticalSpeedMs,
+                HorizontalSpeedMs: landing.Landing.HorizontalSpeedMs,
+                CrewCount: landing.Landing.CrewCount,
+                Survived: landing.Survived,
+                RadarAltM: landing.Landing.RadarAltM,
+                Lat: landing.Landing.Lat,
+                Lon: landing.Landing.Lon));
 
     /// <summary>Builds a <c>roster.snapshot</c> payload, hashing every roster name into a <c>kid</c>.</summary>
     /// <param name="installId">The install ULID; salts the hash so ids are not comparable across installs.</param>

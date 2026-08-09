@@ -2,7 +2,7 @@
 title: Background telemetry
 description: >-
   The 30-second flight summary — how catlog samples your flight, what it keeps,
-  and why a missing g-load is not a zero.
+  the two heights it measures, and why a missing reading is not a zero.
 sidebar:
   order: 7
 ---
@@ -33,28 +33,63 @@ Three things close a window early, and all three produce a summary with fewer th
 Loading a save is different: the partial window is **discarded**, because it would
 span two different timelines and its averages would mean nothing.
 
-## Why a missing g-load is not zero
+## Why a missing reading is not zero
 
-`peak_g` and `max_q_pa` are left out of the summary entirely when the game did not
-compute them, rather than being written as zero.
+`peak_g`, `max_q_pa` and `radar_alt_m` are left out of the summary entirely when
+there was nothing to read, rather than being written as zero.
 
 The game only computes structural loads while a vehicle is under full physics. On
 rails, or in freefall, there is simply no reading — and the raw value sitting in
 memory in that case is zero.
 
-<Aside type="danger" title="Writing zero would break two boards">
+<Aside type="danger" title="Writing zero would break three boards">
   If catlog reported those zeros, **Peak G Survived** and **Max Q Survived** would fill up with
   entries claiming nothing at all, and every real reading would have to compete with noise from
-  vehicles that were not being simulated. Leaving the field out says "no data", which is what
-  actually happened.
+  vehicles that were not being simulated. **Lowest Pass** would be worse still: it is won by the
+  smallest number, so a single fabricated zero would take the record and nobody could ever beat it.
+  Leaving the field out says "no data", which is what actually happened.
+</Aside>
+
+## The two heights, and the one that is not always there
+
+A window carries two altitudes and they answer different questions.
+
+- **Altitude** is measured from the world's average radius. It is always readable,
+  because it is a position rather than a physics result, and it is what **Highest
+  Altitude** ranks.
+- **Height above the ground** is measured from whatever is directly underneath
+  you. It is what **Lowest Pass** ranks, and it is the number you would actually
+  watch on approach.
+
+The second one is folded over **only the samples that had a ground reading**, so
+its minimum, maximum, mean and last do not describe the same set of samples as the
+`n` beside them. When no sample in the window had one — a window spent in orbit
+has nothing underneath it to measure against — the field is absent rather than
+zero, exactly as `peak_g` is.
+
+That is why a flight can hold a Highest Altitude record and no Lowest Pass figure
+at all, and why a low run down a canyon and a hover over a mountaintop come out
+the opposite way round on the two boards.
+
+## The time-warp reading
+
+Each window also records the highest time-warp speed seen during it; `1` means real
+time. Under deep warp a window covers 30 game-seconds with far fewer than 60
+samples, so this is what lets a reader tell a fully-sampled window from a sparse
+one.
+
+<Aside type="note" title="It is descriptive, and nothing else">
+  Time warp is a normal part of playing, and this number disqualifies nothing. It is not a cheat
+  signal, it is not scored, and no board reads it. It exists so that "60 samples" and "six samples"
+  are distinguishable after the fact.
 </Aside>
 
 ## Switching it off
 
 This is the largest thing catlog sends and the most tempting one to turn off, and
-you can. It costs you five boards — Peak G Survived, Max Q Survived, Highest
-Altitude, Fastest Surface Speed and Fastest Orbital Speed — and nothing else
-supplies them. It also removes the only thing catlog is allowed to discard on its
+you can. It costs you six boards — Peak G Survived, Max Q Survived, Highest
+Altitude, Lowest Pass, Fastest Surface Speed and Fastest Orbital Speed — and
+nothing else supplies them. It also removes the only thing catlog is allowed to discard on its
 own, described just below, so a spool under pressure has nothing left to shed.
 
 See [Turning things off](/catlog/start/turning-things-off/).

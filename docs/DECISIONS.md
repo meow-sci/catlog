@@ -24,10 +24,10 @@ commit. See [ARCHITECTURE.md](ARCHITECTURE.md#7-keeping-the-documentation-true) 
 - **[Storage — Turso, schema & compression](#storage--turso-schema--compression)** — `STORE-*`, 16 entries
 - **[Ingest, auth & the conformance vectors](#ingest-auth--the-conformance-vectors)** — `INGEST-*`, 24 entries
 - **[Identity, handles & moderation](#identity-handles--moderation)** — `IDENT-*`, 15 entries
-- **[Projector, boards & the read API](#projector-boards--the-read-api)** — `PROJ-*`, 92 entries
+- **[Projector, boards & the read API](#projector-boards--the-read-api)** — `PROJ-*`, 99 entries
 - **[Archive & restore](#archive--restore)** — `ARCH-*`, 13 entries
 - **[The two frontends](#the-two-frontends)** — `UI-*`, 56 entries
-- **[The mod and its KSA-free core](#the-mod-and-its-ksa-free-core)** — `MOD-*`, 74 entries
+- **[The mod and its KSA-free core](#the-mod-and-its-ksa-free-core)** — `MOD-*`, 80 entries
 - **[The load harness](#the-load-harness)** — `LOAD-*`, 26 entries
 - **[Containers, nginx & deployment](#containers-nginx--deployment)** — `OPS-*`, 25 entries
 - **[Documentation](#documentation)** — `DOCS-*`, 4 entries
@@ -1184,6 +1184,98 @@ The mod attributing `kitten.tumble` and `kitten.kia` to a flight (MOD-073) and b
 
 **What this fixes, and why it went unnoticed.** `event-details.md`'s known drift item 26 and the tail of PROJ-091 recorded both mechanisms as inert on shipped data. They had passing tests the whole time — `TestRebuildAppliesTheKIAWindow` built the event with a flight the mod never sent. The replacements are shaped like real history instead: `TestRebuildAppliesTheKIAWindowToAScuttleShapedHistory` puts the KIA *after* `flight.ended` with `reason: destroyed` and asserts that the attributed flight loses both impact rows while a second flight, whose death is flightless, keeps its record; `TestTuningFlagExcludesTheTumblesItWasBuiltFor` asserts a flagged flight's tumbles do not score incrementally *or* after a rebuild, while an unflagged flight's does. **A guard whose test data is shaped differently from real data is not a guard**, and the only defence against the next one is fixtures built the way the producer builds them.
 
+### PROJ-093 — Five new boards, and the registry lockstep that has to land with them
+
+*Accepted · 2026-08-09 · WP-BOARDS.*
+
+Wire v2 (MOD-075…MOD-080) is worth nothing on its own: a recorded number that no board reads is a decision to record it, not a feature. Five boards read the new material — `heaviest_to_orbit`, `softest_landing`, `landings`, `lowest_pass`, `biggest_stack` — taking the fixed set from 35 to 40.
+
+**Every one of them exists because it answers a question its nearest neighbour cannot**, and the pairing is the justification in each case. `heaviest_to_orbit` versus `heaviest_launch`: what left the pad includes the propellant that will be spent getting off it, and what is still there at the milestone is the payload — paired, they are the only honest efficiency-shaped number reachable **without reading propellant** (PROJ-099). `softest_landing` versus `softest_touchdown`: that board ranks `surface_speed_ms`, the *whole* velocity relative to the ground, so a rover arriving at 8 m/s across a plain and a lander arriving at 8 m/s straight down are the same number there and very different flying. `landings` versus `landed_bodies`: arrivals versus worlds (PROJ-097). `lowest_pass` versus `highest_altitude`: `alt_m` is barometric, so a low run down a canyon reads as *high* and a mountaintop hover reads as *low* — it is not that board inverted, it is the other altitude. `biggest_stack` versus `most_stages`: built versus *fired*, and a five-stage rocket that RUDs on stage two scores 5 on one and 2 on the other.
+
+`biggest_stack` is a **fourth instantiation of the existing `launchFold`** rather than a new type, and `landings` is deliberately **not** a `countFold` — that type counts every event of a type, and this one owes the same `survived` gate its sibling takes (PROJ-096). `heaviest_to_orbit` is its own fold rather than a fifth `orbitRecordFold` because it does not take the shared shape blob: it ranks the vehicle, and its context is the apsides that say where it got to.
+
+**The registry lockstep is the hard blocker, and it is not a formality.** `vehicle.landed` had to be added to `ingest.knownTypes` in the same release. Until it is there, the server answers **`400 malformed_batch` for the entire batch** on the unknown type — so a wire-v2 mod shipping to a wire-v1 server loses *everything*, not just landings. `projector.currentVer` had to gain the seven `ver` 2 entries in the same release for the mirror-image reason: a type the mod stamps 2 while the server folds 1 is skipped as a future version. **The mod change and the server change cannot be deployed separately in either order**, and `catlog.sim` / `catlog.loadgen` now emit `vehicle.landed`, so `make test-integration` fails loudly if they drift apart. That is the intended failure mode.
+
+### PROJ-094 — The three wire-v2 record boards gate on `> 0`, not on `ver >= 2`
+
+*Accepted · 2026-08-09 · WP-BOARDS.*
+
+All seven `ver` 1 → `ver` 2 upcasters are `identityUpcast`, verified key by key against `Payloads.cs` rather than taken on faith: each `ver` 2 record is its `ver` 1 record *plus* fields, in that order, with no rename, retype, re-unit or removal. Nine identity transforms are now registered.
+
+**The identity is only safe because absence is refused at the fold**, and three of the new keys could otherwise have poisoned a board: `vehicle.orbit.mass_kg` and `flight.started.stage_count` decode as `0` on a `ver` 1 row, and `telemetry.window.radar_alt_m` decodes as `nil`. `heaviest_to_orbit` requires `mass_kg > 0`, `biggest_stack` requires `stage_count > 0`, and `lowest_pass` refuses `nil` before it looks at a number.
+
+**The mod delta asked for `ver >= 2` on `heaviest_to_orbit`. It was built with `> 0` instead.** The two are the same predicate — a real orbital mass is never ≤ 0, and an absent one is exactly 0 — so the envelope check buys no correctness. It costs something, though: it would make **one** board out of forty a reader of the envelope rather than the payload, and every future maintainer of `boards.go` would have to know which one and why. Every other gate in that file is a value test. Uniformity here is worth more than the redundant belt.
+
+The same reasoning covers `stage_count`, where it is not even redundant: 0 means *both* "read failed" and "genuinely no sequences", and a version test would let a real 0 through on a `ver` 2 row while a value test refuses both — which is what the board wants, since neither is a stack anybody built.
+
+### PROJ-095 — `lowest_pass` refuses an absent aggregate before it refuses a value, and its population is not `n`
+
+*Accepted · 2026-08-09 · WP-BOARDS.*
+
+Two gates, and they are doing different jobs. Conflating them would break the board in a way tests on complete data would not catch.
+
+**Gate one: the aggregate must be present.** `telemetry.window.radar_alt_m` is folded over only the samples that carried a terrain reading, and the key is **omitted entirely** when none did — the `peak_g` rule, applied to an aggregate for the first time. A window spent in orbit has no terrain below it at all. If the mod folded zeros instead, or if the server decoded absence as a zeroed `Agg`, every orbital window would arrive claiming `min: 0` and the board would be a list of everyone who has ever been in space, tied at zero. The field is `*Agg` and the fold refuses `nil` first.
+
+**Gate two: the minimum must be strictly positive.** 0 m is where a vehicle *sitting on the ground* reads, and on an ascending board that is an unbeatable record every flight ties on its way to the pad (PROJ-088). **A landing is not a pass** — `softest_landing` is the board for arriving, and this one is explicitly about not arriving.
+
+**Two consequences worth stating because they are easy to get wrong later.** The aggregate's population is **not** `n`: `n` remains the total sample count and nothing may reconstruct a count from the aggregate. And the board takes the **plain** flag exclusion rather than `survivedLoad`'s recovered-flight rule, exactly as `highest_altitude` does — a position is always sampled, and a probe that never came back still flew that low. A structural-load reading is only written under full physics; a position is not.
+
+### PROJ-096 — A landing has no plausibility rule, `survived` is taken not re-derived, and there is no crew gate
+
+*Accepted · 2026-08-09 · WP-BOARDS.*
+
+Three refusals, and each is a thing that would look like an improvement.
+
+**No plausibility rule.** A one-metre hop is a landing. "Was that a *real* landing" is a question about **intent**, answered from data shape, which Constitution §8 forbids — and every version of it needs a threshold nobody can defend: a minimum fall height, a minimum time airborne, a minimum horizontal distance. Each would exclude something real (a hop test, a rover cresting a ridge, an aborted hover) and none would exclude a determined faker, who can simply hop from higher. catlog records what happened; the player-facing site says a hop counts, rather than the server pretending it did not happen.
+
+**`survived` is the mod's answer and the only one taken.** It has already been through the same one-full-frame destruction hold as `vehicle.impact.survived` (MOD-077). Re-deriving it here — "was there a `vehicle.rud` near this landing", "did the flight end `destroyed`" — would be a second implementation of one invariant with a tuned window in it, and the two would disagree on exactly the cases that matter. A touchdown the vehicle did not walk away from is a crash, and `vehicle.rud` / `biggest_impact_energy` are where a crash belongs.
+
+**No crew requirement and no ±2 s KIA window**, unlike `survivedImpact`. Those exist because D11's rule is about a **crew** surviving a lithobrake — the claim being ranked there is "kittens lived through this". The claim here is "the vehicle arrived intact", and **landing a probe is landing**. `crew_count` rides in the context for a reader who cares. There is also no rebuild-only refinement, so `softest_landing` and `landings` fold identically incrementally and on rebuild.
+
+**The feed takes one suppression the boards do not**: `!survived` produces no line at all. That is not an eligibility rule, it is an editorial one — the `vehicle.rud` emitted beside it already announces the crash, and one moment must not reach the feed twice, in two moods. `vertical_speed_ms` is *not* gated there, because a feed line about a 0 m/s landing is merely uninteresting rather than a fake record.
+
+### PROJ-097 — `landed_bodies` stays on `vehicle.situation` now that `vehicle.landed` exists
+
+*Accepted · 2026-08-09 · WP-BOARDS.*
+
+The obvious move once a landing event exists is to source the landing board from it. **It was not made**, and the reasons are in weight order.
+
+**Coverage.** `vehicle.landed` fires only on the contact-free → contact edge. This board asks a different question: does the player have anything *on* a surface there. A vehicle **already on the ground when a save loads** never produces a landing event — the mod's baseline emits nothing, by design (MOD-076) — and a rover that goes `rolling` → `landed` as it stops puts its body on the board through the situation and through nothing else. Switching the source would quietly lose both classes of body, and "quietly" is the problem: nothing would error.
+
+**History.** Every `landed_bodies` row in every existing log was written from a `vehicle.situation`, and no `vehicle.landed` exists anywhere before wire v2. Moving the source would **empty the board on the next rebuild** — data loss dressed as a refactor, and exactly the kind of rebuild-versus-incremental disagreement D22 exists to keep visible rather than to create.
+
+**Nothing gained.** The two events come off the *same* detection in the mod, in that order, so there is no edge the landing sees that the situation does not. The landing carries `survived` and a decomposed descent rate; this board reads neither.
+
+**The corollary is the no-double-counting rule.** `landings` and `softest_landing` read `vehicle.landed` and never touch `player_body`; `landedBodiesFold` remains the **sole** writer of `kind = 'landed'`. One touchdown advances the body counter through exactly one path and the landing counter through exactly one other. A test ships the real pair — situation and landing, same body, same flight — and asserts one `player_body` row and one increment on each of the four boards involved, because the failure this guards against is silent double counting rather than an error.
+
+The reasoning is repeated in a comment on `landedBodiesFold`, since from the code alone the board looks like an oversight somebody should fix.
+
+### PROJ-098 — `warp_max` is descriptive only, and its `ver` 1 default is not synthesizable
+
+*Accepted · 2026-08-09 · WP-BOARDS.*
+
+`telemetry.window.warp_max` is decoded and **read by no fold**, and that is the decision rather than an omission.
+
+**Why it is recorded at all.** A window samples at 2 Hz on the **wall** clock but spans 30 **sim** seconds, so under time warp its aggregates are drawn from a handful of samples rather than the nominal 60. Nothing else in the payload says so, and a reader comparing two windows has no way to tell a dense one from a sparse one. It is context for a number, not a number.
+
+**Why it must never become a gate.** Under Constitution §8 it may inform a reader, weight a value or annotate a row; it must not **reject or disqualify** a record. Time warp is a shipped, universally available game feature used for exactly the reason everyone uses it, and "this record was set under warp" is not evidence of anything. Treating it as a cheat signal would be inferring intent from data shape, and it would punish the ordinary way people play. It is not a flag, it does not belong in `flight.flagged`, and no board may read it as eligibility. Recorded now, before somebody adds the check.
+
+**The `ver` 1 gap, stated because it is a live trap.** The intended `ver` 1 default is `1` — an unreadable or unstated warp is real time, never a stopped clock, which is also the mod's fallback. **The server does not implement that**, deliberately: an identity upcaster cannot synthesize a key (PROJ-094), and Go's zero value for the field is `0`. Nothing reads it today, so this is currently invisible. **The first reader must treat `0` as "absent" at the read site**, or that one type's upcaster stops being the identity and the whole seven-type wave loses the property that let it move in one commit. Noted in a comment on the field, in [event-details.md](event-details.md)'s known-drift list, and here.
+
+### PROJ-099 — Propellant and Δv are deliberately out of the wire-v2 wave, and the reason is §8 rather than cost
+
+*Accepted · 2026-08-09 · WP-BOARDS.*
+
+`Vehicle.PropellantMass` sits beside `TotalMass`, which catlog already reads twice. A Δv figure is reachable from it and a mass fraction is trivial. **Neither is recorded, and the reason is not that it is hard.**
+
+**A recorded Δv invites a physics-plausibility check, and Constitution §8 forbids one.** The moment the log carries "this vehicle had 4,200 m/s of Δv" and "this vehicle reached this orbit", the difference between them is computable, and the next reasonable-sounding proposal is to reject records where the two do not reconcile. That check fails §8's tests: it infers intent from data shape, it needs a tolerance nobody can defend (aerobraking, gravity assists, staging losses, atmospheric drag, a partial burn, an engine the mod could not read), and it produces false positives on exactly the flying that is most interesting. The false positives land on **honest players doing something clever**, which is the worst possible distribution of error for a leaderboard.
+
+There is a second cost that would have argued for deferral anyway: the propellant and engine layer had breaking signature changes between 5117 and 5168, so it is the churn-prone part of the surface, and a Δv number is not comparable across a thrust rebalance. But that is the weaker argument and it will expire; the §8 one will not.
+
+**What a future decision has to write down first, before any code.** The rule is *record it, never validate it* — the same rule `warp_max` takes (PROJ-098) and for the same reason. A propellant reading may inform a reader, may support an efficiency board that ranks a *ratio* rather than judging a *claim*, and may never gate eligibility for anything. Until that is a decision with a number on it, the field stays unread.
+
+**What this wave shipped instead**, and it is the honest version of the same appetite: `vehicle.orbit.mass_kg` next to `flight.started.mass_kg`. The pair gives a mass-delivered-to-orbit comparison — what left the pad against what was still there at the milestone — which is efficiency-shaped, is derived entirely from things the game states directly, and validates nothing. `heaviest_to_orbit` (PROJ-093) is the board.
+
 ---
 
 ## Archive & restore
@@ -2149,6 +2241,84 @@ Both events were emitted with `flight: null`, and two anti-cheat mechanisms were
 **Why bump anyway.** The two versions **score differently**, and that is the only kind of difference a version is for. A `ver` 1 `kitten.tumble` can never be excluded by its flight's `tuning` flag, because it names no flight; a `ver` 2 one can. A `ver` 1 `kitten.kia` can never disqualify an impact; a `ver` 2 one can. Events are immutable forever, so a reader who asks "why did this flagged flight's tumbles score" needs the answer to be *in the row* — and no other field carries it. [events.md](events.md) states the rule as changing an **event**, not only a payload field, and this changed the envelope contract of both.
 
 **The honest argument against, recorded so it is not rediscovered as a mistake.** `ver` has also been described as the *payload* schema version, and `projector/upcast.go` is strictly a payload-conversion mechanism — so the bump forces an upcaster that converts nothing. There is a real deployment cost too: a `ver` 2 event reaching a server built before this change is `ErrFutureVersion` and is **skipped** until that server catches up and rebuilds. That is tolerable only because "the mod and the server ship together" is a stated invariant of the wire contract, and it is precisely why the two registries have to move in one commit. Amending in place — as REPO-017 did for `flight.flagged: "tuning"` — was available there because no such event had ever been stored. Here, every tumble and every KIA ever shipped is a `ver` 1 row. That is the difference.
+
+### MOD-075 — A landing is its own event type, not more payload on `vehicle.situation`
+
+*Accepted · 2026-08-09 · mod.*
+
+`vehicle.landed` is a new type at `ver` 1 rather than four more keys — `vertical_speed_ms`, `horizontal_speed_ms`, `survived`, `radar_alt_m` — bolted onto the `vehicle.situation` that already reports the same transition. The two are emitted off **one** detection, in that order, so the cheaper option was genuinely available.
+
+**Why a type.** `survived` is the reason. It cannot be known at detection time: it takes a full frame of destruction-hold before the verdict is final, and `vehicle.situation` is emitted immediately. Putting it on the situation payload would mean either delaying every situation change by a frame — a rule the other eight transitions have no reason to pay — or emitting a situation event whose `survived` is a lie that a later event would have to correct, in a log that is immutable forever. There is no third option: catlog never revises a stored event.
+
+The rest follows from that but would not have been sufficient alone. A landing is a **scoring** occurrence and a situation change is a **passive sample**, which is the distinction the whole taxonomy is built on and the one the player-facing site surfaces as "something happened" versus "sampled in the background". Four of the nine situation transitions are not landings, so four keys would be absent or meaningless on most rows of the type. And `[events]` lets a player switch types off individually: a player who wants landings but not the chatter of every `rolling` → `landed` on a rover has a knob only if the two are separate types.
+
+**The cost, stated.** Two events per touchdown instead of one, roughly 200 extra bytes on the wire per landing, and a reader who wants "the landing and the situation it came from" has to join them on `(flight, sim_t)`. Both are cheap and neither is a correctness problem. The alternative was a lie or a stall.
+
+### MOD-076 — The landing shares the situation rule's debounce and never marks a timer of its own
+
+*Accepted · 2026-08-09 · mod.*
+
+`DetectKind.Landing` exists, and `CanFire` is never called with it. `vehicle.landed` is emitted from **inside** `CheckSituation`'s `CanFire` gate, after `vehicle.situation`, and `MarkFired` is called once — for `Situation`.
+
+**Why not its own 2 s timer, which is what every other detector kind has.** Three reasons, and the third is the one that decided it.
+
+1. **Chatter.** A bouncing lander, or a rover on rough ground, alternates `freefall` ↔ `landed` at the sample rate. Under the shared gate that is one landing every 2 s at worst; under an independent timer it is still one every 2 s, so this alone does not decide it — but under *no* gate it would be one every 500 ms, each one a `softest_landing` candidate.
+2. **Nothing is lost.** `ReportedSituation` is only advanced when the pair actually fires, so a suppressed edge is still pending on the next sample and both events are emitted then, off the same `from`. The debounce rate-limits; it does not drop.
+3. **An independent timer can desynchronise the pair.** Two timers with different last-fired stamps can reach a state where the landing may fire and the situation may not — leaving a `vehicle.landed` in the immutable log with **nothing beside it to explain it**: no `from`, no `to`, no altitude, no surface speed. A reader of that log cannot tell it from a corrupt row. One gate makes the pair an invariant rather than a coincidence.
+
+Baseline still emits nothing, so a vehicle already on the ground when a save loads does not "land" — the first sample only seeds the latch. That is the same rule every other detector takes and it is why a save-scummed history cannot manufacture landings by reloading.
+
+### MOD-077 — `survived` reuses `ImpactCorrelator`; one generic hold, two instantiations, one return value
+
+*Accepted · 2026-08-09 · mod.*
+
+`vehicle.landed.survived` goes through the same one-full-frame destruction hold as `vehicle.impact.survived`, not through an inference from a nearby `vehicle.rud` or `flight.ended`.
+
+**Why the hold rather than an inference.** Without it, a player who fell over on touchdown could scuttle the craft and still bank the landing — exactly the hole the correlator was built to close for impacts, arriving again in a new event. The machinery already existed and the rule is identical; re-deriving it would be a second implementation of one invariant, and the two would drift. An inference is worse still: "was there a RUD near this landing" needs a window, a window needs a threshold, and a threshold on a scoring gate is the kind of tuned constant §8 exists to keep out.
+
+**The refactor, and why it is one generic type.** `ImpactCorrelator` grew a `Hold<TObservation, TVerdict>` with the two-slot pending/held structure, instantiated twice. `EndFrame`, `Drain` and `DrainFor` now return a `Verdicts` record struct carrying **both** kinds. That shape is deliberate: one advance of the hold settles both, so two separate methods would mean two calls, and **a caller that made only one of them would strand the other kind forever** — silently, with no error and no log. Making it impossible to express beat documenting that it must not be done.
+
+**The one asymmetry, accepted rather than corrected.** An impact is raised inside frame *N* by a Harmony postfix; a landing is detected on the *worker*, from frame *N*'s telemetry, which is processed just after frame *N*'s boundary signal was consumed. So a landing enters the pending slot one step later and settles at the end of frame *N+2* rather than *N+1*. That is one extra frame of destruction sensitivity — strictly the **safer** direction, since it can only turn a survivor into a casualty and never the reverse — so it is left alone rather than special-cased. A special case here would be a second timing rule to keep true.
+
+### MOD-078 — `lat`, `lon` and `radar_alt_m` are omitted when unreadable; `stage_count` and `mass_kg` are zeroed
+
+*Accepted · 2026-08-09 · mod.*
+
+The wire-v2 wave added seven values and split them two ways. `lat`, `lon` and `radar_alt_m` are `[JsonIgnore(WhenWritingNull)]` nullables — **absent from the object entirely** when unreadable, never `null` and never `0`. `stage_count`, `mass_kg` on `vehicle.orbit`, `warp_max`, and both landing speeds are non-nullable and carry a defined fallback.
+
+**The rule that separates them: is zero a real reading?** For the three that are omitted it emphatically is. **Latitude 0 is the equator**, longitude 0 is a meridian, and a radar altitude of 0 is *the ground* — the single most consequential value that field can take, since it is what a landed vehicle reads and what `lowest_pass` must refuse. Writing 0 for "could not read" does not produce a missing record, it produces a **wrong** one, and a wrong record in an immutable log is permanent. This is the same rule `peak_g` / `max_q_pa` already followed, arrived at from the opposite direction: there, zero was meaningless and had to be suppressed; here, zero is meaningful and must be reserved.
+
+For the others, zero is either not a plausible reading or is one the consumer already refuses. A stage count of 0 is a legal vehicle (no sequences) *and* the value a failed read leaves behind, and the board gates `> 0` either way, so the two are indistinguishable and it does not matter that they are. `warp_max` falls back to **`1`, never `0`** — an unreadable warp is not a stopped clock, and 0 would make every window look warp-free. Both landing speeds fall back to 0, which `softest_landing` refuses for the PROJ-088 reason.
+
+**The cost of the split, accepted.** A decoder now has to know which keys are optional, and a decoder that reads them into a plain float silently converts "absent" into a real place. That is a genuine hazard, which is why it is stated in [events.md](events.md), in the payload table of every affected event, and in the suppression matrix, and why every optional key is a pointer on the Go side. A test asserts the emitted line contains no `null` token at all, so the mod cannot regress to sending `null` instead of omitting.
+
+### MOD-079 — `flight.ended` gains `body`, `lat`, `lon` and `kids`, and the one path that cannot fill them says so
+
+*Accepted · 2026-08-09 · mod.*
+
+`flight.ended` carried no body at all, which made a landing site **unplaceable**: the flight's last `telemetry.window` may be a whole window old and the vehicle may have changed SOI since, so "where did this flight end" had no honest answer anywhere in the log.
+
+**Why the reads are real on every ordinary path.** The removal hook is a **prefix** on the single dispose choke point — recover, destroy, dock-consume, EVA-board, shutdown all pass through it — so the vehicle is fully intact and its orbit, parent and seats are all readable. That is the *last* instant at which they are, which is the whole reason the hook was a prefix in the first place.
+
+**The exception, and the thing deliberately not done about it.** `PolledSignals.Prune` is the silent-removal safety net: it fires when a vehicle id stops appearing in the live list without a dispose — a `CelestialSystem.Rename`, or a docking merge whose consumed vehicle was missed. There is **no vehicle object left to ask**, so it emits `body: "unknown"`, `kids: []` and omits the position, matching the `crew_count: 0` that path already reported.
+
+Caching the last sampled body and position per vehicle to backfill it was available and was **refused**. An id can vanish because it was *renamed* or *merged into another vehicle*, and "where it was half a second ago" is a different claim from "where it ended" — the first is a fact about a sample, the second is a fact about a flight. Filling one in with the other would put a plausible, unmarked, wrong position in an immutable log, and nothing downstream could ever tell the two apart. `"unknown"` is legible; a stale coordinate is not.
+
+`"unknown"` is an ordinary member of the open `body` set, not a sentinel — there is no allow-list of bodies anywhere in catlog and there must not be one — but it is a *name*, so the server must not mint a `landed_on_unknown` board and must exclude it wherever a real body is required.
+
+### MOD-080 — `Vehicle.GetRadarAltitude()` is refused; the cached `PhysicsEnvironment` radii are read instead
+
+*Accepted · 2026-08-09 · mod.*
+
+The wire-v2 spec named `Vehicle.GetRadarAltitude()` as the source for `radar_alt_m`. **It is not called, and the recorded numbers are identical.**
+
+**Why it is refused.** `GetRadarAltitude()` re-does the entire terrain lookup on **every invocation**: `Celestial.GetTerrainHeightFromDirCci` → `GetTerrainHeightFromDirCcf` is a bicubic heightmap texture fetch, a normal-map fetch and a tangent-frame construction, plus two further CPU texture samples where biome materials are present — and, on an ocean body, a `GetOceanRenderer()` query. catlog samples at 2 Hz across **every vehicle in the system**, and §7.2's governing requirement is that the mod costs the player nothing. The KSA survey itself ranks the call *"deliberately excluded — not affordable at 2 Hz across many vehicles"*. This is not a micro-optimisation: it is the constraint the mod's entire sampling design exists to satisfy, and a terrain fetch per vehicle per tick would break it.
+
+**Why the substitute is exact rather than approximate.** The physics step has already paid for that computation and cached the answer. `PhysicsEnvironment.RecomputePositionalValues` writes `TerrainRadius = meanRadius + GetTerrainHeightFromDirCcf(…)` and `OceanRadius = meanRadius + GetOceanHeightAtPositionCcf(…)` from the same two lookups. `GetRadarAltitude()` computes `|r| − (meanRadius + max(terrainHeight, oceanHeight))`; those two radii **are** `meanRadius + height`. So `|r| − max(TerrainRadius, OceanRadius)` is the same number for two field reads. The game's own physics debug window reads the same fields for its "Terrain Height" readout, which is the strongest available evidence that they are the intended cheap accessor.
+
+**Three guards, and every one of them yields *absent* rather than zero** (MOD-078): `InPhysicsRadius == false` (outside the near-surface radius the game zeroes the whole positional block, and 0 there would read as *on the ground*); `ClosestParent is not Celestial` (nothing else has a heightmap and the game substitutes `meanRadius`, which would silently make radar altitude equal barometric); and `ClosestParent != Orbit.Parent` (the radius below would be measured against a different body from the position above it).
+
+**Recorded at three sites on purpose** — here, in [ksa-integration.md](ksa-integration.md) §1, and in a long remark on the method — because the failure mode is somebody "simplifying" it back to the obvious one-line call, which compiles, passes every test, produces identical numbers, and costs a terrain fetch per vehicle per tick. Nothing in the test suite would catch that. If a future build makes `GetRadarAltitude()` cheap, the substitution becomes legitimate and this entry is superseded; until then it is not.
 
 ## The load harness
 

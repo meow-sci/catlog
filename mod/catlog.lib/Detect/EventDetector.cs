@@ -25,6 +25,19 @@ public enum DetectKind
 
     /// <summary><c>vehicle.soi</c>.</summary>
     SoiChange = 5,
+
+    /// <summary>
+    /// <c>vehicle.landed</c> — the surface-contact half of the same edge <see cref="Situation"/>
+    /// fires on.
+    /// </summary>
+    /// <remarks>
+    /// This kind deliberately has <b>no debounce timer of its own</b>: it is emitted from inside
+    /// the situation rule, gated by that rule's timer, so <see cref="VehicleDetectState.CanFire"/>
+    /// is never called with it. A landing carries a <see cref="LandingObservation"/> in
+    /// <see cref="DetectedEvent.Payload"/> rather than a finished payload record, because
+    /// <c>survived</c> is not knowable yet — see <see cref="ImpactCorrelator"/>.
+    /// </remarks>
+    Landing = 6,
 }
 
 /// <summary>A detected event, before it is given ids and turned into an <see cref="EventEnvelope"/>.</summary>
@@ -233,23 +246,79 @@ public sealed class EventDetector
         if (!state.CanFire(DetectKind.Situation, curr.SimT))
             return;
 
+        string from = state.ReportedSituation;
+
         Add(ref sink, new DetectedEvent(
             curr.VehicleId,
             DetectKind.Situation,
             EventTypes.VehicleSituation,
             new VehicleSituationPayload(
-                From: state.ReportedSituation,
+                From: from,
                 To: curr.Situation,
                 Body: curr.Body,
                 AltitudeM: curr.AltitudeM,
                 SurfaceSpeedMs: curr.SurfaceSpeedMs,
-                OrbitalSpeedMs: curr.OrbitalSpeedMs),
+                OrbitalSpeedMs: curr.OrbitalSpeedMs,
+                RadarAltM: curr.RadarAltM),
             curr.SimT,
             curr.WallMs));
+
+        // A landing is this same edge seen from the other side, so it is detected here and nowhere
+        // else. It inherits the situation rule's 2 s debounce by construction — it is emitted
+        // inside the `CanFire` gate above and never marks a timer of its own — and that is the
+        // behaviour we want, in both directions:
+        //
+        //   * a landing suppressed by debounce is not lost. The latch is only advanced when the
+        //     situation event actually fires, so the edge is still pending on the next sample and
+        //     both events are emitted then, off the same `from`.
+        //   * a craft chattering between `freefall` and `landed` at 2 Hz — a bouncing lander, a
+        //     rover on rough ground — would otherwise mint a landing every 500 ms, each one a
+        //     record.
+        //
+        // Giving it its own timer would also let it fire on a transition whose `vehicle.situation`
+        // was suppressed, leaving a `vehicle.landed` in the log with no situation change beside it
+        // to explain it.
+        if (IsTouchdown(from, curr.Situation))
+        {
+            Add(ref sink, new DetectedEvent(
+                curr.VehicleId,
+                DetectKind.Landing,
+                EventTypes.VehicleLanded,
+                new LandingObservation(
+                    VehicleId: curr.VehicleId,
+                    SimT: curr.SimT,
+                    WallMs: curr.WallMs,
+                    Body: curr.Body,
+                    VerticalSpeedMs: curr.VerticalSpeedMs,
+                    HorizontalSpeedMs: curr.HorizontalSpeedMs,
+                    CrewCount: curr.CrewCount,
+                    RadarAltM: curr.RadarAltM,
+                    Lat: curr.Lat,
+                    Lon: curr.Lon),
+                curr.SimT,
+                curr.WallMs));
+        }
 
         state.ReportedSituation = curr.Situation;
         state.MarkFired(DetectKind.Situation, curr.SimT);
     }
+
+    /// <summary>
+    /// True when the transition is from a contact-free situation into one that touches terrain or
+    /// ocean.
+    /// </summary>
+    /// <remarks>
+    /// Both sides must be <b>known</b> situations. <see cref="SituationInfo"/> is total by design
+    /// and reports "no contact" for a name it has never seen, so without the
+    /// <see cref="SituationInfo.IsKnown"/> test a ninth situation added by a future build would
+    /// read as flight and every transition out of it would score as a landing. Not knowing is not
+    /// the same as being airborne.
+    /// </remarks>
+    private static bool IsTouchdown(string from, string to)
+        => SituationInfo.IsKnown(from)
+           && SituationInfo.IsKnown(to)
+           && !SituationInfo.HasSurfaceContact(from)
+           && SituationInfo.HasSurfaceContact(to);
 
     private static void CheckSoi(
         VehicleDetectState state, TelemetrySnapshot curr, bool baseline, ref List<DetectedEvent>? sink)
@@ -414,7 +483,8 @@ public sealed class EventDetector
                 ApM: curr.ApAltM,
                 PeM: curr.PeAltM,
                 Ecc: curr.Ecc,
-                IncDeg: curr.IncDeg),
+                IncDeg: curr.IncDeg,
+                MassKg: curr.MassKg),
             curr.SimT,
             curr.WallMs);
 

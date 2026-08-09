@@ -139,7 +139,19 @@ public sealed class EventPipeline
         List<EventEnvelope>? envelopes = null;
 
         foreach (DetectedEvent detected in _detector.Observe(frame))
+        {
+            // A landing is the one detector output that is not yet an event: `survived` is not
+            // knowable until a frame has passed without a destruction, so it goes into the same
+            // hold `vehicle.impact` uses and is emitted from there. Everything else is final the
+            // moment it is detected.
+            if (detected.Kind == DetectKind.Landing && detected.Payload is LandingObservation landing)
+            {
+                _correlator.Landed(landing);
+                continue;
+            }
+
             Add(ref envelopes, EventFactory.FromDetected(Tracker, detected));
+        }
 
         foreach (TelemetrySnapshot snapshot in frame.Vehicles)
         {
@@ -194,7 +206,9 @@ public sealed class EventPipeline
     {
         List<EventEnvelope>? envelopes = null;
 
-        foreach (ResolvedImpact impact in _correlator.Drain())
+        Verdicts outstanding = _correlator.Drain();
+
+        foreach (ResolvedImpact impact in outstanding.Impacts)
         {
             if (Tracker.PeekFlight(impact.Signal.VehicleId) is not { } flight)
             {
@@ -208,6 +222,20 @@ public sealed class EventPipeline
             Add(ref envelopes, EventFactory.FromResolvedImpact(Tracker, impact, flight));
         }
 
+        foreach (ResolvedLanding landing in outstanding.Landings)
+        {
+            if (Tracker.PeekFlight(landing.Landing.VehicleId) is not { } flight)
+            {
+                ModLog.Log.Debug(
+                    $"catlog: dropping a landing for vehicle '{landing.Landing.VehicleId}' at sim_t "
+                    + $"{landing.Landing.SimT:0.###} — same reason as an outstanding impact: its flight "
+                    + "had already ended when the session flushed.");
+                continue;
+            }
+
+            Add(ref envelopes, EventFactory.FromResolvedLanding(Tracker, landing, flight));
+        }
+
         foreach (ClosedWindow window in _windows.FlushAll())
             Add(ref envelopes, EventFactory.FromWindow(Tracker, window, wallMs));
 
@@ -219,8 +247,19 @@ public sealed class EventPipeline
         switch (signal)
         {
             case FrameBoundarySignal:
-                foreach (ResolvedImpact impact in _correlator.EndFrame())
+                Verdicts settled = _correlator.EndFrame();
+                foreach (ResolvedImpact impact in settled.Impacts)
                     Add(ref envelopes, EventFactory.FromResolvedImpact(Tracker, impact));
+                foreach (ResolvedLanding landing in settled.Landings)
+                {
+                    // FlightFor, as for impacts: a landing is only detected from a vehicle that was
+                    // in the published frame, and PolledSignals.Track has already emitted that
+                    // vehicle's flight.started ahead of the frame, so this resolves rather than
+                    // mints. The flight-end and session-flush paths, where that is not true, peek.
+                    Add(ref envelopes, EventFactory.FromResolvedLanding(
+                        Tracker, landing, Tracker.FlightFor(landing.Landing.VehicleId)));
+                }
+
                 break;
 
             case SessionLoadedSignal loaded:
@@ -232,12 +271,16 @@ public sealed class EventPipeline
                 break;
 
             case VehicleRecoveredSignal recovered:
-                EndFlight(recovered.VehicleId, FlightEndReason.Recovered, recovered.CrewCount,
+                EndFlight(
+                    recovered.VehicleId, FlightEndReason.Recovered, recovered.CrewCount,
+                    recovered.Body, recovered.KittenNames, recovered.Lat, recovered.Lon,
                     recovered.SimT, recovered.WallMs, ref envelopes);
                 break;
 
             case VehicleRemovedSignal removed:
-                EndFlight(removed.VehicleId, removed.Reason, removed.CrewCount,
+                EndFlight(
+                    removed.VehicleId, removed.Reason, removed.CrewCount,
+                    removed.Body, removed.KittenNames, removed.Lat, removed.Lon,
                     removed.SimT, removed.WallMs, ref envelopes);
                 break;
 
@@ -253,7 +296,9 @@ public sealed class EventPipeline
                         SpeedMs: rud.SpeedMs,
                         AltitudeM: rud.AltitudeM,
                         Body: rud.Body,
-                        CrewCount: rud.CrewCount)));
+                        CrewCount: rud.CrewCount,
+                        Lat: rud.Lat,
+                        Lon: rud.Lon)));
                 break;
 
             case ImpactSignal impact:
@@ -385,7 +430,11 @@ public sealed class EventPipeline
                 Body: created.Body,
                 MassKg: created.MassKg,
                 PartCount: created.PartCount,
-                CrewCount: created.CrewCount)));
+                CrewCount: created.CrewCount,
+                Kids: Kids(created.KittenNames),
+                StageCount: created.StageCount,
+                Lat: created.Lat,
+                Lon: created.Lon)));
 
         // A session-wide flag (live tuning, a console command) taints every flight in the session,
         // including ones started after the flag was raised.
@@ -496,6 +545,10 @@ public sealed class EventPipeline
         string vehicleId,
         FlightEndReason reason,
         int crewCount,
+        string body,
+        IReadOnlyList<string>? kittenNames,
+        double? lat,
+        double? lon,
         double simT,
         long wallMs,
         ref List<EventEnvelope>? envelopes)
@@ -516,8 +569,16 @@ public sealed class EventPipeline
         // as a brand-new one with no flight.started. That is the same phantom-flight hazard Flush
         // guards against with peek semantics, on the far more common path: an impact and the
         // destruction it caused land in the same frame every single time.
-        foreach (ResolvedImpact impact in _correlator.DrainFor(vehicleId))
+        Verdicts due = _correlator.DrainFor(vehicleId);
+        foreach (ResolvedImpact impact in due.Impacts)
             Add(ref envelopes, EventFactory.FromResolvedImpact(Tracker, impact, flight));
+
+        // A landing that has not yet cleared the hold when the flight ends is settled here for the
+        // same reason an impact is — and this is the path that carries the whole point of routing
+        // landings through the correlator at all: the destruction below has already told it, so a
+        // craft scuttled where it stood reports survived: false rather than banking the touchdown.
+        foreach (ResolvedLanding landing in due.Landings)
+            Add(ref envelopes, EventFactory.FromResolvedLanding(Tracker, landing, flight));
 
         // The last partial window is worth keeping: it covers the seconds immediately before a
         // RUD or a recovery, which is exactly the interesting part.
@@ -526,7 +587,13 @@ public sealed class EventPipeline
 
         Add(ref envelopes, EventEnvelope.Create(
             EventTypes.FlightEnded, Tracker.SessionId, Tracker.CareerId, flight, simT, wallMs,
-            new FlightEndedPayload(EventTypes.ToWire(reason), crewCount)));
+            new FlightEndedPayload(
+                Reason: EventTypes.ToWire(reason),
+                CrewCount: crewCount,
+                Kids: Kids(kittenNames),
+                Body: string.IsNullOrEmpty(body) ? "unknown" : body,
+                Lat: lat,
+                Lon: lon)));
 
         Tracker.EndFlight(vehicleId);
         _detector.Forget(vehicleId);
@@ -537,6 +604,24 @@ public sealed class EventPipeline
         => EventEnvelope.Create(type, Tracker.SessionId, Tracker.CareerId, Tracker.FlightFor(vehicleId), simT, wallMs, payload);
 
     private string Kid(string kittenName) => Ids.KittenId(_options.InstallId, kittenName);
+
+    /// <summary>
+    /// The <c>kids</c> array for a crew list: the same per-install relabelling every other kitten
+    /// field uses, and an empty array — never a null and never a missing key — when there is nobody
+    /// aboard or the seats could not be read.
+    /// </summary>
+    /// <param name="kittenNames">The roster names, or null.</param>
+    /// <returns>The pseudonymous ids, in the order given.</returns>
+    private IReadOnlyList<string> Kids(IReadOnlyList<string>? kittenNames)
+    {
+        if (kittenNames is null || kittenNames.Count == 0)
+            return [];
+
+        var kids = new string[kittenNames.Count];
+        for (int i = 0; i < kittenNames.Count; i++)
+            kids[i] = Kid(kittenNames[i]);
+        return kids;
+    }
 
     private void PruneStaleVehicles(TelemetryFrame frame, ref List<EventEnvelope>? envelopes)
     {

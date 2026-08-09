@@ -2,7 +2,7 @@
 title: Your vehicle
 description: >-
   Situation changes, atmosphere crossings, orbits, sphere-of-influence changes,
-  impacts, destruction, staging and docking.
+  landings, impacts, destruction, staging and docking.
 sidebar:
   order: 4
 ---
@@ -10,7 +10,7 @@ sidebar:
 import { Aside } from "@astrojs/starlight/components";
 import EventDetail from "../../../components/EventDetail.astro";
 
-Everything catlog records about the vehicle itself. Four of these are sampled
+Everything catlog records about the vehicle itself. Five of these are sampled
 twice a second and reported when something changes; the rest fire the moment the
 game does the thing.
 
@@ -26,15 +26,30 @@ game does the thing.
 Three readings appear over and over, and it is worth being precise about them
 once.
 
-| Reading           | What it is                                                                                                                                                                                     |
-| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Altitude**      | Height above the body's **mean radius**, not above the terrain underneath you. Over a mountain your altitude is smaller than your height above sea level would suggest; over a trench, larger. |
-| **Surface speed** | Speed relative to the surface rotating below you.                                                                                                                                              |
-| **Orbital speed** | Speed relative to the body's centre.                                                                                                                                                           |
+| Reading              | What it is                                                                                                                                                                                     |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Altitude**         | Height above the body's **mean radius**, not above the terrain underneath you. Over a mountain your altitude is smaller than your height above sea level would suggest; over a trench, larger. |
+| **Ground clearance** | Height above whatever is directly underneath you — the ground, or the sea. This is the number you care about on approach, and it is the one the altitude above does not give you.              |
+| **Surface speed**    | Speed relative to the surface rotating below you.                                                                                                                                              |
+| **Orbital speed**    | Speed relative to the body's centre.                                                                                                                                                           |
+
+The two heights are genuinely different questions, and catlog keeps both because
+neither answers the other. A hover 50 m over a mountaintop is high above the
+ground and unremarkable above the mean radius; a run down a canyon is the reverse.
 
 Surface speed is deliberately **not** whatever your navball is showing — the
 navball changes meaning depending on which mode you have it in, and a leaderboard
 cannot be built on a display setting.
+
+<Aside type="caution" title="A missing reading is left out, never written as zero">
+  Ground clearance, latitude and longitude are all things the game can decline to give catlog an
+  answer for — in orbit there is nothing underneath you to measure against, and a position needs a
+  world to be a position on. When there is no answer, the field is **absent from the record
+  entirely**. It is never sent as zero, because zero is a real answer to both questions: a latitude
+  of zero is a spot in the ocean south of Ghana, and a ground clearance of zero means you are on the
+  ground. A zero standing in for "we could not tell" would be a wrong record rather than a missing
+  one.
+</Aside>
 
 <EventDetail type="vehicle.situation" />
 
@@ -83,6 +98,65 @@ Two more impacts that never count:
 - **The launch pad.** Recorded, never scored.
 - **Anything within 5 seconds of a teleport.** Discarded outright — the game
   suppresses the impact effects there, and it is not a landing.
+
+<EventDetail type="vehicle.landed" />
+
+## Landing, and what catlog counts as one
+
+catlog looks at your vehicle twice a second. When it goes from touching nothing —
+falling, or flying under power — to touching a surface, you have landed. It is the
+same moment as the situation change at the top of this page, read from the other
+side: one record says what changed, the other says how you arrived.
+
+Every kind of contact counts. Coming to rest on your legs is a landing; so is a
+wheel touching down, a hull settling in water, and a capsule dragging in the
+shallows. And every scale counts too.
+
+<Aside type="note" title="A one-metre hop is a landing">
+  There is no plausibility rule anywhere in this. catlog does not judge whether you meant to land,
+  how far you had come, or whether the arrival was interesting. It records that a vehicle stopped
+  being in the air and started being on something, and leaves the judging to the leaderboards.
+</Aside>
+
+Two things are **not** landings:
+
+- **A vehicle that was already on the ground when you loaded a save.** catlog's
+  first look at any vehicle only establishes a starting point, and reports
+  nothing from it. You have to leave the ground before you can arrive on it.
+- **A change catlog cannot read both sides of.** The state you came from and the
+  state you are in now both have to be ones catlog recognises. Not knowing what
+  you were doing is not the same as knowing you were airborne.
+
+**Bouncing does not mint a landing every half second.** A landing shares the
+2-second cool-off the situation change uses, so a lander that touches, hops and
+settles is one landing rather than four.
+
+**Whether the vehicle survived is not a guess.** It goes through exactly the same
+one-full-frame wait an impact does, so scuttling a lander right after an awkward
+arrival cannot bank a soft-landing record. A landing you did not walk away from
+scores nothing — and it produces no line in the live feed either. That is a crash,
+and the destruction recorded beside it already announces it; the same moment
+should not reach the feed twice in two different moods.
+
+### Four boards that sound alike
+
+| Board                 | Asks                                                                                               | Read from            |
+| --------------------- | -------------------------------------------------------------------------------------------------- | -------------------- |
+| **Softest Landing**   | How gently did you come **down**? Descent rate alone, and the vehicle has to have survived.        | The landing          |
+| **Softest Touchdown** | How gently did you arrive **overall**? Your whole speed relative to the ground, sideways included. | The situation change |
+| **Landings**          | How many times have you put something down and had it survive?                                     | The landing          |
+| **Bodies Landed On**  | How many different worlds have you got anything standing on?                                       | The situation change |
+
+The pairing is deliberate. A rover crossing a plain at 8 m/s and a lander dropping
+straight in at 8 m/s are the same number on Softest Touchdown and very different
+flying; Softest Landing is the vertical half on its own, which is the half you are
+actually managing on the way in.
+
+Bodies Landed On asks the wider question of the two counters: it wants to know
+whether you have anything on a surface there at all, so a vehicle that was already
+parked when a save loaded counts, and so does a rover that rolls to a stop. Neither
+of those is a landing. **The two never double-count each other** — a touchdown
+reaches each of them by exactly one route.
 
 <EventDetail type="vehicle.staging" />
 <EventDetail type="vehicle.docked" />

@@ -22,9 +22,10 @@ public sealed record ClosedWindow(string VehicleId, TelemetryWindowPayload Paylo
 /// samples and the boundary never lands in two windows at once.
 /// </para>
 /// <para>
-/// <c>peak_g</c> and <c>max_q_pa</c> fold only over samples that actually carried a reading and are
-/// <b>omitted</b> from the payload when no sample did — see
-/// <see cref="TelemetrySnapshot.PeakG"/> for why reporting 0 would corrupt the peak-g board.
+/// <c>peak_g</c>, <c>max_q_pa</c> and <c>radar_alt_m</c> fold only over samples that actually
+/// carried a reading and are <b>omitted</b> from the payload when no sample did — see
+/// <see cref="TelemetrySnapshot.PeakG"/> for why reporting 0 would corrupt the peak-g board, and
+/// <see cref="TelemetrySnapshot.RadarAltM"/> for why a zeroed terrain altitude is worse still.
 /// </para>
 /// </remarks>
 public sealed class WindowAccumulator
@@ -114,11 +115,17 @@ public sealed class WindowAccumulator
         private readonly Fold _orbitalSpeed = new();
         private readonly Fold _accel = new();
 
+        // Nullable, not a Fold seeded at zero: a window can legitimately contain no terrain
+        // reading at all (a whole window spent in orbit), and it is allocated on the first sample
+        // that has one so the common case costs nothing.
+        private Fold? _radarAlt;
+
         private string _body;
         private double _massKgLast;
         private double _t1;
         private double? _peakG;
         private double? _maxQPa;
+        private double _warpMax;
         private int _n;
 
         internal VehicleWindow(TelemetrySnapshot first)
@@ -141,6 +148,10 @@ public sealed class WindowAccumulator
                 _peakG = g;
             if (s.MaxQPa is { } q && (_maxQPa is null || q > _maxQPa.Value))
                 _maxQPa = q;
+            if (s.RadarAltM is { } radar)
+                (_radarAlt ??= new Fold()).Add(radar);
+            if (s.WarpFactor > _warpMax)
+                _warpMax = s.WarpFactor;
 
             _body = s.Body;
             _massKgLast = s.MassKg;
@@ -159,7 +170,9 @@ public sealed class WindowAccumulator
             AccelMs2: _accel.ToAgg(),
             PeakG: _peakG,
             MaxQPa: _maxQPa,
-            MassKgLast: _massKgLast);
+            MassKgLast: _massKgLast,
+            RadarAltM: _radarAlt?.ToAgg(),
+            WarpMax: _warpMax);
     }
 
     private sealed class Fold

@@ -9,7 +9,7 @@ import (
 )
 
 // Summarize renders the §5.6 feed line for an event, reporting false when the
-// event is not one of the seven feed types, when the flight was flagged, or when
+// event is not one of the eight feed types, when the flight was flagged, or when
 // the player has no public handle.
 //
 // Flagged flights are excluded for the same reason they are excluded from the
@@ -38,6 +38,20 @@ func summary(ev Event, handle string) (string, bool) {
 			return "", false
 		}
 		return fmt.Sprintf("%s lithobraked at %s m/s on %s — and survived", handle, num(p.SpeedMs), place(p.Body)), true
+
+	case "vehicle.landed":
+		p, ok := payloadOf[VehicleLanded](ev)
+		if !ok || !p.Survived {
+			// A touchdown the vehicle did not walk away from is a crash, and the
+			// `vehicle.rud` emitted beside it already says so. Announcing both
+			// would put one moment on the feed twice, in two moods.
+			return "", false
+		}
+		if p.CrewCount < 1 {
+			return fmt.Sprintf("%s landed on %s at %s m/s", handle, place(p.Body), num(p.VerticalSpeedMs)), true
+		}
+		return fmt.Sprintf("%s landed on %s at %s m/s with %s aboard",
+			handle, place(p.Body), num(p.VerticalSpeedMs), kittens(p.CrewCount)), true
 
 	case "vehicle.rud":
 		p, ok := payloadOf[VehicleRUD](ev)

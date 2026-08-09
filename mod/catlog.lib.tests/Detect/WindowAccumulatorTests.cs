@@ -168,4 +168,69 @@ public sealed class WindowAccumulatorTests
     {
         Assert.Throws<ArgumentOutOfRangeException>(() => new WindowAccumulator(windowSeconds));
     }
+
+    // ----- radar altitude: folded only over samples that had one ------------------------
+
+    /// <summary>
+    /// A window that spent every sample on rails or in orbit has no terrain reading at all, and a
+    /// mean that counted those samples as 0 would report a craft skimming the ground. Same rule as
+    /// <c>peak_g</c>, and the stakes are higher.
+    /// </summary>
+    [Fact]
+    public void RadarAltitude_IsOmittedWhenNoSampleCarriedOne()
+    {
+        var accumulator = new WindowAccumulator(10.0);
+        for (int i = 0; i < 4; i++)
+            accumulator.Add(TestData.Snapshot(simT: i, radarAltM: null));
+
+        ClosedWindow closed = Assert.IsType<ClosedWindow>(accumulator.Add(TestData.Snapshot(simT: 10)));
+
+        Assert.Null(closed.Payload.RadarAltM);
+    }
+
+    /// <summary>
+    /// The mixed case is the one that matters: a climb out of the physics bubble stops producing
+    /// readings part-way through the window, and the aggregate must describe the samples that had
+    /// one rather than being diluted by the ones that did not.
+    /// </summary>
+    [Fact]
+    public void RadarAltitude_FoldsOnlyTheSamplesThatHadAReading()
+    {
+        var accumulator = new WindowAccumulator(10.0);
+        accumulator.Add(TestData.Snapshot(simT: 0, radarAltM: 10));
+        accumulator.Add(TestData.Snapshot(simT: 1, radarAltM: null));
+        accumulator.Add(TestData.Snapshot(simT: 2, radarAltM: 30));
+        accumulator.Add(TestData.Snapshot(simT: 3, radarAltM: 20));
+
+        ClosedWindow closed = Assert.IsType<ClosedWindow>(accumulator.Add(TestData.Snapshot(simT: 10)));
+
+        // Mean 20 over three readings, not 15 over four.
+        Assert.Equal(new Agg(10, 30, 20, 20), closed.Payload.RadarAltM);
+        Assert.Equal(4, closed.Payload.N);
+    }
+
+    [Fact]
+    public void WarpMax_IsTheHighestSimulationSpeedSeen()
+    {
+        var accumulator = new WindowAccumulator(10.0);
+        accumulator.Add(TestData.Snapshot(simT: 0, warpFactor: 1));
+        accumulator.Add(TestData.Snapshot(simT: 1, warpFactor: 1_000));
+        accumulator.Add(TestData.Snapshot(simT: 2, warpFactor: 50));
+
+        ClosedWindow closed = Assert.IsType<ClosedWindow>(accumulator.Add(TestData.Snapshot(simT: 10)));
+
+        Assert.Equal(1_000, closed.Payload.WarpMax);
+    }
+
+    /// <summary>An unwarped window still says so out loud: 1, never 0.</summary>
+    [Fact]
+    public void WarpMax_IsOneForARealTimeWindow()
+    {
+        var accumulator = new WindowAccumulator(10.0);
+        accumulator.Add(TestData.Snapshot(simT: 0));
+
+        ClosedWindow closed = Assert.IsType<ClosedWindow>(accumulator.Add(TestData.Snapshot(simT: 10)));
+
+        Assert.Equal(1, closed.Payload.WarpMax);
+    }
 }

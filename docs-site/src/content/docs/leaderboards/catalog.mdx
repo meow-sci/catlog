@@ -1,7 +1,7 @@
 ---
 title: Every board
 description: >-
-  All 35 fixed leaderboards and the two board families, with the events behind
+  All 40 fixed leaderboards and the two board families, with the events behind
   each one and every rule that disqualifies a value.
 sidebar:
   order: 2
@@ -10,9 +10,8 @@ sidebar:
 import { Aside } from "@astrojs/starlight/components";
 import BoardDetail from "../../../components/BoardDetail.astro";
 
-Thirty-five fixed boards, in the order they are published, then the two families
-whose members appear as people reach new worlds and find new ways to lose a
-vehicle.
+Forty fixed boards, in the order they are published, then the two families whose
+members appear as people reach new worlds and find new ways to lose a vehicle.
 
 ## Records — how much you survived
 
@@ -38,6 +37,16 @@ vehicle take, and was anyone still aboard afterwards.
 <BoardDetail stat="fastest_orbital_speed" />
 <BoardDetail stat="fastest_entry" />
 <BoardDetail stat="highest_altitude" />
+<BoardDetail stat="lowest_pass" />
+
+<Aside type="note" title="Two altitude boards, two different heights">
+  Highest Altitude is measured from the world's **average radius**. Lowest Pass is measured from
+  **whatever is directly underneath you**. That is why they are not two ends of one board: a run
+  down a canyon is low over the ground and high above the average radius, and a hover over a
+  mountaintop is the exact reverse. A window spent in orbit has no ground reading at all and scores
+  nothing on Lowest Pass, however low the orbit was — an orbit is not a pass, and Lowest Stable
+  Orbit is the board for that. Neither is a landing: Softest Landing is the board for arriving.
+</Aside>
 
 <Aside type="note" title="The speed boards do not use your roster's speed figure">
   Your roster carries a "fastest speed" per kitten, and it is deliberately never used. It is
@@ -49,7 +58,9 @@ vehicle take, and was anyone still aboard afterwards.
 
 All four read the same moment — the point at which a flight settled into a stable
 orbit — and describe a different property of it. A path that never closed into an
-orbit is on none of them.
+orbit is on none of them. A fifth board reads that same moment and is published
+further down with the other boards about the vehicle: **Heaviest Payload To
+Orbit**, which describes what got there rather than where it got to.
 
 <BoardDetail stat="highest_apoapsis" />
 <BoardDetail stat="lowest_orbit" />
@@ -66,11 +77,41 @@ orbit is on none of them.
 ## Records — the flight itself
 
 <BoardDetail stat="softest_touchdown" />
+<BoardDetail stat="softest_landing" />
+
+<Aside type="note" title="Softest Touchdown and Softest Landing are not the same board">
+  They rank the same arrival by different halves of the same velocity. Softest Touchdown takes your
+  **whole** speed relative to the ground; Softest Landing takes the **descent rate alone**. A rover
+  arriving at 8 m/s across a plain and a lander arriving at 8 m/s straight down are the same number
+  on the first and very different flying, and the second is the half you are actually managing on
+  the way in. Softest Landing also requires the vehicle to have survived — a touchdown you did not
+  walk away from is a crash, and the impact boards are where a crash belongs.
+</Aside>
+
 <BoardDetail stat="heaviest_launch" />
+<BoardDetail stat="heaviest_to_orbit" />
+
+<Aside type="note" title="Heaviest Launch and Heaviest Payload To Orbit are a pair">
+  What left the pad includes the propellant that is going to be burned getting off it. What is still
+  there when the orbit milestone fires is the payload. Read together they are the closest thing
+  catlog has to an efficiency figure, without ever looking inside a tank — a huge launch mass and a
+  small orbital mass is a rocket that spent nearly all of itself climbing. An escape does not count
+  towards the second one: an escape is not an orbit anybody reached.
+</Aside>
+
 <BoardDetail stat="most_parts" />
+<BoardDetail stat="biggest_stack" />
 <BoardDetail stat="biggest_crew" />
 <BoardDetail stat="biggest_recovery" />
 <BoardDetail stat="most_stages" />
+
+<Aside type="note" title="Most Stages Built is what you designed. Most Stages is what you flew.">
+  The first is read as the flight starts and counts the stages the vehicle was **built** with. The
+  second counts the highest stage you ever actually **fired**. A five-stage rocket that comes apart
+  on stage two scores five on one and two on the other, and a single-stage flight scores one on
+  both.
+</Aside>
+
 <BoardDetail stat="longest_eva" />
 
 ## Counters
@@ -80,6 +121,16 @@ orbit is on none of them.
 <BoardDetail stat="orbits_achieved" />
 <BoardDetail stat="soi_bodies" />
 <BoardDetail stat="landed_bodies" />
+<BoardDetail stat="landings" />
+
+<Aside type="note" title="Bodies Landed On and Landings count different things">
+  Landings counts arrivals: every time you brought something down and it survived, at any speed, on
+  any world, however many times over. Bodies Landed On counts worlds, once each — and it asks the
+  wider question of whether you have anything standing on a surface there at all, so a vehicle that
+  was already parked when a save loaded counts, and so does a rover that rolls to a stop. Neither of
+  those is a landing. The two are read from different records and **never double-count each other**.
+</Aside>
+
 <BoardDetail stat="dockings" />
 <BoardDetail stat="stagings" />
 <BoardDetail stat="splashdowns" />

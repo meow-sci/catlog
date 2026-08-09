@@ -95,13 +95,13 @@ export const EVENTS: CatlogEvent[] = [
     type: "flight.started",
     alwaysOn: true,
     family: "flight",
-    ver: 1,
+    ver: 2,
     summary: "A vehicle appeared that catlog had not seen before.",
     trigger: "passive",
     cause:
       "Catlog looks over the vehicles in the world twice a second. The first time it sees one, that vehicle's flight begins. A vehicle that splits off another — a decoupled stage, a kitten stepping outside — gets its own flight the same way.",
     source:
-      "The vehicle's name, the body it is at, its total mass, how many parts it has, and how many seats actually have a kitten in them.",
+      "The vehicle's name, the body it is at, its total mass, how many parts it has, how many stages it was built with, how many seats actually have a kitten in them, who those kittens are, and where on the world it is standing.",
     gate: "Once per vehicle. A save reload resumes the same flight rather than starting a second one.",
     fields: [
       { key: "vehicle_name", unit: "", what: "The vehicle's name, trimmed to 64 characters." },
@@ -113,15 +113,37 @@ export const EVENTS: CatlogEvent[] = [
         unit: "",
         what: "How many kittens are aboard — occupied seats, not seats fitted.",
       },
+      {
+        key: "kids",
+        unit: "",
+        what: "One per-kitten identifier for every kitten aboard, in seat order. Always present: an uncrewed flight carries an empty list rather than nothing at all, so nobody has to tell 'nobody was aboard' apart from 'the mod did not say'. Re-labelled per player before publication, like every other kitten identifier.",
+      },
+      {
+        key: "stage_count",
+        unit: "",
+        what: "How many stages the vehicle was built with — what the staging list shows in the editor, whether or not you ever fire them all. Zero when it could not be read.",
+      },
+      {
+        key: "lat",
+        unit: "°",
+        optional: true,
+        what: "Where on the world you started, north to south, between −90 and 90. Left out entirely when it could not be read.",
+      },
+      {
+        key: "lon",
+        unit: "°",
+        optional: true,
+        what: "The east-west half of the same position, between −180 and 180, left out under the same rule.",
+      },
     ],
-    feeds: ["heaviest_launch", "most_parts", "biggest_crew"],
+    feeds: ["heaviest_launch", "most_parts", "biggest_crew", "biggest_stack"],
     page: "sessions-and-flights",
   },
   {
     type: "flight.ended",
     alwaysOn: true,
     family: "flight",
-    ver: 1,
+    ver: 2,
     summary: "A vehicle left the world — recovered, destroyed, or simply gone.",
     trigger: "event",
     cause:
@@ -135,6 +157,23 @@ export const EVENTS: CatlogEvent[] = [
         what: "`recovered`, `destroyed`, or `despawned` (merged into another vehicle, or torn down with a save).",
       },
       { key: "crew_count", unit: "", what: "How many kittens were aboard at the end." },
+      {
+        key: "kids",
+        unit: "",
+        what: "One per-kitten identifier for every kitten aboard at the end, empty when nobody was.",
+      },
+      {
+        key: "body",
+        unit: "",
+        what: "The world the flight ended at, or `unknown` on the one path where there is no vehicle left to read it from. Before version 2 an ending carried no world at all, which left the place you came down unplaceable.",
+      },
+      {
+        key: "lat",
+        unit: "°",
+        optional: true,
+        what: "Where on that world it ended, north to south. Left out entirely when it could not be read.",
+      },
+      { key: "lon", unit: "°", optional: true, what: "The east-west half of the same position." },
     ],
     feeds: ["kittens_recovered", "biggest_recovery"],
     page: "sessions-and-flights",
@@ -165,7 +204,7 @@ export const EVENTS: CatlogEvent[] = [
   {
     type: "vehicle.situation",
     family: "vehicle",
-    ver: 1,
+    ver: 2,
     summary: "The vehicle changed between flying, falling, rolling, landed, floating and so on.",
     trigger: "passive",
     cause: "Sampled twice a second; recorded when the state that was last reported changes.",
@@ -183,6 +222,12 @@ export const EVENTS: CatlogEvent[] = [
       },
       { key: "surface_speed_ms", unit: "m/s", what: "Speed relative to the surface." },
       { key: "orbital_speed_ms", unit: "m/s", what: "Speed relative to the body's centre." },
+      {
+        key: "radar_alt_m",
+        unit: "m",
+        optional: true,
+        what: "Height above whatever is directly underneath you — the ground or the sea, not the mean radius. Left out entirely when the game has nothing below you to measure against.",
+      },
     ],
     feeds: ["softest_touchdown", "landed_bodies", "splashdowns"],
     page: "vehicle",
@@ -209,7 +254,7 @@ export const EVENTS: CatlogEvent[] = [
   {
     type: "vehicle.orbit",
     family: "vehicle",
-    ver: 1,
+    ver: 2,
     summary: "You achieved a stable orbit, or escaped one.",
     trigger: "passive",
     cause:
@@ -224,6 +269,11 @@ export const EVENTS: CatlogEvent[] = [
       { key: "pe_m", unit: "m", what: "Periapsis altitude. Can legitimately be negative." },
       { key: "ecc", unit: "", what: "Eccentricity." },
       { key: "inc_deg", unit: "°", what: "Inclination, in degrees." },
+      {
+        key: "mass_kg",
+        unit: "kg",
+        what: "What the vehicle weighed at the instant the milestone fired. Beside the mass it started with, this is what is left once the propellant that got you there has been burned.",
+      },
     ],
     feeds: [
       "orbits_achieved",
@@ -231,6 +281,7 @@ export const EVENTS: CatlogEvent[] = [
       "lowest_orbit",
       "roundest_orbit",
       "steepest_orbit",
+      "heaviest_to_orbit",
       "fastest_to_orbit",
     ],
     page: "vehicle",
@@ -255,7 +306,7 @@ export const EVENTS: CatlogEvent[] = [
   {
     type: "vehicle.rud",
     family: "vehicle",
-    ver: 1,
+    ver: 2,
     summary: "A vehicle came apart — a Rapid Unscheduled Disassembly.",
     trigger: "event",
     cause:
@@ -278,6 +329,13 @@ export const EVENTS: CatlogEvent[] = [
         unit: "",
         what: "How many kittens were aboard. They all survive this — the game ends their missions rather than killing them.",
       },
+      {
+        key: "lat",
+        unit: "°",
+        optional: true,
+        what: "Where on the world it happened, north to south. Left out entirely when it could not be read.",
+      },
+      { key: "lon", unit: "°", optional: true, what: "The east-west half of the same position." },
     ],
     feeds: ["rud_total", "rud_<cause>"],
     page: "vehicle",
@@ -285,7 +343,7 @@ export const EVENTS: CatlogEvent[] = [
   {
     type: "vehicle.impact",
     family: "vehicle",
-    ver: 1,
+    ver: 2,
     summary: "You hit the ground or the water — and whether the vehicle lived through it.",
     trigger: "event",
     cause:
@@ -308,8 +366,61 @@ export const EVENTS: CatlogEvent[] = [
       },
       { key: "body", unit: "", what: "Where it happened." },
       { key: "crew_count", unit: "", what: "How many kittens were aboard." },
+      {
+        key: "lat",
+        unit: "°",
+        optional: true,
+        what: "Where on the world you hit, north to south. Left out entirely when it could not be read.",
+      },
+      { key: "lon", unit: "°", optional: true, what: "The east-west half of the same position." },
     ],
     feeds: ["biggest_lithobrake_survived", "biggest_impact_energy"],
+    page: "vehicle",
+  },
+  {
+    type: "vehicle.landed",
+    family: "vehicle",
+    ver: 1,
+    summary: "A vehicle touched down on a surface it was not touching before.",
+    trigger: "passive",
+    cause:
+      "Catlog looks at the vehicle twice a second. When it goes from touching nothing — falling, or flying under power — to touching a surface, that is a landing. Every kind of contact counts: settled on the ground, rolling, sailing, floating, dragging, or bottomed out in the shallows.",
+    source:
+      "The descent rate and the ground-track speed are taken apart from the same velocity the speed boards use, so one is how fast you were coming down and the other is how fast you were moving across. Whether the vehicle lived is not read at all — it is decided a full frame later.",
+    gate: "It shares the situation change's 2-second cool-off, so a lander bouncing on touchdown does not mint a record every half second. A vehicle that was already sitting on the ground when you loaded a save does not land: catlog's first look at a vehicle only establishes a starting point and reports nothing. Neither side of the change may be a state catlog does not recognise — not knowing what you were doing is not the same as knowing you were airborne.",
+    fields: [
+      { key: "body", unit: "", what: "The world you landed on." },
+      {
+        key: "vertical_speed_ms",
+        unit: "m/s",
+        what: "How fast you were coming down, counted positive downwards. Smaller is softer.",
+      },
+      {
+        key: "horizontal_speed_ms",
+        unit: "m/s",
+        what: "How fast you were moving across the ground. Never negative.",
+      },
+      { key: "crew_count", unit: "", what: "How many kittens were aboard." },
+      {
+        key: "survived",
+        unit: "",
+        what: "Whether the vehicle was still in one piece a full frame later.",
+      },
+      {
+        key: "radar_alt_m",
+        unit: "m",
+        optional: true,
+        what: "Height above the ground at the moment catlog noticed. Not expected to be exactly zero — catlog looks twice a second, so the reading can be up to half a second after the wheels touched. Left out entirely when there was nothing below to measure against.",
+      },
+      {
+        key: "lat",
+        unit: "°",
+        optional: true,
+        what: "Where on the world you came down, north to south. Left out entirely when it could not be read.",
+      },
+      { key: "lon", unit: "°", optional: true, what: "The east-west half of the same position." },
+    ],
+    feeds: ["softest_landing", "landings"],
     page: "vehicle",
   },
   {
@@ -531,13 +642,13 @@ export const EVENTS: CatlogEvent[] = [
   {
     type: "telemetry.window",
     family: "telemetry",
-    ver: 1,
+    ver: 2,
     summary: "Thirty seconds of flight, summarised.",
     trigger: "passive",
     cause:
       "This is the background telemetry. Catlog samples each live vehicle twice a second and folds 30 game-seconds of samples into one summary — 60 samples in a full window.",
     source:
-      "Altitude above mean radius, surface speed, orbital speed and acceleration, each as a minimum, maximum, mean and last value. Peak g and peak dynamic pressure are included only when the game actually computed them.",
+      "Altitude above mean radius, surface speed, orbital speed and acceleration, each as a minimum, maximum, mean and last value. Height above the ground is folded the same way, over only the samples that had a ground reading. Peak g and peak dynamic pressure are included only when the game actually computed them.",
     gate: "A window also closes early when the flight ends, when a vehicle disappears, or when the game shuts down — those windows are short. Loading a save discards the partial window rather than folding two timelines together.",
     fields: [
       { key: "t0_sim", unit: "s", what: "Game time of the first sample." },
@@ -561,6 +672,17 @@ export const EVENTS: CatlogEvent[] = [
         what: "Highest dynamic pressure in the window, left out under the same rule.",
       },
       { key: "mass_kg_last", unit: "kg", what: "Mass at the end of the window." },
+      {
+        key: "radar_alt_m",
+        unit: "m",
+        optional: true,
+        what: "Height above the ground directly underneath — min, max, mean, last. Folded over only the samples that had a ground reading, and left out entirely when none of them did, exactly as `peak_g` is. So its samples are not the same population as `n`, and a window spent in orbit carries no such reading at all.",
+      },
+      {
+        key: "warp_max",
+        unit: "",
+        what: "The highest time-warp speed during the window; `1` is real time. It says how much game happened per sample, so a reader can tell a full 60-sample window from the handful a deep warp leaves behind. Descriptive only — it disqualifies nothing and is not a cheat signal.",
+      },
     ],
     feeds: [
       "peak_g_survived",
@@ -568,6 +690,7 @@ export const EVENTS: CatlogEvent[] = [
       "fastest_surface_speed",
       "fastest_orbital_speed",
       "highest_altitude",
+      "lowest_pass",
     ],
     droppable: true,
     page: "telemetry",

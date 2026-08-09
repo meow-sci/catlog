@@ -342,6 +342,28 @@ nobody has to re-derive it, and nobody builds one on a quiet afternoon.
 | 5. Statistical outliers — per-metric robust z-scores, suspicion multipliers for new accounts and for first-upload-is-a-world-record | Not built | **Do not build.** This is the literal thing the principle names — "esoteric patterns". It also punishes exactly the honest player who installs catlog and immediately does something spectacular, which is the best day this project can have |
 | 6. Quotas + community reporting feeding the quarantine queue | Partly built, differently | Quotas exist and are identity abuse controls, not anti-cheat (see above). **Do not build** a report queue as an anti-cheat pipeline. A "something's wrong here" mail link into ordinary moderation (§7) is fine and is not this |
 
+**Wire v2 handed three new temptations to layer 2, and all three are refused.** The wave added
+position (`lat` / `lon`), terrain clearance (`radar_alt_m`) and time-warp context (`warp_max`) to the
+log, and every one of them looks like an input to a plausibility check.
+
+- **`warp_max` is not a cheat signal.** Time warp is a shipped, universally available feature used
+  for the reason everyone uses it. Rejecting or weighting a record because it was set under warp
+  fails the honest-player test on the most ordinary way people play, and fails the stock-data test —
+  the game supplies the button. It is **descriptive only**: it may inform a reader or annotate a row,
+  and no board may read it as eligibility (PROJ-098).
+- **`lat` / `lon` are not a teleport detector.** Position jumps between windows are the second clause
+  of layer 2 and were already refused there; carrying an actual coordinate does not change the
+  verdict, it only makes the check easier to write. Teleporting is already covered by `flight.flagged`
+  — a **declared** signal from the mod at the moment it happens, which is layer 3 and is built.
+- **`radar_alt_m` is not a terrain-clipping check.** "You cannot have been 200 m below the ground"
+  needs a tolerance against a heightmap sampled at a different resolution from the one the physics
+  used, which is the tuned-constant failure the plausibility layer exists to keep out.
+
+The same rule governs the field nobody added: **propellant and Δv are deliberately unread**
+(PROJ-099), because a recorded Δv makes `∫a·dt ≈ Δv` computable from one flight's own log and turns
+layer 2 from a proposal into a one-line temptation. Recording it needs its own decision with *record
+it, never validate it* written down first.
+
 One further proposal, from `docs/ksa-integration.md` §7 (the `KittenTuningWindow` row): *"snapshot
 the whole `KittenLocomotionTuning.Current` (or a hash of it) alongside any kitten-locomotion
 record."* Only `TumbleSpeedGate` is compared today, which is correct — it is the only field that

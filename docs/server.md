@@ -223,25 +223,61 @@ holds it honest: the projection may not depend on where the batch boundaries fel
 
 ### The boards
 
-Thirty-five fixed keys, in publish order — which is the order `FixedBoards()` returns and therefore
+Forty fixed keys, in publish order — which is the order `FixedBoards()` returns and therefore
 the order `GET /v1/leaderboards` lists them, grouped by kind rather than by source event:
 
 - **records** — `biggest_lithobrake_survived`, `peak_g_survived`, `max_q_survived`,
   `biggest_impact_energy`, `fastest_surface_speed`, `fastest_orbital_speed`, `fastest_entry`,
-  `highest_altitude`, `highest_apoapsis`, `lowest_orbit`, `roundest_orbit`, `steepest_orbit`,
-  `softest_touchdown`, `heaviest_launch`, `most_parts`, `biggest_crew`, `biggest_recovery`,
-  `most_stages`, `longest_eva`;
+  `highest_altitude`, `lowest_pass`, `highest_apoapsis`, `lowest_orbit`, `roundest_orbit`,
+  `steepest_orbit`, `softest_touchdown`, `softest_landing`, `heaviest_launch`, `heaviest_to_orbit`,
+  `most_parts`, `biggest_stack`, `biggest_crew`, `biggest_recovery`, `most_stages`, `longest_eva`;
 - **counters** — `kitten_tumbles`, `rud_total`, `orbits_achieved`, `soi_bodies`, `landed_bodies`,
-  `dockings`, `stagings`, `splashdowns`, `evas`, `flameouts`, `engine_ignitions`,
+  `landings`, `dockings`, `stagings`, `splashdowns`, `evas`, `flameouts`, `engine_ignitions`,
   `kittens_recovered`;
 - **derived totals and per-kitten records** — `distance_travelled`, `top_kitten_distance`,
   `top_kitten_missions`;
 - **career time** — `fastest_to_orbit`.
 
 `docs/event-details.md` carries the canonical table: title, unit, direction, source event and fold
-kind for every one of them, plus the eligibility rule board by board. Three of them
-(`roundest_orbit`, `most_parts`, `most_stages`) have an **empty** unit on purpose — an eccentricity is
-dimensionless, and a bare count of a thing the title already names does not need the word twice.
+kind for every one of them, plus the eligibility rule board by board. Four of them
+(`roundest_orbit`, `most_parts`, `most_stages`, `biggest_stack`) have an **empty** unit on purpose —
+an eccentricity is dimensionless, and a bare count of a thing the title already names does not need
+the word twice. `units.ForKey("stage_count")` falls through to `""`, which is correct and is why the
+wire-v2 wave needed no `units` change and therefore no `spa/src/ui/units.ts` port edit.
+
+**The five wire-v2 boards, and the pairing that justifies each one.** Every one of them exists
+because it answers a question its nearest neighbour cannot:
+
+| board | source | not the same as | because |
+|---|---|---|---|
+| `heaviest_to_orbit` | `vehicle.orbit.mass_kg` | `heaviest_launch` | what left the pad includes the propellant spent getting off it; what is still there at the milestone is the payload. Paired, the only honest efficiency-shaped number reachable without reading propellant |
+| `softest_landing` | `vehicle.landed.vertical_speed_ms` | `softest_touchdown` | that board ranks the *whole* velocity relative to the ground. A rover at 8 m/s across a plain and a lander at 8 m/s straight down are the same number there |
+| `landings` | `vehicle.landed`, counted | `landed_bodies` | worlds versus arrivals. `landed_bodies` still reads `vehicle.situation` and stays the sole writer of `player_body kind='landed'` |
+| `lowest_pass` | `telemetry.window.radar_alt_m.min` | `highest_altitude` inverted | `alt_m` is barometric, so a low run down a canyon reads as high. This is the terrain-relative reading |
+| `biggest_stack` | `flight.started.stage_count` | `most_stages` | built versus *fired*. A five-stage rocket that RUDs on stage two scores 5 here and 2 there |
+
+`heaviest_to_orbit` requires `phase == "achieved"`; `softest_landing` and `landings` share one
+`survivedLanding` gate so the two agree about which arrivals happened; `lowest_pass` refuses an
+**absent** aggregate before it looks at a number. Each of the three that reads a newly-added key gates
+`> 0`, which is what keeps a `ver` 1 history — where the key does not exist — off the board.
+`heaviest_to_orbit` uses `> 0` rather than `ver >= 2` on purpose: the two are the same predicate, and
+`> 0` matches every other gate in `boards.go` so no reader has to know that one board consults the
+envelope.
+
+**Newly decoded in `stats/payload.go`.** `FlightStarted` gained `kids []string`, `stage_count int`
+and `lat`/`lon *float64`; `FlightEnded` gained `kids`, `body string` and `lat`/`lon`;
+`VehicleSituation` gained `radar_alt_m *float64`; `VehicleOrbit` gained `mass_kg float64`;
+`VehicleRUD` and `VehicleImpact` gained `lat`/`lon`; `TelemetryWindow` gained `radar_alt_m *Agg` and
+`warp_max float64`; and `VehicleLanded` is a new struct. **Every optional key is a pointer**,
+following the `peak_g` precedent — absent is `nil`, an explicit 0 is a pointer to 0 — because a
+zeroed latitude is the equator and a zeroed radar altitude is the ground. `FlightStarted` and
+`FlightEnded` are no longer comparable structs, since they hold a slice; nothing compared them with
+`==` and nothing should.
+
+Most of those fields are decoded and read by no fold, deliberately: the immutable log is the product
+and a board for each of them is a separate decision. The one with an obvious consumer is
+`flight.ended.body` — `flight_state.body` still comes only from `flight.started`, so a flight whose
+start was never folded still has an empty body although its end now carries one.
 
 **Two families are not fixed:** `rud_<cause>` and `fastest_to_<body>` take their second half from the
 event stream, because KSA's celestial systems are content that mods extend and `body` is opaque to
@@ -259,9 +295,17 @@ and cause regardless, so lowering the threshold publishes history that is alread
 **Rules every fold obeys:** flagged flights score nothing (all of them, not only the record boards —
 a counter board on a cheated flight is just as wrong); ties keep the earliest `updated_seq`; and
 `ascending` boards exist, where the smallest value wins. Ascending is **no longer only** a career-time
-property: `lowest_orbit`, `roundest_orbit` and `softest_touchdown` are ascending records, which is why
-each of them refuses a zero — on a board where small wins, a zero from a value the game never wrote is
-an unbeatable record nobody flew.
+property: `lowest_orbit`, `roundest_orbit`, `softest_touchdown`, `softest_landing` and `lowest_pass`
+are ascending records, which is why each of them refuses a zero — on a board where small wins, a zero
+from a value the game never wrote is an unbeatable record nobody flew. On the two newest that is
+literal rather than theoretical: 0 m/s of descent is an unreadable state-vector decomposition, and
+0 m of ground clearance is where every vehicle sits on the pad.
+
+**Two rules the wire-v2 boards do *not* get, and must not.** There is no plausibility check on a
+landing — a one-metre hop is a landing, and filtering on "was that real" infers intent from data
+shape, which Constitution §8 forbids. And `telemetry.window.warp_max` is descriptive only: it may
+inform a reader, weight or annotate a value, but it must never reject or disqualify a record, and it
+is not a cheat signal.
 
 **The flag exclusion is structural, not universal.** `scoreable` passes every event that carries no
 flight, and the wire sends `flight: null` for `roster.snapshot` and `kitten.eva_end`. So
@@ -293,19 +337,41 @@ absent from a rebuilt feed and present in an incremental one.
 path, because the incremental path has already passed them. The board expansion is exactly that case:
 until a server rebuilds, the boards fed by the newly-decoded types are short by their whole history.
 
+**The wire-v2 boards are the *other* case, and the two are easy to confuse.** They read keys that
+were never sent, not keys that were sent and ignored, so a `ver` 1 payload replayed through the new
+decoders yields the same 0 or the same absence and every gate refuses it; `vehicle.landed` was
+rejected outright at ingest until this build, so it has no history at all. **All five start empty and
+fill from the first wire-v2 batch.** A rebuild recovers exactly one thing here: events a `ver` 2 mod
+shipped to a server whose projector still folded `ver` 1, which were skipped as a future version and
+are sitting in the log unfolded. `launchFold`'s context blob also gained `stage_count`, so rows
+written before this build keep the five-key shape until they are beaten or the projection is rebuilt;
+both paths produce the six-key shape, so this is not a divergence.
+
 The swap keeps the old file until the reopen succeeds: close → delete the stale `-wal`/`-shm` →
 rename live to `.old` → rename the rebuild in → reopen → delete `.old`, restoring `.old` on failure.
 
 **An event the projector cannot decode is skipped and the checkpoint still advances** — one event
 from a newer mod must never wedge every projection behind it. The skip log is deduplicated per
 `(type, ver)` and carries no payload, because payloads are player-supplied and unbounded.
-`projector.Upcasters` holds exactly two entries: `kitten.tumble` and `kitten.kia` are `ver: 2`
-(both gained a non-null `flight`) and each registers an **identity** transform, because the bump was
-to the envelope and the payload bytes did not move. The prediction the empty registry was built on
-held — the first version bump was two `Register` lines, not a migration — and the entries are still
-required, since `Apply` refuses to fold a row it cannot bring to the current version. Every other
-type is `ver: 1`. `currentVer` must equal the mod's `EventTypes.Versions` exactly, or a newer mod's
-events are skipped as a future version until this build catches up and a rebuild runs (PROJ-092).
+`projector.Upcasters` holds **nine** entries, and every one of them is the **identity**.
+`kitten.tumble` and `kitten.kia` are `ver: 2` because both gained a non-null `flight` — an envelope
+change, with the payload bytes unmoved. The seven wire-v2 types are `ver: 2` for the mirror-image
+reason: each `ver` 2 payload is its `ver` 1 payload *plus* keys, in that order, with nothing renamed,
+retyped, re-unitted or removed, so a `ver` 1 event still folds correctly and simply says less. That
+is what let all seven move in one commit. The prediction the empty registry was built on has now held
+twice — a version bump is a `Register` line, not a migration — and the entries are still required,
+since `Apply` refuses to fold a row it cannot bring to the current version.
+
+The identity is only *safe* because each new key's absence is refused **downstream** rather than read
+as a zero, which is where the three `> 0` gates above earn their keep. `vehicle.landed` gets no entry
+at all: it is new at `ver: 1`, which is already `CurrentVer`.
+
+`currentVer` must equal the mod's `EventTypes.Versions` exactly, or a newer mod's events are skipped
+as a future version until this build catches up and a rebuild runs (PROJ-092). `knownTypes` must
+equal the mod's registry name for name and index for index — 23 entries since `vehicle.landed` was
+added between `vehicle.impact` and `vehicle.staging`. Until a type is in that list the server answers
+`400 malformed_batch` for the **whole batch**, so a wire-v2 mod shipping to a wire-v1 server loses
+everything, not just landings: the mod change and the server change have to merge together (PROJ-093).
 
 ## §5.7 The server-rendered site
 

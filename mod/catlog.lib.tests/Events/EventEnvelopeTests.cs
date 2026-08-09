@@ -16,14 +16,14 @@ public sealed class EventEnvelopeTests
             id: "01J9V5M3E8Z0FAKEULID26CHR",
             simT: 12345.678,
             wallMs: 1_770_000_000_123,
-            payload: new VehicleRudPayload("ground_impact", 41.5, 0, 220, 0, "earth", 2));
+            payload: new VehicleRudPayload("ground_impact", 41.5, 0, 220, 0, "earth", 2, null, null));
 
         using JsonDocument document = JsonDocument.Parse(envelope.ToNdjsonLine());
         JsonElement root = document.RootElement;
 
         Assert.Equal("01J9V5M3E8Z0FAKEULID26CHR", root.GetProperty("id").GetString());
         Assert.Equal("vehicle.rud", root.GetProperty("type").GetString());
-        Assert.Equal(1, root.GetProperty("ver").GetInt32());
+        Assert.Equal(2, root.GetProperty("ver").GetInt32());
         Assert.Equal("01J9V5M3E8Z0FAKEFLIGHT001", root.GetProperty("flight").GetString());
         Assert.Equal("01J9V5M3E8Z0FAKESESSION01", root.GetProperty("session").GetString());
         Assert.Equal(12345.678, root.GetProperty("sim_t").GetDouble());
@@ -84,7 +84,7 @@ public sealed class EventEnvelopeTests
             T0Sim: 0, T1Sim: 29.5, N: 60, Body: "earth",
             AltM: new Agg(0, 1, 0.5, 1), SurfaceSpeedMs: new Agg(0, 1, 0.5, 1),
             OrbitalSpeedMs: new Agg(0, 1, 0.5, 1), AccelMs2: new Agg(0, 1, 0.5, 1),
-            PeakG: null, MaxQPa: null, MassKgLast: 1_000);
+            PeakG: null, MaxQPa: null, MassKgLast: 1_000, RadarAltM: null, WarpMax: 1);
 
         using JsonDocument document = JsonDocument.Parse(
             TestData.Envelope(type: EventTypes.TelemetryWindow, payload: payload).ToNdjsonLine());
@@ -102,7 +102,8 @@ public sealed class EventEnvelopeTests
             T0Sim: 0, T1Sim: 29.5, N: 60, Body: "earth",
             AltM: new Agg(0, 1, 0.5, 1), SurfaceSpeedMs: new Agg(0, 1, 0.5, 1),
             OrbitalSpeedMs: new Agg(0, 1, 0.5, 1), AccelMs2: new Agg(0, 1, 0.5, 1),
-            PeakG: 4.25, MaxQPa: 31_000, MassKgLast: 1_000);
+            PeakG: 4.25, MaxQPa: 31_000, MassKgLast: 1_000,
+            RadarAltM: new Agg(2, 900, 400, 2), WarpMax: 1);
 
         using JsonDocument document = JsonDocument.Parse(
             TestData.Envelope(type: EventTypes.TelemetryWindow, payload: payload).ToNdjsonLine());

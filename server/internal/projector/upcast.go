@@ -26,6 +26,31 @@ var currentVer = map[string]int{
 	// under the ±2 s window. The stored `ver` is what tells those rows apart.
 	"kitten.tumble": 2,
 	"kitten.kia":    2,
+
+	// Wire v2: seven types gained payload keys in one wave, and every one of
+	// them only *added* — no key was renamed, retyped, re-unitted or removed —
+	// so every upcaster below is the identity and a ver 1 row still folds
+	// exactly as it always did. What each one gained:
+	//
+	//	flight.started    + kids, stage_count, lat, lon
+	//	flight.ended      + kids, body, lat, lon
+	//	vehicle.situation + radar_alt_m
+	//	vehicle.orbit     + mass_kg
+	//	vehicle.rud       + lat, lon
+	//	vehicle.impact    + lat, lon
+	//	telemetry.window  + radar_alt_m, warp_max
+	//
+	// A ver 1 row simply says less, and the boards built on the new keys refuse
+	// its absent-as-zero readings on their own: `heaviest_to_orbit` needs
+	// `mass_kg > 0`, `biggest_stack` needs `stage_count > 0`, and `lowest_pass`
+	// scores nothing without a `radar_alt_m` object at all.
+	"flight.started":    2,
+	"flight.ended":      2,
+	"vehicle.situation": 2,
+	"vehicle.orbit":     2,
+	"vehicle.rud":       2,
+	"vehicle.impact":    2,
+	"telemetry.window":  2,
 }
 
 // Errors the version resolution can produce. Neither is fatal to the projector:
@@ -64,17 +89,30 @@ type Upcasters struct {
 
 // NewUpcasters returns the registry this build folds with.
 //
-// `kitten.tumble` and `kitten.kia` are at ver 2 and their transforms are the
-// identity: the bump was an envelope change (those events now carry a flight),
-// and a ver 1 row's payload is already exactly what the ver 2 folds read. The
-// entries are still required — [Apply] refuses to fold a row it cannot bring to
-// the current version — and they are what keeps the old rows scoring as they
-// always did: a flightless `kitten.tumble` still counts, it simply cannot be
-// excluded by a flag it never named.
+// Every entry is the identity today, for two different reasons that happen to
+// meet at the same transform. `kitten.tumble` and `kitten.kia` bumped on an
+// *envelope* change (those events now carry a flight), so their ver 1 payload
+// is already exactly what the ver 2 folds read. The seven wire-v2 types bumped
+// on a payload change that only added keys, so their ver 1 payload is a ver 2
+// payload with those keys absent — which is precisely what the wire means by
+// omitting them.
+//
+// The entries are still required — [Apply] refuses to fold a row it cannot
+// bring to the current version — and they are what keeps the old rows scoring
+// as they always did: a flightless `kitten.tumble` still counts, it simply
+// cannot be excluded by a flag it never named, and a ver 1 `vehicle.orbit`
+// still ranks on every orbit-shape board, it simply cannot say what it weighed.
 func NewUpcasters() *Upcasters {
 	u := &Upcasters{m: map[upcastKey]Upcaster{}}
 	u.Register("kitten.tumble", 1, identityUpcast)
 	u.Register("kitten.kia", 1, identityUpcast)
+	u.Register("flight.started", 1, identityUpcast)
+	u.Register("flight.ended", 1, identityUpcast)
+	u.Register("vehicle.situation", 1, identityUpcast)
+	u.Register("vehicle.orbit", 1, identityUpcast)
+	u.Register("vehicle.rud", 1, identityUpcast)
+	u.Register("vehicle.impact", 1, identityUpcast)
+	u.Register("telemetry.window", 1, identityUpcast)
 	return u
 }
 

@@ -132,6 +132,60 @@ public sealed record TelemetrySnapshot(
     /// <summary>Peak dynamic pressure this step in pascals, or <c>null</c> when unavailable. Same rule as <see cref="PeakG"/>.</summary>
     public double? MaxQPa { get; init; }
 
+    /// <summary>
+    /// Altitude above the terrain (or the ocean surface, whichever is higher) directly below, in
+    /// metres — or <c>null</c> when the game has no terrain sample for this vehicle.
+    /// </summary>
+    /// <remarks>
+    /// Nullable for the same reason as <see cref="PeakG"/>, and it matters more here: the game only
+    /// samples the heightmap under a vehicle that is inside the parent's near-surface physics
+    /// radius, so a craft in orbit has <b>no</b> terrain-relative altitude at all. Reporting 0 there
+    /// would say "on the ground", which is the exact opposite of the truth. Absent means absent.
+    /// </remarks>
+    public double? RadarAltM { get; init; }
+
+    /// <summary>
+    /// Latitude on the parent body in degrees, or <c>null</c> when it is not readable.
+    /// </summary>
+    /// <remarks>
+    /// Only a <c>Celestial</c> parent has a body-fixed frame to take a latitude in; a vehicle
+    /// orbiting another vehicle has none. <b>A zeroed latitude is a real place</b> — the equator —
+    /// so an unreadable one is omitted rather than defaulted, and every consumer branches on null.
+    /// </remarks>
+    public double? Lat { get; init; }
+
+    /// <summary>Longitude on the parent body in degrees, or <c>null</c>. Same rule as <see cref="Lat"/>.</summary>
+    public double? Lon { get; init; }
+
+    /// <summary>
+    /// Surface-relative descent rate in m/s, <b>positive downwards</b> — the radial component of
+    /// the surface-frame velocity, negated so a landing reads as a positive number.
+    /// </summary>
+    /// <remarks>
+    /// Carried on every sample rather than only at touchdown because the landing edge is detected
+    /// by a prev/curr comparison on the worker, which sees nothing but snapshots: by the time the
+    /// detector knows a landing happened, the game thread is several frames on and cannot be asked
+    /// again.
+    /// </remarks>
+    public double VerticalSpeedMs { get; init; }
+
+    /// <summary>Surface-relative ground-track speed in m/s: the tangential component of the surface-frame velocity.</summary>
+    public double HorizontalSpeedMs { get; init; }
+
+    /// <summary>
+    /// The universe's simulation speed (time-warp factor) at capture; 1 is real time.
+    /// </summary>
+    /// <remarks>
+    /// Universe-wide, not per-vehicle, but it rides here because the window fold is only ever
+    /// handed snapshots. It exists because <c>telemetry.window</c> samples at 2 Hz <b>wall</b> clock
+    /// and aggregates over 30 <b>sim</b> seconds: under warp a window closes on far fewer samples
+    /// than the nominal 60, and every mean in it is drawn from a thinner sample. Recording the
+    /// highest warp seen lets a reader tell a dense window from a smeared one instead of guessing.
+    /// Defaults to 1 so a fixture that does not care reads as real time rather than as a stopped
+    /// clock.
+    /// </remarks>
+    public double WarpFactor { get; init; } = 1.0;
+
     /// <summary>True when the situation indicates terrain and/or ocean contact.</summary>
     public bool HasSurfaceContact => SituationInfo.HasSurfaceContact(Situation);
 

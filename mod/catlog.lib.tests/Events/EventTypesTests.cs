@@ -11,17 +11,30 @@ public sealed partial class EventTypesTests
     [Fact]
     public void RegistryHasExactlyTheLaunchSet()
     {
-        // 22 rows: the §4.2 table, counting each of the docked/undocked and engine.* variants.
-        Assert.Equal(22, EventTypes.All.Count);
+        // 23 rows: the §4.2 table plus vehicle.landed, counting each of the docked/undocked and
+        // engine.* variants.
+        Assert.Equal(23, EventTypes.All.Count);
 
-        // Everything is still at the launch version except the two that began carrying a flight.
         // The server mirrors these numbers in projector.currentVer; a type this side calls ver 2
-        // and that side still folds at ver 1 is skipped there as a future version, so the pair is
-        // pinned here rather than left to a blanket "all ver 1".
-        Assert.Equal(2, EventTypes.VersionOf(EventTypes.KittenTumble));
-        Assert.Equal(2, EventTypes.VersionOf(EventTypes.KittenKia));
+        // and that side still folds at ver 1 is skipped there as a future version, so the whole
+        // set is pinned here rather than left to a blanket "all ver 1". vehicle.landed is new in
+        // wire v2 and therefore starts at 1 — there is no ver 0 to upcast from.
+        string[] atVersionTwo =
+        [
+            EventTypes.FlightStarted,
+            EventTypes.FlightEnded,
+            EventTypes.VehicleSituation,
+            EventTypes.VehicleOrbit,
+            EventTypes.VehicleRud,
+            EventTypes.VehicleImpact,
+            EventTypes.TelemetryWindow,
+            EventTypes.KittenTumble,
+            EventTypes.KittenKia,
+        ];
+
+        Assert.All(atVersionTwo, static type => Assert.Equal(2, EventTypes.VersionOf(type)));
         Assert.All(
-            EventTypes.All.Where(static type => type is not (EventTypes.KittenTumble or EventTypes.KittenKia)),
+            EventTypes.All.Where(type => !atVersionTwo.Contains(type)),
             static type => Assert.Equal(1, EventTypes.VersionOf(type)));
     }
 

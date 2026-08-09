@@ -95,6 +95,7 @@ public sealed class ModConfig
         # "vehicle.soi" = true        # soi_bodies and every fastest_to_<body> board
         # "vehicle.rud" = true        # rud_total and every rud_<cause> board
         # "vehicle.impact" = true     # biggest_lithobrake_survived, biggest_impact_energy
+        # "vehicle.landed" = true     # every landing board: where, how hard, and whether it held
         # "vehicle.staging" = true    # stagings, most_stages
         # "vehicle.docked" = true     # dockings
         # "vehicle.undocked" = true   # no board reads it today; it is part of the story

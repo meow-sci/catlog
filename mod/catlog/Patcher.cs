@@ -402,7 +402,11 @@ public static class Patcher
                 Body: VehicleTelemetry.BodyOf(vehicle),
                 // §4/D11: everyone survives. EndAllCrewMissions banks the mission and frees the
                 // kitten; the physics path never reaches KillCrew.
-                CrewCount: VehicleTelemetry.CrewCount(vehicle)));
+                CrewCount: VehicleTelemetry.CrewCount(vehicle),
+                // Prefix: the vehicle is fully intact (Universe.cs:1699), so the position is the
+                // position it died at rather than a torn-down zero.
+                Lat: VehicleTelemetry.Latitude(vehicle),
+                Lon: VehicleTelemetry.Longitude(vehicle)));
         }
         catch (Exception ex)
         {
@@ -437,7 +441,9 @@ public static class Patcher
                 EnergyJ: __instance.ImpactKineticEnergy,
                 LaunchPad: __instance.IsLaunchPad,
                 Body: VehicleTelemetry.BodyOf(vehicle),
-                CrewCount: VehicleTelemetry.CrewCount(vehicle)));
+                CrewCount: VehicleTelemetry.CrewCount(vehicle),
+                Lat: VehicleTelemetry.Latitude(vehicle),
+                Lon: VehicleTelemetry.Longitude(vehicle)));
         }
         catch (Exception ex)
         {
@@ -468,7 +474,8 @@ public static class Patcher
 
             runtime.Signal(new SplashSignal(
                 simT, wallMs, id, speed, energy,
-                VehicleTelemetry.BodyOf(vehicle), VehicleTelemetry.CrewCount(vehicle)));
+                VehicleTelemetry.BodyOf(vehicle), VehicleTelemetry.CrewCount(vehicle),
+                VehicleTelemetry.Latitude(vehicle), VehicleTelemetry.Longitude(vehicle)));
         }
         catch (Exception ex)
         {
@@ -534,8 +541,22 @@ public static class Patcher
                 runtime.Signal(new EvaEndSignal(simT, wallMs, id, duration));
             }
 
+            // This is a PREFIX on the single removal choke point, so the vehicle has not been torn
+            // down yet: its orbit, its parent and its seats are all still readable, and this is the
+            // last instant at which they are. That is what makes flight.ended able to carry a body
+            // and a position at all — a postfix here would have nothing left to read, and a value
+            // recovered from the last telemetry sample could be up to half a second and one SOI
+            // change stale.
             runtime.Signal(new VehicleRemovedSignal(
-                simT, wallMs, id, reason, VehicleTelemetry.CrewCount(__instance)));
+                simT,
+                wallMs,
+                id,
+                reason,
+                VehicleTelemetry.CrewCount(__instance),
+                VehicleTelemetry.BodyOf(__instance),
+                VehicleTelemetry.CrewNames(__instance),
+                VehicleTelemetry.Latitude(__instance),
+                VehicleTelemetry.Longitude(__instance)));
         }
         catch (Exception ex)
         {

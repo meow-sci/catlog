@@ -41,6 +41,12 @@ internal static class TestData
         int partCount = 1,
         double? peakG = null,
         double? maxQPa = null,
+        double? radarAltM = null,
+        double? lat = null,
+        double? lon = null,
+        double verticalSpeedMs = 0,
+        double horizontalSpeedMs = 0,
+        double warpFactor = 1.0,
         long wallMs = WallMs,
         string? parentBodyId = null,
         string? vehicleName = null)
@@ -69,6 +75,12 @@ internal static class TestData
             PartCount = partCount,
             PeakG = peakG,
             MaxQPa = maxQPa,
+            RadarAltM = radarAltM,
+            Lat = lat,
+            Lon = lon,
+            VerticalSpeedMs = verticalSpeedMs,
+            HorizontalSpeedMs = horizontalSpeedMs,
+            WarpFactor = warpFactor,
         };
 
     internal static TelemetryFrame Frame(long sequence, params TelemetrySnapshot[] vehicles)
@@ -103,8 +115,22 @@ internal static class TestData
         double energyJ = 1_922_000,
         bool launchPad = false,
         string body = "earth",
-        int crewCount = 2)
-        => new(simT, WallMs, vehicleId, speedMs, energyJ, launchPad, body, crewCount);
+        int crewCount = 2,
+        double? lat = null,
+        double? lon = null)
+        => new(simT, WallMs, vehicleId, speedMs, energyJ, launchPad, body, crewCount, lat, lon);
+
+    internal static LandingObservation Landing(
+        string vehicleId = "v1",
+        double simT = 10,
+        string body = "earth",
+        double verticalSpeedMs = 3.5,
+        double horizontalSpeedMs = 0.4,
+        int crewCount = 2,
+        double? radarAltM = null,
+        double? lat = null,
+        double? lon = null)
+        => new(vehicleId, simT, WallMs, body, verticalSpeedMs, horizontalSpeedMs, crewCount, radarAltM, lat, lon);
 
     internal static RudSignal Rud(
         string vehicleId = "v1",
@@ -126,8 +152,14 @@ internal static class TestData
         double massKg = 12_000,
         int partCount = 24,
         int crewCount = 2,
-        double launchGameTime = 0)
-        => new(simT, WallMs, vehicleId, vehicleName, body, massKg, partCount, crewCount, launchGameTime);
+        double launchGameTime = 0,
+        IReadOnlyList<string>? kittenNames = null,
+        int stageCount = 0,
+        double? lat = null,
+        double? lon = null)
+        => new(
+            simT, WallMs, vehicleId, vehicleName, body, massKg, partCount, crewCount, launchGameTime,
+            kittenNames, stageCount, lat, lon);
 
     /// <summary>Deterministic install id so <c>kid</c> values are stable across runs.</summary>
     internal const string InstallId = "01J9V5M3E8Z0FAKEINSTALL01";

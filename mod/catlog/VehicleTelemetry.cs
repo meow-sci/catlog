@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using Brutal.Numerics;
 using KSA;
 using MeowSci.Catlog.Lib.Events;
 using MeowSci.Catlog.Lib.Telemetry;
@@ -201,6 +202,12 @@ public static class VehicleTelemetry
                 PartCount = PartCount(vehicle),
                 PeakG = PeakG(vehicle),
                 MaxQPa = PeakDynamicPressurePa(vehicle),
+                RadarAltM = RadarAltitudeM(vehicle),
+                Lat = Latitude(vehicle),
+                Lon = Longitude(vehicle),
+                VerticalSpeedMs = VerticalSpeedMs(vehicle),
+                HorizontalSpeedMs = HorizontalSpeedMs(vehicle),
+                WarpFactor = WarpFactor(),
             };
         }
         catch (Exception ex)
@@ -287,6 +294,259 @@ public static class VehicleTelemetry
             Faults.Note(ex);
             return null;
         }
+    }
+
+    /// <summary>
+    /// Altitude above the terrain — or the ocean surface where that is higher — directly beneath
+    /// the vehicle, in metres; <c>null</c> when the game has no terrain sample for it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Deliberately not <c>Vehicle.GetRadarAltitude()</c>.</b> That method is the obvious call
+    /// and it is not affordable here: it re-does a bicubic heightmap fetch, a normal-map fetch and
+    /// (on an ocean body) an <c>OceanRenderer</c> query on every invocation
+    /// (<c>Vehicle.cs:2845</c> → <c>Celestial.cs:790</c> → <c>GetTerrainHeightFromDirCcf</c>
+    /// <c>:796-830</c>). At 2 Hz across every vehicle in the system that is a real frame cost, and
+    /// §7.2's governing requirement is that catlog costs the player nothing.
+    /// </para>
+    /// <para>
+    /// The physics step has <b>already paid for it</b>: <c>PhysicsEnvironment.TerrainRadius</c> and
+    /// <c>OceanRadius</c> (<c>PhysicsEnvironment.cs:27,29</c>) are written from the same
+    /// <c>GetTerrainHeightFromDirCcf</c> + <c>GetOceanHeightAtPositionCcf</c> pair
+    /// (<c>:110-127</c>) every time the vehicle's positional environment is recomputed. Reading
+    /// them off the cached struct is two field reads and reproduces <c>GetRadarAltitude</c>'s
+    /// arithmetic exactly: it computes <c>|r| − (meanRadius + max(terrainHeight, oceanHeight))</c>,
+    /// and those two radii <i>are</i> <c>meanRadius + height</c>.
+    /// </para>
+    /// <para>
+    /// <b>Three guards, and all three mean "omit", not "zero".</b> <c>InPhysicsRadius</c> is false
+    /// outside the parent's near-surface radius, where the game zeroes the whole positional block
+    /// (<c>PhysicsStates.cs:377-379</c>) — an orbiting craft has no terrain reading at all, and 0
+    /// there would read as "on the ground". The parent must be a <c>Celestial</c>, because nothing
+    /// else has a heightmap; the game hands back <c>meanRadius</c> as the terrain radius for the
+    /// rest (<c>PhysicsEnvironment.cs:107</c>), which would silently make radar altitude equal
+    /// barometric. And the environment's <c>ClosestParent</c> must be the orbit's parent, or the
+    /// radius below is measured against a different body from the position above it.
+    /// </para>
+    /// </remarks>
+    /// <param name="vehicle">The vehicle.</param>
+    /// <returns>The terrain-relative altitude in metres, or null.</returns>
+    [KsaAnchor("Vehicle.PhysicsEnvironment (TerrainRadius / OceanRadius / InPhysicsRadius / ClosestParent); "
+               + "Orbit.StateVectors.PositionCci",
+        SourceFile = "KSA/Vehicle.cs:527 / KSA/PhysicsEnvironment.cs:11-31,85-135,170-180 / KSA/Orbit.cs:1150",
+        Verified = "2026-08-09", GameVersion = "2026.8.5.5168", Risk = ChurnRisk.Medium,
+        Notes = "The cheap equivalent of Vehicle.GetRadarAltitude() (Vehicle.cs:2845), which the sample pass "
+                + "must NOT call — it re-samples the heightmap per call. TerrainRadius/OceanRadius are RADII "
+                + "FROM BODY CENTRE (meanRadius + height), written at PhysicsEnvironment.cs:110-127 from the "
+                + "same terrain/ocean lookups. TerrainRadius is 0 outside the near-surface radius (:134), "
+                + "MeanRadius on the reset path (:176) and MeanRadius for a non-Celestial parent (:107) — "
+                + "hence the InPhysicsRadius and `is Celestial` guards rather than a zero test alone.")]
+    public static double? RadarAltitudeM(Vehicle vehicle)
+    {
+        try
+        {
+            if (!IsReadable(vehicle))
+                return null;
+
+            ref readonly PhysicsEnvironment environment = ref vehicle.PhysicsEnvironment;
+            if (!environment.InPhysicsRadius || environment.ClosestParent is not Celestial)
+                return null;
+            if (!ReferenceEquals(environment.ClosestParent, vehicle.Orbit.Parent))
+                return null;
+
+            double ground = Math.Max(environment.TerrainRadius, environment.OceanRadius);
+            if (!double.IsFinite(ground) || ground <= 0.0)
+                return null;
+
+            double radius = vehicle.Orbit.StateVectors.PositionCci.Length();
+            return double.IsFinite(radius) ? radius - ground : null;
+        }
+        catch (Exception ex)
+        {
+            Faults.Note(ex);
+            return null;
+        }
+    }
+
+    /// <summary>Latitude on the parent body in degrees, or <c>null</c> when it is not readable.</summary>
+    /// <remarks>
+    /// <b>A zeroed latitude is a real place</b> — the equator — so this returns null rather than a
+    /// default when there is no body-fixed frame to take a latitude in. Only a <c>Celestial</c> has
+    /// one: a vehicle whose parent is another vehicle, or whose orbit is not yet initialized, has
+    /// no latitude at all, and saying so is the only honest answer.
+    /// </remarks>
+    /// <param name="vehicle">The vehicle.</param>
+    /// <returns>Degrees in [-90, 90], or null.</returns>
+    [KsaAnchor("Celestial.GetLatitudeFromCce(double3); Vehicle.GetPositionCce(); Orbit.Parent",
+        SourceFile = "KSA/Celestial.cs:698 / KSA/Vehicle.cs:2414", Verified = "2026-08-09",
+        GameVersion = "2026.8.5.5168", Risk = ChurnRisk.Low,
+        Notes = "Cheap: GetPositionCce() returns a cached double3 field, GetCce2Ccf() is one quaternion "
+                + "inverse (Celestial.cs:544), and the rest is a transform plus an asin. Already in DEGREES "
+                + "(GetLatitudeFromCcf, Celestial.cs:712) — do NOT convert. Declared on Celestial, not on "
+                + "IParentBody, which is why the type test is mandatory rather than defensive.")]
+    public static double? Latitude(Vehicle vehicle)
+        => OnCelestial(vehicle, static (celestial, positionCce) => celestial.GetLatitudeFromCce(positionCce));
+
+    /// <summary>Longitude on the parent body in degrees, or <c>null</c>. Same rule as <see cref="Latitude"/>.</summary>
+    /// <param name="vehicle">The vehicle.</param>
+    /// <returns>Degrees in [-180, 180], or null.</returns>
+    [KsaAnchor("Celestial.GetLongitudeFromCce(double3)",
+        SourceFile = "KSA/Celestial.cs:733", Verified = "2026-08-09", GameVersion = "2026.8.5.5168",
+        Risk = ChurnRisk.Low,
+        Notes = "Atan2 of the body-fixed X/Y, already in DEGREES (GetLongitudeFromCcf, Celestial.cs:740). "
+                + "Same `Parent is Celestial` requirement as the latitude.")]
+    public static double? Longitude(Vehicle vehicle)
+        => OnCelestial(vehicle, static (celestial, positionCce) => celestial.GetLongitudeFromCce(positionCce));
+
+    /// <summary>Descent rate in the rotating surface frame, in m/s, <b>positive downwards</b>.</summary>
+    /// <remarks>
+    /// The game publishes <c>GetSurfaceSpeed()</c> — a magnitude — and nothing else, so the vector
+    /// it is the length of is reconstructed here from the same two terms it uses
+    /// (<c>Vehicle.cs:2759-2763</c>): <c>v_surface = v_cci − ω × r</c>. Its radial component is the
+    /// vertical rate, negated so a landing reads positive, which is the sign a player means by
+    /// "came down at 4 m/s". It is a cached field read and a cross product.
+    /// </remarks>
+    /// <param name="vehicle">The vehicle.</param>
+    /// <returns>The descent rate, 0 when unreadable.</returns>
+    [KsaAnchor("Orbit.StateVectors.VelocityCci/PositionCci; IParentBody.GetAngularVelocityCci()",
+        SourceFile = "KSA/Orbit.cs:1150 / KSA/Vehicle.cs:2759", Verified = "2026-08-09",
+        GameVersion = "2026.8.5.5168", Risk = ChurnRisk.Low,
+        Notes = "Mirrors Vehicle.GetSurfaceSpeed()'s own decomposition. There is no vertical or horizontal "
+                + "speed anywhere on Vehicle or NavBallData — NavBallData.Speed is frame-dependent on the "
+                + "player's chosen navball mode and must never be used for a recorded number.")]
+    public static double VerticalSpeedMs(Vehicle vehicle)
+    {
+        try
+        {
+            SurfaceVelocity(vehicle, out double vertical, out _);
+            return vertical;
+        }
+        catch (Exception)
+        {
+            return 0.0;
+        }
+    }
+
+    /// <summary>Ground-track speed in the rotating surface frame, in m/s.</summary>
+    /// <param name="vehicle">The vehicle.</param>
+    /// <returns>The tangential speed, 0 when unreadable.</returns>
+    [KsaAnchor("Orbit.StateVectors.VelocityCci/PositionCci; IParentBody.GetAngularVelocityCci()",
+        SourceFile = "KSA/Orbit.cs:1150 / KSA/Vehicle.cs:2759", Verified = "2026-08-09",
+        GameVersion = "2026.8.5.5168", Risk = ChurnRisk.Low,
+        Notes = "The tangential half of the same decomposition: vertical² + horizontal² == GetSurfaceSpeed()².")]
+    public static double HorizontalSpeedMs(Vehicle vehicle)
+    {
+        try
+        {
+            SurfaceVelocity(vehicle, out _, out double horizontal);
+            return horizontal;
+        }
+        catch (Exception)
+        {
+            return 0.0;
+        }
+    }
+
+    /// <summary>The universe's simulation speed — the time-warp factor. 1 is real time.</summary>
+    /// <remarks>
+    /// A free static field read. It rides on every snapshot so <c>telemetry.window</c> can report
+    /// the highest warp a window saw: the window samples at 2 Hz <b>wall</b> clock but spans 30
+    /// <b>sim</b> seconds, so under warp its aggregates are drawn from a handful of samples rather
+    /// than the nominal 60, and nothing else in that payload says so.
+    /// </remarks>
+    /// <returns>The simulation speed, or 1 when unreadable.</returns>
+    [KsaAnchor("Universe.SimulationSpeed (static double)",
+        SourceFile = "KSA/Universe.cs:100", Verified = "2026-08-09", GameVersion = "2026.8.5.5168",
+        Risk = ChurnRisk.Low,
+        Notes = "The getter is a plain backing-field read; the setter routes through SetSimulationSpeed and "
+                + "is never touched here. 1 is the honest fallback — an unreadable warp is not a stopped "
+                + "clock, and 0 would make every window look warp-free.")]
+    public static double WarpFactor()
+    {
+        try
+        {
+            double speed = Universe.SimulationSpeed;
+            return double.IsFinite(speed) && speed > 0 ? speed : 1.0;
+        }
+        catch (Exception)
+        {
+            return 1.0;
+        }
+    }
+
+    /// <summary>How many stages the vehicle has, or 0 when the count cannot be read.</summary>
+    /// <remarks>
+    /// <c>SequenceList</c> was very nearly rewritten in build 5168 — most of the file is now ImGui
+    /// drag-and-drop editor state — so this is treated as churn-prone. <c>Count</c> itself is a
+    /// one-line <c>List.Count</c>, but the type around it moves, and 0 is a value the wire already
+    /// tolerates: a vehicle genuinely can have no sequences.
+    /// </remarks>
+    /// <param name="vehicle">The vehicle.</param>
+    /// <returns>The stage count, 0 when unreadable.</returns>
+    [KsaAnchor("Vehicle.Parts.SequenceList.Count",
+        SourceFile = "KSA/PartTree.cs:29 / KSA/SequenceList.cs:99", Verified = "2026-08-09",
+        GameVersion = "2026.8.5.5168", Risk = ChurnRisk.High,
+        Notes = "NEARLY REWRITTEN IN 5168. SequenceList is a public FIELD on PartTree, not a property. "
+                + "Count is _sequences.Count — O(1), no walk. ActiveSequence (SequenceList.cs:101) is the "
+                + "index the vehicle.staging patch already reads off the same object.")]
+    public static int StageCount(Vehicle vehicle)
+    {
+        try
+        {
+            return vehicle.Parts.SequenceList.Count;
+        }
+        catch (Exception)
+        {
+            return 0;
+        }
+    }
+
+    // The shared body of the two lat/lon reads: resolve the Celestial parent, hand it the vehicle's
+    // cached body-centred-ecliptic position, and return null for anything that is not a Celestial or
+    // that throws. The delegates at the two call sites are static lambdas, so the compiler caches
+    // one instance of each and this allocates nothing per call.
+    private static double? OnCelestial(Vehicle vehicle, Func<Celestial, double3, double> read)
+    {
+        try
+        {
+            if (!IsReadable(vehicle) || vehicle.Orbit.Parent is not Celestial celestial)
+                return null;
+
+            double value = read(celestial, vehicle.GetPositionCce());
+            return double.IsFinite(value) ? value : null;
+        }
+        catch (Exception ex)
+        {
+            Faults.Note(ex);
+            return null;
+        }
+    }
+
+    // v_surface = v_cci − (ω × r), decomposed against the local radial direction. Not guarded
+    // itself: both callers wrap it, and splitting it in two would mean reading the state vectors
+    // twice to answer two halves of one question.
+    private static void SurfaceVelocity(Vehicle vehicle, out double verticalMs, out double horizontalMs)
+    {
+        verticalMs = 0.0;
+        horizontalMs = 0.0;
+        if (!IsReadable(vehicle))
+            return;
+
+        Orbit orbit = vehicle.Orbit;
+        double3 position = orbit.StateVectors.PositionCci;
+        double radius = position.Length();
+        if (!double.IsFinite(radius) || radius <= 0.0)
+            return;
+
+        double3 surface = orbit.StateVectors.VelocityCci
+                          - double3.Cross(orbit.Parent.GetAngularVelocityCci(), position);
+        double3 up = position / radius;
+        double climb = double3.Dot(surface, up);
+
+        // Positive downwards: a descent is a negative radial rate, and a landing board that reported
+        // "-4 m/s" for a soft touchdown would be misread by every human who saw it.
+        verticalMs = Sanitize.Finite(-climb);
+        horizontalMs = Sanitize.Finite((surface - climb * up).Length());
     }
 
     /// <summary>The lowercase parent body name for the wire's <c>body</c> field.</summary>

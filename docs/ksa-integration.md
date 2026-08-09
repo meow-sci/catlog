@@ -72,6 +72,54 @@ Only the items that change code you would otherwise write.
 | Surface vs orbital speed | **VERIFIED** | `public double GetSurfaceSpeed()` `KSA/Vehicle.cs:2759`; `public double GetInertialSpeed()` `KSA/Vehicle.cs:2754`; `public double OrbitalSpeed => GetVelocityCci().Length();` `KSA/Vehicle.cs:581` | as listed | **No `Vehicle.GetOrbitalSpeed()`** — `Orbit.GetOrbitalSpeed(double radiusMeters)` `KSA/Orbit.cs:1422` is a vis-viva helper, not current speed. Do **not** use `NavBallData.Speed` (`KSA/Vehicle.cs:575`) — it is frame-dependent (switch at `KSA/Vehicle.cs:2506-2590`). |
 | Dynamic pressure | **CHANGED (no property)** | `public static double GetDynamicPressure(Vehicle? vehicle)` | `KSA/PhysicalAtmosphereReference.cs:66` | **No `Vehicle.DynamicPressure`.** Game calls it as `PhysicalAtmosphereReference.GetDynamicPressure(this)` (`KSA/Vehicle.cs:5672`). Cheaper cached alternatives: `vehicle.PhysicsEnvironment.AtmosphericPressure` / `.AtmosphericDensity` (`KSA/PhysicsEnvironment.cs:21`, `:23`) via `public ref readonly PhysicsEnvironment PhysicsEnvironment => ref _environment;` `KSA/Vehicle.cs:527`. |
 | `StructuralLoad.PeakGLoad` | **NEW IN 5168 — VERIFIED, with a big caveat** | `public ref readonly StructuralLoad StructuralLoad => ref _structuralLoad;` `KSA/Vehicle.cs:531`; `public struct StructuralLoad { public double PeakGLoad; public double MaxGLoad; public double PeakDynamicPressure; public double MaxDynamicPressure; public bool IsPressureHydrodynamic; public double GLoadFraction => …; public double DynamicPressureFraction => …; }` `KSA/StructuralLoad.cs:3-18` | as listed | Did **not** exist in 5117. Written at `KSA/VehicleUpdateTask.cs:492-497` (inside `DetectStructuralFailure`, only reached from `ApplyFullPhysics`), applied at `KSA/Vehicle.cs:2344`, reset to `default` each prepared step at `KSA/VehicleUpdateState.cs:287`. **⇒ all-zero for any vehicle not under full physics.** Static helper `public static StructuralLoad? GetControlledStructuralLoad()` `KSA/Vehicle.cs:6097`. |
+| **Terrain-relative altitude** — `PhysicsEnvironment.TerrainRadius` / `OceanRadius` | **VERIFIED (2026-08-09) — and deliberately NOT `Vehicle.GetRadarAltitude()`** | `public ref readonly PhysicsEnvironment PhysicsEnvironment` `KSA/Vehicle.cs:527`; `public double TerrainRadius;` / `public double OceanRadius;` / `public bool InPhysicsRadius;` / `public IParentBody? ClosestParent;` — **fields** on `public struct PhysicsEnvironment` `KSA/PhysicsEnvironment.cs:11-31` | `KSA/PhysicsEnvironment.cs:11-31,85-135,170-180`; `KSA/Orbit.cs:1150` | **Churn risk Medium.** Both are **radii from body centre** (`meanRadius + height`), written at `:110-127` from `GetTerrainHeightFromDirCcf` + `GetOceanHeightAtPositionCcf`. Radar altitude = `PositionCci.Length() − max(TerrainRadius, OceanRadius)`. See [the `GetRadarAltitude` refusal](#the-getradaraltitude-refusal) below. Failure mode: **`null` → key omitted**. |
+| **Latitude / longitude** — `Celestial.GetLatitudeFromCce` / `GetLongitudeFromCce` | **VERIFIED (2026-08-09)** | `public double GetLatitudeFromCce(double3 positionCce)` `KSA/Celestial.cs:698`; `public double GetLongitudeFromCce(double3 positionCce)` `:733`; `public double3 GetPositionCce()` `KSA/Vehicle.cs:2414` | as listed | **Churn risk Low.** **Already in DEGREES** (`GetLatitudeFromCcf` `:712`, `GetLongitudeFromCcf` `:740`) — do **not** convert. Declared on `Celestial`, **not** on `IParentBody`, so the `Orbit.Parent is Celestial` test is mandatory rather than defensive. Cheap: `GetPositionCce()` is a cached `double3` field, `GetCce2Ccf()` is one quaternion inverse (`:544`), then a transform and an `asin`/`atan2`. Non-allocating. Failure mode: **`null` → key omitted**. |
+| **Vertical / horizontal surface speed** — reconstructed, no game property exists | **VERIFIED (2026-08-09) — the game exposes only the magnitude** | `public double GetSurfaceSpeed()` `KSA/Vehicle.cs:2759-2763` (= `\|v_cci − ω × r\|`); components from `Orbit.StateVectors.VelocityCci` / `PositionCci` `KSA/Orbit.cs:1150` and `IParentBody.GetAngularVelocityCci()` | as listed | **Churn risk Low.** There is **no** vertical or horizontal speed anywhere on `Vehicle`. `NavBallData.Speed` is frame-dependent on the player's chosen navball mode and must never be used for a recorded number. catlog reconstructs the same decomposition and splits it radially/tangentially; the radial term is **negated so a landing reads positive**. One cross product, one dot, one length. Failure mode: **`0`**. |
+| **Time-warp factor** — `Universe.SimulationSpeed` | **VERIFIED (2026-08-09)** | `public static double SimulationSpeed { get; … }` | `KSA/Universe.cs:100` | **Churn risk Low.** The getter is a plain backing-field read; the setter routes through `SetSimulationSpeed` and is never touched. Failure mode: **`1.0`, never `0`** — an unreadable warp is not a stopped clock, and `0` would make every window look warp-free. |
+| **Stage count** — `Vehicle.Parts.SequenceList.Count` | **VERIFIED (2026-08-09) — highest churn risk of the wire-v2 reads** | `public SequenceList SequenceList;` — a **public field** on `PartTree`, `KSA/PartTree.cs:29`; `public int Count => _sequences.Count;` `KSA/SequenceList.cs:99` | as listed | **Churn risk High. `SequenceList` was very nearly rewritten in 5168** — most of the file is now ImGui drag-and-drop editor state. `Count` itself is O(1). `ActiveSequence` (`:101`) is the index the `vehicle.staging` patch already reads off the same object. Failure mode: **`0`**, which the wire tolerates because a vehicle genuinely can have no sequences — `biggest_stack` gates `> 0`. |
+| **Crew identity** — the existing seat walk, newly used for `kids` | **VERIFIED (2026-08-09) — no new game surface** | `Vehicle.Crew` seat walk + `KittenRosterData.Find(KeyHash)` `KSA/KittenRosterData.cs:77` | as listed | **Churn risk Low.** Nothing new is read: `crew_count` already walked these seats. Names are resolved once **per vehicle on first sight**, inside the poll's tracking step, not per tick. Failure mode: **`[]`**. |
+
+### The `GetRadarAltitude` refusal
+
+**The obvious call is `Vehicle.GetRadarAltitude()` (`KSA/Vehicle.cs:2845`), the terrain-relative
+sibling of the barometric read catlog already makes. catlog does not call it, and the numbers it
+records are identical.**
+
+`GetRadarAltitude()` re-does the whole terrain lookup on **every invocation**.
+`Celestial.GetTerrainHeightFromDirCci` → `GetTerrainHeightFromDirCcf` (`KSA/Celestial.cs:796-830`) is
+a **bicubic heightmap texture fetch**, a normal-map fetch and a tangent-frame construction, plus two
+more CPU texture samples where biome materials are present — and, on an ocean body, a
+`Program.GetOceanRenderer()` query. At 2 Hz across **every vehicle in the system** that is a real
+frame cost, and §7.2's governing requirement is that catlog costs the player nothing. This survey's
+own §A8 ranks the call *"deliberately excluded — not affordable at 2 Hz across many vehicles"*.
+
+**The physics step has already paid for exactly that computation and cached the answer.**
+`PhysicsEnvironment.RecomputePositionalValues` (`KSA/PhysicsEnvironment.cs:110-127`) writes
+`TerrainRadius = meanRadius + GetTerrainHeightFromDirCcf(…)` and
+`OceanRadius = meanRadius + GetOceanHeightAtPositionCcf(…)` from the same two lookups.
+`GetRadarAltitude()` computes `|r| − (meanRadius + max(terrainHeight, oceanHeight))`, and those two
+radii *are* `meanRadius + height` — so `|r| − max(TerrainRadius, OceanRadius)` is the same number for
+**two field reads**. The game's own physics debug window reads the same fields for its "Terrain
+Height" readout (`KSA/Vehicle.cs:3689`).
+
+**Three guards, and each of them yields *absent*, not zero:**
+
+1. `InPhysicsRadius == false` — outside the parent's near-surface radius, where the game zeroes the
+   whole positional block (`KSA/PhysicsStates.cs:377-379`). An orbiting craft has no terrain reading
+   at all, and a `0` there would read as *on the ground*.
+2. `ClosestParent is not Celestial` — nothing else has a heightmap, and the game substitutes
+   `meanRadius` (`KSA/PhysicsEnvironment.cs:107`), which would silently make radar altitude equal
+   barometric.
+3. `ClosestParent != Orbit.Parent` — the radius below would be measured against a different body from
+   the position above it.
+
+`TerrainRadius` is also `0` outside the near-surface radius (`:134`) and `MeanRadius` on the reset
+path (`:176`), which is why the guards are structural rather than a zero test alone.
+
+**This is recorded here and in a long remark on the method so that the next reader does not "fix" it
+by switching to the obvious call.** MOD-080. If a future build makes `GetRadarAltitude()` cheap — a
+cached property, say — the substitution becomes legitimate; until then, calling it from the sample
+pass violates the frame-budget rule the whole mod is built around.
 
 ---
 
@@ -262,6 +310,8 @@ Items the older plan could not have covered.
 | **Control-point relocation** ("Control From Here", changelog r5133) | `KSA/Vehicle.cs:563-571` — `public Part? TargetPart { get; private set; }`, `public Part? ControlPart`, `public Part.Connector? ControlConnector`, `public doubleQuat Ctrl2Body => …`, `public double3 CtrlOriginBody => …`, `public double3 CtrlRates => …` `:587` | New this build. Attitude/navball telemetry is now expressed in a **control frame** that the player can move at will (`Rocket.UpdateThrusterCache` and `ThrusterController.RecomputeDynamicData` both gained a `ctrl2Body` parameter — see below). Any attitude-based metric must record which control point was active, or normalize back to the body frame. |
 | **Breaking signature changes in the RCS/engine layer** (5117→5168) | `public static void UpdateThrusterCache(ReadOnlyPhysicsStates, doubleQuat ctrl2Body, …)` `KSA/Rocket.cs:187` (new 2nd param); `ThrusterController.RecomputeDynamicData(…, floatQuat ctrl2Body)` `KSA/ThrusterController.cs:85`; `public bool TrySampleThrustCurve(ThrustCurveSamples samples, out ThrustCurvePreview preview)` `KSA/SolidMotor.cs:315` (was `Span<float>`), new `public ref struct ThrustCurveSamples` `KSA/SolidMotor.cs:23` | Not detection surfaces catlog needs, but they are the *shape* of what breaks between builds — worth `[KsaAnchor]`-ing if catlog ever reads thrust curves or RCS maps. Nozzle/engine read surface itself (`RocketNozzleState`, `EngineController`, `RocketCoreState`, all templates) is **byte-identical** to 5117. |
 | **SOI transition handling in physics** | `if (newStates.CheckSoiTransitions()) { PopulateAnalyticStatesFromKinematicStates(vehicleState); }` `KSA/VehicleUpdateTask.cs:1685-1688` (new) | SOI changes are now resolved inside the physics step for off-rails vehicles. The plan's polled `vehicle.Parent.Id` diff still works, but expect SOI transitions to be observable a step earlier and for off-rails vehicles that previously would not have transitioned mid-bubble. |
+| **`PhysicsEnvironment` positional cache** | `KSA/PhysicsEnvironment.cs:11-31`, recomputed `:110-127` | The physics step caches `TerrainRadius`, `OceanRadius`, `AtmosphericPressure`, `AtmosphericDensity` and `InPhysicsRadius` per vehicle. This is what makes a **terrain-relative altitude affordable at 2 Hz** — see [the `GetRadarAltitude` refusal](#the-getradaraltitude-refusal). It is also the cheap source for dynamic pressure, which otherwise needs `PhysicalAtmosphereReference.GetDynamicPressure(vehicle)`. **Caveat: zeroed outside the near-surface radius**, so absence has to be detected structurally rather than by testing for 0. |
+| **`Celestial.GetLatitudeFromCce` / `GetLongitudeFromCce`** | `KSA/Celestial.cs:698`, `:733` | Body-fixed latitude/longitude in **degrees**, off a cached position and one quaternion inverse. This is the whole spatial dimension catlog was built without, and it costs nothing per tick. Declared on `Celestial` rather than `IParentBody` — a vehicle orbiting another vehicle has no latitude, and that is the honest answer rather than a defensive one. |
 | **RCS thrust rebalance** (changelog r5119, r5128) | — | "Reduced RCS thrust overall", "small RCS thrusters noticeably less thrust", "Greatly increased the thrust of Kitten RCS". Purely numeric, but any **historical** delta-v or maneuver-efficiency leaderboard is not comparable across the 5117/5168 boundary. Stamp the game build on every batch. |
 
 ---
@@ -374,4 +424,6 @@ directory.
 |---|---|---|
 | Everything the plan attributes to build `2026.7.3.4826` | **UNVERIFIABLE** | That decomp tree is not on disk. The only prior tree is `2026.8.3.5117`. Several plan claims (`StructuralLoad.PeakGLoad`, `GroundImpactEvent.ImpactVelocity`, `LocomotionMode.Tumbling`, `TumbleSpeedGate`) are **absent from 5117**, so they cannot have been verified against 4826 either — treat them as newly confirmed here, not re-confirmed. |
 | `LocomotionMode.Ladder` reachability | **UNVERIFIABLE from source** | Declared and handled but no producer; changelog says not functional. Needs in-game confirmation once ladders ship. |
+| Whether `PhysicsEnvironment.TerrainRadius` tracks `GetRadarAltitude()` **exactly** in flight | **VERIFIED AT SOURCE, UNVERIFIED IN GAME** | The arithmetic is provably the same (both are `\|r\| − (meanRadius + height)` from the same two lookups), but the cached radii are written by the physics step and the direct call samples at call time, so a value read mid-frame could be one step stale. That is a sub-step of drift on a 2 Hz sample and is accepted; it has not been measured in-game. |
+| Propellant and Δv | **DELIBERATELY UNREAD** | `Vehicle.PropellantMass` (`KSA/Vehicle.cs:555`) is right there beside `TotalMass`, and a Δv figure is reachable from it. It is out of scope until it has its own decision, because a recorded Δv invites a physics-plausibility check and Constitution §8 forbids inferring intent from data shape. PROJ-099. |
 | Runtime field-name fidelity | **UNVERIFIABLE from source** | Standing KSA-skill caveat: the shipped binary can differ from the decomp. Resolve every patch target with `AccessTools` + null check + patch-time logging, and dead-latch on failure. |

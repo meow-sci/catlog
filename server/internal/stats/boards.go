@@ -47,6 +47,15 @@ const (
 	StatEngineIgnitions     = "engine_ignitions"
 	StatTopKittenDistance   = "top_kitten_distance"
 	StatTopKittenMissions   = "top_kitten_missions"
+
+	// The wire-v2 boards. Three read keys that did not exist before
+	// (`mass_kg` on an orbit, `stage_count` on a launch, `radar_alt_m` on a
+	// window) and two read the event wire v2 added.
+	StatHeaviestToOrbit = "heaviest_to_orbit"
+	StatSoftestLanding  = "softest_landing"
+	StatLandings        = "landings"
+	StatLowestPass      = "lowest_pass"
+	StatBiggestStack    = "biggest_stack"
 )
 
 // Board is the metadata `GET /v1/leaderboards` publishes for one stat (§4.8).
@@ -77,11 +86,11 @@ type Board struct {
 // is a property of the build. The two *families* below are not: their keys come
 // out of the data.
 //
-// Three boards have an **empty unit** — `roundest_orbit` (an eccentricity),
-// `most_parts` and `most_stages` (bare counts of a thing whose name is already
-// in the title). An empty unit is a real answer here rather than a missing one:
-// units.Split renders it as the number alone, and inventing a label like
-// "parts" would put it on the page twice.
+// Four boards have an **empty unit** — `roundest_orbit` (an eccentricity),
+// `most_parts`, `most_stages` and `biggest_stack` (bare counts of a thing whose
+// name is already in the title). An empty unit is a real answer here rather
+// than a missing one: units.Split renders it as the number alone, and inventing
+// a label like "parts" would put it on the page twice.
 var fixedBoards = func() []Board {
 	rec := func(stat, title, unit string) Board { return Board{Stat: stat, Title: title, Unit: unit} }
 	// best is rec's mirror: a board where a *smaller* value ranks higher.
@@ -98,13 +107,17 @@ var fixedBoards = func() []Board {
 		rec(StatFastestOrbitalSpeed, "Fastest Orbital Speed", "m/s"),
 		rec(StatFastestEntry, "Fastest Atmospheric Entry", "m/s"),
 		rec(StatHighestAltitude, "Highest Altitude", "m"),
+		best(StatLowestPass, "Lowest Pass", "m"),
 		rec(StatHighestApoapsis, "Highest Apoapsis", "m"),
 		best(StatLowestOrbit, "Lowest Stable Orbit", "m"),
 		best(StatRoundestOrbit, "Roundest Orbit", ""),
 		rec(StatSteepestOrbit, "Most Inclined Orbit", "deg"),
 		best(StatSoftestTouchdown, "Softest Touchdown", "m/s"),
+		best(StatSoftestLanding, "Softest Landing", "m/s"),
 		rec(StatHeaviestLaunch, "Heaviest Launch", "kg"),
+		rec(StatHeaviestToOrbit, "Heaviest Payload To Orbit", "kg"),
 		rec(StatMostParts, "Most Parts", ""),
+		rec(StatBiggestStack, "Most Stages Built", ""),
 		rec(StatBiggestCrew, "Biggest Crew", "kittens"),
 		rec(StatBiggestRecovery, "Most Kittens Home At Once", "kittens"),
 		rec(StatMostStages, "Most Stages", ""),
@@ -114,6 +127,7 @@ var fixedBoards = func() []Board {
 		rec(StatOrbitsAchieved, "Orbits Achieved", "orbits"),
 		rec(StatSOIBodies, "Bodies Visited", "bodies"),
 		rec(StatLandedBodies, "Bodies Landed On", "bodies"),
+		rec(StatLandings, "Landings", "landings"),
 		rec(StatDockings, "Dockings", "dockings"),
 		rec(StatStagings, "Stagings", "stagings"),
 		rec(StatSplashdowns, "Splashdowns", "splashdowns"),
@@ -598,6 +612,37 @@ func (altitudeFold) Apply(ctx context.Context, b *Batch, ev Event) error {
 	return putRecord(ctx, b, ev, StatHighestAltitude, p.AltM.Max, windowContext(ev, p))
 }
 
+// lowestPassFold implements `lowest_pass`: the closest a vehicle came to the
+// ground without ending up on it.
+//
+// The counterpart of `highest_altitude`, and deliberately the *other* altitude.
+// `alt_m` is barometric — above the parent's mean radius — so a low pass down a
+// canyon reads as high and a mountaintop hover reads as low; `radar_alt_m` is
+// the terrain-relative reading the mod folds over only the samples that had one.
+//
+// Two gates, both load-bearing. **An absent aggregate never scores**: a window
+// spent in orbit has no terrain below it and the mod omits the key entirely
+// rather than sending zeros, the peak_g rule. And the minimum must be strictly
+// positive, because this board is ascending and a 0 is what a vehicle sitting on
+// the ground reads — an unbeatable record that every flight would tie on its way
+// to the pad (PROJ-088). A landing is not a pass; `softest_landing` is the board
+// for arriving.
+type lowestPassFold struct{}
+
+func (lowestPassFold) Name() string { return StatLowestPass }
+
+func (lowestPassFold) Apply(ctx context.Context, b *Batch, ev Event) error {
+	p, ok := payloadOf[TelemetryWindow](ev)
+	if !ok || p.RadarAltM == nil || p.RadarAltM.Min <= 0 {
+		return nil
+	}
+	ok, err := scoreable(ctx, ev, b)
+	if err != nil || !ok {
+		return err
+	}
+	return putBest(ctx, b, ev, StatLowestPass, p.RadarAltM.Min, windowContext(ev, p))
+}
+
 // entryFold implements `fastest_entry`: the fastest a vehicle was moving as it
 // crossed into an atmosphere.
 //
@@ -685,14 +730,55 @@ func (f orbitRecordFold) Apply(ctx context.Context, b *Batch, ev Event) error {
 	return putRecord(ctx, b, ev, f.stat, value, cx)
 }
 
-// launchFold implements the three boards about what was on the pad:
-// `heaviest_launch`, `most_parts` and `biggest_crew`.
+// orbitMassFold implements `heaviest_to_orbit`: the heaviest thing a player has
+// ever put into a stable orbit around anything.
 //
-// All three read `flight.started`, all three are gated on `> 0`, and for the
-// two integer fields that gate *is* §4.2's `>= 1`. Zero is what every one of
-// them reports when the read failed — mass, part count and crew count are all
-// written as 0 rather than omitted — so a zero is an unreadable vehicle, not an
-// empty one.
+// Not the same claim as `heaviest_launch`, and the pair is the point. What left
+// the pad includes the propellant that will be spent getting off it; what is
+// still there when the milestone fires is the payload. Paired, the two are the
+// only honest efficiency-shaped number reachable without reading propellant,
+// which is why the mod added `mass_kg` to `vehicle.orbit` rather than letting a
+// reader diff a launch mass against a telemetry window that may be half a
+// window stale.
+//
+// `escaped` is excluded exactly as it is on the four shape boards: an escape is
+// not an orbit anybody reached. The `> 0` gate is what keeps ver 1 history off
+// the board — `mass_kg` did not exist before wire v2, so every stored orbit
+// older than the bump decodes as 0, and 0 kg is not a payload.
+type orbitMassFold struct{}
+
+func (orbitMassFold) Name() string { return StatHeaviestToOrbit }
+
+func (orbitMassFold) Apply(ctx context.Context, b *Batch, ev Event) error {
+	p, ok := payloadOf[VehicleOrbit](ev)
+	if !ok || p.Phase != "achieved" || p.MassKg <= 0 {
+		return nil
+	}
+	ok, err := scoreable(ctx, ev, b)
+	if err != nil || !ok {
+		return err
+	}
+	// The orbit it reached, not the whole shape blob: this board ranks the
+	// vehicle, and the apsides are what say where it got to.
+	return putRecord(ctx, b, ev, StatHeaviestToOrbit, p.MassKg, map[string]any{
+		"body":   p.Body,
+		"flight": ids.String(ev.FlightID),
+		"ap_m":   p.ApM,
+		"pe_m":   p.PeM,
+	})
+}
+
+// launchFold implements the four boards about what was on the pad:
+// `heaviest_launch`, `most_parts`, `biggest_crew` and `biggest_stack`.
+//
+// All four read `flight.started`, all four are gated on `> 0`, and for the
+// three integer fields that gate *is* §4.2's `>= 1`. Zero is what every one of
+// them reports when the read failed — mass, part count, crew count and stage
+// count are all written as 0 rather than omitted — so a zero is an unreadable
+// vehicle, not an empty one. `stage_count` is the highest-risk read of the four
+// (it walks `Vehicle.Parts.SequenceList`), which makes the gate matter most
+// there and is also why a ver 1 row, which carries no stage count at all, falls
+// out through the same door.
 type launchFold struct {
 	stat  string
 	value func(FlightStarted) float64
@@ -713,13 +799,18 @@ func (f launchFold) Apply(ctx context.Context, b *Batch, ev Event) error {
 	if err != nil || !ok {
 		return err
 	}
+	// One blob for all four, for the reason orbitRecordFold carries one: a
+	// reader looking at the heaviest launch wants to know how many parts and
+	// stages it took, and four rows describing one vehicle should be the same
+	// bytes rather than four partial views of it.
 	return putRecord(ctx, b, ev, f.stat, value, map[string]any{
-		"body":       p.Body,
-		"flight":     ids.String(ev.FlightID),
-		"vehicle":    p.VehicleName,
-		"mass_kg":    p.MassKg,
-		"part_count": p.PartCount,
-		"crew_count": p.CrewCount,
+		"body":        p.Body,
+		"flight":      ids.String(ev.FlightID),
+		"vehicle":     p.VehicleName,
+		"mass_kg":     p.MassKg,
+		"part_count":  p.PartCount,
+		"crew_count":  p.CrewCount,
+		"stage_count": p.StageCount,
 	})
 }
 
@@ -856,6 +947,90 @@ func (touchdownFold) Apply(ctx context.Context, b *Batch, ev Event) error {
 	})
 }
 
+// survivedLanding reports whether a `vehicle.landed` may score, which is the
+// whole eligibility `softest_landing` and `landings` share — a board about
+// touching down gently and a board about touching down at all must agree about
+// which arrivals happened.
+//
+// `survived` is the mod's answer and the only one taken: it has been through
+// the same one-full-frame destruction hold as `vehicle.impact.survived`, so a
+// touchdown the vehicle did not walk away from is a crash, and `vehicle.rud`
+// and `biggest_impact_energy` are where a crash belongs.
+//
+// Unlike [survivedImpact] there is no crew requirement and no ±2 s KIA window.
+// Those exist because §4.2's D11 rule is about a *crew* surviving a lithobrake;
+// landing a probe is landing, and `crew_count` rides in the context for a reader
+// who cares. And unlike [survivedLoad] there is no rebuild-only refinement, so
+// these two boards fold identically incrementally and on rebuild.
+func survivedLanding(ctx context.Context, b *Batch, ev Event, p VehicleLanded) (bool, error) {
+	if !p.Survived {
+		return false, nil
+	}
+	return scoreable(ctx, ev, b)
+}
+
+// softestLandingFold implements `softest_landing`: the gentlest touchdown, by
+// descent rate.
+//
+// Not a duplicate of `softest_touchdown`, which ranks the same moment by
+// `surface_speed_ms` — the *whole* velocity relative to the ground. A rover
+// arriving at 8 m/s across a plain and a lander arriving at 8 m/s straight down
+// are the same number there and very different flying; this board is the
+// vertical component alone, which is the one a pilot is actually managing.
+//
+// `vertical_speed_ms` is positive downwards, so smaller is softer and the board
+// is ascending — and therefore must refuse a 0, which is what an unreadable
+// state-vector decomposition leaves behind and would be an unbeatable record
+// (PROJ-088). A genuine touchdown is never exactly 0 m/s: the detector samples
+// at 2 Hz and the vehicle is still settling.
+type softestLandingFold struct{}
+
+func (softestLandingFold) Name() string { return StatSoftestLanding }
+
+func (softestLandingFold) Apply(ctx context.Context, b *Batch, ev Event) error {
+	p, ok := payloadOf[VehicleLanded](ev)
+	if !ok || p.VerticalSpeedMs <= 0 {
+		return nil
+	}
+	ok, err := survivedLanding(ctx, b, ev, p)
+	if err != nil || !ok {
+		return err
+	}
+	return putBest(ctx, b, ev, StatSoftestLanding, p.VerticalSpeedMs, map[string]any{
+		"body":                p.Body,
+		"flight":              ids.String(ev.FlightID),
+		"horizontal_speed_ms": p.HorizontalSpeedMs,
+		"crew_count":          p.CrewCount,
+	})
+}
+
+// landingsFold implements `landings`: how many times a player has put something
+// down and had it survive.
+//
+// Not a [countFold], because that one counts every event of a type and this one
+// owes the same `survived` gate its sibling board takes. A landing is one edge —
+// the mod emits `vehicle.landed` only on contact-free → surface contact, sharing
+// the situation rule's 2 s debounce — so a bouncing lander cannot inflate this
+// by alternating at 2 Hz, and nothing here needs to guess at that.
+//
+// It counts landings, not bodies: `landed_bodies` is the set-backed board for
+// "how many worlds", and the two are deliberately different questions.
+type landingsFold struct{}
+
+func (landingsFold) Name() string { return StatLandings }
+
+func (landingsFold) Apply(ctx context.Context, b *Batch, ev Event) error {
+	p, ok := payloadOf[VehicleLanded](ev)
+	if !ok {
+		return nil
+	}
+	ok, err := survivedLanding(ctx, b, ev, p)
+	if err != nil || !ok {
+		return err
+	}
+	return addCount(ctx, b, ev, StatLandings, 1)
+}
+
 // --- counter folds -----------------------------------------------------------
 
 // countFold implements the boards that are simply "how many of this event":
@@ -961,6 +1136,23 @@ func (soiFold) Apply(ctx context.Context, b *Batch, ev Event) error {
 // "Landed on" is any surface contact — terrain, ocean or both — because
 // splashing down on a body is arriving at it. `splashdowns` is the board that
 // distinguishes them.
+//
+// **It stays on `vehicle.situation` now that `vehicle.landed` exists**, and
+// that is a decision rather than an oversight. Three reasons, in order of
+// weight. (1) `vehicle.landed` fires only on the contact-free → contact edge,
+// while this board asks whether the player has anything *on* a surface: a
+// vehicle already on the ground when a save loads never produces a landing
+// event, and a rover that then goes `rolling` → `landed` would put its body on
+// the board through the situation and through nothing else. (2) Every
+// `landed_bodies` row in every existing log was written from a
+// `vehicle.situation`, and no `vehicle.landed` exists before wire v2 — moving
+// the source would silently empty the board on the next rebuild, which is data
+// loss dressed as a refactor. (3) The two events come off the *same* detection,
+// so switching would buy no new edges; it would only lose the ones above.
+//
+// The corollary is the rule against double counting: `landings` and
+// `softest_landing` read `vehicle.landed` and never touch `player_body`, so a
+// touchdown advances this counter through exactly one path.
 type landedBodiesFold struct{}
 
 func (landedBodiesFold) Name() string { return StatLandedBodies }

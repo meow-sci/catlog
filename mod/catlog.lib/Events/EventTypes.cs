@@ -46,6 +46,9 @@ public static class EventTypes
     /// <summary>The vehicle hit something.</summary>
     public const string VehicleImpact = "vehicle.impact";
 
+    /// <summary>The vehicle touched down on a surface it was not touching before.</summary>
+    public const string VehicleLanded = "vehicle.landed";
+
     /// <summary>A stage was activated.</summary>
     public const string VehicleStaging = "vehicle.staging";
 
@@ -91,15 +94,30 @@ public static class EventTypes
     private static readonly Dictionary<string, int> Versions = new(StringComparer.Ordinal)
     {
         [SessionStarted] = 1,
-        [FlightStarted] = 1,
-        [FlightEnded] = 1,
+        // ---- wire v2 -------------------------------------------------------------------------
+        // Seven types gained keys in one wave, and every one of them is a payload change rather
+        // than a semantic one: each ver 2 payload is its ver 1 payload plus fields. That makes the
+        // server's upcaster identity in every case — a ver 1 event still folds correctly, it simply
+        // says less — which is exactly why they could all move together.
+        //
+        //   flight.started    + kids, stage_count, lat, lon
+        //   flight.ended      + kids, body, lat, lon
+        //   vehicle.situation + radar_alt_m
+        //   vehicle.orbit     + mass_kg
+        //   vehicle.rud       + lat, lon
+        //   vehicle.impact    + lat, lon
+        //   telemetry.window  + radar_alt_m, warp_max
+        [FlightStarted] = 2,
+        [FlightEnded] = 2,
         [FlightFlagged] = 1,
-        [VehicleSituation] = 1,
+        [VehicleSituation] = 2,
         [VehicleAtmosphere] = 1,
-        [VehicleOrbit] = 1,
+        [VehicleOrbit] = 2,
         [VehicleSoi] = 1,
-        [VehicleRud] = 1,
-        [VehicleImpact] = 1,
+        [VehicleRud] = 2,
+        [VehicleImpact] = 2,
+        // New in wire v2: there is no ver 0 to upcast from.
+        [VehicleLanded] = 1,
         [VehicleStaging] = 1,
         [VehicleDocked] = 1,
         [VehicleUndocked] = 1,
@@ -116,7 +134,7 @@ public static class EventTypes
         [KittenTumble] = 2,
         [KittenKia] = 2,
         [RosterSnapshot] = 1,
-        [TelemetryWindow] = 1,
+        [TelemetryWindow] = 2,
     };
 
     // The five types a player cannot switch off in catlog.toml. Each one is load-bearing for

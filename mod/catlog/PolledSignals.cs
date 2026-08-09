@@ -103,7 +103,14 @@ public sealed class PolledSignals
             VehicleTelemetry.MassKg(vehicle),
             VehicleTelemetry.PartCount(vehicle),
             VehicleTelemetry.CrewCount(vehicle),
-            VehicleTelemetry.LaunchGameTime(vehicle)));
+            VehicleTelemetry.LaunchGameTime(vehicle),
+            // CrewNames walks the same seats CrewCount counts, so "aboard" has one definition.
+            // It runs once per vehicle, on first sight — not per tick — which is what makes the
+            // list it allocates affordable on the game thread.
+            VehicleTelemetry.CrewNames(vehicle),
+            VehicleTelemetry.StageCount(vehicle),
+            VehicleTelemetry.Latitude(vehicle),
+            VehicleTelemetry.Longitude(vehicle)));
         return id;
     }
 
@@ -228,6 +235,13 @@ public sealed class PolledSignals
         foreach (string id in gone)
         {
             _vehicles.Remove(id);
+
+            // No vehicle left to read, by definition — this net exists precisely for ids that
+            // stopped appearing without a Dispose. The body stays "unknown" and the position and
+            // crew stay absent rather than being filled in from the last thing we happened to see:
+            // an id can go missing because it was renamed, merged or torn down, and "where it was
+            // half a second ago" is not the same claim as "where it ended". Everything that leaves
+            // through Vehicle.Dispose — which is every ordinary path — reads all four for real.
             into.Add(new VehicleRemovedSignal(simT, wallMs, id, FlightEndReason.Despawned, 0));
         }
     }

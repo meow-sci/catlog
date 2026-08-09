@@ -1,7 +1,7 @@
 ---
 title: The event catalog
 description: >-
-  Everything catlog can record — 22 event types, what each one stores, where in
+  Everything catlog can record — 23 event types, what each one stores, where in
   the game it comes from, and which leaderboards it moves.
 sidebar:
   order: 1
@@ -11,12 +11,12 @@ import { Aside, Card, CardGrid, LinkCard } from "@astrojs/starlight/components";
 
 An **event** is one thing catlog wrote down. Every event has a type — a name like
 `vehicle.impact` or `kitten.tumble` — and that name is unique across the whole
-catalog. There are 22 of them.
+catalog. There are 23 of them.
 
 <LinkCard
   title="Browse every event"
   href="/catlog/events/browse/"
-  description="All 22 in one filterable table, searchable by name, field or board."
+  description="All 23 in one filterable table, searchable by name, field or board."
 />
 
 ## How to read an entry
@@ -54,8 +54,8 @@ and they are marked **always on** wherever they appear on this site.
   </Card>
   <Card title="Sampled in the background" icon="information">
     catlog looks at every vehicle twice a second and compares this reading against the last.
-    Crossing into an atmosphere, achieving orbit, changing sphere of influence, a kitten going over,
-    and all the flight telemetry work this way.
+    Crossing into an atmosphere, achieving orbit, changing sphere of influence, touching down on a
+    surface, a kitten going over, and all the flight telemetry work this way.
   </Card>
 </CardGrid>
 
@@ -91,7 +91,7 @@ that, so skimming a boundary produces one crossing rather than forty.
   <LinkCard
     title="Your vehicle"
     href="/catlog/events/vehicle/"
-    description="Situation changes, atmosphere, orbit, sphere of influence, impacts, destruction, staging and docking."
+    description="Situation changes, atmosphere, orbit, sphere of influence, landings, impacts, destruction, staging and docking."
   />
   <LinkCard
     title="Engines"
@@ -106,6 +106,6 @@ that, so skimming a boundary produces one crossing rather than forty.
   <LinkCard
     title="Background telemetry"
     href="/catlog/events/telemetry/"
-    description="The 30-second flight summary five speed, load and altitude boards are built from."
+    description="The 30-second flight summary six speed, load and altitude boards are built from."
   />
 </CardGrid>

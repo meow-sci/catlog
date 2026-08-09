@@ -168,6 +168,14 @@ public sealed record SessionLoadedSignal(
 /// The game's <c>Vehicle.LaunchGameTime</c>. Together with the vehicle id this is the flight's
 /// identity, so a rename or a re-registration after a save load does not mint a second flight.
 /// </param>
+/// <param name="KittenNames">
+/// The roster names of the kittens aboard, in seat order — hashed into <c>kids</c> when the
+/// envelope is built, the same relabelling every other kitten-bearing event uses. Null or empty
+/// means uncrewed, and the two are the same thing: an empty array on the wire.
+/// </param>
+/// <param name="StageCount">How many stages the vehicle has; 0 when the read failed.</param>
+/// <param name="Lat">Latitude in degrees, or null when it could not be read.</param>
+/// <param name="Lon">Longitude in degrees, or null when it could not be read.</param>
 public sealed record VehicleCreatedSignal(
     double SimT,
     long WallMs,
@@ -177,7 +185,11 @@ public sealed record VehicleCreatedSignal(
     double MassKg,
     int PartCount,
     int CrewCount,
-    double LaunchGameTime) : GameSignal(SimT, WallMs);
+    double LaunchGameTime,
+    IReadOnlyList<string>? KittenNames = null,
+    int StageCount = 0,
+    double? Lat = null,
+    double? Lon = null) : GameSignal(SimT, WallMs);
 
 /// <summary>A vehicle left the simulation.</summary>
 /// <param name="SimT">Universe sim seconds.</param>
@@ -185,20 +197,44 @@ public sealed record VehicleCreatedSignal(
 /// <param name="VehicleId">The vehicle's id.</param>
 /// <param name="Reason">Why the flight ended.</param>
 /// <param name="CrewCount">Occupied seats at the moment it ended.</param>
+/// <param name="Body">
+/// Lowercase parent body name where the flight ended. The default is the honest value for the one
+/// producer that has no vehicle left to read — the poll's silent-removal safety net, which knows
+/// only that an id stopped appearing — and every other producer reads it off a vehicle that is
+/// still intact, because <c>Vehicle.Dispose</c> is hooked as a <b>prefix</b>.
+/// </param>
+/// <param name="KittenNames">The roster names aboard at the end; null when there was no vehicle left to ask.</param>
+/// <param name="Lat">Latitude in degrees, or null when it could not be read.</param>
+/// <param name="Lon">Longitude in degrees, or null when it could not be read.</param>
 public sealed record VehicleRemovedSignal(
     double SimT,
     long WallMs,
     string VehicleId,
     FlightEndReason Reason,
-    int CrewCount) : GameSignal(SimT, WallMs);
+    int CrewCount,
+    string Body = "unknown",
+    IReadOnlyList<string>? KittenNames = null,
+    double? Lat = null,
+    double? Lon = null) : GameSignal(SimT, WallMs);
 
 /// <summary>The player recovered a vehicle. Ends the flight with <c>reason: "recovered"</c>.</summary>
 /// <param name="SimT">Universe sim seconds.</param>
 /// <param name="WallMs">Client unix milliseconds.</param>
 /// <param name="VehicleId">The vehicle's id.</param>
 /// <param name="CrewCount">Occupied seats.</param>
-public sealed record VehicleRecoveredSignal(double SimT, long WallMs, string VehicleId, int CrewCount)
-    : GameSignal(SimT, WallMs);
+/// <param name="Body">Lowercase parent body name where the recovery happened.</param>
+/// <param name="KittenNames">The roster names aboard at recovery.</param>
+/// <param name="Lat">Latitude in degrees, or null when it could not be read.</param>
+/// <param name="Lon">Longitude in degrees, or null when it could not be read.</param>
+public sealed record VehicleRecoveredSignal(
+    double SimT,
+    long WallMs,
+    string VehicleId,
+    int CrewCount,
+    string Body = "unknown",
+    IReadOnlyList<string>? KittenNames = null,
+    double? Lat = null,
+    double? Lon = null) : GameSignal(SimT, WallMs);
 
 /// <summary>A vehicle was destroyed by the physics solver.</summary>
 /// <param name="SimT">Universe sim seconds.</param>
@@ -214,6 +250,8 @@ public sealed record VehicleRecoveredSignal(double SimT, long WallMs, string Veh
 /// Occupied seats. Per D11 these kittens all survive: the physics destruction path never calls
 /// <c>KillCrew</c> (<c>docs/ksa-integration.md</c> §4).
 /// </param>
+/// <param name="Lat">Latitude in degrees, or null when it could not be read.</param>
+/// <param name="Lon">Longitude in degrees, or null when it could not be read.</param>
 public sealed record RudSignal(
     double SimT,
     long WallMs,
@@ -224,7 +262,9 @@ public sealed record RudSignal(
     double SpeedMs,
     double AltitudeM,
     string Body,
-    int CrewCount) : GameSignal(SimT, WallMs);
+    int CrewCount,
+    double? Lat = null,
+    double? Lon = null) : GameSignal(SimT, WallMs);
 
 /// <summary>A ground impact. Paired with a same-or-next-frame destruction by <see cref="Detect.ImpactCorrelator"/>.</summary>
 /// <param name="SimT">Universe sim seconds.</param>
@@ -235,6 +275,8 @@ public sealed record RudSignal(
 /// <param name="LaunchPad">True when the struck collider was the launch pad (excluded from the lithobrake board).</param>
 /// <param name="Body">Lowercase parent body name.</param>
 /// <param name="CrewCount">Occupied seats.</param>
+/// <param name="Lat">Latitude in degrees, or null when it could not be read.</param>
+/// <param name="Lon">Longitude in degrees, or null when it could not be read.</param>
 public sealed record ImpactSignal(
     double SimT,
     long WallMs,
@@ -243,7 +285,9 @@ public sealed record ImpactSignal(
     double EnergyJ,
     bool LaunchPad,
     string Body,
-    int CrewCount) : GameSignal(SimT, WallMs);
+    int CrewCount,
+    double? Lat = null,
+    double? Lon = null) : GameSignal(SimT, WallMs);
 
 /// <summary>
 /// A water splash. Treated as an impact with <c>launch_pad = false</c>; the game's splash event
@@ -256,6 +300,8 @@ public sealed record ImpactSignal(
 /// <param name="EnergyJ">Impact kinetic energy, in joules.</param>
 /// <param name="Body">Lowercase parent body name.</param>
 /// <param name="CrewCount">Occupied seats.</param>
+/// <param name="Lat">Latitude in degrees, or null when it could not be read.</param>
+/// <param name="Lon">Longitude in degrees, or null when it could not be read.</param>
 public sealed record SplashSignal(
     double SimT,
     long WallMs,
@@ -263,7 +309,9 @@ public sealed record SplashSignal(
     double SpeedMs,
     double EnergyJ,
     string Body,
-    int CrewCount) : GameSignal(SimT, WallMs);
+    int CrewCount,
+    double? Lat = null,
+    double? Lon = null) : GameSignal(SimT, WallMs);
 
 /// <summary>The player activated the next stage.</summary>
 /// <param name="SimT">Universe sim seconds.</param>

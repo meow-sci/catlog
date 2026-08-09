@@ -39,6 +39,20 @@ Run this checklist on a machine with KSA, then replace each item with a dated re
       fix, and it has never run in-game.
 - [ ] **Launch-pad impacts are excluded.** A hard set-down on the launch pad records
       `launch_pad: true`, and scores nothing.
+- [ ] **Landing.** Set down gently and stay intact: exactly **one** `vehicle.landed` beside the
+      `vehicle.situation` for the same edge, `survived: true`, `vertical_speed_ms` a small **positive**
+      number (positive is *downwards*) and `radar_alt_m` near but not exactly 0. Then bounce a lander
+      so it alternates `freefall`/`landed` for several seconds — the 2 s shared debounce must hold it
+      to one record per 2 s and **never** one per sample. Then land and immediately scuttle:
+      `survived` must be `false`, and **no feed line** may appear.
+- [ ] **Nothing lands at save-load.** Load a save with a vehicle already sitting on the ground. No
+      `vehicle.landed` at all — the baseline seeds the latch and emits nothing.
+- [ ] **The new spatial reads resolve.** `lat` / `lon` present and sane on a launch, a landing and a
+      RUD on a `Celestial`; `radar_alt_m` **absent** on a `telemetry.window` spent in orbit and
+      present near the surface; `warp_max` reading 1 in real time and the warp factor under warp.
+      Any of these arriving as `0` rather than absent is an omit-don't-zero regression (MOD-078).
+- [ ] **`stage_count` is not 0.** The highest-churn read of the wave. A three-stage rocket reports 3
+      on `flight.started`; a 0 means `SequenceList` moved in this build.
 - [ ] **Teleport does not false-flag.** Go EVA, and separately do an editor decouple. Neither may
       produce `flight.flagged: teleport`. Then teleport from the console or the Set Orbit window:
       that one **must** flag.
@@ -149,6 +163,27 @@ number *better* than it was; `vehicle.rud` only hides how often a player explode
 `vehicle.impact.survived` verdict — the one that actually scores — is computed client-side before the
 filter ever sees the envelope, so it stays honest either way. Vanity-hiding is a preference, and
 Constitution §8's proportionality is the reason the list stops where it does. See MOD-072.
+
+### Propellant, Δv and any efficiency board that judges a claim
+
+Refused for now, and the reason is Constitution §8 rather than cost. `Vehicle.PropellantMass` sits
+beside the mass catlog already reads twice, so this is cheap — but the moment the log carries both a
+Δv figure and the orbit a vehicle reached, the difference between them is computable and the next
+reasonable-sounding proposal is to reject records where the two do not reconcile. That check needs a
+tolerance nobody can defend (aerobraking, gravity assists, staging losses, drag, an engine the mod
+could not read), and its false positives land on **honest players doing something clever**.
+
+What shipped instead is the honest version of the same appetite: `vehicle.orbit.mass_kg` beside
+`flight.started.mass_kg`, and the `heaviest_to_orbit` / `heaviest_launch` pair. That ranks a ratio
+rather than judging a claim. A future decision may record propellant — but it has to write *record
+it, never validate it* down first, the way `warp_max` did. PROJ-099.
+
+### A plausibility rule on what counts as a "real" landing
+
+A one-metre hop is a landing, and catlog says so on the player-facing site rather than filtering it
+out. Every version of the filter — a minimum fall height, a minimum time airborne, a minimum
+horizontal distance — infers **intent** from data shape, excludes something real (a hop test, a rover
+cresting a ridge, an aborted hover) and excludes no determined faker, who hops from higher. PROJ-096.
 
 ### Save-scum detection
 

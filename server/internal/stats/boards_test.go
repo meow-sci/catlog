@@ -190,9 +190,10 @@ func TestLaunchBoardsMeasureWhatWasOnThePad(t *testing.T) {
 	f1, f2, f3 := flightN(1), flightN(2), flightN(3)
 	got := fold(t, []input{
 		{flight: f1, typ: "flight.started", payload: stats.FlightStarted{
-			VehicleName: "Whisker VII", Body: "kerbin", MassKg: 412000, PartCount: 214, CrewCount: 3}},
+			VehicleName: "Whisker VII", Body: "kerbin", MassKg: 412000, PartCount: 214,
+			CrewCount: 3, StageCount: 3}},
 		{flight: f2, typ: "flight.started", payload: stats.FlightStarted{
-			VehicleName: "Probe", Body: "kerbin", MassKg: 900, PartCount: 640, CrewCount: 0}},
+			VehicleName: "Probe", Body: "kerbin", MassKg: 900, PartCount: 640, CrewCount: 0, StageCount: 5}},
 		// An unreadable vehicle reports zeros rather than omitting the keys, so
 		// a zero here is a failed read and not an empty rocket.
 		{flight: f3, typ: "flight.started", payload: stats.FlightStarted{Body: "unknown"}},
@@ -201,9 +202,12 @@ func TestLaunchBoardsMeasureWhatWasOnThePad(t *testing.T) {
 		"1/heaviest_launch": 412000,
 		"1/most_parts":      640,
 		"1/biggest_crew":    3,
+		// The tallest stack is not the heaviest rocket: `biggest_stack` ranks the
+		// probe that flew on five sequences over the crewed vehicle's three.
+		"1/biggest_stack": 5,
 	})
 	wantCx := `{"body":"kerbin","crew_count":3,"flight":"` + ids.String(f1) +
-		`","mass_kg":412000,"part_count":214,"vehicle":"Whisker VII"}`
+		`","mass_kg":412000,"part_count":214,"stage_count":3,"vehicle":"Whisker VII"}`
 	if cx := got["1/heaviest_launch"].Context; cx != wantCx {
 		t.Errorf("context = %s\n   want %s", cx, wantCx)
 	}
@@ -418,9 +422,12 @@ func TestFlaggedFlightExcludesTheNewBoards(t *testing.T) {
 	want(t, fold(t, []input{
 		{flight: dirty, typ: "flight.flagged", payload: stats.FlightFlagged{Flag: "teleport"}},
 		{flight: dirty, typ: "flight.started", payload: stats.FlightStarted{
-			VehicleName: "Cheat", Body: "kerbin", MassKg: 9e9, PartCount: 9000, CrewCount: 90}},
+			VehicleName: "Cheat", Body: "kerbin", MassKg: 9e9, PartCount: 9000, CrewCount: 90,
+			StageCount: 900}},
 		{flight: dirty, typ: "vehicle.orbit", payload: stats.VehicleOrbit{
-			Phase: "achieved", Body: "kerbin", ApM: 9e9, PeM: 1, Ecc: 0.00001, IncDeg: 179}},
+			Phase: "achieved", Body: "kerbin", ApM: 9e9, PeM: 1, Ecc: 0.00001, IncDeg: 179, MassKg: 9e9}},
+		{flight: dirty, typ: "vehicle.landed", payload: stats.VehicleLanded{
+			Body: "mun", VerticalSpeedMs: 0.001, HorizontalSpeedMs: 0, CrewCount: 9, Survived: true}},
 		{flight: dirty, typ: "vehicle.atmosphere", payload: stats.VehicleAtmosphere{
 			Dir: "entered", Body: "eve", SpeedMs: 9999}},
 		{flight: dirty, typ: "vehicle.impact", payload: stats.VehicleImpact{
@@ -432,7 +439,8 @@ func TestFlaggedFlightExcludesTheNewBoards(t *testing.T) {
 		{flight: dirty, typ: "engine.ignition", payload: stats.Engine{Engine: "lv-909", Count: 1}},
 		{flight: dirty, typ: "engine.flameout", payload: stats.Engine{Engine: "lv-909", Count: 1}},
 		{flight: dirty, typ: "telemetry.window", payload: stats.TelemetryWindow{
-			T1Sim: 30, Body: "kerbin", AltM: stats.Agg{Max: 9e9}, MaxQPa: ptr(9e9)}},
+			T1Sim: 30, Body: "kerbin", AltM: stats.Agg{Max: 9e9}, MaxQPa: ptr(9e9),
+			RadarAltM: &stats.Agg{Min: 0.001, Max: 4, Mean: 2, Last: 1}}},
 		{flight: dirty, typ: "flight.ended", payload: stats.FlightEnded{Reason: "recovered", CrewCount: 90}},
 	}), map[string]float64{})
 }
@@ -466,5 +474,173 @@ func TestTheOnceUndecodedTypesNowDecode(t *testing.T) {
 		if ev.Payload != c.want {
 			t.Errorf("%s decoded to %#v, want %#v", c.typ, ev.Payload, c.want)
 		}
+	}
+}
+
+// --- the wire-v2 boards ---------------------------------------------------------
+
+func TestLandingBoardsRankTheDescentRate(t *testing.T) {
+	f := flightN(1)
+	got := fold(t, []input{
+		{flight: f, typ: "vehicle.landed", payload: stats.VehicleLanded{
+			Body: "mun", VerticalSpeedMs: 1.4, HorizontalSpeedMs: 0.3, CrewCount: 2, Survived: true}},
+		// Harder, but still a landing: the counter takes it and the record does not.
+		{flight: f, typ: "vehicle.landed", payload: stats.VehicleLanded{
+			Body: "duna", VerticalSpeedMs: 9.8, HorizontalSpeedMs: 12, CrewCount: 1, Survived: true}},
+		// A touchdown nobody walked away from is a crash, and `survived` is the
+		// mod's answer rather than something inferred from how gentle it looks.
+		{flight: f, typ: "vehicle.landed", payload: stats.VehicleLanded{
+			Body: "eve", VerticalSpeedMs: 0.2, HorizontalSpeedMs: 1, CrewCount: 3, Survived: false}},
+		// An unreadable descent decomposition reads 0, which on an ascending board
+		// would be an unbeatable record — but it is still a landing that happened.
+		{flight: f, typ: "vehicle.landed", payload: stats.VehicleLanded{
+			Body: "mun", VerticalSpeedMs: 0, HorizontalSpeedMs: 4, CrewCount: 0, Survived: true}},
+	})
+	want(t, got, map[string]float64{
+		"1/landings":        3,
+		"1/softest_landing": 1.4,
+	})
+	wantCx := `{"body":"mun","crew_count":2,"flight":"` + ids.String(f) + `","horizontal_speed_ms":0.3}`
+	if cx := got["1/softest_landing"].Context; cx != wantCx {
+		t.Errorf("context = %s\n   want %s", cx, wantCx)
+	}
+}
+
+func TestLandingBoardsAreNotLandedBodies(t *testing.T) {
+	// `landed_bodies` stays on `vehicle.situation`, and the two events are
+	// emitted from the same detection — so a real landing arrives as a pair and
+	// must advance each board exactly once.
+	f := flightN(1)
+	proj := testutil.MemProjections(t)
+	apply(t, proj, []input{
+		{flight: f, typ: "vehicle.situation", payload: stats.VehicleSituation{
+			From: "freefall", To: "landed", Body: "mun", SurfaceSpeedMs: 1.5}},
+		{flight: f, typ: "vehicle.landed", payload: stats.VehicleLanded{
+			Body: "mun", VerticalSpeedMs: 1.4, HorizontalSpeedMs: 0.5, CrewCount: 1, Survived: true}},
+	}, 0, false)
+	want(t, readStats(t, proj), map[string]float64{
+		"1/landed_bodies":     1,
+		"1/softest_touchdown": 1.5,
+		"1/landings":          1,
+		"1/softest_landing":   1.4,
+	})
+
+	// Only the situation writes player_body; the landing folds never touch it,
+	// which is what stops the pair counting the body twice.
+	var rows int
+	if err := proj.Reader().QueryRowContext(t.Context(),
+		`SELECT count(*) FROM player_body WHERE player_id = 1 AND kind = 'landed'`).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 1 {
+		t.Errorf("player_body kind='landed' rows = %d, want 1", rows)
+	}
+}
+
+func TestLowestPassNeedsARadarReading(t *testing.T) {
+	f := flightN(1)
+	got := fold(t, []input{
+		{flight: f, typ: "telemetry.window", payload: stats.TelemetryWindow{
+			T0Sim: 0, T1Sim: 30, N: 60, Body: "mun",
+			AltM:      stats.Agg{Max: 12000},
+			RadarAltM: &stats.Agg{Min: 340, Max: 12000, Mean: 4000, Last: 900}}},
+		{flight: f, typ: "telemetry.window", payload: stats.TelemetryWindow{
+			T0Sim: 30, T1Sim: 60, N: 60, Body: "mun",
+			AltM:      stats.Agg{Max: 9000},
+			RadarAltM: &stats.Agg{Min: 85, Max: 9000, Mean: 2000, Last: 120}}},
+		// A window spent in orbit has no terrain below it, so the mod omits the
+		// aggregate entirely rather than folding zeros into it. The altitude board
+		// still scores — a position is always sampled.
+		{flight: f, typ: "telemetry.window", payload: stats.TelemetryWindow{
+			T0Sim: 60, T1Sim: 90, N: 60, Body: "mun", AltM: stats.Agg{Max: 240000}}},
+		// And a window that ended on the ground: 0 is where a landed vehicle sits,
+		// and on an ascending board that is a record nobody can beat (PROJ-088).
+		{flight: f, typ: "telemetry.window", payload: stats.TelemetryWindow{
+			T0Sim: 90, T1Sim: 120, N: 60, Body: "mun",
+			AltM:      stats.Agg{Max: 400},
+			RadarAltM: &stats.Agg{Min: 0, Max: 400, Mean: 90, Last: 0}}},
+	})
+	want(t, got, map[string]float64{
+		"1/highest_altitude": 240000,
+		"1/lowest_pass":      85,
+	})
+	if cx := got["1/lowest_pass"].Context; cx != `{"body":"mun","flight":"`+ids.String(f)+`","t1_sim":60}` {
+		t.Errorf("context = %s", cx)
+	}
+}
+
+func TestHeaviestToOrbitRanksThePayloadNotTheRocket(t *testing.T) {
+	f1, f2 := flightN(1), flightN(2)
+	got := fold(t, []input{
+		{flight: f1, typ: "flight.started", payload: stats.FlightStarted{
+			VehicleName: "Heirloom", Body: "kerbin", MassKg: 412000, PartCount: 214,
+			CrewCount: 3, StageCount: 3}},
+		{flight: f1, typ: "vehicle.orbit", payload: stats.VehicleOrbit{
+			Phase: "achieved", Body: "kerbin", ApM: 320000, PeM: 295000,
+			Ecc: 0.0021, IncDeg: 51.6, MassKg: 18400}},
+		// A much lighter rocket that got more of itself up there — which is the
+		// whole reason this is not `heaviest_launch` read twice.
+		{flight: f2, typ: "flight.started", payload: stats.FlightStarted{
+			VehicleName: "Lean", Body: "kerbin", MassKg: 90000, PartCount: 40,
+			CrewCount: 0, StageCount: 2}},
+		{flight: f2, typ: "vehicle.orbit", payload: stats.VehicleOrbit{
+			Phase: "achieved", Body: "kerbin", ApM: 200000, PeM: 190000,
+			Ecc: 0.001, IncDeg: 5, MassKg: 22100}},
+		// An escape is not an orbit anybody reached, however heavy.
+		{flight: f2, typ: "vehicle.orbit", payload: stats.VehicleOrbit{
+			Phase: "escaped", Body: "kerbin", MassKg: 9e6}},
+		// A ver 1 row carries no mass at all, and 0 kg is not a payload.
+		{flight: f2, typ: "vehicle.orbit", payload: stats.VehicleOrbit{
+			Phase: "achieved", Body: "mun", ApM: 10000, PeM: 9000, Ecc: 0.05, IncDeg: 2}},
+	})
+	want(t, got, map[string]float64{
+		"1/heaviest_launch":   412000,
+		"1/most_parts":        214,
+		"1/biggest_crew":      3,
+		"1/biggest_stack":     3,
+		"1/orbits_achieved":   3,
+		"1/fastest_to_orbit":  0,
+		"1/highest_apoapsis":  320000,
+		"1/lowest_orbit":      9000,
+		"1/roundest_orbit":    0.001,
+		"1/steepest_orbit":    51.6,
+		"1/heaviest_to_orbit": 22100,
+	})
+	wantCx := `{"ap_m":200000,"body":"kerbin","flight":"` + ids.String(f2) + `","pe_m":190000}`
+	if cx := got["1/heaviest_to_orbit"].Context; cx != wantCx {
+		t.Errorf("context = %s\n   want %s", cx, wantCx)
+	}
+}
+
+func TestVehicleLandedKeepsAbsentApartFromZero(t *testing.T) {
+	// A wire-shaped map rather than the struct, so the JSON tags are what is
+	// under test. lat/lon/radar_alt_m are omitted when the read failed — never
+	// null, never 0 — and 0 is a real place for all three, so the decoder has to
+	// keep "the mod could not say" apart from "at the equator, on the ground".
+	full := decode(t, input{flight: flightN(1), typ: "vehicle.landed", payload: map[string]any{
+		"body": "mun", "vertical_speed_ms": 1.4, "horizontal_speed_ms": 0.3,
+		"crew_count": 2, "survived": true, "radar_alt_m": 0, "lat": 0, "lon": 0,
+	}}, 1)
+	p, ok := full.Payload.(stats.VehicleLanded)
+	if !ok {
+		t.Fatalf("payload = %#v", full.Payload)
+	}
+	if p.Body != "mun" || p.VerticalSpeedMs != 1.4 || p.HorizontalSpeedMs != 0.3 ||
+		p.CrewCount != 2 || !p.Survived {
+		t.Errorf("payload = %#v", p)
+	}
+	for name, got := range map[string]*float64{"radar_alt_m": p.RadarAltM, "lat": p.Lat, "lon": p.Lon} {
+		if got == nil || *got != 0 {
+			t.Errorf("%s = %v, want a pointer to 0: an explicit zero is a reading", name, got)
+		}
+	}
+
+	bare := decode(t, input{flight: flightN(1), typ: "vehicle.landed", payload: map[string]any{
+		"body": "mun", "vertical_speed_ms": 1.4, "horizontal_speed_ms": 0.3,
+		"crew_count": 2, "survived": true,
+	}}, 2)
+	q := bare.Payload.(stats.VehicleLanded)
+	if q.RadarAltM != nil || q.Lat != nil || q.Lon != nil {
+		t.Errorf("absent keys decoded to %v/%v/%v, want nil", q.RadarAltM, q.Lat, q.Lon)
 	}
 }

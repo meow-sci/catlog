@@ -638,6 +638,257 @@ public sealed class EventPipelineTests
         Assert.Equal(flight, ended.Flight);
     }
 
+    // ----- wire v2: the landing edge ---------------------------------------------------------
+
+    /// <summary>
+    /// The golden landing shape: one contact-free → contact transition produces
+    /// <c>vehicle.situation</c> immediately and <c>vehicle.landed</c> once the correlator's hold
+    /// has expired without a destruction. Two events, one detection, in that order.
+    /// </summary>
+    [Fact]
+    public void GoldenScenario_TouchdownEmitsSituationThenLanding()
+    {
+        EventPipeline pipeline = TestData.Pipeline();
+        var produced = new List<EventEnvelope>();
+
+        produced.AddRange(pipeline.ProcessSignal(TestData.Created(simT: 0, crewCount: 2)));
+        produced.AddRange(pipeline.ProcessFrame(TestData.Frame(1,
+            TestData.Snapshot(simT: 0, situation: "freefall", altitudeM: 900))));
+        produced.AddRange(pipeline.ProcessFrame(TestData.Frame(2,
+            TestData.Snapshot(simT: 5, situation: "landed", altitudeM: 12, radarAltM: 0.3,
+                verticalSpeedMs: 1.8, horizontalSpeedMs: 0.2, crewCount: 2, lat: 28.6, lon: -80.6))));
+        produced.AddRange(pipeline.ProcessSignal(new FrameBoundarySignal(5, TestData.WallMs, 1)));
+        produced.AddRange(pipeline.ProcessSignal(new FrameBoundarySignal(5.1, TestData.WallMs, 2)));
+
+        Assert.Equal(
+            [EventTypes.FlightStarted, EventTypes.VehicleSituation, EventTypes.VehicleLanded],
+            produced.Select(static e => e.Type).ToArray());
+
+        var landed = Assert.IsType<VehicleLandedPayload>(
+            produced.Single(static e => e.Type == EventTypes.VehicleLanded).Payload);
+        Assert.True(landed.Survived, "nothing destroyed the vehicle after it touched down");
+        Assert.Equal("earth", landed.Body);
+        Assert.Equal(1.8, landed.VerticalSpeedMs);
+        Assert.Equal(0.2, landed.HorizontalSpeedMs);
+        Assert.Equal(2, landed.CrewCount);
+        Assert.Equal(0.3, landed.RadarAltM);
+        Assert.Equal(28.6, landed.Lat);
+        Assert.Equal(-80.6, landed.Lon);
+
+        // One flight, and the landing is on it rather than on a freshly minted phantom.
+        Assert.Single(produced.Select(static e => e.Flight).Distinct());
+    }
+
+    /// <summary>
+    /// The whole reason <c>survived</c> is routed through <see cref="ImpactCorrelator"/> rather
+    /// than inferred: a player who tips over on touchdown and immediately scuttles must not bank
+    /// the landing. The verdict is settled as the flight ends, against that flight.
+    /// </summary>
+    [Fact]
+    public void Landing_FollowedByAScuttle_DoesNotSurvive()
+    {
+        EventPipeline pipeline = TestData.Pipeline();
+        pipeline.ProcessSignal(TestData.Created(simT: 0));
+        string flight = pipeline.Tracker.PeekFlight("v1")!;
+
+        pipeline.ProcessFrame(TestData.Frame(1, TestData.Snapshot(simT: 0, situation: "freefall")));
+        pipeline.ProcessFrame(TestData.Frame(2, TestData.Snapshot(simT: 5, situation: "landed")));
+
+        // No RudSignal: this is the player hitting Abandon, which the game applies in its input pass.
+        IReadOnlyList<EventEnvelope> ended = pipeline.ProcessSignal(
+            new VehicleRemovedSignal(5.1, TestData.WallMs, "v1", FlightEndReason.Destroyed, 1));
+
+        EventEnvelope landed = Assert.Single(ended, static e => e.Type == EventTypes.VehicleLanded);
+        Assert.False(Assert.IsType<VehicleLandedPayload>(landed.Payload).Survived);
+        Assert.Equal(flight, landed.Flight);
+
+        // Nothing is left for a later boundary to resolve a second time.
+        Assert.Empty(pipeline.ProcessSignal(new FrameBoundarySignal(5.2, TestData.WallMs, 1)));
+    }
+
+    /// <summary>
+    /// Same peek semantics as an outstanding impact: a landing whose flight has already ended when
+    /// the session flushes is dropped rather than minted onto a phantom flight.
+    /// </summary>
+    [Fact]
+    public void Flush_DropsALandingWhoseFlightAlreadyEnded()
+    {
+        EventPipeline pipeline = TestData.Pipeline();
+        pipeline.ProcessSignal(TestData.Created(simT: 0));
+        pipeline.ProcessFrame(TestData.Frame(1, TestData.Snapshot(simT: 0, situation: "freefall")));
+
+        // The touchdown is detected in the last frame the game ever runs, and the vehicle is gone
+        // before the hold expires.
+        pipeline.ProcessFrame(TestData.Frame(2, TestData.Snapshot(simT: 5, situation: "landed")));
+        pipeline.ProcessSignal(new VehicleRemovedSignal(5, TestData.WallMs, "v1", FlightEndReason.Despawned, 0));
+
+        Assert.DoesNotContain(pipeline.Flush(TestData.WallMs), static e => e.Type == EventTypes.VehicleLanded);
+        Assert.Empty(pipeline.Tracker.ActiveVehicleIds);
+    }
+
+    // ----- wire v2: crew identity, body and position on the flight events ---------------------
+
+    [Fact]
+    public void FlightStarted_CarriesTheCrewAsKidsPlusStagesAndPosition()
+    {
+        EventPipeline pipeline = TestData.Pipeline();
+
+        EventEnvelope started = Assert.Single(pipeline.ProcessSignal(TestData.Created(
+            crewCount: 2, kittenNames: ["Whiskers", "Mittens"], stageCount: 3, lat: 28.6, lon: -80.6)));
+
+        var payload = Assert.IsType<FlightStartedPayload>(started.Payload);
+        Assert.Equal(
+            [Ids.KittenId(TestData.InstallId, "Whiskers"), Ids.KittenId(TestData.InstallId, "Mittens")],
+            payload.Kids);
+        Assert.Equal(3, payload.StageCount);
+        Assert.Equal(28.6, payload.Lat);
+        Assert.Equal(-80.6, payload.Lon);
+    }
+
+    /// <summary>An uncrewed flight says so with an empty array, never a null and never a missing key.</summary>
+    [Fact]
+    public void FlightStarted_WithNoCrew_CarriesAnEmptyKidsArray()
+    {
+        EventPipeline pipeline = TestData.Pipeline();
+
+        EventEnvelope started = Assert.Single(pipeline.ProcessSignal(TestData.Created(crewCount: 0)));
+
+        Assert.Empty(Assert.IsType<FlightStartedPayload>(started.Payload).Kids);
+
+        using JsonDocument document = JsonDocument.Parse(started.ToNdjsonLine());
+        JsonElement kids = document.RootElement.GetProperty("payload").GetProperty("kids");
+        Assert.Equal(JsonValueKind.Array, kids.ValueKind);
+        Assert.Equal(0, kids.GetArrayLength());
+    }
+
+    [Fact]
+    public void FlightEnded_CarriesTheCrewBodyAndPosition()
+    {
+        EventPipeline pipeline = TestData.Pipeline();
+        pipeline.ProcessSignal(TestData.Created(crewCount: 1));
+
+        EventEnvelope ended = Assert.Single(pipeline.ProcessSignal(new VehicleRecoveredSignal(
+            100, TestData.WallMs, "v1", 1, "moon", ["Whiskers"], 0.67, -23.47)));
+
+        var payload = Assert.IsType<FlightEndedPayload>(ended.Payload);
+        Assert.Equal("recovered", payload.Reason);
+        Assert.Equal("moon", payload.Body);
+        Assert.Equal([Ids.KittenId(TestData.InstallId, "Whiskers")], payload.Kids);
+        Assert.Equal(0.67, payload.Lat);
+        Assert.Equal(-23.47, payload.Lon);
+    }
+
+    /// <summary>
+    /// The one producer with no vehicle left to read — the poll's silent-removal net — says
+    /// <c>unknown</c> and omits the position, rather than inventing a body it cannot see.
+    /// </summary>
+    [Fact]
+    public void FlightEnded_WithNothingLeftToRead_SaysUnknownAndOmitsThePosition()
+    {
+        EventPipeline pipeline = TestData.Pipeline();
+        pipeline.ProcessSignal(TestData.Created());
+
+        EventEnvelope ended = Assert.Single(pipeline.ProcessSignal(
+            new VehicleRemovedSignal(50, TestData.WallMs, "v1", FlightEndReason.Despawned, 0)));
+
+        var payload = Assert.IsType<FlightEndedPayload>(ended.Payload);
+        Assert.Equal("unknown", payload.Body);
+        Assert.Empty(payload.Kids);
+
+        using JsonDocument document = JsonDocument.Parse(ended.ToNdjsonLine());
+        JsonElement body = document.RootElement.GetProperty("payload");
+        Assert.False(body.TryGetProperty("lat", out _));
+        Assert.False(body.TryGetProperty("lon", out _));
+    }
+
+    [Fact]
+    public void OrbitAchieved_CarriesTheMassAtTheMilestone()
+    {
+        EventPipeline pipeline = TestData.Pipeline();
+        pipeline.ProcessSignal(TestData.Created());
+        pipeline.ProcessFrame(TestData.Frame(1, TestData.Snapshot(simT: 0, peAltM: 0, massKg: 400_000,
+            orbitClass: OrbitClass.Bound)));
+
+        EventEnvelope orbit = Assert.Single(
+            pipeline.ProcessFrame(TestData.Frame(2, TestData.Snapshot(simT: 300, peAltM: 200_000,
+                massKg: 22_500, orbitClass: OrbitClass.Bound))),
+            static e => e.Type == EventTypes.VehicleOrbit);
+
+        Assert.Equal(22_500, Assert.IsType<VehicleOrbitPayload>(orbit.Payload).MassKg);
+    }
+
+    // ----- wire v2: absent means absent, on the wire -------------------------------------------
+
+    /// <summary>
+    /// The rule the whole optional-field design exists for: a position that could not be read is
+    /// <b>missing from the JSON</b>, not <c>null</c> and not <c>0</c>. Latitude 0 is the equator and
+    /// radar altitude 0 is the ground; either one emitted as a stand-in for "we do not know" is a
+    /// wrong record rather than a missing one.
+    /// </summary>
+    [Fact]
+    public void UnreadableOptionalKeys_AreAbsentFromTheJsonEntirely()
+    {
+        EventPipeline pipeline = TestData.Pipeline();
+        var produced = new List<EventEnvelope>();
+
+        produced.AddRange(pipeline.ProcessSignal(TestData.Created(simT: 0)));
+        produced.AddRange(pipeline.ProcessSignal(TestData.Rud(simT: 1)));
+        produced.AddRange(pipeline.ProcessSignal(TestData.Impact(simT: 2)));
+        produced.AddRange(pipeline.ProcessFrame(TestData.Frame(1, TestData.Snapshot(simT: 3, situation: "freefall"))));
+        produced.AddRange(pipeline.ProcessFrame(TestData.Frame(2, TestData.Snapshot(simT: 6, situation: "landed"))));
+        produced.AddRange(pipeline.ProcessSignal(new FrameBoundarySignal(6, TestData.WallMs, 1)));
+        produced.AddRange(pipeline.ProcessSignal(new FrameBoundarySignal(6.1, TestData.WallMs, 2)));
+
+        // Every type that can carry a position is represented above.
+        Assert.Contains(produced, static e => e.Type == EventTypes.VehicleLanded);
+        Assert.Contains(produced, static e => e.Type == EventTypes.VehicleImpact);
+
+        foreach (EventEnvelope envelope in produced)
+        {
+            string line = envelope.ToNdjsonLine();
+            using JsonDocument document = JsonDocument.Parse(line);
+            JsonElement payload = document.RootElement.GetProperty("payload");
+
+            Assert.False(payload.TryGetProperty("lat", out _), $"{envelope.Type} must omit lat, not zero it");
+            Assert.False(payload.TryGetProperty("lon", out _), $"{envelope.Type} must omit lon, not zero it");
+            Assert.False(payload.TryGetProperty("radar_alt_m", out _),
+                $"{envelope.Type} must omit radar_alt_m, not zero it");
+            Assert.DoesNotContain("null", line, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>And the same keys are present, with their values, the moment the game can read them.</summary>
+    [Fact]
+    public void ReadableOptionalKeys_ArePresentInTheJson()
+    {
+        EventPipeline pipeline = TestData.Pipeline();
+        pipeline.ProcessSignal(TestData.Created(simT: 0));
+        pipeline.ProcessFrame(TestData.Frame(1, TestData.Snapshot(simT: 0, situation: "freefall")));
+
+        IReadOnlyList<EventEnvelope> onTouchdown = pipeline.ProcessFrame(TestData.Frame(2,
+            TestData.Snapshot(simT: 5, situation: "landed", radarAltM: 1.5, lat: -0.0, lon: 12.25)));
+        pipeline.ProcessSignal(new FrameBoundarySignal(5, TestData.WallMs, 1));
+        IReadOnlyList<EventEnvelope> settled = pipeline.ProcessSignal(
+            new FrameBoundarySignal(5.1, TestData.WallMs, 2));
+
+        JsonElement situation = Payload(Assert.Single(onTouchdown, static e => e.Type == EventTypes.VehicleSituation));
+        Assert.Equal(1.5, situation.GetProperty("radar_alt_m").GetDouble());
+
+        JsonElement landed = Payload(Assert.Single(settled, static e => e.Type == EventTypes.VehicleLanded));
+        Assert.Equal(1.5, landed.GetProperty("radar_alt_m").GetDouble());
+
+        // Zero really is a value here: the prime meridian and the equator are places, and this is
+        // the case the omit-do-not-zero rule exists to keep distinguishable from "unknown".
+        Assert.Equal(0.0, landed.GetProperty("lat").GetDouble());
+        Assert.Equal(12.25, landed.GetProperty("lon").GetDouble());
+
+        static JsonElement Payload(EventEnvelope envelope)
+        {
+            using JsonDocument document = JsonDocument.Parse(envelope.ToNdjsonLine());
+            return document.RootElement.GetProperty("payload").Clone();
+        }
+    }
+
     // The hop-lithobrake shape from GoldenScenario_HopAndSurvivedLithobrake, parameterised by the
     // filter so the two runs are the same inputs in the same order.
     private static List<EventEnvelope> HopAndSurvivedLithobrake(EventTypeFilter types)

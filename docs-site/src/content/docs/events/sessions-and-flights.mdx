@@ -32,6 +32,37 @@ same flights resume.
 <EventDetail type="flight.started" />
 <EventDetail type="flight.ended" />
 
+## What a flight's two ends record about you
+
+A flight beginning and a flight ending are the bookends of everything else, so
+they carry the details that place the rest of it.
+
+**Who was aboard, by name-behind-the-scenes.** Both ends list one identifier per
+kitten in the vehicle, in seat order, and an uncrewed flight lists an empty set
+rather than nothing at all — so "nobody was aboard" and "catlog did not say" are
+never the same answer. Those identifiers are re-labelled per player before
+anything is published, exactly like every other kitten identifier on this site,
+so two players' rosters can never be joined up.
+
+**How tall the stack was.** The start of a flight records how many stages the
+vehicle was built with — the whole staging list, whether or not you ever fire it
+all. That is a different number from the highest stage you actually reach, and
+there is a board for each: a five-stage rocket that comes apart on stage two
+scores five on **Most Stages Built** and two on **Most Stages**.
+
+**Where it happened.** Both ends record the world and, when the game can say, the
+latitude and longitude. The ending carries a world in its own right now; before
+that, the place a flight came down could not be pinned to a map at all, because
+the last telemetry summary could be most of a window old and the vehicle may have
+changed worlds since.
+
+<Aside type="note" title="An unreadable position is left out, not written as zero">
+  Latitude and longitude are absent from the record entirely when the game cannot give catlog an
+  answer. They are never sent as zero, because zero is a real place — a point in the ocean south of
+  Ghana — and a record saying you landed there when catlog simply could not tell would be wrong
+  rather than merely incomplete. A world that could not be read says so in as many words instead.
+</Aside>
+
 ## The three endings
 
 | `reason`    | When                                                                                                                                    |

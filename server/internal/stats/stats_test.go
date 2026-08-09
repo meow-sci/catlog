@@ -649,6 +649,12 @@ func TestFeedSummaries(t *testing.T) {
 			"whiskers said goodbye to kitten Bramble"},
 		{input{flight: f, typ: "flight.ended", payload: stats.FlightEnded{Reason: "recovered", CrewCount: 3}},
 			"whiskers brought 3 kittens home safely"},
+		{input{flight: f, typ: "vehicle.landed", payload: stats.VehicleLanded{
+			Body: "mun", VerticalSpeedMs: 1.4, HorizontalSpeedMs: 0.3, CrewCount: 2, Survived: true}},
+			"whiskers landed on mun at 1.4 m/s with 2 kittens aboard"},
+		{input{flight: f, typ: "vehicle.landed", payload: stats.VehicleLanded{
+			Body: "duna", VerticalSpeedMs: 240, HorizontalSpeedMs: 4, Survived: true}},
+			"whiskers landed on duna at 240 m/s"},
 	}
 
 	proj := testutil.MemProjections(t)
@@ -686,6 +692,13 @@ func TestFeedSkipsNonEventsAndFlaggedFlights(t *testing.T) {
 			payload: stats.FlightEnded{Reason: "despawned"}}, 1), "whiskers", b); err != nil || ok {
 			t.Errorf("despawned flight produced a feed line (err %v)", err)
 		}
+		// A landing the vehicle did not survive is a crash, and the vehicle.rud
+		// beside it already announces that. One moment, one feed line.
+		if _, ok, err := stats.Summarize(ctx, decode(t, input{flight: flightN(1), typ: "vehicle.landed",
+			payload: stats.VehicleLanded{Body: "eve", VerticalSpeedMs: 0.4, CrewCount: 3}}, 5),
+			"whiskers", b); err != nil || ok {
+			t.Errorf("a landing nobody survived produced a feed line (err %v)", err)
+		}
 		// A player with no handle produces nothing — the feed is public.
 		if _, ok, err := stats.Summarize(ctx, decode(t, input{flight: flightN(1), typ: "vehicle.soi",
 			payload: stats.VehicleSOI{ToBody: "mun"}}, 2), "", b); err != nil || ok {
@@ -713,13 +726,14 @@ func TestFeedSkipsNonEventsAndFlaggedFlights(t *testing.T) {
 func TestBoardMetadataCoversEveryStatAFoldWrites(t *testing.T) {
 	// Every board key a fold can produce must describe, or the read API would
 	// hold a row it can neither title nor serve.
-	// The three boards whose unit is deliberately empty: an eccentricity, and
-	// two counts of a thing the title already names. Everything else must carry
-	// a label, or a value column would be a bare number nobody can read.
+	// The four boards whose unit is deliberately empty: an eccentricity, and
+	// three counts of a thing the title already names. Everything else must
+	// carry a label, or a value column would be a bare number nobody can read.
 	unitless := map[string]bool{
 		stats.StatRoundestOrbit: true,
 		stats.StatMostParts:     true,
 		stats.StatMostStages:    true,
+		stats.StatBiggestStack:  true,
 	}
 	declared := map[string]bool{}
 	for _, b := range stats.FixedBoards() {
@@ -753,6 +767,8 @@ func TestBoardMetadataCoversEveryStatAFoldWrites(t *testing.T) {
 		stats.StatSplashdowns, stats.StatEVAs, stats.StatFlameouts,
 		stats.StatEngineIgnitions, stats.StatTopKittenDistance,
 		stats.StatTopKittenMissions,
+		stats.StatHeaviestToOrbit, stats.StatSoftestLanding, stats.StatLandings,
+		stats.StatLowestPass, stats.StatBiggestStack,
 	}
 	for _, stat := range fixed {
 		if !declared[stat] {

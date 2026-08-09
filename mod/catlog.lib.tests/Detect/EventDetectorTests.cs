@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Linq;
 using MeowSci.Catlog.Lib.Detect;
 using MeowSci.Catlog.Lib.Events;
 using MeowSci.Catlog.Lib.Telemetry;
@@ -98,6 +99,180 @@ public sealed class EventDetectorTests
         Assert.Empty(detector.Observe(TestData.Snapshot(simT: 10, situation: "freefall")));
     }
 
+    /// <summary>
+    /// Optional snapshot fields ride through to the payload untouched when they are present.
+    /// </summary>
+    [Fact]
+    public void SituationChange_CarriesTheRadarAltitudeWhenThereIsOne()
+    {
+        var detector = new EventDetector();
+        detector.Observe(TestData.Snapshot(simT: 0, situation: "landed"));
+
+        DetectedEvent detected = Assert.Single(
+            detector.Observe(TestData.Snapshot(simT: 1, situation: "freefall", altitudeM: 4_000, radarAltM: 1_250)),
+            static e => e.Kind == DetectKind.Situation);
+
+        Assert.Equal(1_250, Assert.IsType<VehicleSituationPayload>(detected.Payload).RadarAltM);
+    }
+
+    /// <summary>
+    /// And stay <c>null</c> when they are not — the barometric altitude beside them is a real
+    /// number, so a zeroed radar altitude would read as a craft on the ground at 4 km.
+    /// </summary>
+    [Fact]
+    public void SituationChange_LeavesTheRadarAltitudeNullWhenThereIsNone()
+    {
+        var detector = new EventDetector();
+        detector.Observe(TestData.Snapshot(simT: 0, situation: "landed"));
+
+        DetectedEvent detected = Assert.Single(
+            detector.Observe(TestData.Snapshot(simT: 1, situation: "freefall", altitudeM: 4_000)),
+            static e => e.Kind == DetectKind.Situation);
+
+        Assert.Null(Assert.IsType<VehicleSituationPayload>(detected.Payload).RadarAltM);
+    }
+
+    // ----- landing: the same edge, seen from the other side ----------------------------
+
+    /// <summary>
+    /// The contact-free → contact transition emits <b>both</b> events off one detection, and the
+    /// landing carries a <see cref="LandingObservation"/> rather than a finished payload because
+    /// <c>survived</c> belongs to the correlator.
+    /// </summary>
+    [Fact]
+    public void Touchdown_EmitsBothASituationChangeAndALanding()
+    {
+        var detector = new EventDetector();
+        detector.Observe(TestData.Snapshot(simT: 0, situation: "freefall"));
+
+        IReadOnlyList<DetectedEvent> events = detector.Observe(TestData.Snapshot(
+            simT: 5, situation: "landed", verticalSpeedMs: 4.5, horizontalSpeedMs: 1.25,
+            crewCount: 3, radarAltM: 0.4, lat: -28.5, lon: 152.75));
+
+        Assert.Equal(
+            [EventTypes.VehicleSituation, EventTypes.VehicleLanded],
+            events.Select(static e => e.Type).ToArray());
+
+        var landing = Assert.IsType<LandingObservation>(
+            events.Single(static e => e.Kind == DetectKind.Landing).Payload);
+        Assert.Equal("earth", landing.Body);
+        Assert.Equal(4.5, landing.VerticalSpeedMs);
+        Assert.Equal(1.25, landing.HorizontalSpeedMs);
+        Assert.Equal(3, landing.CrewCount);
+        Assert.Equal(0.4, landing.RadarAltM);
+        Assert.Equal(-28.5, landing.Lat);
+        Assert.Equal(152.75, landing.Lon);
+    }
+
+    /// <summary>A landing where the position could not be read omits it rather than claiming (0, 0).</summary>
+    [Fact]
+    public void Touchdown_WithNoReadablePosition_LeavesLatLonNull()
+    {
+        var detector = new EventDetector();
+        detector.Observe(TestData.Snapshot(simT: 0, situation: "freefall"));
+
+        DetectedEvent detected = Assert.Single(
+            detector.Observe(TestData.Snapshot(simT: 5, situation: "landed")),
+            static e => e.Kind == DetectKind.Landing);
+
+        var landing = Assert.IsType<LandingObservation>(detected.Payload);
+        Assert.Null(landing.Lat);
+        Assert.Null(landing.Lon);
+        Assert.Null(landing.RadarAltM);
+    }
+
+    /// <summary>Every surface-contact situation counts, not only <c>landed</c>.</summary>
+    [Theory]
+    [InlineData("landed")]
+    [InlineData("rolling")]
+    [InlineData("sailing")]
+    [InlineData("floating")]
+    [InlineData("dragging")]
+    [InlineData("bottomed")]
+    public void Touchdown_FiresForEverySurfaceContactSituation(string situation)
+    {
+        var detector = new EventDetector();
+        detector.Observe(TestData.Snapshot(simT: 0, situation: "maneuvering"));
+
+        Assert.Single(
+            detector.Observe(TestData.Snapshot(simT: 5, situation: situation)),
+            static e => e.Kind == DetectKind.Landing);
+    }
+
+    /// <summary>
+    /// Contact → contact is a taxi, not a landing; contact → contact-free is a liftoff. Only the
+    /// one edge produces the event.
+    /// </summary>
+    [Theory]
+    [InlineData("landed", "rolling")]
+    [InlineData("floating", "sailing")]
+    [InlineData("landed", "freefall")]
+    [InlineData("rolling", "maneuvering")]
+    public void NonTouchdownTransitions_EmitOnlyTheSituationChange(string from, string to)
+    {
+        var detector = new EventDetector();
+        detector.Observe(TestData.Snapshot(simT: 0, situation: from));
+
+        DetectedEvent only = Assert.Single(detector.Observe(TestData.Snapshot(simT: 5, situation: to)));
+        Assert.Equal(DetectKind.Situation, only.Kind);
+    }
+
+    /// <summary>
+    /// A situation name catlog does not know reports "no contact" by construction, and that must
+    /// not be mistaken for flight: leaving an unknown state for the ground is not a landing anyone
+    /// can vouch for.
+    /// </summary>
+    [Fact]
+    public void Touchdown_FromAnUnknownSituation_IsNotClaimed()
+    {
+        var detector = new EventDetector();
+        detector.Observe(TestData.Snapshot(simT: 0, situation: "unknown"));
+
+        DetectedEvent only = Assert.Single(detector.Observe(TestData.Snapshot(simT: 5, situation: "landed")));
+        Assert.Equal(DetectKind.Situation, only.Kind);
+    }
+
+    /// <summary>
+    /// The landing shares the situation rule's debounce rather than owning one — a lander bouncing
+    /// between <c>freefall</c> and <c>landed</c> at 2 Hz would otherwise mint a record every
+    /// 500 ms — and it is not lost by it either: the latch only advances when the pair actually
+    /// fires, so the next sample past the window emits both.
+    /// </summary>
+    [Fact]
+    public void Touchdown_InheritsTheSituationDebounceWithoutLosingTheEdge()
+    {
+        var detector = new EventDetector();
+        detector.Observe(TestData.Snapshot(simT: 0, situation: "freefall"));
+
+        Assert.Single(
+            detector.Observe(TestData.Snapshot(simT: 1, situation: "landed")),
+            static e => e.Kind == DetectKind.Landing);
+
+        // Bounce back off the surface and down again, all inside the 2 s window: nothing at all.
+        Assert.Empty(detector.Observe(TestData.Snapshot(simT: 1.5, situation: "freefall")));
+        Assert.Empty(detector.Observe(TestData.Snapshot(simT: 2.5, situation: "landed")));
+
+        // Past the window the pending edge is still there — reported from the last state that
+        // reached the wire, which is `landed`, so it is a taxi and not a second landing.
+        DetectedEvent settled = Assert.Single(detector.Observe(TestData.Snapshot(simT: 4, situation: "rolling")));
+        Assert.Equal(DetectKind.Situation, settled.Kind);
+        Assert.Equal("landed", Assert.IsType<VehicleSituationPayload>(settled.Payload).From);
+    }
+
+    /// <summary>
+    /// A vehicle that is already on the ground when catlog first sees it did not land: the first
+    /// sample is a baseline, and replaying the state of the world at save-load as events is the
+    /// storm the baseline exists to prevent.
+    /// </summary>
+    [Fact]
+    public void Touchdown_IsNotClaimedForAVehicleFirstSeenOnTheGround()
+    {
+        var detector = new EventDetector();
+
+        Assert.Empty(detector.Observe(TestData.Snapshot(simT: 0, situation: "landed")));
+        Assert.Empty(detector.Observe(TestData.Snapshot(simT: 5, situation: "landed")));
+    }
+
     // ----- atmosphere hysteresis ------------------------------------------------------
 
     [Fact]
@@ -183,6 +358,9 @@ public sealed class EventDetectorTests
         Assert.Equal(220_000, payload.ApM);
         Assert.Equal(180_000, payload.PeM);
         Assert.Equal(51.6, payload.IncDeg);
+
+        // The mass at the milestone, which is what makes it comparable with flight.started.mass_kg.
+        Assert.Equal(1_000, payload.MassKg);
     }
 
     [Fact]

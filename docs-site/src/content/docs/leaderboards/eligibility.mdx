@@ -108,6 +108,26 @@ including the recovered-flight one below. **Highest Altitude deliberately does n
 share it.** An altitude is a position rather than a physics result — it is always
 readable — so a probe that never came home still holds whatever height it reached.
 
+**Height above the ground follows the same leave-it-out rule**, for a different
+reason: in orbit there is nothing underneath you to measure against, so a window
+spent up there carries no such reading at all and scores nothing on Lowest Pass.
+That figure is also folded over only the samples that had a ground reading, so it
+describes fewer samples than the rest of the window does.
+
+## Missing is not zero
+
+Three things catlog records can simply be unavailable: your height above the
+ground, your latitude and your longitude. When the game cannot answer, **the value
+is left out of the record entirely.** It is never written as zero.
+
+That is not fussiness. Zero is a real answer to all three questions. A ground
+clearance of zero means you are on the ground. A latitude of zero is a specific
+place — a point in the ocean south of Ghana — and so is a longitude of zero. A
+zero standing in for "catlog could not tell" would be a **wrong** record rather
+than a missing one, and a wrong record is the harder of the two to notice.
+
+It is the same rule peak g has always followed, applied to the newer readings.
+
 ## Zero rules
 
 Several boards refuse a value of exactly zero, and it is always for the same
@@ -116,15 +136,27 @@ zero is an unreadable vehicle, not a weightless one; an eccentricity of zero is 
 figure that was never written, not a perfect circle; a spacewalk of zero seconds
 is a start time that could not be read.
 
-On the three boards where the **smallest** number wins — Lowest Stable Orbit,
-Roundest Orbit, Softest Touchdown — this matters more than tidiness. A zero there
-would be an unbeatable record held by a failed measurement, and no real flight
-could ever take it back.
+On the five boards where the **smallest** number wins — Lowest Stable Orbit,
+Roundest Orbit, Softest Touchdown, Softest Landing and Lowest Pass — this matters
+more than tidiness. A zero there would be an unbeatable record held by a failed
+measurement, and no real flight could ever take it back.
 
-Softest Touchdown adds one more of these. It needs to know you were genuinely off
-the ground beforehand, and "catlog could not tell what you were doing" is not the
-same answer as "you were in freefall" — so an unreadable prior state is refused
-rather than accepted as airborne.
+Two of those five refuse a zero for a reason worth spelling out:
+
+- **Softest Landing.** A real touchdown is never at exactly zero metres per second
+  — catlog looks twice a second and the vehicle is still settling — so a flat zero
+  is a measurement that did not come out, and on a board where gentlest wins it
+  would be untouchable.
+- **Lowest Pass.** Zero is where a vehicle sitting on the ground reads. Every
+  flight ever flown would tie on it before leaving the pad, so the board takes
+  only readings above zero. A landing is not a pass; Softest Landing is the board
+  for arriving.
+
+Softest Touchdown and Softest Landing both add one more of these. They need to
+know you were genuinely off the ground beforehand, and "catlog could not tell what
+you were doing" is not the same answer as "you were in freefall" — so an
+unreadable state on either side of the change is refused rather than accepted as
+airborne.
 
 ## Rebuilding, and the answers that change
 
@@ -163,6 +195,20 @@ And one is about catlog itself changing:
    ignitions and flameouts were added to a log that had been quietly collecting
    those events all along. Until a rebuild runs, they show only what has happened
    since.
+
+5. **A board that reads a figure your older flights never recorded.** This is the
+   sharper version of the case above, and it applies to the newest boards.
+   **Heaviest Payload To Orbit**, **Most Stages Built** and **Lowest Pass** each
+   read something the mod did not use to send — what the vehicle weighed as it
+   made orbit, how many stages it was built with, and how high you were above the
+   ground. Flights recorded before that change carry no such figure, so they read
+   as zero, and all three boards refuse a zero. **They score nothing for your
+   older flights, and a rebuild does not rescue them** — the number was never in
+   the log to begin with. What a rebuild does fix is everything recorded since.
+
+   **Softest Landing** and **Landings** are simpler: landing was not a thing
+   catlog recorded at all before, so those two have no history whatsoever and
+   start from your first flight with the new mod.
 
 Rebuilding is always the more correct answer: it is the one computed with the whole
 story in hand.

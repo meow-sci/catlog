@@ -18,6 +18,13 @@ import (
 // game's StructuralLoad is only written under full physics, so the mod omits
 // them rather than reporting zero, and a fold that treated a missing reading as
 // a real 0 would poison the peak_g board (see docs/ksa-integration.md).
+//
+// Wire v2's position keys obey the same rule and need it more, because their
+// zero is a *place*: `lat`/`lon` 0 is a point in the ocean south of Ghana and
+// `radar_alt_m` 0 is the ground. The mod omits the key entirely when the read
+// failed — it never sends null and never sends 0 — so every one of them is a
+// pointer here and a nil is "the mod could not say", not "sea level at the
+// equator".
 
 // Agg is the §4.2 aggregate object.
 type Agg struct {
@@ -28,18 +35,42 @@ type Agg struct {
 }
 
 // FlightStarted is `flight.started`.
+//
+// Kids is the pseudonymous id of every kitten aboard at launch, in seat order.
+// It is always present on the wire and is `[]` for an uncrewed flight, so a nil
+// slice here means a ver 1 row rather than an empty cabin — a distinction no
+// fold needs today and every fold would need if it were ever collapsed.
+//
+// StageCount is 0 when the read failed, which is the same thing MassKg,
+// PartCount and CrewCount do; `biggest_stack` therefore gates on `> 0` exactly
+// as the other three launch boards do.
 type FlightStarted struct {
-	VehicleName string  `json:"vehicle_name"`
-	Body        string  `json:"body"`
-	MassKg      float64 `json:"mass_kg"`
-	PartCount   int     `json:"part_count"`
-	CrewCount   int     `json:"crew_count"`
+	VehicleName string   `json:"vehicle_name"`
+	Body        string   `json:"body"`
+	MassKg      float64  `json:"mass_kg"`
+	PartCount   int      `json:"part_count"`
+	CrewCount   int      `json:"crew_count"`
+	Kids        []string `json:"kids"`
+	StageCount  int      `json:"stage_count"`
+	Lat         *float64 `json:"lat"`
+	Lon         *float64 `json:"lon"`
 }
 
 // FlightEnded is `flight.ended`.
+//
+// Body may be the literal `"unknown"`, which is an ordinary member of §4.2's
+// open body set and not a sentinel to branch on: it is what the mod's
+// silent-removal safety net reports when there is no vehicle left to ask. There
+// is no `landed_on_unknown` board and there must not be one — a board keyed on
+// a body requires a real body, and [statSuffix] is the only gate that decides
+// which names can be one.
 type FlightEnded struct {
-	Reason    string `json:"reason"` // recovered | destroyed | despawned
-	CrewCount int    `json:"crew_count"`
+	Reason    string   `json:"reason"` // recovered | destroyed | despawned
+	CrewCount int      `json:"crew_count"`
+	Kids      []string `json:"kids"`
+	Body      string   `json:"body"`
+	Lat       *float64 `json:"lat"`
+	Lon       *float64 `json:"lon"`
 }
 
 // FlightFlagged is `flight.flagged`.
@@ -56,12 +87,13 @@ type FlightFlagged struct {
 // previous 2 Hz sample, which is what makes a debounced transition report the
 // edge a player would describe.
 type VehicleSituation struct {
-	From           string  `json:"from"`
-	To             string  `json:"to"`
-	Body           string  `json:"body"`
-	AltitudeM      float64 `json:"altitude_m"`
-	SurfaceSpeedMs float64 `json:"surface_speed_ms"`
-	OrbitalSpeedMs float64 `json:"orbital_speed_ms"`
+	From           string   `json:"from"`
+	To             string   `json:"to"`
+	Body           string   `json:"body"`
+	AltitudeM      float64  `json:"altitude_m"`
+	SurfaceSpeedMs float64  `json:"surface_speed_ms"`
+	OrbitalSpeedMs float64  `json:"orbital_speed_ms"`
+	RadarAltM      *float64 `json:"radar_alt_m"`
 }
 
 // VehicleAtmosphere is `vehicle.atmosphere`.
@@ -87,6 +119,12 @@ type VehicleOrbit struct {
 	PeM    float64 `json:"pe_m"`
 	Ecc    float64 `json:"ecc"`
 	IncDeg float64 `json:"inc_deg"`
+	// MassKg is the mass at the instant the milestone fired, and is **absent —
+	// therefore 0 — on every ver 1 row**, because wire v2 added it. That is why
+	// `heaviest_to_orbit` gates on `> 0` rather than trusting the field: a
+	// history folded before the bump must not fill the board with zero-tonne
+	// payloads.
+	MassKg float64 `json:"mass_kg"`
 }
 
 // VehicleSOI is `vehicle.soi`.
@@ -97,24 +135,64 @@ type VehicleSOI struct {
 
 // VehicleRUD is `vehicle.rud`.
 type VehicleRUD struct {
-	Cause     string  `json:"cause"`
-	PeakG     float64 `json:"peak_g"`
-	PeakQPa   float64 `json:"peak_q_pa"`
-	SpeedMs   float64 `json:"speed_ms"`
-	AltitudeM float64 `json:"altitude_m"`
-	Body      string  `json:"body"`
-	CrewCount int     `json:"crew_count"`
+	Cause     string   `json:"cause"`
+	PeakG     float64  `json:"peak_g"`
+	PeakQPa   float64  `json:"peak_q_pa"`
+	SpeedMs   float64  `json:"speed_ms"`
+	AltitudeM float64  `json:"altitude_m"`
+	Body      string   `json:"body"`
+	CrewCount int      `json:"crew_count"`
+	Lat       *float64 `json:"lat"`
+	Lon       *float64 `json:"lon"`
 }
 
 // VehicleImpact is `vehicle.impact`. `survived` is mod-computed (§7.2): it means
 // no destruction of the same vehicle in the same frame or the next.
 type VehicleImpact struct {
-	SpeedMs   float64 `json:"speed_ms"`
-	EnergyJ   float64 `json:"energy_j"`
-	Survived  bool    `json:"survived"`
-	LaunchPad bool    `json:"launch_pad"`
-	Body      string  `json:"body"`
-	CrewCount int     `json:"crew_count"`
+	SpeedMs   float64  `json:"speed_ms"`
+	EnergyJ   float64  `json:"energy_j"`
+	Survived  bool     `json:"survived"`
+	LaunchPad bool     `json:"launch_pad"`
+	Body      string   `json:"body"`
+	CrewCount int      `json:"crew_count"`
+	Lat       *float64 `json:"lat"`
+	Lon       *float64 `json:"lon"`
+}
+
+// VehicleLanded is `vehicle.landed` — a vehicle touched a surface it was not
+// touching before. New in wire v2, so there is no ver 0 and no upcaster.
+//
+// It is emitted off the same detection as the `vehicle.situation` beside it
+// (contact-free → surface contact, sharing that rule's 2 s debounce), so it is
+// not a second opinion about when a landing happened. What it adds is the two
+// numbers a situation change cannot carry — a descent rate decomposed from the
+// ground-track speed — and `survived`.
+//
+// VerticalSpeedMs is **positive downwards**: a soft touchdown is a small
+// positive number, which is why `softest_landing` is an ascending board.
+// HorizontalSpeedMs is a magnitude and is never negative.
+//
+// Survived has already been through the same one-full-frame destruction hold as
+// `vehicle.impact.survived` and is authoritative. Nothing here re-derives it
+// from a nearby `vehicle.rud` or `flight.ended`; that would be a second, worse
+// answer to a question the mod already answered.
+//
+// There is deliberately **no plausibility rule**: a one-metre hop is a landing.
+// Filtering on "was that a real landing" infers intent from the shape of the
+// data, which Constitution §8 forbids.
+type VehicleLanded struct {
+	Body              string  `json:"body"`
+	VerticalSpeedMs   float64 `json:"vertical_speed_ms"`
+	HorizontalSpeedMs float64 `json:"horizontal_speed_ms"`
+	CrewCount         int     `json:"crew_count"`
+	Survived          bool    `json:"survived"`
+	// RadarAltM is the terrain-relative altitude at the detecting sample, and is
+	// **not expected to be 0**: detection runs at 2 Hz, so the sample that first
+	// shows contact is up to half a second after the wheels touched. Absent when
+	// the game had no terrain reading.
+	RadarAltM *float64 `json:"radar_alt_m"`
+	Lat       *float64 `json:"lat"`
+	Lon       *float64 `json:"lon"`
 }
 
 // VehicleStaging is `vehicle.staging`.
@@ -209,6 +287,16 @@ type TelemetryWindow struct {
 	PeakG          *float64 `json:"peak_g"`
 	MaxQPa         *float64 `json:"max_q_pa"`
 	MassKgLast     float64  `json:"mass_kg_last"`
+	// RadarAltM is folded over **only** the samples that carried a terrain
+	// reading and is absent when none did — the peak_g rule, for the peak_g
+	// reason. Its population is therefore not N, and nothing may reconstruct a
+	// sample count from it.
+	RadarAltM *Agg `json:"radar_alt_m"`
+	// WarpMax is the highest simulation speed seen in the window; 1 is real
+	// time and 0 is a ver 1 row that never carried the key. **Descriptive
+	// only** (Constitution §8): it may annotate a row, and it may never reject
+	// or disqualify one. It is not a cheat signal.
+	WarpMax float64 `json:"warp_max"`
 }
 
 // SessionStarted is `session.started`.
@@ -245,6 +333,8 @@ func decodePayload(typ string, raw json.RawMessage) (any, error) {
 		return decodeInto[VehicleRUD](raw)
 	case "vehicle.impact":
 		return decodeInto[VehicleImpact](raw)
+	case "vehicle.landed":
+		return decodeInto[VehicleLanded](raw)
 	case "vehicle.staging":
 		return decodeInto[VehicleStaging](raw)
 	case "vehicle.docked", "vehicle.undocked":
