@@ -69,8 +69,12 @@ catlog_gid: "{{ lookup('env', 'CATLOG_GID') | default('65532', true) }}"
 catlog_image: "{{ lookup('env', 'CATLOG_IMAGE') }}"
 catlog_nginx_image: "{{ lookup('env', 'NGINX_IMAGE') }}"
 catlog_registry: "{{ lookup('env', 'GHCR_REGISTRY') | default('ghcr.io', true) }}"
-catlog_registry_user: "{{ lookup('env', 'GHCR_USER') | default('', true) }}"
-catlog_registry_token: "{{ lookup('env', 'GHCR_TOKEN') | default('', true) }}"
+# The VM authenticates with a READ-ONLY token. GHCR_TOKEN — the one that can
+# push — is deliberately not referenced anywhere in these playbooks: it stays on
+# the machine that builds, and nothing copies it to a public-facing box. See
+# infra/deploy.env.example.
+catlog_registry_user: "{{ lookup('env', 'GHCR_PULL_USER') | default(lookup('env', 'GHCR_USER'), true) | default('', true) }}"
+catlog_registry_token: "{{ lookup('env', 'GHCR_PULL_TOKEN') | default('', true) }}"
 
 # --- catlogd ----------------------------------------------------------------
 

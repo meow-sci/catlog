@@ -802,7 +802,8 @@ secrets in your shell history and the process table), no secret in an image, no 
 | `CATLOG_HOST` | ansible | `user@host` of the VM |
 | `CATLOG_DOMAIN` | ansible, nginx, certs | e.g. `catlog.example.com` |
 | `ADMIN_SSH_CIDR` | firewall role | who may reach port 22 |
-| `GHCR_USER`, `GHCR_TOKEN` | `make images-push`, VM pull | a GitHub PAT with `write:packages` |
+| `GHCR_USER`, `GHCR_TOKEN` | `make images-push` | `write:packages`. **Laptop only** — no playbook reads it |
+| `GHCR_PULL_TOKEN` | the VM's pull | `read:packages` **only**, and a different token; preflight refuses if it matches the one above |
 | `DHI_USER`, `DHI_TOKEN` | `make images` | Docker Hub PAT; **build-time only**, the VM never sees it |
 | `CF_API_TOKEN` | acme role | scoped `Zone:DNS:Edit` + `Zone:Zone:Read` on the one zone |
 | `CATLOG_IDP_{DISCORD,GOOGLE,GITHUB}_CLIENT_{ID,SECRET}` | catlogd | reach the container through `catlogd.env` only |

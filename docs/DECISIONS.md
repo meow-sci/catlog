@@ -29,7 +29,7 @@ commit. See [ARCHITECTURE.md](ARCHITECTURE.md#7-keeping-the-documentation-true) 
 - **[The two frontends](#the-two-frontends)** — `UI-*`, 56 entries
 - **[The mod and its KSA-free core](#the-mod-and-its-ksa-free-core)** — `MOD-*`, 69 entries
 - **[The load harness](#the-load-harness)** — `LOAD-*`, 26 entries
-- **[Containers, nginx & deployment](#containers-nginx--deployment)** — `OPS-*`, 31 entries
+- **[Containers, nginx & deployment](#containers-nginx--deployment)** — `OPS-*`, 32 entries
 - **[Documentation](#documentation)** — `DOCS-*`, 2 entries
 
 ---
@@ -2393,6 +2393,21 @@ The development machine is macOS/arm64 and the target is linux/amd64, so every i
 The consequence is that the build stage **cannot execute what it produced** — an amd64 binary on an arm64 builder — so the post-build check is `readelf`, not `./catlogd -version`. That is the better tool regardless, and it made a stronger assertion possible: the check now verifies the ELF machine type matches `TARGETARCH`, which running the binary never could. A cross-compile that silently targeted the wrong architecture now fails the build.
 
 `Dockerfile.nginx`'s `nginx-modules` stage is **not** cross-compiled and runs emulated. It builds C — nginx plus ngx_brotli plus a static libbrotli — and a cross-toolchain for that is a large amount of machinery to save about a minute on a stage that is cached anyway.
+
+
+### OPS-032 — Two GHCR tokens: the VM gets `read:packages`, and the push token never leaves the build machine
+
+*Accepted · 2026-08-08 · WP-CONTAINER.*
+
+GHCR package visibility is **independent of repository visibility and defaults to private** — GitHub's own words are that a linked package "inherits the access permissions (but not the visibility) of the linked repository". So catlog's images stay private while the repository is public, which is what we want, and which means the VM must authenticate in order to pull.
+
+`docker login` writes that credential to `/root/.docker/config.json`, base64-encoded and readable, on a public-facing box. Given one token for both jobs, compromising the VM once would hand over the ability to publish a poisoned `catlogd` — escalating a single owned host into a foothold on every subsequent deploy. The images are digest-pinned, which limits the blow to *future* releases rather than the running one, but that is a mitigation, not a reason to leave a write credential lying there.
+
+So: `GHCR_TOKEN` (`write:packages`) is used only by `make images-push` and is referenced by no playbook; `GHCR_PULL_TOKEN` (`read:packages`) is the only one Ansible installs. `GHCR_PULL_USER` allows a machine account, so the VM's credential need not be tied to a person at all.
+
+**Both `make preflight` and `roles/docker` refuse when the two values are equal.** Without that check the split would be aspirational: a copy-pasted write token works perfectly — pulls succeed, nothing looks wrong — and the whole point is silently lost. The guard is duplicated on purpose, because preflight runs before anything has been written to the VM and the role runs at the moment it would be.
+
+Not addressed here, and worth knowing: private packages draw on GitHub Packages quotas (Free 500 MB storage / 1 GB transfer per month, shared with Actions artifacts) where public ones are unmetered. At ~85 MB a version that needs a retention policy before it needs a bigger plan.
 
 
 ---

@@ -30,6 +30,31 @@
           Start from infra/deploy.env.example, which documents every key.
         quiet: true
 
+    - name: Check the registry tokens are two different tokens
+      # Checked here as well as in roles/docker, because preflight is the one
+      # that runs before anything has been written to the VM. A write token
+      # copied into GHCR_PULL_TOKEN would work — pulls succeed, nothing looks
+      # wrong — and leave a credential that can publish a poisoned image sitting
+      # readable in /root/.docker/config.json on a public-facing box.
+      ansible.builtin.assert:
+        that:
+          - lookup('env', 'GHCR_PULL_TOKEN') != lookup('env', 'GHCR_TOKEN')
+        fail_msg: >-
+          GHCR_PULL_TOKEN and GHCR_TOKEN are the same value. The VM must get a
+          read:packages token, never the write:packages one. Create a second PAT
+          with read:packages only — see infra/deploy.env.example.
+        quiet: true
+      when: lookup('env', 'GHCR_TOKEN') | length > 0
+
+    - name: Note the registry credentials
+      ansible.builtin.debug:
+        msg: >-
+          {{ 'GHCR: pulling as ' ~ catlog_registry_user ~ ' with a read-only token.'
+             if catlog_registry_token | length > 0 else
+             'GHCR_PULL_TOKEN is unset — pulls will only work if the packages are
+              public, and GHCR packages default to PRIVATE whatever the repository
+              visibility is.' }}
+
     - name: Note which optional settings are unset
       ansible.builtin.debug:
         msg: >-

@@ -41,6 +41,14 @@ and `infra/deploy.env` is the only place a secret exists outside the VM (OPS-026
 `make deploy` prints both digest sets and asks before it stops anything (`CONFIRM=1` skips the
 prompt). `make release` refuses a dirty working tree unless `ALLOW_DIRTY=1`.
 
+**Two GHCR tokens, and they must be different ones.** Package visibility is independent of repository
+visibility and defaults to private, so the images stay private behind a public repo — and the VM has
+to authenticate to pull them. It gets a `read:packages` token; `GHCR_TOKEN`, which can push, never
+leaves your machine and no playbook refers to it. Docker stores whatever it is given readable in
+`/root/.docker/config.json`, so a write token there would turn one compromised box into a
+supply-chain foothold over every later deploy. `make preflight` and `roles/docker` both refuse if the
+two values match (OPS-032).
+
 ---
 
 ## What is installed on the VM, and what is not
