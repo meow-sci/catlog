@@ -855,19 +855,21 @@ func scanCensusRows(rows *sql.Rows) ([]CensusRow, error) {
 
 // ProjectionCounts is the row census `GET /admin/stats` reports (§5.9).
 type ProjectionCounts struct {
-	PlayerStat   int64 `json:"player_stat"`
-	CareerStat   int64 `json:"career_stat"`
-	SystemStat   int64 `json:"system_stat"`
-	FlightState  int64 `json:"flight_state"`
-	PlayerBody   int64 `json:"player_body"`
-	CareerBody   int64 `json:"career_body"`
-	Career       int64 `json:"career"`
-	Kitten       int64 `json:"kitten"`
-	CareerKitten int64 `json:"career_kitten"`
-	System       int64 `json:"system"`
-	SystemBody   int64 `json:"system_body"`
-	BadgeAward   int64 `json:"badge_award"`
-	Feed         int64 `json:"feed"`
+	PlayerStat      int64 `json:"player_stat"`
+	CareerStat      int64 `json:"career_stat"`
+	SystemStat      int64 `json:"system_stat"`
+	FlightState     int64 `json:"flight_state"`
+	PlayerBody      int64 `json:"player_body"`
+	CareerBody      int64 `json:"career_body"`
+	Career          int64 `json:"career"`
+	Kitten          int64 `json:"kitten"`
+	CareerKitten    int64 `json:"career_kitten"`
+	System          int64 `json:"system"`
+	SystemBody      int64 `json:"system_body"`
+	BadgeAward      int64 `json:"badge_award"`
+	ChallengeStat   int64 `json:"challenge_stat"`
+	ChallengeMember int64 `json:"challenge_member"`
+	Feed            int64 `json:"feed"`
 	// FlaggedFlights is how many flights carry at least one flag bit — the
 	// number that says whether the anti-cheat surface is doing anything.
 	FlaggedFlights int64 `json:"flagged_flights"`
@@ -905,6 +907,8 @@ func (p *Projections) Counts(ctx context.Context) (ProjectionCounts, error) {
 		{`SELECT count(*) FROM system`, &c.System},
 		{`SELECT count(*) FROM system_body`, &c.SystemBody},
 		{`SELECT count(*) FROM badge_award`, &c.BadgeAward},
+		{`SELECT count(*) FROM challenge_stat`, &c.ChallengeStat},
+		{`SELECT count(*) FROM challenge_member`, &c.ChallengeMember},
 		{`SELECT count(*) FROM feed`, &c.Feed},
 		{`SELECT count(*) FROM flight_state WHERE flags <> 0`, &c.FlaggedFlights},
 		{`SELECT count(DISTINCT player_id) FROM player_stat`, &c.ScoringPlayers},

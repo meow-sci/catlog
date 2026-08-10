@@ -94,6 +94,10 @@ type Batch struct {
 	careerValues      map[careerStatKey]float64
 	careerValueLoaded map[careerStatKey]bool
 	careerValueExists map[careerStatKey]bool
+	// challengeMembers loads one scoped challenge's durable member set and
+	// merges pending additions into it. Set-valued challenge folds therefore
+	// observe the same novelty/count before and after a flush.
+	challengeMembers map[challengeSetKey]map[string]*challengeMemberEntry
 
 	// Write accumulators, one map per rule. Cleared by every flush. Indexed by
 	// [statKind] rather than carrying it in the value, so the flush walks one
@@ -125,28 +129,30 @@ type Batch struct {
 
 	// dirty flights/careers/bodies/kittens, so a flush walks what changed
 	// rather than everything the batch has ever read.
-	dirtyFlights       []ids.ID
-	dirtyCareers       []careerKey
-	dirtySystems       []string
-	dirtySystemBodies  []systemBodyKey
-	dirtyBodies        []playerBodyKey
-	dirtyCareerBodies  []playerCareerBodyKey
-	dirtyKittens       []playerKittenKey
-	dirtyCareerKittens []playerCareerKittenKey
+	dirtyFlights          []ids.ID
+	dirtyCareers          []careerKey
+	dirtySystems          []string
+	dirtySystemBodies     []systemBodyKey
+	dirtyBodies           []playerBodyKey
+	dirtyCareerBodies     []playerCareerBodyKey
+	dirtyKittens          []playerKittenKey
+	dirtyCareerKittens    []playerCareerKittenKey
+	dirtyChallengeMembers []challengeMemberKey
 
 	// Scratch for the sorted key lists a flush builds. Reused rather than
 	// reallocated: a drain flushes once per batch forever, and a fresh slice of
 	// every pending key each time was the largest allocation the batch made
 	// that was not the driver's.
-	statKeys       []statKey
-	careerStatKeys []careerStatKey
-	systemStatKeys []systemStatKey
-	systemKeys     []string
-	systemBodyKeys []systemBodyKey
-	periodKeys     []periodKey
-	badgeKeys      []badgeKey
-	censusKeys     []censusKey
-	args           []any
+	statKeys            []statKey
+	careerStatKeys      []careerStatKey
+	systemStatKeys      []systemStatKey
+	systemKeys          []string
+	systemBodyKeys      []systemBodyKey
+	periodKeys          []periodKey
+	badgeKeys           []badgeKey
+	censusKeys          []censusKey
+	challengeMemberKeys []challengeMemberKey
+	args                []any
 }
 
 // DefaultFlushRows is how many rows one flushed statement carries. Beyond a
@@ -183,6 +189,7 @@ func NewBatch(tx *sql.Tx, opts BatchOptions) *Batch {
 		careerValues:      map[careerStatKey]float64{},
 		careerValueLoaded: map[careerStatKey]bool{},
 		careerValueExists: map[careerStatKey]bool{},
+		challengeMembers:  map[challengeSetKey]map[string]*challengeMemberEntry{},
 		badges:            map[badgeKey]*badgeEntry{},
 		census:            map[censusKey]*pendingCensus{},
 	}
@@ -196,6 +203,108 @@ func NewBatch(tx *sql.Tx, opts BatchOptions) *Batch {
 		b.flushRows = DefaultFlushRows
 	}
 	return b
+}
+
+// --- challenge_member -------------------------------------------------------
+
+type challengeSetKey struct {
+	playerID  int64
+	career    string
+	system    string
+	challenge string
+}
+
+type challengeMemberKey struct {
+	challengeSetKey
+	member string
+}
+
+type challengeMemberEntry struct {
+	firstSeq int64
+	dirty    bool
+}
+
+func (b *Batch) challengeMemberSet(ctx context.Context, k challengeSetKey) (map[string]*challengeMemberEntry, error) {
+	if members, ok := b.challengeMembers[k]; ok {
+		return members, nil
+	}
+	rows, err := b.tx.QueryContext(ctx, `
+		SELECT member, first_seq FROM challenge_member
+		WHERE player_id = ? AND career = ? AND system = ? AND challenge = ?`,
+		k.playerID, k.career, k.system, k.challenge)
+	if err != nil {
+		return nil, fmt.Errorf("stats: read challenge members for %d/%q/%q/%q: %w",
+			k.playerID, k.career, k.system, k.challenge, err)
+	}
+	defer rows.Close()
+	members := map[string]*challengeMemberEntry{}
+	for rows.Next() {
+		var member string
+		e := &challengeMemberEntry{}
+		if err := rows.Scan(&member, &e.firstSeq); err != nil {
+			return nil, fmt.Errorf("stats: scan challenge member for %d/%q/%q/%q: %w",
+				k.playerID, k.career, k.system, k.challenge, err)
+		}
+		members[member] = e
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("stats: read challenge members for %d/%q/%q/%q: %w",
+			k.playerID, k.career, k.system, k.challenge, err)
+	}
+	b.challengeMembers[k] = members
+	return members, nil
+}
+
+// AddChallengeMember records one distinct member in a challenge scope and
+// reports whether it was new. The pending read-through set makes the answer
+// independent of flush and projector batch boundaries.
+func (b *Batch) AddChallengeMember(ctx context.Context, playerID int64, career, system, challenge, member string, seq int64) (bool, error) {
+	k := challengeSetKey{playerID: playerID, career: career, system: system, challenge: challenge}
+	members, err := b.challengeMemberSet(ctx, k)
+	if err != nil {
+		return false, err
+	}
+	if _, exists := members[member]; exists {
+		return false, nil
+	}
+	e := &challengeMemberEntry{firstSeq: seq, dirty: true}
+	members[member] = e
+	b.dirtyChallengeMembers = append(b.dirtyChallengeMembers, challengeMemberKey{challengeSetKey: k, member: member})
+	return true, nil
+}
+
+// ChallengeMemberCount returns the distinct member count for one challenge
+// scope, including rows added earlier in this batch.
+func (b *Batch) ChallengeMemberCount(ctx context.Context, playerID int64, career, system, challenge string) (int64, error) {
+	members, err := b.challengeMemberSet(ctx, challengeSetKey{
+		playerID: playerID, career: career, system: system, challenge: challenge,
+	})
+	if err != nil {
+		return 0, err
+	}
+	return int64(len(members)), nil
+}
+
+func (b *Batch) flushChallengeMembers(ctx context.Context) error {
+	if len(b.dirtyChallengeMembers) == 0 {
+		return nil
+	}
+	slices.SortFunc(b.dirtyChallengeMembers, compareChallengeMemberKey)
+	b.challengeMemberKeys = append(b.challengeMemberKeys[:0], b.dirtyChallengeMembers...)
+	err := b.write(ctx, len(b.challengeMemberKeys), 6,
+		`INSERT INTO challenge_member (player_id, career, system, challenge, member, first_seq) VALUES `,
+		` ON CONFLICT (player_id, career, system, challenge, member) DO NOTHING`,
+		func(i int, args []any) []any {
+			k := b.challengeMemberKeys[i]
+			e := b.challengeMembers[k.challengeSetKey][k.member]
+			e.dirty = false
+			return append(args, k.playerID, k.career, k.system, k.challenge, k.member, e.firstSeq)
+		})
+	if err != nil {
+		return fmt.Errorf("stats: flush challenge_member: %w", err)
+	}
+	b.dirtyChallengeMembers = b.dirtyChallengeMembers[:0]
+	return nil
 }
 
 // NewRefinedBatch opens the rebuild's batch: `flight_state` is already complete
@@ -1994,7 +2103,7 @@ func (b *Batch) Flush(ctx context.Context) error {
 	for _, fn := range []func(context.Context) error{
 		b.flushSystems, b.flushSystemBodies, b.flushFlights, b.flushCareers, b.flushBodies, b.flushCareerBodies,
 		b.flushKittens, b.flushCareerKittens, b.flushStats, b.flushCareerStats, b.flushBadges, b.flushSystemStats,
-		b.flushPeriods, b.flushCensus,
+		b.flushPeriods, b.flushChallengeMembers, b.flushCensus,
 	} {
 		if err := fn(ctx); err != nil {
 			return err
@@ -2157,6 +2266,22 @@ func comparePlayerCareerKittenKey(x, y playerCareerKittenKey) int {
 		return c
 	}
 	return compareCareerKittenKey(x.careerKittenKey, y.careerKittenKey)
+}
+
+func compareChallengeMemberKey(x, y challengeMemberKey) int {
+	if c := cmpInt64(x.playerID, y.playerID); c != 0 {
+		return c
+	}
+	if c := strings.Compare(x.career, y.career); c != 0 {
+		return c
+	}
+	if c := strings.Compare(x.system, y.system); c != 0 {
+		return c
+	}
+	if c := strings.Compare(x.challenge, y.challenge); c != 0 {
+		return c
+	}
+	return strings.Compare(x.member, y.member)
 }
 
 func cmpInt64(x, y int64) int {

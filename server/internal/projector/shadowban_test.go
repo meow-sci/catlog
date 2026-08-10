@@ -59,6 +59,8 @@ func playerProjectionRows(t *testing.T, r *rig, playerID int64, handle string) m
 		"career_kitten":      `SELECT player_id, career, system, kid, name, travelled_m, fastest_ms, missions, mission_time_s, kia, updated_seq FROM career_kitten WHERE player_id = %d ORDER BY career, kid`,
 		"career":             `SELECT player_id, career, ordinal, system, system_changed, max_sim_t, rewound, first_seq, last_seq FROM career WHERE player_id = %d ORDER BY career`,
 		"badge_award":        `SELECT player_id, career, badge, system, first_career, earned_seq, earned_at, earned_sim_t, context FROM badge_award WHERE player_id = %d ORDER BY career, badge`,
+		"challenge_stat":     `SELECT player_id, career, challenge, system, value, context, updated_seq FROM challenge_stat WHERE player_id = %d ORDER BY career, system, challenge`,
+		"challenge_member":   `SELECT player_id, career, system, challenge, member, first_seq FROM challenge_member WHERE player_id = %d ORDER BY career, system, challenge, member`,
 		"player_stat_period": `SELECT player_id, stat, period, bucket, value, context, updated_seq FROM player_stat_period WHERE player_id = %d ORDER BY stat, period, bucket`,
 	}
 	out := make(map[string][]string, len(queries)+1)
@@ -83,10 +85,9 @@ func playerProjectionRows(t *testing.T, r *rig, playerID int64, handle string) m
 func requirePopulatedPlayerProjections(t *testing.T, rows map[string][]string) {
 	t.Helper()
 	for table, values := range rows {
-		// F1 defines badge ownership before F4 adds the first badge writer. The
-		// dedicated ownership test below seeds this table non-vacuously; event
-		// histories cannot populate it yet.
-		if table == "badge_award" && len(values) == 0 {
+		// Storage foundations may precede their writers. The ownership tests seed
+		// these tables non-vacuously until their ordinary folds exist.
+		if (table == "badge_award" || table == "challenge_stat" || table == "challenge_member") && len(values) == 0 {
 			continue
 		}
 		if len(values) == 0 {
@@ -107,6 +108,24 @@ func seedBadgeAward(t *testing.T, r *rig, playerID int64, career, badge string) 
 	})
 	if err != nil {
 		t.Fatalf("seed badge awards: %v", err)
+	}
+}
+
+func seedChallengeRows(t *testing.T, r *rig, playerID int64, career string) {
+	t.Helper()
+	err := r.live.With(func(p *store.Projections) error {
+		if _, err := p.Writer().ExecContext(t.Context(), `
+			INSERT INTO challenge_stat (player_id, career, challenge, system, value, context, updated_seq)
+			VALUES (?, ?, 'structural-challenge', 'system-hash', 1, '{"fact":"shared"}', 1)`, playerID, career); err != nil {
+			return err
+		}
+		_, err := p.Writer().ExecContext(t.Context(), `
+			INSERT INTO challenge_member (player_id, career, system, challenge, member, first_seq)
+			VALUES (?, ?, 'system-hash', 'structural-challenge', 'system-hash'||char(0)||'member', 1)`, playerID, career)
+		return err
+	})
+	if err != nil {
+		t.Fatalf("seed challenge rows: %v", err)
 	}
 }
 
@@ -173,6 +192,7 @@ func TestShadowbanLeavesTheBoardsOnRebuild(t *testing.T) {
 	r.ship(bystander, moderationHistory("bystander-career", 100)...)
 	r.drain()
 	seedBadgeAward(t, r, subject, "subject-career", "subject-badge")
+	seedChallengeRows(t, r, subject, "subject-career")
 
 	before := playerProjectionRows(t, r, subject, "griefer")
 	requirePopulatedPlayerProjections(t, before)
@@ -267,6 +287,7 @@ func TestPurgeLeavesNoPlayerOwnedProjectionRowsAfterRebuild(t *testing.T) {
 	r.ship(bystander, moderationHistory("bystander-career", 300)...)
 	r.drain()
 	seedBadgeAward(t, r, subject, "deleted-career", "subject-badge")
+	seedChallengeRows(t, r, subject, "deleted-career")
 
 	before := playerProjectionRows(t, r, subject, "deleted_cat")
 	requirePopulatedPlayerProjections(t, before)

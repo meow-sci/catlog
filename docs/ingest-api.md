@@ -236,7 +236,7 @@ All responses `Cache-Control: public, s-maxage=30, stale-while-revalidate=300` e
 - `GET /v1/players/{handle}/events?limit=50&before=<cursor>&type=<event type>` → `{"handle": s, "limit": n, "type"?: s, "next"?: <cursor>, "events": [{"seq": n, "id": ulid, "type": s, "ver": n, "session"?: ulid, "flight"?: ulid, "career"?: s, "sim_t"?: f, "recv": unix_ms, "payload": {…}}]}` (404 if unknown/banned)
 - `GET /v1/events?limit=50&before=<cursor>&type=<event type>&handle=<handle>` → the same envelope with every player's events mixed together, newest first; each row additionally carries `"handle": s`. `?handle=` narrows to one player (404 if unknown/banned, the same one answer); the unfiltered envelope omits `handle`.
 - `GET /v1/events/stream?type=<event type>&handle=<handle>` → live raw events as SSE (no cache)
-- `GET /v1/stats` → `{"generated": unix_ms, "events": {"total": n, "types": [{"type": s, "count": n, "share": f, "first"?: unix_ms, "last"?: unix_ms}], "windows": [{"period": s, "bucket": s, "count": n, "types": [...]}], "first"?: unix_ms, "last"?: unix_ms, "days": n, "per_day": f, "busiest"?: {"period": s, "bucket": s, "count": n}, "daily": [...]}, "collection": {"boards": n, "placements": n, "types": n, "handles": n, "scoring_players": n, "flights": n, "flagged_flights": n, "careers": n, "rewound_careers": n, "kittens": n, "systems": n, "system_bodies": n, "badges": n, "badge_awards": n, "bodies": n, "feed_rows": n, "log_head": n, "projected": n, "lag": n}}` — the collection census; see below
+- `GET /v1/stats` → `{"generated": unix_ms, "events": {"total": n, "types": [{"type": s, "count": n, "share": f, "first"?: unix_ms, "last"?: unix_ms}], "windows": [{"period": s, "bucket": s, "count": n, "types": [...]}], "first"?: unix_ms, "last"?: unix_ms, "days": n, "per_day": f, "busiest"?: {"period": s, "bucket": s, "count": n}, "daily": [...]}, "collection": {"boards": n, "placements": n, "types": n, "handles": n, "scoring_players": n, "flights": n, "flagged_flights": n, "careers": n, "rewound_careers": n, "kittens": n, "systems": n, "system_bodies": n, "badges": n, "badge_awards": n, "challenge_stats": n, "challenge_members": n, "bodies": n, "feed_rows": n, "log_head": n, "projected": n, "lag": n}}` — the collection census; see below
 - `GET /v1/feed?limit=30` → `{"limit": n, "rows": [{"id": n, "at": unix_ms, "handle": s, "type": s, "summary": s}]}` — the JSON activity feed, newest first; `limit` clamps to the feed table's cap (500)
 - `GET /v1/feed/stream` → the same rows live, as SSE (no cache)
 - `GET /v1/compare?handles=a,b,c` → `{"handles": [{"handle": s, "found": b, "since"?: unix_ms}], "boards": [{"stat": s, "title": s, "unit": s, "ascending": b, "players": n, "rows": [{"handle": s, "value": f, "rank": n, "system"?: {"hash": s, "name": s, "slug": s}, "context": {…}, "updated": unix_ms, "rewound"?: true}]}]}`
@@ -460,6 +460,10 @@ Three things worth knowing before comparing numbers:
 `collection.badges` counts distinct badge keys with a lifetime holder; it is not the fixed catalogue
 size. `collection.badge_awards` counts all current award rows at lifetime and per-save scope. Both
 are rebuildable current-projection counts and share the response's `(WriteGen, 10 s TTL)` cache.
+`collection.challenge_stats` counts retained ranked challenge rows and
+`collection.challenge_members` counts their retained distinct-member facts. At the H1 storage
+boundary both are normally zero because challenge definitions and folds do not exist yet; exposing
+the bounded projection census does not imply a challenge catalogue or result endpoint.
 
 ### Handle search — `GET /v1/players?q=`
 

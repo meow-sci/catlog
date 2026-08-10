@@ -256,22 +256,24 @@ func tw(body string, surface, orbital, peakG float64) stats.TelemetryWindow {
 // compared by content rather than by rowid so an id offset cannot make two
 // identical feeds look different.
 type snapshot struct {
-	Stats         []string
-	CareerStats   []string
-	SystemStats   []string
-	Flights       []string
-	Bodies        []string
-	CareerBodies  []string
-	Kittens       []string
-	CareerKittens []string
-	Careers       []string
-	Systems       []string
-	SystemBodies  []string
-	Badges        []string
-	Periods       []string
-	Census        []string
-	Feed          []string
-	Cursor        int64
+	Stats            []string
+	CareerStats      []string
+	SystemStats      []string
+	Flights          []string
+	Bodies           []string
+	CareerBodies     []string
+	Kittens          []string
+	CareerKittens    []string
+	Careers          []string
+	Systems          []string
+	SystemBodies     []string
+	Badges           []string
+	ChallengeStats   []string
+	ChallengeMembers []string
+	Periods          []string
+	Census           []string
+	Feed             []string
+	Cursor           int64
 }
 
 func (r *rig) snapshot() snapshot {
@@ -314,6 +316,12 @@ func (r *rig) snapshot() snapshot {
 			return err
 		}
 		if s.Badges, err = dump(ctx, p, `SELECT player_id, career, badge, system, first_career, earned_seq, earned_at, earned_sim_t, context FROM badge_award ORDER BY player_id, career, badge`); err != nil {
+			return err
+		}
+		if s.ChallengeStats, err = dump(ctx, p, `SELECT player_id, career, challenge, system, value, context, updated_seq FROM challenge_stat ORDER BY player_id, career, system, challenge`); err != nil {
+			return err
+		}
+		if s.ChallengeMembers, err = dump(ctx, p, `SELECT player_id, career, system, challenge, member, first_seq FROM challenge_member ORDER BY player_id, career, system, challenge, member`); err != nil {
 			return err
 		}
 		if s.Periods, err = dump(ctx, p, `SELECT player_id, stat, period, bucket, value, context, updated_seq FROM player_stat_period ORDER BY player_id, stat, period, bucket`); err != nil {
@@ -402,6 +410,8 @@ func diffSnapshot(t *testing.T, got, want snapshot, feedContentOnly bool) {
 	diff(t, "system", got.Systems, want.Systems)
 	diff(t, "system_body", got.SystemBodies, want.SystemBodies)
 	diff(t, "badge_award", got.Badges, want.Badges)
+	diff(t, "challenge_stat", got.ChallengeStats, want.ChallengeStats)
+	diff(t, "challenge_member", got.ChallengeMembers, want.ChallengeMembers)
 	diff(t, "player_stat_period", got.Periods, want.Periods)
 	diff(t, "event_census", got.Census, want.Census)
 	if feedContentOnly {
@@ -443,6 +453,39 @@ func TestBadgeAwardSnapshotIncludesEveryColumnInStableOrder(t *testing.T) {
 	}
 	if got := r.snapshot().Badges; !slices.Equal(got, want) {
 		t.Errorf("badge snapshot = %v, want %v", got, want)
+	}
+}
+
+func TestChallengeSnapshotIncludesEveryColumnInStableOrder(t *testing.T) {
+	r := newRig(t)
+	err := r.live.With(func(p *store.Projections) error {
+		if _, err := p.Writer().ExecContext(t.Context(), `
+			INSERT INTO challenge_stat (player_id, career, challenge, system, value, context, updated_seq)
+			VALUES (2, 'save-two', 'career', 'system-hash', 42.5, '{"body":"luna"}', 12),
+			       (1, '', 'global', '', 3, NULL, 11)`); err != nil {
+			return err
+		}
+		_, err := p.Writer().ExecContext(t.Context(), `
+			INSERT INTO challenge_member (player_id, career, system, challenge, member, first_seq)
+			VALUES (2, '', 'system-hash', 'set', 'system-hash'||char(0)||'luna', 13)`)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap := r.snapshot()
+	wantStats := []string{
+		"player_id=1 career= challenge=global system= value=3 context=<nil> updated_seq=11",
+		"player_id=2 career=save-two challenge=career system=system-hash value=42.5 context={\"body\":\"luna\"} updated_seq=12",
+	}
+	wantMembers := []string{
+		"player_id=2 career= system=system-hash challenge=set member=system-hash\x00luna first_seq=13",
+	}
+	if !slices.Equal(snap.ChallengeStats, wantStats) {
+		t.Errorf("challenge_stat snapshot = %q, want %q", snap.ChallengeStats, wantStats)
+	}
+	if !slices.Equal(snap.ChallengeMembers, wantMembers) {
+		t.Errorf("challenge_member snapshot = %q, want %q", snap.ChallengeMembers, wantMembers)
 	}
 }
 

@@ -157,6 +157,10 @@ type CollectionStats struct {
 	// is every current lifetime and per-save award row.
 	Badges      int64 `json:"badges"`
 	BadgeAwards int64 `json:"badge_awards"`
+	// ChallengeStats counts ranked challenge rows; ChallengeMembers counts the
+	// retained distinct facts used by set-valued challenge rules.
+	ChallengeStats   int64 `json:"challenge_stats"`
+	ChallengeMembers int64 `json:"challenge_members"`
 	// Bodies is how many distinct celestial bodies anybody has reached.
 	//
 	// The one number here catlog could not have known in advance: bodies are
@@ -310,24 +314,26 @@ func (s *Server) buildStats(ctx context.Context, now time.Time) (StatsResponse, 
 	}
 
 	out.Collection = CollectionStats{
-		Boards:         len(boards.Boards),
-		Types:          len(out.Events.Types),
-		Handles:        s.deps.Directory.Len(),
-		ScoringPlayers: counts.ScoringPlayers,
-		Flights:        counts.FlightState,
-		FlaggedFlights: counts.FlaggedFlights,
-		Careers:        counts.Career,
-		RewoundCareers: counts.RewoundCareers,
-		Kittens:        counts.Kitten,
-		Systems:        counts.System,
-		SystemBodies:   counts.SystemBody,
-		Badges:         int64(len(badges)),
-		BadgeAwards:    counts.BadgeAward,
-		Bodies:         counts.Bodies,
-		FeedRows:       counts.Feed,
-		LogHead:        head,
-		Projected:      cursor,
-		Lag:            max(head-cursor, 0),
+		Boards:           len(boards.Boards),
+		Types:            len(out.Events.Types),
+		Handles:          s.deps.Directory.Len(),
+		ScoringPlayers:   counts.ScoringPlayers,
+		Flights:          counts.FlightState,
+		FlaggedFlights:   counts.FlaggedFlights,
+		Careers:          counts.Career,
+		RewoundCareers:   counts.RewoundCareers,
+		Kittens:          counts.Kitten,
+		Systems:          counts.System,
+		SystemBodies:     counts.SystemBody,
+		Badges:           int64(len(badges)),
+		BadgeAwards:      counts.BadgeAward,
+		ChallengeStats:   counts.ChallengeStat,
+		ChallengeMembers: counts.ChallengeMember,
+		Bodies:           counts.Bodies,
+		FeedRows:         counts.Feed,
+		LogHead:          head,
+		Projected:        cursor,
+		Lag:              max(head-cursor, 0),
 	}
 	for _, b := range boards.Boards {
 		out.Collection.Placements += b.Count

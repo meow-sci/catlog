@@ -74,6 +74,10 @@ export default defineConfig({
           ],
         },
         {
+          label: "Challenges",
+          items: [{ label: "How challenges work", slug: "challenges" }],
+        },
+        {
           label: "Reference",
           items: [{ autogenerate: { directory: "reference" } }],
         },

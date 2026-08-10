@@ -208,6 +208,8 @@ byte-identical across events. Rows written either way stay readable, so the swit
 | `system` | One immutable first-seen identity/header per celestial-system hash: raw system id, display name, stable URL slug, home body, declared body count, monotone reported-complete bit and first seq (migration 0008) |
 | `system_body` | One immutable first-seen catalogue row per `(hash, body)`, including opaque game class, semantic kind, forest topology, physical values, orientation and optional orbital elements (migration 0008) |
 | `badge_award` | Current-projection merit-badge awards at lifetime and per-save scope, with first-award sequence, server receive time, optional career time and provenance (migration 0011) |
+| `challenge_stat` | Retained ranked values for explicitly dated challenges at player, save or system scope (migration 0013); H1 establishes storage only, before challenge definitions and folds |
+| `challenge_member` | Retained distinct facts used by set-valued challenge rules, with first sequence and the same scope sentinels as `challenge_stat` (migration 0013) |
 | `feed` | The activity feed, capped at 500 rows |
 | `event_census` | One row per `(type, period, bucket)` — what makes `GET /v1/stats` affordable |
 
@@ -267,6 +269,25 @@ player's non-lifetime award rows in one store query; `readapi.SaveBadgeCounts` r
 career keys against the player's saves and returns only ordinal-to-count pairs. The web package uses
 that narrow non-HTTP seam instead of issuing one checklist read per save, and never receives a raw
 career key (`store/projections.go`, `readapi/badges.go`, `web/pages.go`).
+
+Migration `0013_challenges.sql` adds the challenge projection foundation. `challenge_stat` is keyed
+by `(player_id, career, system, challenge)` and ranked through
+`challenge_rank(challenge, system, value, updated_seq)`. `challenge_member` is keyed by
+`(player_id, career, system, challenge, member)` and indexed by
+`challenge_member_count(challenge, player_id, career, system)`. Player scope uses empty career and
+system; save scope uses its career and bound system; system scope uses empty career and its system.
+Those non-NULL sentinels prevent a mixed player aggregate from being labelled with whichever system
+contributed last.
+
+Challenge rows have no retention. They do not reuse `player_stat_period`, whose calendar buckets
+are deliberately aged out: the archive of a closed challenge is part of the feature. Definitions
+will be compiled into the server so an incremental fold and a later rebuild cannot silently apply
+different mutable rules. H1 does not yet define or fold any challenge. Its batch foundation only
+loads one scoped `challenge_member` set on demand, merges pending additions, and flushes new members
+in deterministic key order, making future set-valued folds independent of projector batch size.
+Both challenge tables are player-owned structural projections for moderation/rebuild purposes.
+`ProjectionCounts` and the cached public collection census expose their current row counts as
+`challenge_stat`/`challenge_member` and `challenge_stats`/`challenge_members`, respectively.
 
 Awards are insert-once inside one projection build: the first qualifying event keeps its
 `earned_seq`, matching server-side `recv_time` in `earned_at`, nullable event career clock in

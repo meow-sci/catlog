@@ -2409,6 +2409,24 @@ enumerates this table: structural log exclusion plus rebuild supplies Constituti
 while shared `system` and `system_body` rows remain catalogue facts rather than player awards
 (STORE-019).
 
+### Challenge projection foundation
+
+Migration `0013_challenges.sql` reserves two rebuildable, player-owned projections for explicitly
+dated challenges. `challenge_stat` holds a ranked value and nullable projector-authored context at
+one of three scopes: player `(career='', system='')`, save `(career=<id>, system=<hash>)`, or system
+`(career='', system=<hash>)`. `challenge_member` holds distinct set members with their first event
+sequence at the identical scope. Its batch read-through set merges durable rows with additions from
+earlier events in the current transaction, so a future set-valued rule sees the same novelty and
+count at batch size one or 500.
+
+These tables deliberately are not `player_stat_period`. Period buckets expire; closed challenge
+results and qualifying member facts do not. Challenge definitions will be compile-time server rules
+so rebuilding the immutable log applies the same dated predicate as incremental projection. At the
+H1 boundary no definition registry or fold exists, so no gameplay event feeds either table and no
+challenge result endpoint exists. The collection census nevertheless includes both row counts, and
+moderation treats both tables as player-owned facts removed by structural log exclusion plus
+rebuild.
+
 ### Badge accumulator and dual-scope writer
 
 `stats.Batch` keys pending awards by `(player_id, career, badge)` and retains the complete candidate:

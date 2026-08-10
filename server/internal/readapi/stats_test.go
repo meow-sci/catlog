@@ -196,7 +196,8 @@ func TestStatsCountsSystemsBodiesAndBadgesAndCachesByGenerationAndTTL(t *testing
 	}
 	afterFirst := counting.calls
 	if first.Collection.Systems != 0 || first.Collection.SystemBodies != 0 ||
-		first.Collection.Badges != 0 || first.Collection.BadgeAwards != 0 {
+		first.Collection.Badges != 0 || first.Collection.BadgeAwards != 0 ||
+		first.Collection.ChallengeStats != 0 || first.Collection.ChallengeMembers != 0 {
 		t.Fatalf("empty system census = %+v", first.Collection)
 	}
 	if _, err := srv.Stats(t.Context()); err != nil {
@@ -223,6 +224,12 @@ func TestStatsCountsSystemsBodiesAndBadgesAndCachesByGenerationAndTTL(t *testing
 		(1, '', 'first_flight', 'hash-sol', 'save-a', 1, 1001),
 		(1, 'save-a', 'first_flight', 'hash-sol', '', 1, 1001),
 		(2, '', 'first_orbit', 'hash-sol', 'save-b', 2, 1002)`)
+	f.projWrite(`INSERT INTO challenge_stat
+		(player_id, career, challenge, system, value, updated_seq)
+		VALUES (1, '', 'tumbleweek', '', 2, 3)`)
+	f.projWrite(`INSERT INTO challenge_member
+		(player_id, career, system, challenge, member, first_seq)
+		VALUES (1, '', 'hash-sol', 'coasting_class', 'hash-sol'||char(0)||'luna', 4)`)
 	updated, err := srv.Stats(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -234,6 +241,10 @@ func TestStatsCountsSystemsBodiesAndBadgesAndCachesByGenerationAndTTL(t *testing
 	if updated.Collection.Badges != 2 || updated.Collection.BadgeAwards != 3 {
 		t.Errorf("badge census = %d keys, %d awards, want 2 and 3",
 			updated.Collection.Badges, updated.Collection.BadgeAwards)
+	}
+	if updated.Collection.ChallengeStats != 1 || updated.Collection.ChallengeMembers != 1 {
+		t.Errorf("challenge census = %d rows, %d members, want 1 and 1",
+			updated.Collection.ChallengeStats, updated.Collection.ChallengeMembers)
 	}
 	if counting.calls == afterTTL {
 		t.Error("projection write generation did not invalidate the stats cache")

@@ -2077,6 +2077,29 @@ churn and repeat the mistake PROJ-039 avoids for public catalogue tests. End-to-
 compare the visitor catalogue with the JSON response row for row, while using the two-player Luna
 award only to prove the dynamic publication gate and friendly provenance are genuinely exercised.
 
+### PROJ-129 — Challenge results are permanent projections of compile-time dated rules
+
+*Accepted · 2026-08-10 · Task H1.*
+
+A challenge definition will live in the deployed server artifact, not a database row or admin
+setting. Incremental projection and a later rebuild must replay the same immutable history against
+the same rule; mutable definitions would make disagreement inevitable. H1 therefore establishes
+only the generic result/member schema and batch-aware member primitive. The registry, folds and
+public result reads arrive in their owning tasks rather than being guessed by storage code.
+
+Challenge rows do not reuse `player_stat_period`. That table's retention delete is correct for
+rolling calendar leaderboards but would erase the archive of a closed challenge, which is precisely
+the history this feature must retain. Separate bounded tables also represent distinct qualifying
+members without confusing them with out-of-window `career_body` facts. They grow by entrants and by
+the finite member sets admitted by curated rules, with no time-bucket multiplier.
+
+The empty-string scope sentinels are deliberate: player is `('', '')`, save is
+`(<career>, <system>)`, and system is `('', <system>)`. A genuinely cross-system player aggregate
+must never acquire the label of its last contributor. A read-through member set merges SQL rows with
+pending additions before counting, so flush size cannot change a set-valued result. Both tables are
+player-owned for structural moderation and rebuild, while their row counts join the existing cached
+collection census as storage facts rather than an early challenge API.
+
 ## Archive & restore
 
 The filesystem archiver, the manifest, restore verification, and the R2 design that is deliberately not built.

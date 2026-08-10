@@ -1,0 +1,49 @@
+---
+title: Weekly challenges
+description: How catlog will rank curated rules inside explicit UTC windows.
+sidebar:
+  order: 1
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+A challenge is a curated rule over an explicitly dated window. It asks a temporary question of the
+same recorded history that builds the leaderboards: perhaps one best result, a running total or a
+set of distinct things achieved before the window closes.
+
+The rule and its opening and closing dates are part of a catlog server release. They cannot be
+edited while the server is running. That keeps a later rebuild honest: old history is always judged
+by the same challenge definition as live history, rather than by a rule somebody changed after the
+events arrived.
+
+## The deadline is when catlog receives the flight
+
+Challenge windows use UTC and the time each event reaches the catlog server. They do not use your
+computer's clock or the clock inside the save. An event received exactly when a challenge opens can
+count; one received exactly when it closes cannot.
+
+<Aside type="caution" title="Offline flights still have to arrive on time">
+  Your flights have to reach catlog before the deadline — if you play offline, get back online
+  before it closes. A flight that remains queued until afterwards does not count, even if you flew
+  it while the challenge was open.
+</Aside>
+
+## Who or what a challenge ranks
+
+A challenge can compare one result per player, one result per save, or one result per player within
+each celestial system. The scope belongs to the challenge rule:
+
+- A **player** challenge can combine qualifying play across saves and systems.
+- A **save** challenge keeps each save's result separate.
+- A **system** challenge keeps each player's result separate inside each matching celestial system,
+  so different systems are not presented as the same contest.
+
+Closed challenge results are designed to remain available rather than expiring like a rolling
+daily or weekly leaderboard. That makes an archive of past challenges possible without treating
+last week's result as disposable.
+
+<Aside type="note" title="The read surface comes later">
+  H1 only lays down the projection storage and these rules of meaning. Challenge definitions,
+  results, a challenge catalogue or result JSON API, and visitor result pages are not built yet. The
+  general catlog census can report how many storage rows exist without exposing a result.
+</Aside>
