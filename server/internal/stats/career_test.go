@@ -249,7 +249,7 @@ func TestFastestToBodySkipsANameThatCannotBeAStatKey(t *testing.T) {
 
 	got := readStats(t, proj)
 	for stat := range got {
-		if stat != "1/soi_bodies" {
+		if stat != "1/soi_bodies" && stat != "1/career_playtime" {
 			t.Errorf("a malformed body name produced the stat %q", stat)
 		}
 	}
@@ -284,6 +284,8 @@ func TestFastestToBodyNeverCollidesWithAFixedBoard(t *testing.T) {
 func TestBoardDirectionAndUnitsAreDerivedFromTheKey(t *testing.T) {
 	for stat, want := range map[string]stats.Board{
 		"fastest_to_orbit": {Stat: "fastest_to_orbit", Title: "Fastest to Orbit", Unit: "ms", Ascending: true, Career: true},
+		"career_playtime":  {Stat: "career_playtime", Title: "Longest Save", Unit: "ms", Career: true},
+		"play_sessions":    {Stat: "play_sessions", Title: "Play Sessions", Unit: "sessions"},
 		"fastest_to_luna":  {Stat: "fastest_to_luna", Title: "Fastest to Luna", Unit: "ms", Ascending: true, Career: true},
 		"fastest_to_kerbin_ii": {
 			Stat: "fastest_to_kerbin_ii", Title: "Fastest to Kerbin Ii", Unit: "ms", Ascending: true, Career: true,
@@ -300,6 +302,126 @@ func TestBoardDirectionAndUnitsAreDerivedFromTheKey(t *testing.T) {
 	for _, stat := range []string{"not_a_board", "fastest_to_", "fastest_to_Luna", "rud_a b", "fastest_to__x"} {
 		if b, ok := stats.Describe(stat); ok {
 			t.Errorf("Describe(%q) = %+v, want it rejected", stat, b)
+		}
+	}
+}
+
+// --- the save itself ---------------------------------------------------------
+
+func TestCareerPlaytimeGoldenValueAndTieBreak(t *testing.T) {
+	proj := testutil.MemProjections(t)
+	apply(t, proj, []input{
+		{typ: "session.started", payload: stats.SessionStarted{ModVer: "0.1.0"}, simT: 10},
+		{flight: flightN(1), typ: "vehicle.staging", payload: stats.VehicleStaging{StageIndex: 0}, simT: 313.5},
+		{career: otherCareer, typ: "session.started", payload: stats.SessionStarted{ModVer: "0.1.0"}, simT: 313.5},
+		// Equal duration: the earlier claim keeps the player row and its context.
+		{career: otherCareer, flight: flightN(2), typ: "vehicle.staging", payload: stats.VehicleStaging{StageIndex: 0}, simT: 313.5},
+	}, 0, false)
+
+	wantRow(t, readStats(t, proj), "1/career_playtime", row{
+		Value: 313_500, Seq: 2, Context: `{"career":"` + defaultCareer + `"}`,
+	})
+	for career, want := range map[string]float64{defaultCareer: 313_500, otherCareer: 313_500} {
+		var value float64
+		if err := proj.Reader().QueryRowContext(t.Context(),
+			`SELECT value FROM career_stat WHERE player_id = 1 AND career = ? AND stat = ?`,
+			career, stats.StatCareerPlaytime).Scan(&value); err != nil {
+			t.Fatalf("read career_playtime for %s: %v", career, err)
+		}
+		if value != want {
+			t.Errorf("career_playtime for %s = %v, want %v", career, value, want)
+		}
+	}
+}
+
+func TestCareerPlaytimeRequiresAPositiveClockAndCareer(t *testing.T) {
+	got := fold(t, []input{
+		{typ: "session.started", payload: stats.SessionStarted{ModVer: "0.1.0"}, noSimT: true},
+		{typ: "session.started", payload: stats.SessionStarted{ModVer: "0.1.0"}, simT: 0},
+		{typ: "session.started", payload: stats.SessionStarted{ModVer: "0.1.0"}, simT: -1},
+		{noCareer: true, typ: "session.started", payload: stats.SessionStarted{ModVer: "0.1.0"}, simT: 900},
+	})
+	if _, ok := got["1/"+stats.StatCareerPlaytime]; ok {
+		t.Errorf("ineligible events produced career_playtime: %v", got)
+	}
+}
+
+func TestCareerPlaytimeIncludesFlaggedActivity(t *testing.T) {
+	f := flightN(1)
+	got := fold(t, []input{
+		{flight: f, typ: "flight.flagged", payload: stats.FlightFlagged{Flag: "teleport"}, simT: 600},
+	})
+	wantRow(t, got, "1/career_playtime", row{
+		Value: 600_000, Seq: 1, Context: `{"career":"` + defaultCareer + `"}`,
+	})
+}
+
+func TestCareerPlaytimeIsTheMaxSimTNotTheCareerTableReading(t *testing.T) {
+	in := []input{
+		{typ: "session.started", payload: stats.SessionStarted{ModVer: "0.1.0"}, simT: 100},
+		{flight: flightN(1), typ: "vehicle.staging", payload: stats.VehicleStaging{StageIndex: 0}, simT: 500},
+		{flight: flightN(1), typ: "telemetry.window", payload: stats.TelemetryWindow{T0Sim: 250, T1Sim: 300, Body: "earth"}, simT: 300},
+	}
+	incremental := testutil.MemProjections(t)
+	apply(t, incremental, in, 0, false)
+	refined := testutil.MemProjections(t)
+	apply(t, refined, in, 0, true)
+
+	want := readStats(t, incremental)["1/"+stats.StatCareerPlaytime]
+	got := readStats(t, refined)["1/"+stats.StatCareerPlaytime]
+	if got != want {
+		t.Errorf("refined career_playtime = %v, incremental = %v", got, want)
+	}
+	if got.Value != 500_000 || got.Seq != 2 {
+		t.Errorf("career_playtime = %v, want 500000 at seq 2", got)
+	}
+}
+
+func TestPlaySessionsCountsLoads(t *testing.T) {
+	proj := testutil.MemProjections(t)
+	apply(t, proj, []input{
+		{typ: "session.started", payload: stats.SessionStarted{ModVer: "0.1.0"}, simT: 0},
+		{typ: "session.started", payload: stats.SessionStarted{ModVer: "0.1.0"}, simT: 100},
+		{career: otherCareer, typ: "session.started", payload: stats.SessionStarted{ModVer: "0.1.0"}, simT: 0},
+	}, 0, false)
+	if got := readStats(t, proj)["1/"+stats.StatPlaySessions].Value; got != 3 {
+		t.Errorf("play_sessions = %v, want 3 including initial sessions and reloads", got)
+	}
+	for career, want := range map[string]float64{defaultCareer: 2, otherCareer: 1} {
+		var value float64
+		if err := proj.Reader().QueryRowContext(t.Context(),
+			`SELECT value FROM career_stat WHERE player_id = 1 AND career = ? AND stat = ?`,
+			career, stats.StatPlaySessions).Scan(&value); err != nil {
+			t.Fatalf("read play_sessions for %s: %v", career, err)
+		}
+		if value != want {
+			t.Errorf("play_sessions for %s = %v, want %v", career, value, want)
+		}
+	}
+}
+
+func TestCareerNativeBoardsHaveSystemScope(t *testing.T) {
+	proj := testutil.MemProjections(t)
+	seedCareerSet(t, proj, defaultCareer, testSystem, 1)
+	seedCareerSet(t, proj, otherCareer, testSystem, 2)
+	apply(t, proj, []input{
+		{typ: "session.started", payload: stats.SessionStarted{ModVer: "0.1.0"}, simT: 100},
+		{career: otherCareer, typ: "session.started", payload: stats.SessionStarted{ModVer: "0.1.0"}, simT: 200},
+		{typ: "session.started", payload: stats.SessionStarted{ModVer: "0.1.0"}, simT: 300},
+	}, 0, false)
+
+	for stat, want := range map[string]float64{
+		stats.StatCareerPlaytime: 300_000,
+		stats.StatPlaySessions:   3,
+	} {
+		var value float64
+		if err := proj.Reader().QueryRowContext(t.Context(),
+			`SELECT value FROM system_stat WHERE player_id = 1 AND system = ? AND stat = ?`,
+			testSystem, stat).Scan(&value); err != nil {
+			t.Fatalf("read system %s: %v", stat, err)
+		}
+		if value != want {
+			t.Errorf("system %s = %v, want %v", stat, value, want)
 		}
 	}
 }
@@ -428,8 +550,8 @@ func TestCareerTracksEveryAttributedEventAsActivity(t *testing.T) {
 	if got.maxSimT != 100 {
 		t.Errorf("max_sim_t = %v, want 100 — a clockless event is activity, not a clock reading", got.maxSimT)
 	}
-	if got := readStats(t, proj); len(got) != 0 {
-		t.Errorf("the activity fixture unexpectedly scored: %v", got)
+	if got := readStats(t, proj); got["1/career_playtime"].Value != 100_000 || got["1/play_sessions"].Value != 1 || len(got) != 2 {
+		t.Errorf("activity boards = %v, want only career_playtime 100000 and play_sessions 1", got)
 	}
 }
 

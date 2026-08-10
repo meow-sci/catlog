@@ -1,7 +1,7 @@
 ---
 title: Every board
 description: >-
-  All 40 fixed leaderboards and the two board families, with the events behind
+  All 42 fixed leaderboards and the two board families, with the events behind
   each one and every rule that disqualifies a value.
 sidebar:
   order: 2
@@ -10,7 +10,7 @@ sidebar:
 import { Aside } from "@astrojs/starlight/components";
 import BoardDetail from "../../../components/BoardDetail.astro";
 
-Forty fixed boards, in the order they are published, then the two families whose
+Forty-two fixed boards, in the order they are published, then the two families whose
 members appear as people reach new worlds and find new ways to lose a vehicle.
 
 ## Records — how much you survived
@@ -165,6 +165,20 @@ best individual cat is. The row names her.
 
 <BoardDetail stat="top_kitten_distance" />
 <BoardDetail stat="top_kitten_missions" />
+
+## The save itself
+
+These boards describe the saves you play rather than a particular flight. **Longest
+Save** follows the career clock attached to events: on the player board it picks
+your longest-running save, while a career row shows how long that one save has
+been played. A flight flag does not disqualify that time, because the duration of
+a save is not a flying feat.
+
+**Play Sessions** counts the first session as well as every later load. It is the
+number of times play began, not merely the number of times a save was resumed.
+
+<BoardDetail stat="career_playtime" />
+<BoardDetail stat="play_sessions" />
 
 ## Career times
 

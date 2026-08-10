@@ -773,6 +773,7 @@ func TestBoardMetadataCoversEveryStatAFoldWrites(t *testing.T) {
 		stats.StatTopKittenMissions,
 		stats.StatHeaviestToOrbit, stats.StatSoftestLanding, stats.StatLandings,
 		stats.StatLowestPass, stats.StatBiggestStack,
+		stats.StatCareerPlaytime, stats.StatPlaySessions,
 	}
 	for _, stat := range fixed {
 		if !declared[stat] {
@@ -868,6 +869,26 @@ func TestCatalogPublishesFamilyBoardsOnceEnoughPlayersAreOnThem(t *testing.T) {
 	}
 	if !slices.Contains(all, "fastest_to_zephyria") || !slices.Contains(all, "rud_kraken") {
 		t.Errorf("min 1 = %v, want the single-entrant boards listed", all)
+	}
+}
+
+func TestCareerNativeBoardsAreLastWithoutDisplacingDynamicFamilies(t *testing.T) {
+	fixed := stats.FixedBoards()
+	if len(fixed) < 2 || fixed[len(fixed)-2].Stat != stats.StatCareerPlaytime || fixed[len(fixed)-1].Stat != stats.StatPlaySessions {
+		t.Fatalf("last fixed boards = %v, want career_playtime then play_sessions", fixed[max(0, len(fixed)-2):])
+	}
+
+	var got []string
+	for _, b := range stats.Catalog(map[string]int64{"fastest_to_luna": 2}, 2) {
+		got = append(got, b.Stat)
+	}
+	orbit := slices.Index(got, stats.StatFastestToOrbit)
+	if orbit < 0 || orbit+3 >= len(got) {
+		t.Fatalf("catalog is missing the career tail: %v", got)
+	}
+	want := []string{stats.StatFastestToOrbit, "fastest_to_luna", stats.StatCareerPlaytime, stats.StatPlaySessions}
+	if !slices.Equal(got[orbit:orbit+4], want) {
+		t.Errorf("catalog career tail = %v, want %v", got[orbit:orbit+4], want)
 	}
 }
 

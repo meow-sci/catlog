@@ -38,7 +38,7 @@ export interface Board {
 
 const UNIVERSAL_SCOPES: Board["scopes"] = ["player", "career", "system"];
 
-/** The 40 fixed boards, in the order the site publishes them. */
+/** The 42 fixed boards, in the order the site publishes them. */
 const BOARD_DEFINITIONS: Omit<Board, "scopes">[] = [
   {
     stat: "biggest_lithobrake_survived",
@@ -571,9 +571,34 @@ const BOARD_DEFINITIONS: Omit<Board, "scopes">[] = [
       "The event carried no career or no clock reading — an absent time is not treated as zero.",
     ],
   },
+  {
+    stat: "career_playtime",
+    title: "Longest Save",
+    unit: "ms",
+    ascending: false,
+    career: true,
+    from: ["any event carrying career + sim_t"],
+    what: "How long your longest-running save has been played.",
+    how: "The largest positive career-clock reading carried by an event in the selected scope. A career row is the time played in that save; the player row is your longest-running save; a celestial-system row is the longest-running save using that system.",
+    excluded: [
+      "An event with no save or no career-clock reading, or a clock reading of zero or less.",
+      "Nothing based on a flight flag. A duration is not a feat: a flagged flight is still time spent playing that save.",
+    ],
+  },
+  {
+    stat: "play_sessions",
+    title: "Play Sessions",
+    unit: "sessions",
+    ascending: false,
+    career: false,
+    from: ["session.started"],
+    what: "How many times you have started or loaded the game into a save.",
+    how: "One for the initial session and one for every later load in the selected player, save or celestial-system scope. This counts play sessions, not just resumes.",
+    excluded: ["Nothing."],
+  },
 ];
 
-// Scope is deliberately attached here rather than repeated on 40 entries. A
+// Scope is deliberately attached here rather than repeated on 42 entries. A
 // board added to the catalog receives every scope automatically; there is no
 // opt-out registry to forget to update.
 export const BOARDS: Board[] = BOARD_DEFINITIONS.map((board) => ({

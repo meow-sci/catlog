@@ -52,6 +52,8 @@ const (
 	StatLandings            = "landings"
 	StatLowestPass          = "lowest_pass"
 	StatBiggestStack        = "biggest_stack"
+	StatCareerPlaytime      = "career_playtime"
+	StatPlaySessions        = "play_sessions"
 )
 
 // Board is the metadata `GET /v1/leaderboards` publishes for one stat (§4.8).
@@ -75,8 +77,8 @@ type Board struct {
 
 // fixedBoards is the §5.6 table, in display order: the "how did you survive
 // that" records first, then the speed and shape records, then what was on the
-// pad, then the counters, then the one career-time board whose key is a
-// constant.
+// pad, then the counters and roster totals, then the career-time and
+// save-native boards.
 //
 // Every entry here is a board because a fold with that name exists, so the list
 // is a property of the build. The two *families* below are not: their keys come
@@ -135,6 +137,8 @@ var fixedBoards = func() []Board {
 		rec(StatTopKittenDistance, "Furthest-Travelled Kitten", "m"),
 		rec(StatTopKittenMissions, "Most Missions Flown", "missions"),
 		{Stat: StatFastestToOrbit, Title: "Fastest to Orbit", Unit: "ms", Ascending: true, Career: true},
+		{Stat: StatCareerPlaytime, Title: "Longest Save", Unit: "ms", Career: true},
+		rec(StatPlaySessions, "Play Sessions", "sessions"),
 	}
 }()
 
@@ -1029,7 +1033,7 @@ func (landingsFold) Apply(ctx context.Context, b *Batch, ev Event) error {
 // --- counter folds -----------------------------------------------------------
 
 // countFold implements the boards that are simply "how many of this event":
-// `kitten_tumbles`, `dockings`, `stagings`.
+// `kitten_tumbles`, `dockings`, `stagings`, `play_sessions`.
 type countFold struct {
 	stat      string
 	eventType string
@@ -1460,6 +1464,35 @@ func careerTime(ctx context.Context, ev Event, b *Batch) (float64, bool, error) 
 // problem — it is rebuildable by definition — so the conversion happens here, at
 // the one place a career time becomes a board value.
 func careerMillis(seconds float64) float64 { return seconds * 1000 }
+
+// careerPlaytimeFold records how far the career's own clock has run.
+//
+// It folds `ev.SimTime` directly and NEVER reads career.max_sim_t, even though
+// that column holds the same number. careerFold is a state fold: on a rebuild it
+// runs in pass 1, so by pass 2 the table already holds the career's FINAL
+// high-water mark and every event would read it. The value would agree with the
+// incremental result and the `updated_seq` would not — the rebuild would stamp
+// the career's first event, the incremental path its last raising one. That is a
+// rebuild-versus-incremental divergence for no benefit: max(sim_t) over the
+// career's events IS max_sim_t, and putRecord's strictly-larger rule computes it
+// replay-stably.
+//
+// There is no flag gate. A duration is not a feat: a teleport-flagged flight is
+// one flight inside a save, and the save was still played for as long as it was
+// played. This joins the four boards that already carry no flag exclusion for
+// reasons of their own (see the Boards table in docs/event-details.md).
+type careerPlaytimeFold struct{}
+
+func (careerPlaytimeFold) Name() string { return StatCareerPlaytime }
+
+func (careerPlaytimeFold) Apply(ctx context.Context, b *Batch, ev Event) error {
+	if !ev.HasCareer() || !ev.HasSimTime || ev.SimTime <= 0 {
+		return nil
+	}
+	return putRecord(ctx, b, ev, StatCareerPlaytime, careerMillis(ev.SimTime), map[string]any{
+		"career": ev.Career,
+	})
+}
 
 // toOrbitFold implements `fastest_to_orbit`: how long into a career the player
 // first put something into a stable orbit around anything.

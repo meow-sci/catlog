@@ -2057,17 +2057,17 @@ row context carries `career`.
 
 **Every board has player, career and system scope.** Scope is a ranking dimension, not a second board
 key: player scope ranks players, career scope ranks `(player, save)` pairs, and system scope ranks
-`(player, celestial system)` pairs. This applies to all 40 fixed rows below and both dynamic
+`(player, celestial system)` pairs. This applies to all 42 fixed rows below and both dynamic
 families, with no opt-out list. `Career` in the table is unrelated: it says the board's *value* is a
 time measured from the start of a career.
 
-### The 40 fixed boards, in display order
+### The 42 fixed boards, in display order
 
 `stats/boards.go:85-129`. Display order **is** publish order — it is the order `FixedBoards()`
 returns and therefore the order `GET /v1/leaderboards` lists — and it is grouped by kind rather than
 by source: the "how did you survive that" records first, then the speed and shape records, then what
-was on the pad, then the counters, then the one career-time board whose key is a constant. The two
-dynamic families slot in under `rud_total` and `fastest_to_orbit`.
+was on the pad, then the counters and roster totals, then the career-time and save-native boards.
+The two dynamic families slot in under `rud_total` and `fastest_to_orbit`.
 
 | # | key | Title | Unit | Asc | Career | Source event | Fold kind |
 |---|---|---|---|---|---|---|---|
@@ -2111,6 +2111,8 @@ dynamic families slot in under `rud_total` and `fastest_to_orbit`.
 | 38 | `top_kitten_distance` | Furthest-Travelled Kitten | `m` | no | no | `roster.snapshot` | record (max) |
 | 39 | `top_kitten_missions` | Most Missions Flown | `missions` | no | no | `roster.snapshot` | record (max) |
 | 40 | `fastest_to_orbit` | Fastest to Orbit | `ms` | **yes** | **yes** | `vehicle.orbit` | best (min) |
+| 41 | `career_playtime` | Longest Save | `ms` | no | **yes** | any event carrying `career` + `sim_t` | record (max) |
+| 42 | `play_sessions` | Play Sessions | `sessions` | no | no | `session.started` | count |
 
 **Four boards carry an empty `Unit` on purpose** — `roundest_orbit` (an eccentricity is
 dimensionless) and `most_parts` / `most_stages` / `biggest_stack` (bare counts of a thing the title
@@ -2120,14 +2122,17 @@ four (`stats_test.go`, `readapi_test.go`) rather than being deleted, so a *fifth
 still a test failure and a decision somebody has to make. `units.ForKey("stage_count")` returns `""`
 by falling through, which is correct and needed no units change at all.
 
-**Four boards have no flag exclusion, and one has it only sometimes.** That is a property of the
-source event rather than a choice: `scoreable` passes every event carrying no flight, and §4.1 sends
-`flight: null` for `roster.snapshot` and for `kitten.eva_end`.
+**Five boards have no flag exclusion, and one has it only sometimes.** For the roster and EVA
+boards that is a property of the source event rather than a choice: `scoreable` passes every event
+carrying no flight, and §4.1 sends `flight: null` for `roster.snapshot` and for `kitten.eva_end`.
+`career_playtime` is deliberately different: a save's duration is not a feat, so a flagged flight
+inside it does not erase the time for which the save was played.
 
 | board | flag exclusion |
 |---|---|
 | `distance_travelled`, `top_kitten_distance`, `top_kitten_missions` | **none** — `roster.snapshot` carries no flight |
 | `longest_eva` | **none** — `kitten.eva_end` is `flight: null`, asymmetrically with `kitten.eva_start` |
+| `career_playtime` | **none** — a duration is not a feat; it records the positive career clock directly |
 | `evas` | **only when the EVA signal carried a vehicle id** (`kitten.eva_start`) |
 
 ### The two dynamic families
