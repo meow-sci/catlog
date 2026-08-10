@@ -42,6 +42,15 @@ public sealed class SystemSurveySourceTests
         Assert.Contains("_runtime.OnSessionBoundary()", mod, StringComparison.Ordinal);
     }
 
+    [RepositoryFact]
+    public void SurveyAnchorsNameTheVerified5168SourceLines()
+    {
+        string source = File.ReadAllText(RepositoryFile("mod", "catlog", "SystemSurvey.cs"));
+        Assert.Contains("KSA/Astronomical.cs:96,100", source, StringComparison.Ordinal);
+        Assert.Contains("KSA/SystemInfo.cs:11,29", source, StringComparison.Ordinal);
+        Assert.Contains("KSA/IParentBody.cs:35", source, StringComparison.Ordinal);
+    }
+
     private static string RepositoryFile(params string[] parts)
     {
         string? root = AppContext.BaseDirectory;

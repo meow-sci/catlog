@@ -40,7 +40,7 @@ public static class SystemSurvey
     public static void Clear() => Cached = null;
 
     [KsaAnchor("CelestialSystem.All.OfType<IParentBody>(); IParentBody.Id; Astronomical.Class",
-        SourceFile = "KSA/CelestialSystem.cs:57 / KSA/LookupCollection.cs:12 / KSA/Astronomical.cs:96",
+        SourceFile = "KSA/CelestialSystem.cs:57 / KSA/LookupCollection.cs:12 / KSA/Astronomical.cs:96,100",
         Verified = "2026-08-10", GameVersion = "2026.8.5.5168", Risk = ChurnRisk.Low,
         Notes = "TypeFilter is a ref struct over a Span; materialise during this game-thread call.")]
     private static SystemSnapshot Capture(CelestialSystem system)
@@ -79,7 +79,7 @@ public static class SystemSurvey
     }
 
     [KsaAnchor("SelectSystem.Systems; SystemInfo.Id; SystemInfo.DisplayName.Value",
-        SourceFile = "KSA/SelectSystem.cs:18 / KSA/SystemInfo.cs:10,28", Verified = "2026-08-10",
+        SourceFile = "KSA/SelectSystem.cs:18 / KSA/SystemInfo.cs:11,29", Verified = "2026-08-10",
         GameVersion = "2026.8.5.5168", Risk = ChurnRisk.Medium,
         Notes = "Launcher metadata owns display names; unresolved ids deliberately fall back to raw id.")]
     private static string ResolveDisplayName(string systemId)
@@ -97,7 +97,7 @@ public static class SystemSurvey
         GameVersion = "2026.8.5.5168", Risk = ChurnRisk.Low,
         Notes = "Atmosphere Physical.Height and ocean Level are metres above mean radius.")]
     [KsaAnchor("IParentBody.GetCcf2Cce(SimTime.Zero); Celestial.GetRotationAxisCce(); Brutal.Numerics.doubleQuat.X/Y/Z/W",
-        SourceFile = "KSA/IParentBody.cs:39 / KSA/Celestial.cs:575-578,622-625 / Brutal.Numerics/doubleQuat.cs:17-29",
+        SourceFile = "KSA/IParentBody.cs:35 / KSA/Celestial.cs:575-578,622-625 / Brutal.Numerics/doubleQuat.cs:17-29",
         Verified = "2026-08-10", GameVersion = "2026.8.5.5168", Risk = ChurnRisk.Low,
         Notes = "Orientation is at SimTime.Zero; Celestial supplies its CCE rotation axis and StellarBody uses its fixed UnitZ axis.")]
     [KsaAnchor("Celestial.Parent/Orbit fields",

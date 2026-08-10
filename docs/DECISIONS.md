@@ -3442,6 +3442,21 @@ increase of 4,594 bytes, **0.809%**, far below the roughly one-third reconsidera
 No fold reads the state and no board changes. This is the final pre-launch `telemetry.window` `ver: 1`
 shape under DOCS-005, so there is no fictional version bump or upcaster for undeployed history.
 
+### MOD-086 — Survey anchors cite the exact member declarations they justify
+
+*Accepted · 2026-08-10 · post-J4 source audit.*
+
+`SystemSurvey` already read the correct KSA members, but three `[KsaAnchor].SourceFile` strings named
+adjacent declarations: `Astronomical.Id` without `Class`, the lines before `SystemInfo.DisplayName`
+and `.Id`, and the timed CCF→CCE overload's neighbouring CCF→CCI method. Those annotations are the
+mechanical checklist for the next decompile bump; an adjacent line that happens to exist would turn
+the audit trail into false confidence even though runtime behavior remained correct.
+
+The literals now cite both `Astronomical` members and the exact build-5168 declarations, and the
+existing repository-source test pins them beside the survey's enumeration and lifecycle invariants.
+No game read, payload or projection changes: this corrects only the evidence attached to those
+reads.
+
 ## The load harness
 
 `catlog.loadgen`: many randomised players through the real pipeline, and what one laptop actually does.
