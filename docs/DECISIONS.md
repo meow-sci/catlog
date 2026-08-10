@@ -1874,6 +1874,30 @@ leaves shared celestial-system catalogue facts alone. The player site describes 
 foundation now: badge predicates, catalogues and public award surfaces belong to later tasks and are
 not implied by the existence of storage.
 
+### PROJ-121 — Badge metadata reuses board key derivation and the one community-publication threshold
+
+*Accepted · 2026-08-10 · Task F2.*
+
+The badge registry mirrors the board registry because it has the same two hard problems: describe a
+fixed or data-derived key without consulting stored rows, and prevent one person's invented place
+name from filling a public catalogue. Fixed metadata is ordered and compile-time; each family title
+is a pure function of its key. A place introduced by a game update or system mod therefore arrives
+fully described without a celestial-body allow-list, database lookup or deployment.
+
+Family construction reuses the board `statSuffix` and `titleize` rules rather than copying them. A
+badge key is also a URL path segment, so a second alphabet, length limit or title normaliser would
+eventually let the same body work in one catalogue and fail in the other. Sharing the rule makes an
+invalid name fail consistently and makes a fixed-key collision impossible by the same test already
+used for boards.
+
+Dynamic badge families also reuse `[boards] min_players`. It answers the same privacy/community
+question as a dynamic board family: whether a data-derived name has enough independent holders to
+belong in the public index. A separate badge threshold would be another knob operators would set to
+the same value, and two policies that could drift for no player benefit. The gate affects listing
+only; pure description and later award storage remain valid below it. Fixed badges are always
+listed. This task deliberately registers metadata without awarding folds, so documenting all 35
+fixed entries and three patterns does not imply that any is currently earnable.
+
 ## Archive & restore
 
 The filesystem archiver, the manifest, restore verification, and the R2 design that is deliberately not built.

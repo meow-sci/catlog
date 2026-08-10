@@ -2393,6 +2393,81 @@ enumerates this table: structural log exclusion plus rebuild supplies Constituti
 while shared `system` and `system_body` rows remain catalogue facts rather than player awards
 (STORE-019).
 
+### Badge catalogue registry
+
+The registry contains **35 fixed badges in five ordered groups plus three exploration-family
+patterns**. Metadata is a pure function of the key: `DescribeBadge` does not consult stored awards,
+and a valid family key can therefore be titled even when that exact body name was never compiled
+into the server. `FixedBadges` retains the order below. `BadgeCatalog` inserts eligible family
+members after `been_to_everything`, in declared family order (`reached_`, `orbited_`, `landed_on_`)
+and key order within each family, before continuing with the kitten group. Group order is
+`first-steps`, `flight`, `survival`, `exploration`, `kittens`. Tier is presentational only. Earning
+a higher tier never removes a lower one (`stats/badges.go:57-138,196-230`).
+
+| # | key | Title | Blurb | Group | Tier | Derivation |
+|---|---|---|---|---|---:|---|
+| 1 | `first_flight` | Off The Pad | Your first flight. | `first-steps` | — | first `flight.started` |
+| 2 | `first_stage` | Separation | You let go of something on purpose. | `first-steps` | — | first `vehicle.staging` |
+| 3 | `first_space` | Above The Air | You left the atmosphere. | `first-steps` | — | first `vehicle.atmosphere` with `dir == "exited"` |
+| 4 | `first_orbit` | Around We Go | You made orbit. | `first-steps` | — | first `vehicle.orbit` with `phase == "achieved"` |
+| 5 | `first_landing` | Wheels Down | You put something down and it survived. | `first-steps` | — | first surviving `vehicle.landed` |
+| 6 | `first_recovery` | Home Again | You recovered a vehicle. | `first-steps` | — | first `flight.ended` with `reason == "recovered"` |
+| 7 | `first_eva` | Outside | A kitten went out. | `first-steps` | — | first `kitten.eva_start` |
+| 8 | `first_dock` | Well Met | Two of your vehicles became one. | `first-steps` | — | first `vehicle.docked` |
+| 9 | `first_rud` | It Happens | You lost a vehicle. Everyone does. | `first-steps` | — | first `vehicle.rud` |
+| 10 | `crewed_orbit` | Passengers | You brought company into orbit. | `flight` | — | achieved orbit on a flight whose start crew was at least 1 |
+| 11 | `orbit_and_back` | Round Trip | You made orbit and brought the vehicle home. | `flight` | — | recovered flight whose set state contains the orbit milestone |
+| 12 | `docked_after_orbit` | Rendezvous | You docked after making orbit. | `flight` | — | docking after that flight had set its orbit milestone; does not claim docking occurred in orbit |
+| 13 | `coaster` | Along For The Ride | You reached another sphere without an engine. | `flight` | — | SOI arrival on a flight with known `engine_count == 0` |
+| 14 | `heavy_lifter` | Heavy Lifter | You put a notably heavy payload into orbit. | `flight` | — | `heaviest_to_orbit >= 20,000` |
+| 15 | `big_stack` | Tall Order | You built a stack with ambitions. | `flight` | — | `biggest_stack >= 5` |
+| 16 | `many_parts` | Kit Bash | You assembled a hundred parts into one vehicle. | `flight` | — | `most_parts >= 100` |
+| 17 | `well_lit` | Well Lit | You have lit rather a lot of engines. | `flight` | — | `engine_ignitions >= 100` |
+| 18 | `lithobraker` | Lithobraker | You survived an enthusiastic arrival. | `survival` | 1 | `biggest_lithobrake_survived >= 50` |
+| 19 | `ground_truth` | Ground Truth | You survived an even more enthusiastic arrival. | `survival` | 2 | `biggest_lithobrake_survived >= 100` |
+| 20 | `pressed` | Pressed | You remained attached through ten g. | `survival` | — | `peak_g_survived >= 10` |
+| 21 | `feather` | Feather | You landed with unusual restraint. | `survival` | — | `0 < softest_landing <= 0.5` |
+| 22 | `canyon_run` | Canyon Run | You passed within a hundred metres of the ground. | `survival` | — | `0 < lowest_pass <= 100` |
+| 23 | `old_hand` | Old Hand | You have landed often enough to look practised. | `survival` | — | `landings >= 25` |
+| 24 | `wanderer` | Wanderer | You reached three worlds. | `exploration` | 1 | `soi_bodies >= 3` |
+| 25 | `voyager` | Voyager | You reached five worlds. | `exploration` | 2 | `soi_bodies >= 5` |
+| 26 | `grand_tour` | Grand Tour | You reached eight worlds. | `exploration` | 3 | `soi_bodies >= 8` |
+| 27 | `groundskeeper` | Groundskeeper | You landed on three worlds. | `exploration` | — | `landed_bodies >= 3` |
+| 28 | `been_to_every_planet` | Every World | You visited every planet in this system. | `exploration` | — | entered every `kind == "planet"` body in the save's effectively complete system catalogue |
+| 29 | `been_to_everything` | Nothing Left | You visited everything in this system. | `exploration` | — | entered every body in the save's effectively complete system catalogue |
+| 30 | `not_on_their_feet` | Not On Their Feet | A kitten failed to land on their feet. | `kittens` | — | first `kitten.tumble` with `from == "airborne"` |
+| 31 | `persistently_upside_down` | Persistently Upside Down | Your kittens have tumbled fifty times. | `kittens` | — | `kitten_tumbles >= 50` |
+| 32 | `crowded_capsule` | Crowded Capsule | You brought four kittens home at once. | `kittens` | — | `biggest_recovery >= 4` |
+| 33 | `spacewalker` | Spacewalker | Your kittens have taken ten spacewalks. | `kittens` | — | `evas >= 10` |
+| 34 | `the_long_walk` | The Long Walk | A kitten spent an hour outside. | `kittens` | — | `longest_eva >= 3,600` |
+| 35 | `ferry_service` | Ferry Service | You brought ten kittens to orbit and home. | `kittens` | — | `kittens_to_orbit_and_back >= 10` |
+
+| Family key | Title derivation | Blurb derivation | Group | Derivation |
+|---|---|---|---|---|
+| `reached_<body>` | `"Reached " + titleize(body)` | `"You reached " + titleize(body) + "."` | `exploration` | `vehicle.soi.to_body` |
+| `orbited_<body>` | `"Orbited " + titleize(body)` | `"You made orbit around " + titleize(body) + "."` | `exploration` | achieved `vehicle.orbit.body` |
+| `landed_on_<body>` | `"Landed on " + titleize(body)` | `"You landed on " + titleize(body) + "."` | `exploration` | surviving `vehicle.landed.body` |
+
+All three call the board registry's exact `statSuffix` rule: lowercase; first character
+`[a-z0-9]`; remaining characters `[a-z0-9._-]`; value-derived suffix at most 40 characters.
+`familyBadge` also rejects a fixed-key collision (`stats/badges.go:140-159`). `titleize` is shared
+too, so board and badge titles cannot disagree about the same opaque game name. There is no
+celestial-body allow-list.
+
+Every fixed badge is always catalogued. A dynamic family member is catalogued only when at least
+`[boards] min_players` distinct players hold it; this reuses the board-family community-publication
+threshold rather than creating a second knob. A caller value below 1 uses
+`DefaultMinPlayers == 2`. The threshold affects listing only, not whether a valid key can be
+described or stored. `KnownBadge` accepts every fixed key and a valid family key with at least one
+holder for direct lookup; the stricter catalogue gate is separate
+(`stats/badges.go:161-230`).
+
+This task registers metadata only. There are still **no badge-awarding folds**, so none of these 35
+fixed badges or three families can yet produce a `badge_award` row. Their derivations above are the
+locked predicates the later fold tasks implement, not a claim that an award is currently earnable.
+When those folds land, every flight-bearing predicate also uses the existing final-state
+`scoreable` rule; that eligibility is shared rather than repeated in every table row.
+
 ---
 
 ## Boards
