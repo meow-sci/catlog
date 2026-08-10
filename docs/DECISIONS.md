@@ -2125,6 +2125,32 @@ the event, preserving PROJ-043 across replay. Past windows remain legal because 
 rebuild is the one backfill mechanism. The docs component is fail-fast against the derived mirror,
 so H4 cannot add a player-visible challenge by prose alone or silently render an unknown key.
 
+### PROJ-131 — The challenge engine owns time, scope and merge; each rule owns eligibility
+
+*Accepted · 2026-08-10 · Task H3.*
+
+Every challenge shares three mechanical decisions, so H3 implements them once: reject an event
+outside the half-open server-receive window before invoking rule code, translate the declared scope
+into the H1 career/system sentinels, and merge record/best/count values with the exact board rules.
+Keeping the strict comparison in both the pending map and SQL preserves the earlier sequence and its
+context on a tie regardless of flush size. Sorted composite-key flushing gives the rebuild the same
+deterministic write surface as every other batched projection.
+
+Eligibility stays in the concrete rule. The generic engine cannot infer that every candidate has a
+flight—some challenge sources are genuinely flightless—and applying `scoreable` centrally would
+pretend it had inspected an attribution that may not exist. Conversely, omitting it from a
+flight-bearing rule would score a flagged flight. The executable value-function contract therefore
+states and tests the ownership explicitly: a flight-bearing rule calls `scoreable` before returning
+`ok=true`. This makes the arbitrary predicate and its exclusion readable in one place, while still
+inheriting D22's final-state correction on refined rebuild.
+
+Challenge folds occupy one stable second-pass slot after badges and before the log census, with one
+`challenge:<key>` identity per definition. A name added later changes `BuildID`, forcing the normal
+rebuild that PROJ-090 already defines as the sole backfill; the replay uses stored `recv_time`, so it
+can discover an old qualifying event without reopening a deadline. H3 keeps both shipped catalogue
+and rule map empty: generic machinery is testable with injected synthetic definitions, while no
+player-visible contest exists until H4 lands metadata and executable rules together.
+
 ## Archive & restore
 
 The filesystem archiver, the manifest, restore verification, and the R2 design that is deliberately not built.

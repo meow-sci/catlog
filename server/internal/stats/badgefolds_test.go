@@ -476,12 +476,13 @@ func TestSecondPassOrderNamesAndBuildIdentity(t *testing.T) {
 	}
 	second := SecondPassFolds()
 	boards := BoardFolds()
+	challenges := ChallengeFolds()
 	if err := validateFoldNames(second); err != nil {
 		t.Fatalf("actual second-pass names are not unique: %v", err)
 	}
-	if len(second) != len(boards)+len(badges)+len(LogFolds()) ||
+	if len(second) != len(boards)+len(badges)+len(challenges)+len(LogFolds()) ||
 		second[len(boards)].Name() != "badge:"+BadgeFirstFlight ||
-		second[len(boards)+len(badges)].Name() != LogFolds()[0].Name() {
+		second[len(boards)+len(badges)+len(challenges)].Name() != LogFolds()[0].Name() {
 		t.Fatalf("second-pass boundary = %v", foldNames(second))
 	}
 	t.Run("constructor rejects duplicate names", func(t *testing.T) {
@@ -490,7 +491,7 @@ func TestSecondPassOrderNamesAndBuildIdentity(t *testing.T) {
 				t.Error("second-pass constructor accepted duplicate fold names")
 			}
 		}()
-		secondPassFolds(nil, []Fold{eventBadge{badge: "same"}, thresholdBadge{badge: "same"}}, nil)
+		secondPassFolds(nil, []Fold{eventBadge{badge: "same"}, thresholdBadge{badge: "same"}}, nil, nil)
 	})
 	t.Run("constructor rejects empty names", func(t *testing.T) {
 		defer func() {
@@ -498,7 +499,7 @@ func TestSecondPassOrderNamesAndBuildIdentity(t *testing.T) {
 				t.Error("second-pass constructor accepted an empty fold name")
 			}
 		}()
-		secondPassFolds(nil, []Fold{testNamedFold{}}, nil)
+		secondPassFolds(nil, []Fold{testNamedFold{}}, nil, nil)
 	})
 	base := []string{"state", "board", "census"}
 	added := slices.Insert(slices.Clone(base), 2, "badge:first_orbit")

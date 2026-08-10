@@ -102,10 +102,11 @@ type Batch struct {
 	// Write accumulators, one map per rule. Cleared by every flush. Indexed by
 	// [statKind] rather than carrying it in the value, so the flush walks one
 	// kind at a time — each kind's ON CONFLICT clause is a different statement.
-	stats       [numStatKinds]map[statKey]*pendingStat
-	careerStats [numStatKinds]map[careerStatKey]*pendingCareerStat
-	systemStats [numStatKinds]map[systemStatKey]*pendingStat
-	periods     [numStatKinds]map[periodKey]*pendingStat
+	stats          [numStatKinds]map[statKey]*pendingStat
+	careerStats    [numStatKinds]map[careerStatKey]*pendingCareerStat
+	systemStats    [numStatKinds]map[systemStatKey]*pendingStat
+	periods        [numStatKinds]map[periodKey]*pendingStat
+	challengeStats [numStatKinds]map[challengeStatKey]*pendingStat
 	// badges is both the read-through existence cache and the first-write
 	// accumulator. Pending rows retain every column from the earliest seq.
 	badges map[badgeKey]*badgeEntry
@@ -152,6 +153,7 @@ type Batch struct {
 	badgeKeys           []badgeKey
 	censusKeys          []censusKey
 	challengeMemberKeys []challengeMemberKey
+	challengeStatKeys   []challengeStatKey
 	args                []any
 }
 
@@ -198,6 +200,7 @@ func NewBatch(tx *sql.Tx, opts BatchOptions) *Batch {
 		b.careerStats[k] = map[careerStatKey]*pendingCareerStat{}
 		b.systemStats[k] = map[systemStatKey]*pendingStat{}
 		b.periods[k] = map[periodKey]*pendingStat{}
+		b.challengeStats[k] = map[challengeStatKey]*pendingStat{}
 	}
 	if b.flushRows <= 0 {
 		b.flushRows = DefaultFlushRows
@@ -222,6 +225,56 @@ type challengeMemberKey struct {
 type challengeMemberEntry struct {
 	firstSeq int64
 	dirty    bool
+}
+
+type challengeStatKey struct {
+	playerID  int64
+	career    string
+	system    string
+	challenge string
+}
+
+func (b *Batch) putChallengeStat(kind statKind, k challengeStatKey, value float64, cx any, seq int64) {
+	if pending, ok := b.challengeStats[kind][k]; ok {
+		pending.merge(kind, value, cx, seq)
+		return
+	}
+	b.challengeStats[kind][k] = &pendingStat{value: value, cx: cx, seq: seq}
+}
+
+var challengeStatFlush = [numStatKinds]string{
+	kindRecord: ` ON CONFLICT (player_id, career, system, challenge) DO UPDATE SET
+	   value = excluded.value, context = excluded.context, updated_seq = excluded.updated_seq
+	 WHERE excluded.value > challenge_stat.value`,
+	kindBest: ` ON CONFLICT (player_id, career, system, challenge) DO UPDATE SET
+	   value = excluded.value, context = excluded.context, updated_seq = excluded.updated_seq
+	 WHERE excluded.value < challenge_stat.value`,
+	kindCount: ` ON CONFLICT (player_id, career, system, challenge) DO UPDATE SET
+	   value = challenge_stat.value + excluded.value, updated_seq = excluded.updated_seq`,
+}
+
+func (b *Batch) flushChallengeStats(ctx context.Context) error {
+	for kind, pending := range b.challengeStats {
+		if len(pending) == 0 {
+			continue
+		}
+		keys := slices.AppendSeq(b.challengeStatKeys[:0], maps.Keys(pending))
+		slices.SortFunc(keys, compareChallengeStatKey)
+		b.challengeStatKeys = keys
+		err := b.write(ctx, len(keys), 7,
+			`INSERT INTO challenge_stat (player_id, career, challenge, system, value, context, updated_seq) VALUES `,
+			challengeStatFlush[statKind(kind)],
+			func(i int, args []any) []any {
+				k := keys[i]
+				p := pending[k]
+				return append(args, k.playerID, k.career, k.challenge, k.system, p.value, p.cx, p.seq)
+			})
+		if err != nil {
+			return fmt.Errorf("stats: flush challenge_stat: %w", err)
+		}
+		clear(pending)
+	}
+	return nil
 }
 
 func (b *Batch) challengeMemberSet(ctx context.Context, k challengeSetKey) (map[string]*challengeMemberEntry, error) {
@@ -2103,7 +2156,7 @@ func (b *Batch) Flush(ctx context.Context) error {
 	for _, fn := range []func(context.Context) error{
 		b.flushSystems, b.flushSystemBodies, b.flushFlights, b.flushCareers, b.flushBodies, b.flushCareerBodies,
 		b.flushKittens, b.flushCareerKittens, b.flushStats, b.flushCareerStats, b.flushBadges, b.flushSystemStats,
-		b.flushPeriods, b.flushChallengeMembers, b.flushCensus,
+		b.flushPeriods, b.flushChallengeStats, b.flushChallengeMembers, b.flushCensus,
 	} {
 		if err := fn(ctx); err != nil {
 			return err
@@ -2282,6 +2335,19 @@ func compareChallengeMemberKey(x, y challengeMemberKey) int {
 		return c
 	}
 	return strings.Compare(x.member, y.member)
+}
+
+func compareChallengeStatKey(x, y challengeStatKey) int {
+	if c := cmpInt64(x.playerID, y.playerID); c != 0 {
+		return c
+	}
+	if c := strings.Compare(x.career, y.career); c != 0 {
+		return c
+	}
+	if c := strings.Compare(x.system, y.system); c != 0 {
+		return c
+	}
+	return strings.Compare(x.challenge, y.challenge)
 }
 
 func cmpInt64(x, y int64) int {

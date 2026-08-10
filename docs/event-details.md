@@ -2432,15 +2432,41 @@ lookup. `Challenge.Open(nowMS)` exists only for future presentation; projection 
 A definition already in the past remains legal: adding its fold and rebuilding discovers matching
 retained history rather than running a separate backfill (PROJ-090).
 
-`ValidateChallenges` runs at catlogd startup before keys or databases are created. It refuses
+`ValidateChallenges` runs at catlogd startup before keys or databases are created. It constructs
+the executable registry and refuses
 duplicate or noncanonical stat-suffix keys, non-positive or reversed windows, unknown scopes,
-definition/fold-count disagreement, duplicate or empty reserved `challenge:<key>` fold identities,
+definition/rule/fold-count disagreement, missing or invalid rules, duplicate or empty
+`challenge:<key>` fold identities,
 and any key that `stats.Describe` recognises as a fixed or dynamic board. Definitions are never
 runtime configuration: there is no definition table, admin mutation or challenge result API.
-The H2 shipped catalogue is intentionally empty, and no `challenge:*` fold is registered, so no
-gameplay event yet feeds either table. The collection census nevertheless includes both row counts,
-and moderation treats both tables as player-owned facts removed by structural log exclusion plus
-rebuild.
+The shipped catalogue and executable rule map remain intentionally empty through H3, so no gameplay
+event yet feeds either table. The generic machinery is registered between badge and log folds in
+the shared second pass; once definitions exist its exact order is boards, badges, challenges,
+event census. The collection census nevertheless includes both row counts, and moderation treats
+both tables as player-owned facts removed by structural log exclusion plus rebuild.
+
+Each executable `challengeFold` applies the receive-time gate **before** calling its arbitrary value
+function. A missing/non-positive receive stamp, a stamp before opening, or a stamp at/after closing
+cannot reach rule code. A qualifying contribution then passes through `putChallenge`, which writes
+exactly one scope: player `('', '')`, save `(<event career>, <resolved system>)`, or system
+`('', <resolved system>)`. Save and system writes are absent when either career or bound-system
+identity is unavailable; the engine never invents a label.
+
+Record, best and count challenge rows use the board merge rules verbatim. Record replaces only on a
+strictly larger value, best only on a strictly smaller one, and count adds deltas; therefore an equal
+record/best retains its earlier `updated_seq` and matching deterministic JSON context in the pending
+batch and again at SQL conflict. Flushes sort `(player_id, career, system, challenge)` and chunk by
+the ordinary batch row cap. Durable SQL rows and pending writes consequently give the same result at
+batch size one or 500 and after restart.
+
+The generic fold deliberately does **not** call `scoreable`: flightless challenge events have no
+flight to test, while only a concrete rule knows whether its candidate is flight-bearing. Every
+flight-bearing rule must call `scoreable` explicitly inside its value function before returning a
+contribution. This inherits D22 precisely: incremental projection may optimistically retain an
+earlier contribution until a late `flight.flagged` arrives, while refined rebuild sees completed
+flight state and removes it. Conversely, adding a named challenge fold changes `BuildID`; rebuilding
+then discovers qualifying events from a past window without changing their receive-time deadline
+(PROJ-090).
 
 ### Badge accumulator and dual-scope writer
 

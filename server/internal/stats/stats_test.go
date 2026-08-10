@@ -1140,8 +1140,8 @@ func TestFoldOrderPutsStateFoldsFirst(t *testing.T) {
 	// The rebuild's second pass and the incremental loop's tail must be the same
 	// list. If they drift, a rebuilt projections.db stops matching the
 	// incremental one — which is the one property the rebuild exists to give.
-	if len(stats.SecondPassFolds()) != len(stats.BoardFolds())+len(stats.BadgeFolds())+len(stats.LogFolds()) {
-		t.Errorf("SecondPassFolds() is not BoardFolds() plus BadgeFolds() plus LogFolds()")
+	if len(stats.SecondPassFolds()) != len(stats.BoardFolds())+len(stats.BadgeFolds())+len(stats.ChallengeFolds())+len(stats.LogFolds()) {
+		t.Errorf("SecondPassFolds() is not BoardFolds() plus BadgeFolds() plus ChallengeFolds() plus LogFolds()")
 	}
 	// Every board fold reads flight_state for the flag exclusion, and the
 	// career-time boards need the career row to exist, so the state folds have

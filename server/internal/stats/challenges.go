@@ -74,7 +74,15 @@ func challengeFoldNames(defs []Challenge) []string {
 // ValidateChallenges validates the shipped compile-time catalogue. catlogd
 // calls this before opening keys or databases so a corrupt registry cannot run.
 func ValidateChallenges() error {
-	return validateChallenges(challengeCatalogue, challengeFoldNames(challengeCatalogue))
+	folds, err := challengeFoldsFor(challengeCatalogue, challengeRules)
+	if err != nil {
+		return err
+	}
+	names := make([]string, len(folds))
+	for i, fold := range folds {
+		names[i] = fold.Name()
+	}
+	return validateChallenges(challengeCatalogue, names)
 }
 
 func validateChallenges(defs []Challenge, foldNames []string) error {

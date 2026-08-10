@@ -68,7 +68,7 @@ func Folds() []Fold {
 }
 
 // SecondPassFolds returns every fold that runs once flight_state and career are
-// complete: the boards, then the census.
+// complete: boards, badges, challenges, then the census.
 //
 // It exists so that "what a rebuild's second pass applies" and "what the
 // incremental loop applies after the state folds" are one list rather than two
@@ -76,11 +76,11 @@ func Folds() []Fold {
 // make a rebuilt projections.db disagree with the incremental one, which is the
 // one property the rebuild exists to guarantee.
 func SecondPassFolds() []Fold {
-	return secondPassFolds(BoardFolds(), BadgeFolds(), LogFolds())
+	return secondPassFolds(BoardFolds(), BadgeFolds(), ChallengeFolds(), LogFolds())
 }
 
-func secondPassFolds(boards, badges, logs []Fold) []Fold {
-	folds := append(append(boards, badges...), logs...)
+func secondPassFolds(boards, badges, challenges, logs []Fold) []Fold {
+	folds := append(append(append(boards, badges...), challenges...), logs...)
 	if err := validateFoldNames(folds); err != nil {
 		panic(err)
 	}

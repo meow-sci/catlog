@@ -45,12 +45,24 @@ Closed challenge results are designed to remain available rather than expiring l
 daily or weekly leaderboard. That makes an archive of past challenges possible without treating
 last week's result as disposable.
 
+## Eligibility and rebuilds
+
+A challenge contribution tied to a flight follows the same final eligibility as a leaderboard
+result. A [flagged flight](/catlog/leaderboards/eligibility/) contributes nothing. If a flight is
+flagged after an earlier event appeared to qualify, rebuilding the projections removes that
+contribution.
+
+Challenge windows remain attached to recorded receive times during a rebuild. That means a
+challenge deployed after its window has closed can still find qualifying events from that window in
+the existing history. It does not reopen the deadline or admit an event that reached catlog too
+late.
+
 ## Shipped challenges
 
 No challenges have been shipped yet.
 
 <Aside type="note" title="The read surface comes later">
   The registry exists, but it contains no definitions, so there are no challenge results. A public
-  challenge JSON API and visitor result pages are not built yet. There is no admin screen or runtime
-  setting for creating or changing a challenge.
+  challenge JSON API and visitor result pages are not built yet, and the starter challenges arrive
+  in a later step. There is no admin screen or runtime setting for creating or changing a challenge.
 </Aside>

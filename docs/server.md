@@ -282,11 +282,15 @@ contributed last.
 Challenge rows have no retention. They do not reuse `player_stat_period`, whose calendar buckets
 are deliberately aged out: the archive of a closed challenge is part of the feature. Definitions
 live in the server's compile-time `stats.Challenge` registry so an incremental fold and a later
-rebuild cannot silently apply different mutable rules. The registry is intentionally empty at H2;
-catlogd validates its keys, windows, scopes, board collisions and reserved fold identities before
-creating runtime state. No challenge fold or result read exists yet. The batch foundation only
+rebuild cannot silently apply different mutable rules. The registry and executable rule map remain
+intentionally empty through H3; catlogd validates their one-to-one construction, keys, windows,
+scopes, board collisions and fold identities before creating runtime state. Generic challenge folds
+now occupy the second-pass slot after badges and before the event census, but the empty registry
+means none is currently returned and no result read exists. The batch foundation
 loads one scoped `challenge_member` set on demand, merges pending additions, and flushes new members
-in deterministic key order, making future set-valued folds independent of projector batch size.
+in deterministic key order. `challenge_stat` contributions likewise merge in per-kind pending maps
+and flush in sorted composite-key order with the same strict record/best/count SQL guards as boards.
+Together those paths make future challenge results independent of projector batch size and restart.
 Both challenge tables are player-owned structural projections for moderation/rebuild purposes.
 `ProjectionCounts` and the cached public collection census expose their current row counts as
 `challenge_stat`/`challenge_member` and `challenge_stats`/`challenge_members`, respectively.
