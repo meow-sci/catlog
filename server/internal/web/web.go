@@ -74,7 +74,14 @@ type Read interface {
 	// period selector, so this site passes through whatever `?period=` named
 	// rather than always asking for `alltime`.
 	Board(ctx context.Context, stat, period, bucket, scope, system string, limit, offset int) (readapi.BoardResponse, bool, error)
+	// ResolveSystem turns a URL-facing slug or hash into the canonical compact
+	// identity a scoped board read accepts.
+	ResolveSystem(ctx context.Context, key string) (readapi.SystemRef, bool, error)
 	Player(ctx context.Context, handle string) (readapi.PlayerResponse, bool, error)
+	// Saves and Save are the read seam for the B5 pages. B4 adds them here so
+	// those pages cannot be tempted to query projections directly.
+	Saves(ctx context.Context, handle string) (readapi.SavesResponse, bool, error)
+	Save(ctx context.Context, handle string, ordinal int64) (readapi.SaveResponse, bool, error)
 	// PlayerEvents is the raw log behind `/p/{handle}/events`.
 	PlayerEvents(ctx context.Context, handle, typ string, before int64, limit int) (readapi.EventsResponse, bool, error)
 	// GlobalEvents is the whole log's newest page, every player mixed together —

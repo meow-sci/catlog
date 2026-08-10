@@ -2,6 +2,7 @@ package web
 
 import (
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -121,19 +122,26 @@ func (s *Server) handleBoards(w http.ResponseWriter, r *http.Request) {
 // window selector and the pager.
 type boardData struct {
 	readapi.BoardResponse
-	// Periods are the windows this board can be read over, in display order.
-	Periods []string
+	Scopes      []boardChip
+	Periods     []boardChip
+	BodyDerived bool
+	SystemURL   string
 	// HasMore says a next page probably exists.
 	//
 	// Inferred from a full page rather than known: `BoardResponse` publishes no
 	// total, deliberately, and inferring is honest — a full page might be the
 	// last one, in which case the next page says "nobody is on this board yet"
 	// and the reader has lost nothing.
-	HasMore bool
-	// Prev and Next are offsets, valid only when the corresponding flag is set.
-	Prev, Next int
+	HasMore          bool
+	PrevURL, NextURL string
 	// FirstRank and LastRank are what the pager counts out loud.
 	FirstRank, LastRank int
+}
+
+type boardChip struct {
+	Key      string
+	URL      string
+	Selected bool
 }
 
 // periodLabels are how a window is written for a reader. The API's keys are
@@ -157,48 +165,172 @@ func periodLabel(period string) string {
 	return period
 }
 
+var scopeLabels = map[string]string{
+	stats.ScopePlayer: "Players",
+	stats.ScopeCareer: "Saves",
+	stats.ScopeSystem: "Systems",
+}
+
+func scopeLabel(scope string) string {
+	if label, ok := scopeLabels[scope]; ok {
+		return label
+	}
+	return scope
+}
+
 func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
-	period, ok := stats.ValidPeriod(r.URL.Query().Get("period"))
+	query := r.URL.Query()
+	limit, ok := webIntParam(query, "limit", BoardRows)
 	if !ok {
-		// A window this server does not serve is not a board that does not
-		// exist: say which of the two it is.
-		s.notFound(w, r, "catlog has no such window. Try all time, today, this week, this month or this year.")
+		s.badRequest(w, r, "Limit must be an integer.")
 		return
 	}
-	offset := 0
-	if raw := r.URL.Query().Get("offset"); raw != "" {
-		n, err := strconv.Atoi(raw)
-		if err != nil || n < 0 {
-			s.notFound(w, r, "That is not a page of this board.")
+	offset, ok := webIntParam(query, "offset", 0)
+	if !ok {
+		s.badRequest(w, r, "Offset must be an integer.")
+		return
+	}
+	limit, offset = readapi.ClampPaging(limit, offset)
+	period, ok := stats.ValidPeriod(query.Get("period"))
+	if !ok {
+		s.badRequest(w, r, "Period must be one of all time, daily, weekly, monthly or yearly.")
+		return
+	}
+	scope, ok := stats.ValidScope(query.Get("scope"))
+	if !ok {
+		s.badRequest(w, r, "Ranking must be players, saves or systems.")
+		return
+	}
+	if scope != stats.ScopePlayer && period != stats.PeriodAllTime {
+		s.badRequest(w, r, scopeLabel(scope)+" boards have no time windows.")
+		return
+	}
+	bucket := query.Get("at")
+	if bucket != "" && (period == stats.PeriodAllTime || !stats.ParseBucket(period, bucket)) {
+		s.badRequest(w, r, "That is not a well-formed "+period+" window.")
+		return
+	}
+	system := query.Get("system")
+	if system != "" && scope == stats.ScopePlayer {
+		s.badRequest(w, r, "System filtering needs a saves or systems ranking.")
+		return
+	}
+	if system != "" {
+		ref, found, err := s.deps.Read.ResolveSystem(r.Context(), system)
+		if err != nil {
+			s.serverError(w, r, err, "resolve the celestial system")
 			return
 		}
-		offset = n
+		if !found {
+			s.notFound(w, r, "catlog has never seen a system by that name.")
+			return
+		}
+		system = ref.Hash
 	}
 
-	board, known, err := s.deps.Read.Board(r.Context(), r.PathValue("stat"), period, "", stats.ScopePlayer, "", BoardRows, offset)
+	board, known, err := s.deps.Read.Board(r.Context(), r.PathValue("stat"), period, bucket, scope, system, limit, offset)
 	switch {
-	case !known:
-		s.notFound(w, r, "No such leaderboard.")
-		return
 	case err != nil:
 		s.serverError(w, r, err, "read the leaderboard")
 		return
+	case !known:
+		s.notFound(w, r, "No such leaderboard.")
+		return
 	}
 
+	base := cloneValues(query)
+	if _, present := query["limit"]; present {
+		base.Set("limit", strconv.Itoa(limit))
+	}
+	if offset == 0 {
+		base.Del("offset")
+	} else {
+		base.Set("offset", strconv.Itoa(offset))
+	}
 	data := boardData{
 		BoardResponse: board,
-		Periods:       stats.Periods(),
 		HasMore:       len(board.Rows) >= board.Limit,
-		Prev:          max(board.Offset-board.Limit, 0),
-		Next:          board.Offset + board.Limit,
 		FirstRank:     board.Offset + 1,
 		LastRank:      board.Offset + len(board.Rows),
 	}
+	if meta, described := stats.Describe(board.Stat); described {
+		data.BodyDerived = meta.BodyDerived
+	}
+	for _, candidate := range stats.Scopes() {
+		values := cloneValues(base)
+		values.Del("offset")
+		if candidate == stats.ScopePlayer {
+			values.Del("scope")
+			values.Del("system")
+		} else {
+			values.Set("scope", candidate)
+			values.Del("period")
+			values.Del("at")
+		}
+		chip := boardChip{Key: candidate, URL: boardURL(board.Stat, values), Selected: candidate == scope}
+		data.Scopes = append(data.Scopes, chip)
+		if candidate == stats.ScopeSystem {
+			data.SystemURL = chip.URL
+		}
+	}
+	if scope == stats.ScopePlayer {
+		for _, candidate := range stats.Periods() {
+			values := cloneValues(base)
+			values.Del("offset")
+			if candidate == stats.PeriodAllTime {
+				values.Del("period")
+				values.Del("at")
+			} else {
+				values.Set("period", candidate)
+				if candidate != period {
+					values.Del("at")
+				}
+			}
+			data.Periods = append(data.Periods, boardChip{
+				Key: candidate, URL: boardURL(board.Stat, values), Selected: candidate == period,
+			})
+		}
+	}
+	prev := cloneValues(base)
+	if n := max(board.Offset-board.Limit, 0); n == 0 {
+		prev.Del("offset")
+	} else {
+		prev.Set("offset", strconv.Itoa(n))
+	}
+	data.PrevURL = boardURL(board.Stat, prev)
+	next := cloneValues(base)
+	next.Set("offset", strconv.Itoa(board.Offset+board.Limit))
+	data.NextURL = boardURL(board.Stat, next)
 	s.render(w, r, http.StatusOK, "board", publicCache, page{
 		Title: board.Title + " — catlog",
 		Nav:   "boards",
 		Data:  data,
 	})
+}
+
+func webIntParam(query url.Values, name string, fallback int) (int, bool) {
+	raw := query.Get(name)
+	if raw == "" {
+		return fallback, true
+	}
+	value, err := strconv.Atoi(raw)
+	return value, err == nil
+}
+
+func cloneValues(values url.Values) url.Values {
+	out := make(url.Values, len(values))
+	for key, entries := range values {
+		out[key] = append([]string(nil), entries...)
+	}
+	return out
+}
+
+func boardURL(stat string, values url.Values) string {
+	path := "/boards/" + stat
+	if encoded := values.Encode(); encoded != "" {
+		return path + "?" + encoded
+	}
+	return path
 }
 
 // --- GET /p/{handle} ------------------------------------------------------------
@@ -519,6 +651,13 @@ func (s *Server) notFound(w http.ResponseWriter, r *http.Request, detail string)
 	// — an unbounded cache anybody can fill by asking for nonsense.
 	s.render(w, r, http.StatusNotFound, "notfound", privateCache, page{
 		Title: "Not found — catlog",
+		Data:  notFoundData{Detail: detail, Path: r.URL.Path},
+	})
+}
+
+func (s *Server) badRequest(w http.ResponseWriter, r *http.Request, detail string) {
+	s.render(w, r, http.StatusBadRequest, "notfound", privateCache, page{
+		Title: "Bad request — catlog",
 		Data:  notFoundData{Detail: detail, Path: r.URL.Path},
 	})
 }

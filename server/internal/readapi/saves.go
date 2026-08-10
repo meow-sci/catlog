@@ -152,6 +152,17 @@ func (s *Server) Saves(ctx context.Context, handle string) (SavesResponse, bool,
 	return out, true, nil
 }
 
+// Save resolves one public handle and save ordinal without exposing the raw
+// career key. Unknown, retired, banned and absent ordinals all return found=false;
+// HTTP callers that need distinct copy resolve the handle before calling it.
+func (s *Server) Save(ctx context.Context, handle string, ordinal int64) (SaveResponse, bool, error) {
+	entry, ok := s.deps.Directory.Lookup(handle)
+	if !ok || ordinal < 1 {
+		return SaveResponse{}, false, nil
+	}
+	return s.save(ctx, entry.PlayerID, entry.Handle, ordinal)
+}
+
 func distinctCareerSeqs(careers []store.CareerRow) []int64 {
 	seen := make(map[int64]bool, len(careers)*2)
 	out := make([]int64, 0, len(careers)*2)

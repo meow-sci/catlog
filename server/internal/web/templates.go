@@ -190,6 +190,7 @@ var templateFuncs = template.FuncMap{
 	"blob":        prettyJSON,
 	"standing":    standing,
 	"periodLabel": periodLabel,
+	"scopeLabel":  scopeLabel,
 	"barWidth":    barWidth,
 	"percent":     percent,
 	"rankClass":   rankClass,

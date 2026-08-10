@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -30,7 +31,10 @@ import (
 type fakeRead struct {
 	boards readapi.BoardsResponse
 	board  map[string]readapi.BoardResponse
+	system map[string]readapi.SystemRef
 	player map[string]readapi.PlayerResponse
+	saves  map[string]readapi.SavesResponse
+	save   map[string]readapi.SaveResponse
 	events map[string]readapi.EventsResponse
 	global readapi.EventsResponse
 	// players maps a player id to its handle for PublicEvents; an id off the
@@ -41,16 +45,17 @@ type fakeRead struct {
 	// lastPeriod and lastOffset record what the board page actually asked for,
 	// so a test can assert that `?period=` and `?offset=` reach the read layer
 	// rather than merely appearing in the URL.
-	lastPeriod string
-	lastOffset int
+	lastPeriod, lastBucket, lastScope, lastSystem string
+	lastLimit, lastOffset                         int
 }
 
 func (f *fakeRead) BoardList(context.Context) (readapi.BoardsResponse, error) {
 	return f.boards, f.err
 }
 
-func (f *fakeRead) Board(_ context.Context, stat, period, _, _, _ string, limit, offset int) (readapi.BoardResponse, bool, error) {
-	f.lastPeriod, f.lastOffset = period, offset
+func (f *fakeRead) Board(_ context.Context, stat, period, bucket, scope, system string, limit, offset int) (readapi.BoardResponse, bool, error) {
+	f.lastPeriod, f.lastBucket, f.lastScope, f.lastSystem = period, bucket, scope, system
+	f.lastLimit, f.lastOffset = limit, offset
 	if f.err != nil {
 		return readapi.BoardResponse{}, true, f.err
 	}
@@ -58,7 +63,7 @@ func (f *fakeRead) Board(_ context.Context, stat, period, _, _, _ string, limit,
 	if !ok {
 		return readapi.BoardResponse{}, false, nil
 	}
-	b.Limit, b.Offset, b.Period = limit, offset, period
+	b.Limit, b.Offset, b.Period, b.Bucket, b.Scope = limit, offset, period, bucket, scope
 	if offset > 0 {
 		// Page two of a one-page board is empty, which is what makes the pager
 		// assertions mean something.
@@ -67,12 +72,36 @@ func (f *fakeRead) Board(_ context.Context, stat, period, _, _, _ string, limit,
 	return b, true, nil
 }
 
+func (f *fakeRead) ResolveSystem(_ context.Context, key string) (readapi.SystemRef, bool, error) {
+	if f.err != nil {
+		return readapi.SystemRef{}, true, f.err
+	}
+	ref, ok := f.system[key]
+	return ref, ok, nil
+}
+
 func (f *fakeRead) Player(_ context.Context, handle string) (readapi.PlayerResponse, bool, error) {
 	if f.err != nil {
 		return readapi.PlayerResponse{}, true, f.err
 	}
 	p, ok := f.player[handle]
 	return p, ok, nil
+}
+
+func (f *fakeRead) Saves(_ context.Context, handle string) (readapi.SavesResponse, bool, error) {
+	if f.err != nil {
+		return readapi.SavesResponse{}, true, f.err
+	}
+	out, ok := f.saves[handle]
+	return out, ok, nil
+}
+
+func (f *fakeRead) Save(_ context.Context, handle string, ordinal int64) (readapi.SaveResponse, bool, error) {
+	if f.err != nil {
+		return readapi.SaveResponse{}, true, f.err
+	}
+	out, ok := f.save[handle+"/"+strconv.FormatInt(ordinal, 10)]
+	return out, ok, nil
 }
 
 func (f *fakeRead) PlayerEvents(_ context.Context, handle, typ string, _ int64, limit int) (readapi.EventsResponse, bool, error) {
@@ -273,7 +302,13 @@ func newFixture(t *testing.T) *fixture {
 			// server mentions this place, and the index must render it anyway.
 			{Stat: "fastest_to_zephyria", Title: "Fastest to Zephyria", Unit: "s", Ascending: true, Count: 2},
 		}},
-		board:   map[string]readapi.BoardResponse{},
+		board: map[string]readapi.BoardResponse{},
+		system: map[string]readapi.SystemRef{
+			"solar-system": {Hash: "hash-sol", Name: "Solar System", Slug: "solar-system"},
+			"hash-sol":     {Hash: "hash-sol", Name: "Solar System", Slug: "solar-system"},
+		},
+		saves:   map[string]readapi.SavesResponse{},
+		save:    map[string]readapi.SaveResponse{},
 		handles: []string{"demo_crasher", "demo_ace"},
 		player: map[string]readapi.PlayerResponse{
 			"demo_crasher": {
@@ -435,10 +470,11 @@ func TestEveryPageRenders(t *testing.T) {
 		}},
 		{"/boards/biggest_lithobrake_survived", 200, []string{
 			`id="board-title"`, `data-handle="demo_crasher"`, `data-rank="2"`,
-			`id="board-periods"`, `data-period="weekly"`, `id="board-range"`,
+			`id="board-scopes"`, `data-scope="career"`, `id="board-periods"`,
+			`data-period="weekly"`, `id="board-range"`,
 		}},
 		{"/boards/no_such_board", 404, []string{`id="not-found"`}},
-		{"/boards/biggest_lithobrake_survived?period=nope", 404, []string{`id="not-found"`}},
+		{"/boards/biggest_lithobrake_survived?period=nope", 400, []string{`id="not-found"`}},
 		{"/p/demo_crasher", 200, []string{`id="profile-handle"`, `data-stat="biggest_lithobrake_survived"`, "#1"}},
 		{"/p/nobody", 404, []string{`id="not-found"`}},
 		{"/p/demo_crasher/events", 200, []string{
@@ -542,18 +578,169 @@ func TestBoardDetailShowsTheAllowListAndHidesTheRest(t *testing.T) {
 func TestBoardPassesTheWindowAndTheOffsetThrough(t *testing.T) {
 	f := newFixture(t)
 
-	f.get(t, "/boards/biggest_lithobrake_survived?period=weekly&offset=100")
+	f.get(t, "/boards/biggest_lithobrake_survived?period=weekly&at=2026-W32&limit=75&offset=100")
 	if f.read.lastPeriod != stats.PeriodWeekly {
 		t.Errorf("period reaching Read = %q, want weekly", f.read.lastPeriod)
 	}
-	if f.read.lastOffset != 100 {
-		t.Errorf("offset reaching Read = %d, want 100", f.read.lastOffset)
+	if f.read.lastBucket != "2026-W32" || f.read.lastScope != stats.ScopePlayer ||
+		f.read.lastSystem != "" || f.read.lastLimit != 75 || f.read.lastOffset != 100 {
+		t.Errorf("Read args = period %q bucket %q scope %q system %q limit %d offset %d",
+			f.read.lastPeriod, f.read.lastBucket, f.read.lastScope, f.read.lastSystem,
+			f.read.lastLimit, f.read.lastOffset)
 	}
 
 	f.get(t, "/boards/biggest_lithobrake_survived")
-	if f.read.lastPeriod != stats.PeriodAllTime {
-		t.Errorf("default period = %q, want alltime", f.read.lastPeriod)
+	if f.read.lastPeriod != stats.PeriodAllTime || f.read.lastScope != stats.ScopePlayer ||
+		f.read.lastBucket != "" || f.read.lastSystem != "" || f.read.lastLimit != web.BoardRows || f.read.lastOffset != 0 {
+		t.Errorf("default Read args = period %q bucket %q scope %q system %q limit %d offset %d",
+			f.read.lastPeriod, f.read.lastBucket, f.read.lastScope, f.read.lastSystem,
+			f.read.lastLimit, f.read.lastOffset)
 	}
+}
+
+func TestBoardValidationMatchesReadAPIOrderAndCombinations(t *testing.T) {
+	f := newFixture(t)
+	tests := []struct {
+		path   string
+		status int
+		detail string
+	}{
+		{"?limit=nope&period=nope&scope=nope", 400, "Limit must be an integer."},
+		{"?offset=nope&period=nope&scope=nope", 400, "Offset must be an integer."},
+		{"?period=nope&scope=nope", 400, "Period must be one of"},
+		{"?scope=nope&system=missing", 400, "Ranking must be players, saves or systems."},
+		{"?scope=career&period=weekly&at=bad&system=missing", 400, "Saves boards have no time windows."},
+		{"?scope=system&period=daily&system=missing", 400, "Systems boards have no time windows."},
+		{"?period=alltime&at=2026-08-10", 400, "not a well-formed alltime window"},
+		{"?system=solar-system", 400, "System filtering needs a saves or systems ranking."},
+		{"?scope=career&system=missing", 404, "catlog has never seen a system by that name."},
+	}
+	const base = "/boards/biggest_lithobrake_survived"
+	for _, tc := range tests {
+		t.Run(tc.path, func(t *testing.T) {
+			rec := f.get(t, base+tc.path)
+			if rec.Code != tc.status || !strings.Contains(rec.Body.String(), tc.detail) {
+				t.Errorf("GET %s = %d, want %d containing %q\n%s", tc.path, rec.Code, tc.status, tc.detail, rec.Body)
+			}
+		})
+	}
+
+	for _, key := range []string{"solar-system", "hash-sol"} {
+		rec := f.get(t, base+"?scope=career&system="+key)
+		if rec.Code != http.StatusOK || f.read.lastSystem != "hash-sol" || f.read.lastScope != stats.ScopeCareer {
+			t.Errorf("system %q = %d, Read scope/system = %q/%q", key, rec.Code, f.read.lastScope, f.read.lastSystem)
+		}
+	}
+	f.get(t, base+"?limit=999&offset=-7")
+	if f.read.lastLimit != readapi.MaxLimit || f.read.lastOffset != 0 {
+		t.Errorf("clamped paging = %d/%d, want %d/0", f.read.lastLimit, f.read.lastOffset, readapi.MaxLimit)
+	}
+}
+
+func TestBoardChipAndPagerURLsPreserveOnlyApplicableDimensions(t *testing.T) {
+	f := newFixture(t)
+	const path = "/boards/biggest_lithobrake_survived"
+	body := f.get(t, path+"?period=weekly&at=2026-W32&limit=1&offset=1").Body.String()
+	for _, want := range []string{
+		`data-scope="career" href="/boards/biggest_lithobrake_survived?limit=1&amp;scope=career"`,
+		`data-scope="system" href="/boards/biggest_lithobrake_survived?limit=1&amp;scope=system"`,
+		`data-period="weekly" href="/boards/biggest_lithobrake_survived?at=2026-W32&amp;limit=1&amp;period=weekly"`,
+		`data-period="daily" href="/boards/biggest_lithobrake_survived?limit=1&amp;period=daily"`,
+		`href="/boards/biggest_lithobrake_survived?at=2026-W32&amp;limit=1&amp;period=weekly" id="board-prev"`,
+	} {
+		mustContain(t, body, want, "player board URLs")
+	}
+	mustNotContain(t, body, `scope=career&amp;offset=`, "scope chip reset")
+	mustNotContain(t, body, `period=daily&amp;offset=`, "period chip reset")
+
+	body = f.get(t, path+"?period=weekly&at=2026-W32&limit=1").Body.String()
+	mustContain(t, body,
+		`href="/boards/biggest_lithobrake_survived?at=2026-W32&amp;limit=1&amp;offset=1&amp;period=weekly" id="board-next"`,
+		"next pager")
+
+	body = f.get(t, path+"?scope=career&system=solar-system&limit=1&offset=1").Body.String()
+	for _, want := range []string{
+		`data-scope="player" href="/boards/biggest_lithobrake_survived?limit=1"`,
+		`data-scope="system" href="/boards/biggest_lithobrake_survived?limit=1&amp;scope=system&amp;system=solar-system"`,
+		`href="/boards/biggest_lithobrake_survived?limit=1&amp;scope=career&amp;system=solar-system" id="board-prev"`,
+	} {
+		mustContain(t, body, want, "career board URLs")
+	}
+	if f.read.lastSystem != "hash-sol" {
+		t.Errorf("career system reaching Read = %q, want canonical hash", f.read.lastSystem)
+	}
+	mustContain(t, body, `<tr class="board-empty"><td colspan="7">`, "career empty table width")
+}
+
+func TestBoardScopeControlsAndScopedColumns(t *testing.T) {
+	f := newFixture(t)
+	const stat = stats.StatBiggestLithobrakeSurvived
+	const path = "/boards/" + stat
+
+	player := f.get(t, path).Body.String()
+	for _, want := range []string{
+		`class="periods" id="board-scopes" aria-label="Ranking"`,
+		`class="chip selected" data-scope="player"`, `aria-current="page">Players</a>`,
+		`data-scope="career"`, `>Saves</a>`, `data-scope="system"`, `>Systems</a>`,
+		`id="board-periods"`,
+	} {
+		mustContain(t, player, want, "player scope controls")
+	}
+	mustNotContain(t, player, `id="board-scope-note"`, "player scope")
+	mustNotContain(t, player, `<th scope="col" class="save">`, "player scope")
+
+	ref := &readapi.SystemRef{Hash: "hash-sol", Name: "Solar System", Slug: "solar-system"}
+	f.read.board[stat] = readapi.BoardResponse{
+		Stat: stat, Title: "Biggest Lithobrake Survived", Unit: "ms",
+		Rows: []readapi.BoardRow{{Rank: 1, Handle: "demo_crasher", Save: 2, SaveID: "save-label",
+			System: ref, Value: 313000.125, Updated: 1767225600000}},
+	}
+	career := f.get(t, path+"?scope=career&system=solar-system").Body.String()
+	for _, want := range []string{
+		`class="chip selected" data-scope="career"`, `aria-current="page">Saves</a>`,
+		`id="board-scope-note">A save is already a period, so these boards have no time windows.`,
+		`<th scope="col" class="save">Save</th>`, `<th scope="col" class="system">System</th>`,
+		`<td class="save"><a href="/p/demo_crasher/saves/2">Save 2</a></td>`,
+		`<td class="system"><a href="/systems/solar-system">Solar System</a></td>`,
+		`data-value="313000.125"`,
+	} {
+		mustContain(t, career, want, "career scope")
+	}
+	mustNotContain(t, career, `id="board-periods"`, "career period controls")
+	mustNotContain(t, career, "hash-sol", "career human-facing system")
+
+	system := f.get(t, path+"?scope=system").Body.String()
+	mustContain(t, system, `class="chip selected" data-scope="system"`, "system scope")
+	mustContain(t, system, `<th scope="col" class="system">System</th>`, "system scope")
+	mustNotContain(t, system, `<th scope="col" class="save">`, "system scope")
+	mustNotContain(t, system, `id="board-periods"`, "system period controls")
+	mustNotContain(t, system, `id="board-scope-note"`, "system career note")
+	systemEmpty := f.get(t, path+"?scope=system&offset=100").Body.String()
+	mustContain(t, systemEmpty, `<tr class="board-empty"><td colspan="6">`, "system empty table width")
+	playerEmpty := f.get(t, path+"?offset=100").Body.String()
+	mustContain(t, playerEmpty, `<tr class="board-empty"><td colspan="5">`, "player empty table width")
+}
+
+func TestBodyDerivedPlayerBoardExplainsNameCollisionAndLinksSystemScope(t *testing.T) {
+	f := newFixture(t)
+	const stat = "fastest_to_luna"
+	f.read.board[stat] = readapi.BoardResponse{
+		Stat: stat, Title: "Fastest to Luna", Unit: "ms",
+		Rows: []readapi.BoardRow{{Rank: 1, Handle: "demo_ace", Value: 5000}},
+	}
+	body := f.get(t, "/boards/"+stat).Body.String()
+	for _, want := range []string{
+		`id="board-scope-note"`, `This board ranks a <strong>name</strong>.`,
+		`If two celestial systems both have a Luna, both are here`,
+		`href="/boards/fastest_to_luna?scope=system">by system</a>`,
+	} {
+		mustContain(t, body, want, "body-derived player note")
+	}
+	body = f.get(t, "/boards/"+stat+"?scope=career").Body.String()
+	if strings.Count(body, `id="board-scope-note"`) != 1 {
+		t.Errorf("career body-derived board: scope note count = %d, want 1", strings.Count(body, `id="board-scope-note"`))
+	}
+	mustNotContain(t, body, `This board ranks a <strong>name</strong>.`, "career body-derived board")
 }
 
 // The comparison marks the best cell from the board's published direction. It

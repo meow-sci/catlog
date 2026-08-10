@@ -346,6 +346,14 @@ func (s *Server) rewoundCareers(ctx context.Context, keys []careerKey) (map[care
 
 // systemBySlug resolves the URL-facing slug or an already-canonical hash.
 func (s *Server) systemBySlug(ctx context.Context, key string) (string, bool, error) {
+	ref, ok, err := s.ResolveSystem(ctx, key)
+	return ref.Hash, ok, err
+}
+
+// ResolveSystem returns the compact public identity for a slug or hash. It is
+// the narrow non-HTTP seam used by page handlers that must pass the canonical
+// hash back into a scoped board read without querying store directly.
+func (s *Server) ResolveSystem(ctx context.Context, key string) (SystemRef, bool, error) {
 	var row store.SystemRow
 	var ok bool
 	err := s.deps.Projections.With(func(p *store.Projections) error {
@@ -353,7 +361,10 @@ func (s *Server) systemBySlug(ctx context.Context, key string) (string, bool, er
 		row, ok, err = p.SystemBySlugOrHash(ctx, key)
 		return err
 	})
-	return row.Hash, ok, err
+	if err != nil || !ok {
+		return SystemRef{}, ok, err
+	}
+	return SystemRef{Hash: row.Hash, Name: row.Name, Slug: row.Slug}, true, nil
 }
 
 // systemRefs resolves every distinct system carried by one page in one query.

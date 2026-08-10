@@ -2012,6 +2012,35 @@ The original reason was narrower — a second frontend was served at `/app/` on 
 
 **One outstanding action outside this repository:** the Cloudflare zone's *Cache everything* rule still names `/app/assets/`. Edge configuration is not in `infra/`, so no `make deploy` will remove it — see [operations.md](operations.md#3--cloudflare-zone-settings). Harmless while it sits there (nothing serves that prefix any more) and still wrong.
 
+### UI-058 — Ranking scope is a first-class board control, and navigation preserves every applicable dimension
+
+*Accepted · 2026-08-10 · Task B4.*
+
+A board key still describes one achievement, but its rows can compare players, saves or celestial
+systems (PROJ-110). The HTML page therefore presents scope as a selector beside the existing window
+selector instead of multiplying board routes or inventing separate catalogues. Players remain the
+default because that preserves every existing board URL. Human labels say Players, Saves and
+Systems; save rows link their ordinal and system-capable rows show the friendly name, while the
+content hash remains API comparison identity rather than something a person is asked to read.
+
+Scope and time are independent query dimensions with an intentional boundary: only player scope has
+rolling windows. A save is already a period, and crossing either non-player scope with windows would
+offer a control the API refuses and a projection catlog does not store. The page consequently hides
+period controls outside player scope and explains the save case in one sentence rather than
+silently presenting an empty result.
+
+Every chip and pager URL is derived from a copy of the current query, removing only parameters that
+become invalid. Reconstructing links from `period` and `offset` was cheaper in template code but
+would reset a save ranking to players during pagination or discard a system filter; that is a
+navigation correctness bug disguised as a default. Offsets reset when a comparison dimension
+changes, while pagers preserve scope, system, period and bucket.
+
+Body-derived player rankings receive a short ambiguity note because equal body names need not mean
+equal game content. The note links to system scope rather than adding an empty system column to a
+player projection that has already merged systems. Across every scope, the raw float remains on the
+value cell under UI-028: a formatted duration is presentation and cannot be used to test or sort the
+ranking it represents.
+
 ---
 
 ## The mod and its KSA-free core

@@ -897,6 +897,11 @@ details.details-blob pre {
   font-variant-numeric: tabular-nums;
 }
 
+td.save,
+td.system {
+  white-space: nowrap;
+}
+
 /* Period selector and pager */
 .periods {
   display: flex;

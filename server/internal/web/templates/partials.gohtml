@@ -54,6 +54,8 @@ career-rewind qualification.
     <tr>
       <th scope="col" class="rank">#</th>
       <th scope="col">Handle</th>
+      {{- if and (not .Compact) (eq $board.Scope "career")}}<th scope="col" class="save">Save</th>{{end}}
+      {{- if and (not .Compact) (or (eq $board.Scope "career") (eq $board.Scope "system"))}}<th scope="col" class="system">System</th>{{end}}
       {{- /* The header labels the column; every cell still carries its own unit.
              `unitLabel` is what keeps the two from contradicting each other: a
              career-time column renders "5m 13s" and "243d 01h", so its header
@@ -67,6 +69,12 @@ career-rewind qualification.
     <tr class="board-row" data-rank="{{.Rank}}" data-handle="{{.Handle}}">
       <td class="rank">{{.Rank}}</td>
       <td class="handle"><a href="{{playerPath .Handle}}">{{.Handle}}</a></td>
+      {{- if and (not $.Compact) (eq $board.Scope "career")}}
+      <td class="save"><a href="{{playerPath .Handle}}/saves/{{.Save}}">Save {{.Save}}</a></td>
+      {{- end}}
+      {{- if and (not $.Compact) (or (eq $board.Scope "career") (eq $board.Scope "system"))}}
+      <td class="system">{{with .System}}<a href="/systems/{{.Slug}}">{{.Name}}</a>{{else}}&#8212;{{end}}</td>
+      {{- end}}
       {{template "value-cell" (dict "Value" .Value "Unit" $board.Unit "Rewound" .Rewound)}}
       {{- if not $.Compact}}
       {{template "context-cell" .}}
@@ -74,7 +82,7 @@ career-rewind qualification.
       {{- end}}
     </tr>
     {{- else}}
-    <tr class="board-empty"><td colspan="{{if .Compact}}3{{else}}5{{end}}">Nobody has scored here yet.</td></tr>
+    <tr class="board-empty"><td colspan="{{if .Compact}}3{{else if eq $board.Scope "career"}}7{{else if eq $board.Scope "system"}}6{{else}}5{{end}}">Nobody has scored here yet.</td></tr>
     {{- end}}
   </tbody>
 </table>

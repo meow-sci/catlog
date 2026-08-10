@@ -614,7 +614,7 @@ surface and the pages that document it; `/login` and `/dashboard` need a session
 |---|:--:|---|
 | `/` | ● | **Where am I and what is happening?** Global tiles, three featured boards, the live feed, a search box, and — if a "me" handle is set — a personal card above the fold |
 | `/boards` | ● | The index. Which boards exist, how populated, which way each reads |
-| `/boards/{stat}` | ● | One board, paged, with a period selector, my row highlighted and reachable in one click |
+| `/boards/{stat}` | ● | One board ranked by players, saves or systems, paged, with applicable period controls and my row highlighted |
 | `/p/{handle}` | ● | One player: every placement, every rank *and its denominator*, and a way to start comparing |
 | `/p/{handle}/events` | ● | **New.** The raw event log for that handle, live-tailed on page one |
 | `/events` | ● | **New.** The whole raw log, every player mixed together — same rows, same redaction, `?type=`/`?handle=` filters, live-tailed on page one |
@@ -645,6 +645,41 @@ then the feed. The **period selector** on `/boards/{stat}` —
 periods landed and **unused when this was written** — turns a static ranking into "what
 happened this week", which is the cheapest available way to make a leaderboard worth
 revisiting. Shipping it is most of Journey B.
+
+Every board page also carries a **ranking selector** directly above its period controls. It
+renders `#board-scopes` as links labelled **Players**, **Saves** and **Systems**, in that order.
+The selected `.chip` has `aria-current="page"`; each link carries `data-scope` and remains an
+`<a href>`. `player` is the default and is omitted from a canonical URL. The label helper falls
+back to an unknown scope's raw key so a future server-advertised scope stays navigable rather than
+rendering blank.
+
+Windows apply only to player rankings. Save and system rankings are all-time, so their pages do not
+render `#board-periods`; in save scope `#board-scope-note` says exactly *"A save is already a period,
+so these boards have no time windows."* System scope likewise offers no period links rather than
+constructing a query the read API refuses. Changing scope or period resets the row offset. Scope,
+period, system filter and bucket links, and both pagers, are built from a copied query rather than
+reconstructed from a hand-picked subset: changing one dimension preserves every other applicable
+dimension. A switch to player scope drops `system`, because player scope rejects that filter; a
+switch to save or system scope drops `period` and `at`, because those scopes are all-time; a pager
+changes only `offset`.
+
+The table remains one ranking with scope-specific identity columns between Handle and the value:
+
+- Save scope adds a **Save** cell, `td.save`, linking to `/p/{handle}/saves/{save}` as
+  *"Save N"*.
+- Save and system scope add a **System** column. It shows the friendly system name and links to
+  `/systems/{slug}`; it never prints the content hash. A save whose system is not yet known uses the
+  site's ordinary em dash rather than a blank label or invented system.
+
+On a body-derived board in player scope, a note appears above the table instead of adding a
+misleading system column: *"This board ranks a **name**. If two celestial systems both have a
+Luna, both are here — see the same board [by system](?scope=system)."* The final phrase is a real
+link, with other applicable query values preserved. This note is absent in save and system scope,
+where the row itself provides the comparison context.
+
+None of these columns changes §4.4. Every `td.value` continues to carry
+`data-value="<the exact float, as sent>"`, even when the rendered value is a duration such as
+`5m 13s`; pager, sorting and e2e assertions never recover a number from display text.
 
 **C — "compare with friends."** From a profile, **Compare** adds that handle to a set held
 in the URL. From search, a multi-select adds several. `/compare?handles=…` renders one row
@@ -1199,6 +1234,7 @@ Things a redesign will delete without noticing, and what breaks when it does.
 [data-ascending]` with `td.unit` and `td.direction`; `#boards-title`; `#boards-note` (must
 contain the server's `min_players` number); `#board-title[data-stat]`;
 `#board-direction[data-ascending]`; `#board-periods a[data-period]`;
+`#board-scopes a[data-scope]`; `#board-scope-note`; `td.save`;
 `#board-bucket[data-bucket]`; `#board-prev`, `#board-next`, `#board-range`;
 `thead th.value` (the unit header, §4.4); `#profile-handle[data-handle]`;
 `#profile-stats tr[data-stat][data-rank]` with `td.rank[data-players]`;
