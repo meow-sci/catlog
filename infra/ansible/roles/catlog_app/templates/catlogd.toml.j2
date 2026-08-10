@@ -81,6 +81,10 @@ batch_size = {{ catlog_projector_batch_size }}
 flush_rows = 500
 tick_s     = 0
 decoders   = 0
+# A deploy that changes the boards rebuilds the projections by itself: the fold
+# loop suspends so nothing half-built is served, the old file keeps answering
+# reads, and the rebuild is swapped in when it lands.
+auto_rebuild = {{ catlog_projector_auto_rebuild | default(true) | lower }}
 
 # --- cross-origin reads -----------------------------------------------------
 # EMPTY, and that is the point. catlog's own pages are rendered by catlogd and

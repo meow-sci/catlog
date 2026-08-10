@@ -65,7 +65,7 @@ enums are allow-lists (Constitution §6).
 | `infra/` | The production deployment: two Dockerfiles, the compose project, the nginx configuration, and the Ansible roles and playbooks that own the VM. | [operations.md](operations.md) |
 | `docs-site/` | The **player-facing** documentation site: Astro 7 + Starlight + React, published to GitHub Pages at `https://meow.science.fail/catlog/`. Own lockfile, own toolchain, own deployment. Not to be confused with `site/`. | [event-details.md](event-details.md), `docs-site/README.md` |
 | `scripts/` | `e2e-full.sh` (the whole-stack proof), `db-snapshot.sh`, `precompress.mjs` (build-time brotli/gzip siblings), `container-smoke.sh` (the release gate), `ansible.sh` (runs Ansible in a container so nothing is installed locally). | [../DEVELOPMENT.md](../DEVELOPMENT.md) |
-| `data/` | Runtime state, git-ignored: `events.db`, `projections.db`, `keys/`, `archive/`. | — |
+| `data/` | Runtime state, git-ignored: `events.db`, `projections.db`, `keys/`, `archive/`. A rebuild adds `projections.rebuild.db` beside the live one for the length of the build, and `projections.db.old` until the swap's reopen succeeds. | — |
 
 Four toolchains: **Go 1.26**, **.NET SDK 10**, **Node 24 + pnpm 11**. `pnpm` only — never `npm`,
 `npx` or `yarn`. Docker is optional and used by exactly one test suite.
@@ -124,10 +124,16 @@ stops `make dev` from starting at all. `make db-snapshot` exists for ad-hoc SQL.
    cheapest-check-first — structural parse, license, deny-list, credential row, proof, skew, rate
    limit, body hash, replay short-circuit, stream check — and only then decodes the body.
 6. **Stored.** One writer goroutine owns `events.db`. Events insert with `INSERT OR IGNORE` on
-   `(player_id, event_id)`, so a resend is free.
+   `(player_id, event_id)`, so a resend is free. `seq` comes from an explicit forward-only allocator
+   rather than the rowid, because a deletion would otherwise hand the same number out twice
+   (`STORE-017`). This is also the one fork on the write path: a **shadowbanned** player's batch is
+   verified, deduped and sequenced identically and lands in `shadowban_event` instead of the log —
+   the same `200`, nothing they can see, and nothing any reader can (§4.7).
 7. **Folded.** The projector wakes on the writer's notification, reads the log past its checkpoint,
    applies every registered fold in one transaction, and advances the checkpoint. Flagged flights
-   score nothing.
+   score nothing. If `projections.db` was built by a fold set that is not this binary's, the loop is
+   **suspended** instead and a rebuild runs in the background — the old file keeps serving, so boards
+   go stale rather than wrong ([server.md](server.md), `PROJ-101`).
 8. **Served.** The read API answers from `projections.db` with `Cache-Control: s-maxage=30` so a CDN
    can absorb popularity for free, and pushes new feed rows to SSE subscribers.
 

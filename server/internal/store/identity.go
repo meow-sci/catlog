@@ -71,7 +71,12 @@ func (e *Events) UnrevokeCredentialsAt(ctx context.Context, q Querier, playerID,
 
 // PurgeCounts reports what a purge deleted (§4.7).
 type PurgeCounts struct {
-	Events      int64 `json:"events"`
+	Events int64 `json:"events"`
+	// Withheld is how many of their events were being held by a shadow ban
+	// (0005). A purge takes those too — an account deletion that left a copy of
+	// the log in the other table would be a privacy failure dressed as a
+	// feature, and §4.7 promises the rows are gone.
+	Withheld    int64 `json:"withheld_events"`
 	Batches     int64 `json:"batches"`
 	Streams     int64 `json:"streams"`
 	Credentials int64 `json:"credentials"`
@@ -99,6 +104,8 @@ func (e *Events) PurgePlayer(ctx context.Context, playerID int64) (PurgeCounts, 
 			dst *int64
 		}{
 			{`DELETE FROM event WHERE player_id = ?`, &c.Events},
+			{`DELETE FROM shadowban_event WHERE player_id = ?`, &c.Withheld},
+			{`DELETE FROM shadowban WHERE player_id = ?`, nil},
 			{`DELETE FROM ingest_batch WHERE player_id = ?`, &c.Batches},
 			{`DELETE FROM stream_state WHERE player_id = ?`, &c.Streams},
 			{`DELETE FROM credential WHERE player_id = ?`, &c.Credentials},

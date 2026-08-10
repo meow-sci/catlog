@@ -2556,6 +2556,7 @@ fold writes. Surfaced as `collection.projected` / `collection.lag` and `projecto
 | Install-derived identifiers are never published raw | `Redact` / `Label` | `readapi/privacy.go` |
 | A family board is withheld from the public index below `min_players` | listing rule only — the value is still stored, the board is still served, the profile still shows it | PROJ-034 / PROJ-035 |
 | Purge deletes from `events.db`; projections follow only on rebuild | `tombstone` | `migrations/events/0001_init.sql:82` |
+| A shadowbanned player's events are **not in the log at all** — moved to `shadowban_event`, so no fold ever sees them; projections follow on rebuild, the handle directory hides them meanwhile | `shadowban`, `shadowban_event` | `migrations/events/0005_shadowban.sql` |
 
 ---
 
@@ -2588,8 +2589,8 @@ always answers false then. **This is D22, not a bug.** The divergences, exhausti
    **broadest** divergence: every `destroyed` / `despawned` / still-open flight loses both rows on
    rebuild.
 4. **Feed rows.** `feedRow` resolves the handle from the *live* directory at fold time, and rebuild
-   pass 2 re-renders them. A player banned since the events were folded therefore keeps feed rows
-   incrementally (until the 500-row cap ages them out) but produces none on rebuild.
+   pass 2 re-renders them. A player banned or shadowbanned since the events were folded therefore
+   keeps feed rows incrementally (until the 500-row cap ages them out) but produces none on rebuild.
 5. **Undecodable events.** A build that gained a decoder, a fold or a board folds on rebuild what it
    skipped or ignored before. Incrementally the new fold only sees events arriving after the upgrade,
    because the checkpoint has already passed everything older; a rebuild replays the log from seq 0
@@ -2597,6 +2598,31 @@ always answers false then. **This is D22, not a bug.** The divergences, exhausti
    is needed.** The one thing a rebuild cannot invent is a field the wire never carried: a fold
    reading a key no stored payload holds decodes the same zero or the same absence on both paths, and
    the `> 0` gates refuse it either way.
+6. **A shadow ban applied since the last rebuild.** The withheld events are gone from `event`, so the
+   rebuild cannot see them and every board row they earned disappears. Incrementally those rows
+   survive, because the cursor only moves forward and cannot take back what it already scored. This
+   is why every shadow-ban verb queues a rebuild, and why the handle directory hides the account in
+   the meantime. `unshadowban` is the same divergence in reverse — the events return **at their
+   original seq**, so the rebuild reproduces the original values *and* the original `updated_seq`
+   tie-break, which is what decides who holds a record when two players reach the same number.
+
+### The build stamp — the divergence that used to be invisible
+
+`proj_build` (projections migration 0005) records the fold-set identity that produced the file:
+`stats.BuildID` over the projections schema version, every registered fold's name in order, and
+`stats.BuildVersion`. At startup the projector compares it to its own.
+
+Divergence 5 above is the reason. A deploy that adds or changes a board leaves the live file holding
+the *old* definition, and folding forward mixes the two: the new board fills with events from the
+deploy onwards, which is indistinguishable from a board nobody has scored on. So a mismatched stamp
+**suspends the fold loop** and starts a rebuild (`[projector] auto_rebuild`, on by default). Boards go
+stale for the length of the rebuild and are never wrong, and a board this deploy added reads empty
+rather than short-by-history.
+
+Fold names catch a board added, removed or renamed. **`stats.BuildVersion` is a hand-bumped constant
+and catches what they cannot: a fold whose name did not change and whose meaning did** — a new
+threshold, a changed unit, a widened eligibility rule, a different tie-break. Bumping it belongs in
+the same commit as the change, exactly like an event's `ver`.
 
 Things that deliberately **do not** diverge: rolling-window buckets (derived from `ev.RecvTime`, never
 the wall clock — PROJ-043), retention trims (gated on `ev.Seq % 512`), and the census. Nor do the

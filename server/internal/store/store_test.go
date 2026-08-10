@@ -85,19 +85,19 @@ func TestMigrationsCreateTheFullDDL(t *testing.T) {
 	t.Run("events", func(t *testing.T) {
 		e := testutil.Events(t)
 		want := []string{
-			"archive_cursor", "credential", "event", "handle", "ingest_batch",
+			"archive_cursor", "credential", "event", "event_seq", "handle", "ingest_batch",
 			"payload_dict", "player", "retired_handle", "schema_version",
-			"stream_state", "tombstone",
+			"shadowban", "shadowban_event", "stream_state", "tombstone",
 		}
 		if got := tableNames(t, e.DB); !equal(got, want) {
 			t.Errorf("tables = %v, want %v", got, want)
 		}
-		wantIdx := []string{"cred_player", "ev_dedup", "ev_player"}
+		wantIdx := []string{"cred_player", "ev_dedup", "ev_player", "sb_dedup", "sb_player"}
 		if got := indexNames(t, e.DB); !equal(got, wantIdx) {
 			t.Errorf("indexes = %v, want %v", got, wantIdx)
 		}
-		if e.Version != 3 {
-			t.Errorf("schema version = %d, want 3", e.Version)
+		if e.Version != 5 {
+			t.Errorf("schema version = %d, want 5", e.Version)
 		}
 	})
 
@@ -105,7 +105,7 @@ func TestMigrationsCreateTheFullDDL(t *testing.T) {
 		p := testutil.Projections(t)
 		want := []string{
 			"career", "event_census", "feed", "flight_state", "kitten", "player_body",
-			"player_stat", "player_stat_period", "proj_checkpoint", "schema_version",
+			"player_stat", "player_stat_period", "proj_build", "proj_checkpoint", "schema_version",
 		}
 		if got := tableNames(t, p.DB); !equal(got, want) {
 			t.Errorf("tables = %v, want %v", got, want)
@@ -181,8 +181,8 @@ func TestMigrationsAreIdempotent(t *testing.T) {
 
 func TestMigrationsRunOnMemoryStores(t *testing.T) {
 	e := testutil.MemEvents(t)
-	if e.Version != 3 {
-		t.Errorf("version = %d, want 3", e.Version)
+	if e.Version != 5 {
+		t.Errorf("version = %d, want 5", e.Version)
 	}
 	if got := len(tableNames(t, e.DB)); got == 0 {
 		t.Error("in-memory store has no tables")

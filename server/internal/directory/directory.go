@@ -17,6 +17,12 @@
 // player is simply absent from the directory, which makes every read surface
 // treat them as if they had no handle at all. That is one place to get right
 // rather than one per endpoint.
+//
+// A **shadowbanned** player (migration 0005) is absent for the same reason and
+// by the same predicate ([store.DirectoryRow.Hidden]), but for a different
+// duration: their events have already left the log, so the rebuild that follows
+// removes them from the projections permanently and this map is only what
+// covers the minutes in between.
 package directory
 
 import (
@@ -85,7 +91,12 @@ func (d *Directory) Reload(ctx context.Context) error {
 	primary := make(map[int64]Entry, len(rows))
 	banned := map[int64]bool{}
 	for _, r := range rows {
-		if r.Banned {
+		if r.Hidden() {
+			// Banned and shadowbanned are one thing here. A shadow ban is
+			// silent on the *ingest* side — the client keeps working, and keeps
+			// producing the evidence a review reads — but a moderation action
+			// has to take effect on the public side immediately, and this map
+			// is the only mechanism that acts faster than a rebuild.
 			banned[r.PlayerID] = true
 			continue
 		}

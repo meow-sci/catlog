@@ -140,10 +140,12 @@ func (e *Events) RestoreEvents(ctx context.Context, q Querier, playerID int64, e
 	  (seq, event_id, player_id, flight_id, session_id, career, type, ver, sim_time, wall_time, recv_time, payload, enc)
 	  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
+	var highest int64
 	for _, se := range evs {
 		if se.Seq <= 0 {
 			return inserted, deduped, fmt.Errorf("store: restore event %s: seq %d is not positive", ids.String(se.ID), se.Seq)
 		}
+		highest = max(highest, se.Seq)
 		// The archive carries JSON text; restoring compresses it exactly as
 		// InsertEvents would, so a restore-from-archive into a fresh database —
 		// the honest file-size reclamation path, with VACUUM unused by policy
@@ -181,6 +183,12 @@ func (e *Events) RestoreEvents(ctx context.Context, q Querier, playerID int64, e
 			return inserted, deduped, fmt.Errorf("%w: seq %d is already taken by another event",
 				ErrSeqConflict, se.Seq)
 		}
+	}
+	// The allocator knows nothing about a seq that arrived from the archive, so
+	// a restore into a database whose allocator sits below the restored range
+	// would hand those numbers out again (0004).
+	if err := e.RaiseSeqFloor(ctx, q, highest); err != nil {
+		return inserted, deduped, err
 	}
 	return inserted, deduped, nil
 }

@@ -171,7 +171,15 @@ Claims:
 10. Read body (enforce size caps while reading). `bh == b64u(sha256(body))` — else `proof_invalid`.
 11. Batch replay: row exists in `ingest_batch(player, jti)` → `200 replay` short-circuit, stop.
 12. Stream check against `stream_state(player, sid)`: no row → require `seq == 1` and no `ph` (else `409`). Row exists → `seq == last_seq + 1 && ph == last_bh` accepted; `seq <= last_seq` → `409 stream_fork`; `seq > last_seq + 1` → accept but set `gap` marker in stream_state (telemetry is loss-tolerant; forensics only).
-13. Decompress (cap 8 MiB), parse NDJSON, validate envelopes, txn: insert events (`INSERT OR IGNORE` on `(player_id,event_id)`), upsert `stream_state`, insert `ingest_batch`, commit.
+13. Decompress (cap 8 MiB), parse NDJSON, validate envelopes, txn: reserve a run of `seq` from the allocator, insert events (`INSERT OR IGNORE` on `(player_id,event_id)`), upsert `stream_state`, insert `ingest_batch`, commit.
+
+**Step 13 carries the one fork in the chain.** A player under a shadow ban (§4.7) passes every step
+above untouched — no deny-list entry at step 4, a valid credential row at step 5 — and their events
+are written to `shadowban_event` instead of `event`. The response is byte-identical: the same `200`,
+the same `accepted`/`deduped` counts, the same headers. No client can distinguish it, which is the
+point: a moderation review needs the evidence to keep arriving, and a ban is the one thing guaranteed
+to stop it. `INSERT OR IGNORE` runs against that table's own dedup index, so the idempotency contract
+below holds unchanged on both sides of the fork.
 
 Mod-side failure handling: `401 clock_skew` → recompute offset from `Date` header, re-sign, retry once; `409` → mint new `sid`, reset `seq=1`, continue (old chain abandoned); `413` → halve batch event cap (floor 50), retry; `429`/`5xx`/network → exponential backoff 1 s·2ⁿ + full jitter, cap 5 min, batches coalesce.
 

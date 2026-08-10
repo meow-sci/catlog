@@ -48,6 +48,69 @@ func (p *Projections) SetCheckpoint(ctx context.Context, q Querier, projection s
 	return nil
 }
 
+// --- the build stamp ----------------------------------------------------------
+
+// ProjectionBuild is the `proj_build` row: which binary's folds produced this
+// file, over how much of the log, and whether that build finished (0005).
+type ProjectionBuild struct {
+	BuildID       string `json:"build_id"`
+	FoldVersion   int    `json:"fold_version"`
+	SchemaVersion int    `json:"schema_version"`
+	BuiltFromSeq  int64  `json:"built_from_seq"`
+	BuiltAt       int64  `json:"built_at"`
+	Complete      bool   `json:"complete"`
+}
+
+// Build reads the build stamp. An unstamped file — anything built before 0005,
+// or a scratch database a rebuild has not finished — reports the zero value and
+// no error, because "I do not know what built this" is a legitimate state and
+// the caller's response to it is the same as to a mismatch.
+func (p *Projections) Build(ctx context.Context) (ProjectionBuild, error) {
+	var (
+		b        ProjectionBuild
+		complete int
+	)
+	err := p.Reader().QueryRowContext(ctx,
+		`SELECT build_id, fold_version, schema_version, built_from_seq, built_at, complete
+		   FROM proj_build WHERE id = 1`).
+		Scan(&b.BuildID, &b.FoldVersion, &b.SchemaVersion, &b.BuiltFromSeq, &b.BuiltAt, &complete)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ProjectionBuild{}, nil
+	}
+	if err != nil {
+		return ProjectionBuild{}, fmt.Errorf("store: read the projection build stamp: %w", err)
+	}
+	b.Complete = complete != 0
+	return b, nil
+}
+
+// SetBuild writes the build stamp.
+//
+// A rebuild calls it against its scratch database *before* the swap, so a file
+// on disk is never labelled with a build it does not actually contain — the
+// stamp and the rows it describes land in the same file, and the swap is
+// atomic.
+func (p *Projections) SetBuild(ctx context.Context, q Querier, b ProjectionBuild) error {
+	if q == nil {
+		q = p.Writer()
+	}
+	complete := 0
+	if b.Complete {
+		complete = 1
+	}
+	if _, err := q.ExecContext(ctx,
+		`INSERT INTO proj_build (id, build_id, fold_version, schema_version, built_from_seq, built_at, complete)
+		 VALUES (1, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT (id) DO UPDATE SET
+		   build_id = excluded.build_id, fold_version = excluded.fold_version,
+		   schema_version = excluded.schema_version, built_from_seq = excluded.built_from_seq,
+		   built_at = excluded.built_at, complete = excluded.complete`,
+		b.BuildID, b.FoldVersion, b.SchemaVersion, b.BuiltFromSeq, b.BuiltAt, complete); err != nil {
+		return fmt.Errorf("store: write the projection build stamp: %w", err)
+	}
+	return nil
+}
+
 // --- leaderboards ------------------------------------------------------------
 //
 // Everything below is the *read* side of projections.db: the queries the §4.8

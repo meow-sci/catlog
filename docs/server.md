@@ -108,7 +108,7 @@ merely for a 2xx: a proxy answering 200 with something else is not this server.
 | `[idp.*]` | Discord, Google, GitHub endpoints and credentials |
 | `[limits]` | `ratelimit_per_jkt_per_s`, `ratelimit_burst`, `ratelimit_disabled` |
 | `[boards]` | `min_players` — how many distinct players a *family* board needs before it is listed |
-| `[projector]` | `batch_size`, `flush_rows`, `tick_s`, `decoders` |
+| `[projector]` | `batch_size`, `flush_rows`, `tick_s`, `decoders`, `auto_rebuild` |
 | `[cors]` | `allowed_origins` — exact `scheme://host[:port]`, no wildcards |
 
 **`Config.Validate` refuses rather than warns.** Two development-only settings — `clock_control` and
@@ -158,13 +158,33 @@ order, one `Exec` per file inside its own transaction, recorded in
 | `player` | `player_id`, `user_key` (32 B, unique), `idp`, `created_at`, ban state |
 | `handle`, `retired_handle` | Live handles (with a `handle_lc` unique index) and permanently retired ones |
 | `credential` | One row per key thumbprint: `jkt`, player, handle, license `jti`, issue/expiry/revocation |
-| `event` | `seq` (rowid — the server-local total order and the projector cursor), `event_id`, player, flight, session, `career`, type, `ver`, `sim_time`, `wall_time`, `recv_time`, `payload` |
+| `event` | `seq` (the server-local total order and the projector cursor), `event_id`, player, flight, session, `career`, type, `ver`, `sim_time`, `wall_time`, `recv_time`, `payload` |
+| `event_seq` | The explicit `seq` allocator (migration 0004) |
+| `shadowban`, `shadowban_event` | The shadow-ban roster and the withheld half of the log (migration 0005) |
 | `ingest_batch` | `(player_id, batch_id)` — the replay short-circuit |
 | `stream_state` | Per `(player, sid)`: `last_seq`, `last_bh`, `gap` |
 | `tombstone`, `archive_cursor` | Purge records; the archiver's position |
 
 `CREATE UNIQUE INDEX ev_dedup ON event(player_id, event_id)` is the dedup guarantee, and
 `ev_player(player_id, seq)` keeps its `seq` column because the planner needs it.
+
+**`event.seq` is allocated explicitly, not by the rowid** (migration 0004). SQLite hands out
+`max(rowid) + 1`, which reuses a number whose row was deleted — and rows *are* deleted, by a purge
+(§4.7) and by a shadow ban's move (below). A reused seq is already behind the projector checkpoint
+and the archive cursor, so the re-issued event would be stored and then never folded onto a board and
+never archived, silently. `event_seq.next_seq` only moves forward; `InsertEvents` reserves a run of
+numbers inside the caller's transaction, `RestoreEvents` lifts the floor past anything it inserted at
+an explicit seq, and `OpenEvents` reconciles the allocator against both event tables at every start.
+Gaps are expected: every reader scans `seq > cursor` and none assumes the column is dense.
+
+**Shadow bans move rows rather than filtering them** (migration 0005). `shadowban_event` mirrors
+`event` column for column, **including `seq`**, so withholding a player is one `INSERT..SELECT` plus a
+`DELETE` and lifting the ban is the same in reverse — at the original sequence numbers, which is what
+makes a restore reproduce the same boards down to the "who got there first" tie-break. The exclusion
+is structural rather than a predicate: every public surface reads either `event` or a projection
+folded from it, so a withheld player is absent from both by construction and a read path added later
+inherits that without knowing the feature exists. `PurgePlayer` deletes from both tables, because an
+account deletion that left a copy of the log behind would be a privacy failure.
 
 **Payloads are zstd-compressed against a trained dictionary** (`compress_payloads`, migration 0003) —
 measured **3.25×** on the payload column, because a majority of the dominant payload type is
@@ -175,6 +195,7 @@ byte-identical across events. Rows written either way stay readable, so the swit
 | Table | Holds |
 |---|---|
 | `proj_checkpoint` | One shared cursor for every fold |
+| `proj_build` | The build stamp: which binary's fold set produced this file (migration 0005) |
 | `player_stat` | `(player_id, stat) → value, context, updated_seq` — every board row |
 | `flight_state` | Per flight: `flags` bitfield, `ended_reason`, crew, body |
 | `player_body` | Distinct bodies per player and `kind` — `'soi'` (entered) and `'landed'` (touched down) — plus first-arrival times, which only `'soi'` rows carry |
@@ -338,6 +359,58 @@ script — and only a rebuild, because nothing else re-reads history.
 
 The swap keeps the old file until the reopen succeeds: close → delete the stale `-wal`/`-shm` →
 rename live to `.old` → rename the rebuild in → reopen → delete `.old`, restoring `.old` on failure.
+**Reads are never interrupted**: the old file answers every query until the rename, and the rename is
+same-filesystem and atomic. That is the whole cutover — there is no second process and no second copy
+of the log, because one process per database file (§5.4) forbids both.
+
+### Rebuild is a routine operation
+
+It is not only the nightly backstop. It is how a new board gets the history that preceded it, how a
+shadowbanned player's records leave the boards, and how a changed fold is applied to everything it
+should always have applied to. Three properties follow, and they are in `projector/job.go`:
+
+- **It runs detached.** `POST /admin/projections/rebuild` answers `202` with a job, and
+  `GET /admin/projections/rebuild` reports the phase, the events scanned and the head. At production
+  size a rebuild is minutes, and no HTTP request, admin write lock or operator should be held for
+  that. `{"wait": true}` exists for scripts that need the finished result in one call.
+- **A request that arrives during one is queued, not lost.** A shadow ban applied while a rebuild is
+  scanning is invisible to that rebuild — the scan already read those rows — so the file swapped in
+  would still hold their records. The job runs one more pass instead.
+- **The rebuild does not hold the §5.4 admin mutex.** It used to, which made it exclude bans, backups
+  and the deny-list for its whole duration. The projections database is serialized by the projector's
+  own `applyMu`; nothing else needed a lock.
+
+### The build stamp — how a deploy that changes the boards heals itself
+
+`projections.db` is a cache of the log, and a deploy can change what that cache is *supposed* to
+contain. The projector's cursor only moves forward, so a board added today fills up with events from
+today onwards while every event that preceded the deploy is missing from it — a board that is
+populated, plausible and **wrong**, and indistinguishable from a board nobody has scored on yet.
+
+`proj_build` records the fold-set identity that produced the file: `stats.BuildID` over the
+projections schema version, the ordered names of every registered fold, and `stats.BuildVersion`. The
+first two catch a board added, removed or renamed; the third is a hand-bumped constant and catches the
+case they cannot see — **a fold whose name is unchanged and whose meaning changed**. Bumping it is the
+same discipline as bumping an event's `ver`: same commit as the change, no exceptions.
+
+At startup the projector compares the stamp to its own fold set:
+
+| The live file | What happens |
+|---|---|
+| Stamp matches | Normal operation. |
+| Stamp differs, checkpoint is 0 | The file holds nothing, so folding forward from zero *is* a full build. It is stamped and the loop runs. |
+| Stamp differs, file holds history | **The fold loop is suspended** and a rebuild starts (`auto_rebuild`, on by default). The old file keeps answering reads unchanged, and the rebuilt one is swapped in when it is ready. |
+| Stamp differs, in-memory database | Nothing to swap, so it logs loudly and carries on. Tests only. |
+
+Suspending is the point. While it is suspended, boards are **stale but never wrong**, and a board this
+deploy added reads *empty* rather than short-by-history. `GET /admin/stats` reports
+`projector.build.stale` and `projector.rebuild.suspended`, and `catlogctl rebuild -status` says so in
+words.
+
+**Projections migrations must be additive.** The live file is migrated in place at open so its old
+boards stay readable while the rebuild runs; a destructive migration would damage the file that is
+still serving. A change that needs the old shape gone gets it for free, because the rebuild creates a
+fresh database from every migration.
 
 **An event the projector cannot decode is skipped and the checkpoint still advances** — one event
 from a newer mod must never wedge every projection behind it. The skip log is deduplicated per
@@ -417,19 +490,29 @@ issuance to the world.
 |---|---|---|
 | `POST /admin/issue` | `issue` | Mint a credential. The CLI generates the key locally and sends only the public JWK. |
 | `POST /admin/ban` / `unban` / `purge` | same | Moderation, including archive prefix deletion |
-| `POST /admin/projections/rebuild` | `rebuild` | §5.6 rebuild and swap |
+| `POST /admin/shadowban` / `unshadowban` | same | Withhold a player's log without telling them; give it back |
+| `POST /admin/shadowban/delete` | `shadowban-delete` | Destroy the withheld events permanently. Irreversible; needs `-yes` |
+| `GET /admin/shadowban` | `shadowban-list` | The roster, its reasons and how much is withheld — the review queue |
+| `GET /admin/shadowban/events` | `shadowban-review` | Read the withheld events themselves, unredacted |
+| `POST /admin/projections/rebuild` | `rebuild` | Start a §5.6 rebuild and swap. `202` + a job; `{"wait": true}` blocks |
+| `GET /admin/projections/rebuild` | `rebuild -status` | Phase, events scanned, head, and whether the loop is suspended |
 | `POST /admin/archive/run` / `restore` | `archive` / `archive-restore` | §5.10 |
 | `POST /admin/backup` | `backup` | Quiesce the writer, copy `events.db` **and its `-wal`** |
 | `POST /admin/seed` | `seed` | The deterministic demo dataset |
 | `POST /admin/events` | — | Insert events directly. The dev-loop tool: push one, watch the feed. |
 | `POST /admin/clock` | — | Move the server's notion of now. Development only, mounted only when enabled. |
 | `POST /admin/denylist/publish` | `denylist` | Regenerate the signed deny-list |
-| `GET /admin/stats` | `stats` | Counters, both file sizes, both WAL sizes, projector lag |
+| `GET /admin/stats` | `stats` | Counters, both file sizes, both WAL sizes, projector lag, the build stamp, the rebuild job |
 | — | `keygen`, `testvectors` | Local only; touch no server |
 
 Also on `:6060`: `net/http/pprof` and `expvar`. **All `ingest_rejected_<code>` counters are published
 at init**, including codes ingest cannot produce, so a dashboard never has to guess whether a missing
 variable means "zero" or "not wired".
+
+`GET /admin/shadowban/events` is the one place in catlog where an **unredacted** payload leaves the
+database. The §4.8 views redact `install` and relabel `career`/`kid` per player; this endpoint cannot,
+because its entire purpose is letting a human read what an account actually sent and decide whether it
+should be restored or destroyed. It is loopback-only like every other admin route.
 
 `GET /admin/stats` is the deterministic "has everything landed" primitive: the projector has caught
 up when `lag_seq == 0` **and** `checkpoint_seq == events.max_seq`. Both halves are load-bearing — on

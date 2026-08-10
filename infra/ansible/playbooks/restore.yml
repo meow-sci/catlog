@@ -112,7 +112,7 @@
 
     - name: Rebuild projections
       ansible.builtin.command:
-        cmd: docker compose exec -T catlogd catlogctl projections rebuild
+        cmd: docker compose exec -T catlogd catlogctl rebuild -reason 'archive restore'
         chdir: /opt/catlog
       changed_when: true
 

@@ -198,11 +198,32 @@ And one is about catlog itself changing:
 Rebuilding is always the more correct answer: it is the one computed with the whole
 story in hand.
 
+### A new board starts empty, not half full
+
+When a board is added or the rules behind one change, the boards you are looking
+at were computed by the *old* rules. Rather than start filling the new board with
+only the flights that happen from now on — which would look exactly like a real
+board nobody has scored on yet — catlog stops updating, keeps serving the boards
+exactly as they were, and recomputes everything from the log in the background.
+When that finishes, the whole set is replaced at once.
+
+So for a few minutes after a change: **existing boards may be slightly behind, and
+a brand-new board reads empty.** Neither is showing you a wrong number, which is
+the trade being made. Nothing is interrupted while it happens — the site keeps
+answering the entire time.
+
 ## Moderation
 
 A banned player disappears from every public surface at once. Their rows still
 exist in the derived tables, but nothing can render them, because every handle is
 resolved from one directory and a banned player is not in it.
+
+A player whose flights have been **withheld** disappears the same way, and their
+rows leave the boards for real at the next rebuild — their flights were moved out
+of the log the boards are computed from, so recomputing simply does not find them.
+If the decision is reversed, the flights go back exactly where they were, and the
+rebuild after that restores their records including who reached a number first.
+See [what a ban does](/catlog/start/identity/#being-removed-does-not-mean-your-data-was-deleted).
 
 - **A ban closes the gap rather than leaving a hole** — ranks are positions among
   the rows you can see.

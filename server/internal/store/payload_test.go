@@ -139,6 +139,14 @@ func TestMixedEncPageReadsBothEncodings(t *testing.T) {
 		ids.Bytes(legacy.ID), pid, ids.Bytes(legacy.SessionID), legacy.Type, legacyPayload); err != nil {
 		t.Fatalf("insert legacy row: %v", err)
 	}
+	// Inserting at a seq the allocator did not hand out is exactly what 0004
+	// exists to stop, so this test — the only place that does it — has to lift
+	// the floor itself, the same way RestoreEvents does. Without it the sample
+	// events below would be allocated seq 1, collide with this row, and be
+	// silently dropped by INSERT OR IGNORE.
+	if err := e.RaiseSeqFloor(t.Context(), nil, 1); err != nil {
+		t.Fatalf("RaiseSeqFloor: %v", err)
+	}
 
 	want := insertSamples(t, e, pid)
 

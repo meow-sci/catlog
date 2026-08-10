@@ -400,6 +400,99 @@ Optionally enable the nightly maintenance timer, once `rebuild`, `archive` and `
 — it is installed disabled precisely because a timer that fails every night at 04:30 trains you to
 ignore it. Set `catlog_nightly_enabled: true` and re-run `make provision TAGS=maintenance`.
 
+---
+
+## Rebuilding the projections
+
+This is a routine operation, not an emergency one, and it is designed to be run often. `events.db` is
+the only thing that matters; `projections.db` is a cache of it (D8) and can be thrown away and rebuilt
+at any time.
+
+**Reads are never interrupted.** The rebuild writes a brand-new `projections.rebuild.db` beside the
+live one, and only when it is finished and closed does it `os.Rename` it into place and reopen. The
+old file answers every query until that instant, the rename is same-filesystem and atomic, and the
+old file is kept as `.old` until the reopen succeeds. There is no second process and no second copy of
+the log, because one process per database file forbids both.
+
+What it costs while it runs: the incremental fold is paused, so **boards go stale by the length of the
+rebuild** — at a million events, roughly ten minutes, because the fold runs ~3,300 events/s and a
+rebuild is two passes. Ingest is unaffected; the events queue up in the log and are folded the moment
+the new file is in place.
+
+```sh
+make ops-exec CMD='rebuild'                       # start it and watch it to the end
+make ops-exec CMD='rebuild -detach'               # start it and return
+make ops-exec CMD='rebuild -status'               # where it got to
+```
+
+`^C` stops watching. It does not stop the rebuild — that runs on the server.
+
+### When you need one
+
+| Situation | Who starts it |
+|---|---|
+| A deploy added a board, changed a fold, or changed what a fold computes | **catlogd, by itself.** See below |
+| You shadowbanned, un-shadowbanned or purged somebody | The moderation verb queues it |
+| An archive was restored | `catlogctl archive-restore -rebuild` |
+| Nightly, as the correctness backstop (D22) | The maintenance timer |
+| You suspect a board is wrong | You. It is the cheapest diagnostic there is |
+
+### A deploy that changes the boards
+
+`projections.db` carries a stamp of the fold set that built it. When the running binary's folds do not
+match it, catlogd **suspends the fold loop, keeps serving the old file unchanged, and rebuilds in the
+background**, swapping the new file in when it is ready. No operator action, and nothing half-built is
+ever served: a board the deploy added reads *empty* until the swap rather than holding only the events
+since the deploy.
+
+You will see it in the log:
+
+```
+projections were built by a different fold set — folding suspended until a rebuild lands
+  stamped=7f3a… expected=c19b… fold_version=1 checkpoint=1058811 auto_rebuild=true
+projections rebuilt  events=1058811 stats=8412 build_id=c19b… duration_ms=581204
+```
+
+and in `make ops-status` / `admin-stats.json` as `projector.build.stale` and
+`projector.rebuild.suspended`. Set `[projector] auto_rebuild = false` if you would rather schedule the
+CPU yourself — but note that boards stop advancing until you run one, because the loop stays
+suspended.
+
+---
+
+## Shadow bans — moderating without destroying
+
+A shadow ban withholds an account's log instead of deleting it. They vanish from every board, profile
+and feed at once; their game keeps working and keeps shipping, and everything it ships is withheld
+too. Nothing is destroyed, so you can take your time and then restore or delete.
+
+```sh
+make ops-exec CMD='shadowban -handle Griefer -reason "harassment in flight names"'
+make ops-exec CMD='shadowban-list'                            # who, since when, why, how much
+make ops-exec CMD='shadowban-review -handle Griefer -limit 50'  # read what they actually sent
+make ops-exec CMD='unshadowban -handle Griefer'               # give it all back
+make ops-exec CMD='shadowban-delete -handle Griefer -yes'     # destroy it, permanently
+```
+
+`shadowban` and `unshadowban` queue a rebuild and follow it, because that is what takes their rows off
+the boards (or puts them back). `shadowban-delete` does not: the events were already out of the log
+and off every board, so destroying them changes nothing a board can see.
+
+**It is silent at ingest, not undetectable.** Their mod never sees an error — that is the whole point,
+and it is what keeps the evidence arriving while you decide. But their handle stops resolving
+immediately, so a player who looks up their own profile will find it gone, exactly as a banned player
+would.
+
+Three things it is not:
+
+- **Not a ban.** `ban` revokes credentials and retires handles permanently. Use it when the decision
+  is made and you want them to know.
+- **Not a purge.** `purge` deletes the account and everything attached to it, and cannot be undone.
+  `shadowban-delete` destroys the *data* and leaves the account shadowbanned, which are different
+  decisions and should be made one at a time.
+- **Not anti-cheat.** It is only ever reached by you naming an account. Nothing infers it from
+  anyone's numbers — see [CONSTITUTION.md](CONSTITUTION.md) §8's note on the word.
+
 ### If something is wrong
 
 `make ops-status` first, `make ops-logs` second — the latter fetches a full diagnostics bundle into
@@ -736,10 +829,13 @@ key or the pepper is one you have to treat as a secret forever, and you will not
 | ingest failing for everyone | `catlogd.log` for `htu` mismatches — `accepted_htu` is compared by exact string equality |
 | SSE frames arriving late | `nginx.log`, then Cloudflare's Cache Rules and Compression |
 | the disk filling | `admin-stats.json` WAL sizes — the Turso WAL never auto-checkpoints |
+| boards frozen after a deploy | `admin-stats.json` `projector.rebuild.suspended` — the fold loop is parked because the file was built by a different fold set. `make ops-exec CMD='rebuild -status'` says where the rebuild is; if `auto_rebuild` is off, start one |
+| a new board is empty | the same thing, working as designed: it stays empty until the rebuild swaps in, rather than filling with only the events since the deploy |
+| a shadowbanned player still on a board | the rebuild has not landed. `rebuild -status`; a shadow ban queues one automatically |
 | rate limiting the wrong people | `nginx.log` client addresses. If they are Cloudflare edge IPs, `real_ip` is not in force — check `firewall.txt` and re-run `make provision TAGS=nginx` |
 | 443 reachable from somewhere it should not be | the DigitalOcean firewall's inbound rules — nothing on the box restricts it |
 | a published port unreachable | `iptables.txt`, for a missing DNAT in Docker's `nat` table |
 
-`make ops-exec CMD='projections rebuild'` and friends reach the admin mux. The catlogd image has no
+`make ops-exec CMD='rebuild'` and friends reach the admin mux. The catlogd image has no
 shell, which is not an obstacle: `docker compose exec` runs the binary directly. For a real shell,
 `make ops-ssh` then `docker compose exec nginx sh` — nginx is the image that has one.

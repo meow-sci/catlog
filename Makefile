@@ -406,9 +406,9 @@ ops-logs:
 	 rm -f "$(CURDIR)/$$dest/diagnostics.tar.gz" && \
 	 echo && echo "diagnostics in $$dest:" && ls -la "$(CURDIR)/$$dest"
 
-## ops-exec: run a catlogctl verb against the live server (CMD='projections rebuild')
+## ops-exec: run a catlogctl verb against the live server (CMD='rebuild')
 ops-exec:
-	@test -n "$(CMD)" || { echo "usage: make ops-exec CMD='projections rebuild'" >&2; exit 1; }
+	@test -n "$(CMD)" || { echo "usage: make ops-exec CMD='rebuild'" >&2; exit 1; }
 	$(NEED_ENV)
 	$(ANSIBLE) playbooks/ops.yml --tags exec -e catlog_ctl_cmd="$(CMD)" $(ANSIBLE_ARGS)
 

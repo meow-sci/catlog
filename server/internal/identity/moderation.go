@@ -317,6 +317,143 @@ func (m *Moderator) Purge(ctx context.Context, p store.Player, reason string) (P
 	return res, nil
 }
 
+// --- shadow bans -------------------------------------------------------------
+//
+// A shadow ban is moderation that withholds instead of deleting, and it is the
+// moderation sense of the term rather than the anti-cheat sense Constitution §8
+// forbids: applied by a named administrator to a named account, never inferred
+// from the shape of anyone's data (§5 exempts bans and purges from §8).
+//
+// It differs from [Moderator.Ban] in exactly two ways, and both are deliberate:
+//
+//   - **The credential keeps working.** No revocation, no deny-list entry, no
+//     tombstone. The player's mod ships as normal and is answered as normal;
+//     their events are routed into `shadowban_event` by the store's one write
+//     fork. That is what makes it silent, and it is also what makes it useful —
+//     a review needs the evidence to keep arriving, and a loud ban stops it.
+//   - **Nothing is deleted.** The log is moved, not dropped, so the two
+//     decisions a review ends in — restore, or delete for good — are both still
+//     available afterwards. A ban that deleted foreclosed one of them.
+//
+// What it shares with a ban is the read side: the handle leaves the directory
+// immediately, so every public surface treats the account as handle-less within
+// one reload. Their rows leave the *projections* only when a rebuild runs, which
+// is why every verb here reports whether one is needed.
+
+// ShadowbanResult reports what a shadow ban withheld.
+type ShadowbanResult struct {
+	Sub    string `json:"sub"`
+	IdP    string `json:"idp"`
+	At     int64  `json:"at"`
+	Reason string `json:"reason"`
+	// Withheld is how many events this call moved out of the live log. A
+	// repeat on an already-shadowbanned account reports zero and is otherwise a
+	// no-op.
+	Withheld int64 `json:"withheld"`
+	// Handles are the handles that stopped resolving. They are **not** retired:
+	// retirement is permanent and unclaimable-forever (D9), which is the wrong
+	// shape for an action whose whole point is being reversible.
+	Handles []string `json:"handles_hidden"`
+}
+
+// Shadowban withholds a player's log and hides them from every public surface,
+// leaving their credential — and therefore their client — working.
+//
+// The handles are deliberately left un-retired. A ban retires them because a
+// banned account is not coming back and the handle must never be claimable by
+// an impersonator (D9); a shadow ban may be lifted tomorrow, and un-retiring is
+// a second inverse to keep honest for no gain — the directory already makes the
+// handle unresolvable, and it is still owned, so nobody else can claim it.
+func (m *Moderator) Shadowban(ctx context.Context, p store.Player, reason string) (ShadowbanResult, error) {
+	if reason == "" {
+		reason = "shadowbanned"
+	}
+	at := m.now().UnixMilli()
+	res := ShadowbanResult{Sub: p.UserKey.B64U(), IdP: p.IdP, At: at, Reason: reason}
+
+	handles, err := m.events.HandlesForPlayer(ctx, p.ID)
+	if err != nil {
+		return res, err
+	}
+	if res.Withheld, err = m.events.ShadowbanPlayer(ctx, p.ID, at, reason); err != nil {
+		return res, err
+	}
+	for _, h := range handles {
+		res.Handles = append(res.Handles, h.Handle)
+	}
+
+	if err := m.refresh(ctx); err != nil {
+		return res, err
+	}
+	m.log.Warn("player shadowbanned", "player", p.ID, "user_key", p.UserKey, "idp", p.IdP,
+		"reason", reason, "withheld", res.Withheld, "handles", res.Handles)
+	return res, nil
+}
+
+// UnshadowbanResult reports what a lifted shadow ban gave back.
+type UnshadowbanResult struct {
+	Sub string `json:"sub"`
+	// Restored is how many events went back into the live log, at their
+	// original seq. It is zero when the withheld events were deleted first,
+	// which is honest rather than an error: there was nothing left to restore.
+	Restored int64    `json:"restored"`
+	Handles  []string `json:"handles_restored"`
+}
+
+// Unshadowban lifts a shadow ban: the withheld events go back into the log at
+// the seq they left from, and the handles resolve again.
+//
+// The board rows those events earn do not come back until a rebuild runs. That
+// is not a gap in this method — the projector's cursor only moves forward, so
+// re-folding history is what a rebuild *is* (D22, PROJ-090).
+func (m *Moderator) Unshadowban(ctx context.Context, p store.Player) (UnshadowbanResult, error) {
+	res := UnshadowbanResult{Sub: p.UserKey.B64U()}
+
+	handles, err := m.events.HandlesForPlayer(ctx, p.ID)
+	if err != nil {
+		return res, err
+	}
+	if res.Restored, err = m.events.UnshadowbanPlayer(ctx, p.ID); err != nil {
+		return res, err
+	}
+	for _, h := range handles {
+		res.Handles = append(res.Handles, h.Handle)
+	}
+
+	if err := m.refresh(ctx); err != nil {
+		return res, err
+	}
+	m.log.Warn("shadow ban lifted", "player", p.ID, "user_key", p.UserKey,
+		"restored", res.Restored, "handles", res.Handles)
+	return res, nil
+}
+
+// DeleteWithheldResult reports the end of a review.
+type DeleteWithheldResult struct {
+	Sub     string `json:"sub"`
+	Deleted int64  `json:"deleted"`
+}
+
+// DeleteWithheld destroys a shadowbanned player's withheld events permanently
+// and leaves the shadow ban in place, so anything they ship next is withheld
+// too.
+//
+// This is the one irreversible verb in the set, and it is deliberately not
+// [Moderator.Purge]: purge deletes the *account* — every handle, credential and
+// the player row, leaving a tombstone that keeps them out forever. "I have
+// reviewed this data and it goes" and "this person is gone" are two different
+// decisions and an operator should have to make them one at a time.
+func (m *Moderator) DeleteWithheld(ctx context.Context, p store.Player) (DeleteWithheldResult, error) {
+	res := DeleteWithheldResult{Sub: p.UserKey.B64U()}
+	deleted, err := m.events.DeleteWithheldEvents(ctx, p.ID)
+	if err != nil {
+		return res, err
+	}
+	res.Deleted = deleted
+	m.log.Warn("withheld events deleted", "player", p.ID, "user_key", p.UserKey, "deleted", deleted)
+	return res, nil
+}
+
 // RevokeCredential revokes one credential in both halves — the row and the
 // deny-list — and republishes. It is the dashboard's per-handle revoke and the
 // reissue path's cleanup (§4.8).

@@ -16,9 +16,17 @@ run() {
     docker compose exec -T catlogd catlogctl "$@"
 }
 
-run projections rebuild
-run archive run
-run backup
+# The verb names are exact. `catlogctl` has no sub-verbs: it is `rebuild`, not
+# `projections rebuild`, and `archive`, not `archive run` — both of which this
+# script got wrong for as long as the timer stayed disabled.
+#
+# The rebuild runs detached on the server and this script waits for it, which is
+# what `rebuild` does by default: at production size it is minutes long, and a
+# timer that returned before it finished would archive against projections that
+# were still being rebuilt.
+run rebuild -reason 'nightly maintenance'
+run archive -all
+run backup {{ catlog_data_root }}/backups
 
 # `projections.db` is never backed up — it is rebuildable by design, and a copy
 # of it would be the largest and least useful file in the set.

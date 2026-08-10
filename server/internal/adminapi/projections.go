@@ -2,6 +2,7 @@ package adminapi
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"sync"
 	"time"
@@ -31,12 +32,14 @@ type ProjectionDeps struct {
 // RegisterProjections mounts the §5.9 projection routes:
 //
 //	POST /admin/seed                   the deterministic demo dataset
-//	POST /admin/projections/rebuild    §5.6 rebuild + atomic swap
-//	GET  /admin/stats                  counters
+//	POST /admin/projections/rebuild    start a §5.6 rebuild + atomic swap
+//	GET  /admin/projections/rebuild    where the running or last rebuild got to
+//	GET  /admin/stats                  counters, the build stamp, the rebuild job
 func (s *Server) RegisterProjections(deps ProjectionDeps) {
 	s.projections = deps
 	s.mux.HandleFunc("POST /admin/seed", s.handleSeed)
 	s.mux.HandleFunc("POST /admin/projections/rebuild", s.handleRebuild)
+	s.mux.HandleFunc("GET /admin/projections/rebuild", s.handleRebuildStatus)
 	s.mux.HandleFunc("GET /admin/stats", s.handleStats)
 }
 
@@ -101,37 +104,110 @@ func (s *Server) handleSeed(w http.ResponseWriter, r *http.Request) {
 
 // --- POST /admin/projections/rebuild -----------------------------------------
 
+// RebuildRequest is `POST /admin/projections/rebuild` (§5.9).
+type RebuildRequest struct {
+	// Reason is recorded on the job and logged. Optional; an operator running
+	// it by hand gets a default.
+	Reason string `json:"reason,omitempty"`
+	// Wait blocks the response until the rebuild is finished instead of
+	// answering `202` immediately.
+	//
+	// It exists for scripts that genuinely need the completed result in one
+	// call — the archive restore's `-rebuild`, the e2e suite — and not for
+	// people. `catlogctl rebuild` polls the status endpoint instead, which
+	// shows progress and cannot be lost to a proxy timeout partway through a
+	// ten-minute request.
+	Wait bool `json:"wait,omitempty"`
+}
+
+// handleRebuild starts a rebuild and answers `202 Accepted` with its status.
+//
+// It does **not** hold the §5.4 admin write lock for the duration. It used to,
+// and that made a rebuild exclude every other admin operation for as long as it
+// ran — bans, backups, the deny-list — which is intolerable for something meant
+// to be run routinely. What actually needs serializing is the projections
+// database, and the projector's own applyMu already does that; a second request
+// arriving mid-rebuild is answered by the job's queue rather than by a lock
+// (projector/job.go).
 func (s *Server) handleRebuild(w http.ResponseWriter, r *http.Request) {
+	var req RebuildRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
 	p := s.projections.Projector
 	if p == nil {
 		fail(w, authz.CodeInternal, "no projector is running on this server")
 		return
 	}
+	if req.Reason == "" {
+		req.Reason = "requested by an operator"
+	}
 
-	// A rebuild reads the whole event log; it must not inherit a client's
-	// impatience, and it must not run twice at once. The write mutex gives the
-	// second property; a detached context with a generous ceiling gives the
-	// first.
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), rebuildTimeout)
-	defer cancel()
+	status, err := p.StartRebuild(req.Reason)
+	switch {
+	case errors.Is(err, projector.ErrRebuildInProgress):
+		// Not an error to the caller: a rebuild is exactly what they asked for
+		// and one is running. Queue a follow-up so a change they made since it
+		// started is not missed, and report the running job.
+		status = p.RequestRebuild(req.Reason)
+	case err != nil:
+		s.deps.Log.Error("admin rebuild failed to start", "err", err)
+		fail(w, authz.CodeInternal, "could not start a rebuild")
+		return
+	}
 
-	var res projector.RebuildResult
-	err := s.WithWriteLock(func() error {
-		var err error
-		res, err = p.Rebuild(ctx)
-		return err
-	})
+	if !req.Wait {
+		writeJSON(w, http.StatusAccepted, status)
+		return
+	}
+
+	final, err := s.waitForRebuild(r.Context(), p)
 	if err != nil {
-		s.deps.Log.Error("admin rebuild failed", "err", err)
+		s.deps.Log.Error("admin rebuild wait failed", "err", err)
+		fail(w, authz.CodeInternal, "the rebuild did not finish in time")
+		return
+	}
+	if final.Phase == projector.PhaseFailed {
+		s.deps.Log.Error("admin rebuild failed", "err", final.Err)
 		fail(w, authz.CodeInternal, "could not rebuild the projections")
 		return
 	}
-	writeJSON(w, http.StatusOK, res)
+	writeJSON(w, http.StatusOK, final)
 }
 
-// rebuildTimeout bounds a rebuild. Generous: it is two passes over the entire
-// event log, and the alternative to finishing is a half-built scratch file.
-const rebuildTimeout = 30 * time.Minute
+// waitForRebuild polls until the job reaches a terminal phase. Polling an
+// in-process mutex is not elegant, but a rebuild is minutes long and this path
+// exists only for scripts, so a quarter-second tick costs nothing and needs no
+// condition variable that the normal path would have to maintain.
+func (s *Server) waitForRebuild(ctx context.Context, p *projector.Projector) (projector.RebuildStatus, error) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), projector.RebuildTimeout)
+	defer cancel()
+
+	t := time.NewTicker(250 * time.Millisecond)
+	defer t.Stop()
+	for {
+		status := p.RebuildStatus()
+		if !status.Phase.Running() && !status.Queued {
+			return status, nil
+		}
+		select {
+		case <-ctx.Done():
+			return status, ctx.Err()
+		case <-t.C:
+		}
+	}
+}
+
+// handleRebuildStatus is `GET /admin/projections/rebuild` (§5.9): where the
+// running rebuild is, or how the last one ended.
+func (s *Server) handleRebuildStatus(w http.ResponseWriter, r *http.Request) {
+	p := s.projections.Projector
+	if p == nil {
+		fail(w, authz.CodeInternal, "no projector is running on this server")
+		return
+	}
+	writeJSON(w, http.StatusOK, p.RebuildStatus())
+}
 
 // --- GET /admin/stats --------------------------------------------------------
 
@@ -176,11 +252,20 @@ type IngestStats struct {
 	QueueCap   int `json:"queue_cap"`
 }
 
-// ProjectorStats is the §5.6 loop.
+// ProjectorStats is the §5.6 loop, plus the two questions a deploy raises: is
+// the file being served what this binary computes, and is anything being done
+// about it.
 type ProjectorStats struct {
 	CheckpointSeq int64    `json:"checkpoint_seq"`
 	LagSeq        int64    `json:"lag_seq"`
 	Folds         []string `json:"folds"`
+	// Build compares the live file's stamp to this binary's fold set (0005).
+	// `stale: true` means the boards being served were computed by a different
+	// definition of the boards and a rebuild is owed.
+	Build projector.BuildInfo `json:"build"`
+	// Rebuild is the running or last rebuild, including whether the fold loop
+	// is suspended waiting for one.
+	Rebuild projector.RebuildStatus `json:"rebuild"`
 }
 
 // StorageStats is the file-size watch §13.1 asks for: with no VACUUM, a purge
@@ -269,6 +354,15 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 			CheckpointSeq: p.CheckpointSeq(),
 			LagSeq:        p.Lag(),
 			Folds:         p.FoldNames(),
+			Rebuild:       p.RebuildStatus(),
+		}
+		if build, err := p.Build(ctx); err == nil {
+			out.Projector.Build = build
+		} else {
+			// A build stamp that cannot be read is worth a log line and not
+			// worth failing the whole stats response over: every other number
+			// here is still true.
+			s.deps.Log.Warn("could not read the projections build stamp", "err", err)
 		}
 		err := p.Live().With(func(proj *store.Projections) error {
 			out.Storage.ProjectionsDBBytes = proj.FileSize()

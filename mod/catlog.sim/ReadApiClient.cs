@@ -230,7 +230,12 @@ public sealed class ReadApiClient : IDisposable
     public string Rebuild()
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, _adminUrl + "/admin/projections/rebuild");
-        request.Content = new StringContent("{}", Encoding.UTF8, "application/json");
+        // The endpoint answers 202 and runs the rebuild in the background, because at
+        // production size it is minutes long and no HTTP request should be holding a
+        // connection for that. A scenario needs the finished result in one call, so it
+        // asks to wait — which is exactly what `wait` exists for.
+        request.Content = new StringContent(
+            "{\"wait\":true,\"reason\":\"catlog.sim scenario\"}", Encoding.UTF8, "application/json");
         using HttpResponseMessage response = _http.Send(request);
         string body = response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
         if (!response.IsSuccessStatusCode)
@@ -238,10 +243,15 @@ public sealed class ReadApiClient : IDisposable
 
         using JsonDocument document = JsonDocument.Parse(body);
         JsonElement root = document.RootElement;
+        if (!root.TryGetProperty("result", out JsonElement result) || result.ValueKind != JsonValueKind.Object)
+        {
+            string phase = root.TryGetProperty("phase", out JsonElement p) ? p.GetString() ?? "?" : "?";
+            throw new SimException($"the rebuild finished as '{phase}' but reported no result: {body}");
+        }
         WaitForProjector(TimeSpan.FromSeconds(60));
-        return $"events={Int64(root, "events")} last_seq={Int64(root, "last_seq")} "
-               + $"flights={Int64(root, "flights")} stats={Int64(root, "stats")} "
-               + $"duration_ms={Int64(root, "duration_ms")}";
+        return $"events={Int64(result, "events")} last_seq={Int64(result, "last_seq")} "
+               + $"flights={Int64(result, "flights")} stats={Int64(result, "stats")} "
+               + $"duration_ms={Int64(result, "duration_ms")}";
     }
 
     /// <summary>Reads a player's board placements (<c>GET /v1/players/{handle}</c>).</summary>

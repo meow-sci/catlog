@@ -136,6 +136,12 @@ physics-plausibility envelopes, quarantine or pending-record pipelines, replay t
 record claims, robust z-scores and statistical outlier detection, suspicion multipliers or reputation
 scores, shadow-banning, community-report queues, and client attestation of any kind.
 
+**"Shadow-banning" there means the anti-cheat sense** — a machine inferring a cheater from the shape
+of their data and silently voiding them. The **moderation** verb of the same name is built and is not
+this: an administrator names an account, for abuse or decency, and its log is withheld rather than
+deleted so the call can be reviewed and reversed. Constitution §7 owns it and §8 exempts it
+explicitly. See [identity.md](identity.md).
+
 The client is attacker-controlled and always will be. Signatures prove who sent something, never that
 it is true. A determined person can put a fake number on a leaderboard about a cat game, and the
 complexity budget is better spent elsewhere.

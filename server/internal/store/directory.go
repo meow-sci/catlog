@@ -11,26 +11,40 @@ import (
 	"fmt"
 )
 
-// DirectoryRow is one live handle with the ban state of the account behind it —
-// the whole of what the in-memory player_id → handle map needs (§5.4).
+// DirectoryRow is one live handle with the moderation state of the account
+// behind it — the whole of what the in-memory player_id → handle map needs
+// (§5.4).
 type DirectoryRow struct {
 	Handle    string
 	HandleLC  string
 	PlayerID  int64
 	CreatedAt int64 // unix ms
 	Banned    bool
+	// Shadowbanned is set when the account's log is being withheld (0005). It
+	// is separate from Banned because the two mean different things to the rest
+	// of the server — a ban refuses ingest, a shadow ban accepts it — but the
+	// directory treats them identically, because on the read side "hidden" has
+	// only one meaning.
+	Shadowbanned bool
 }
 
-// Directory lists every live handle joined to its player's ban state.
+// Hidden reports whether this handle should be absent from the public
+// directory. One predicate, so a third kind of hiding added later has one place
+// to be added rather than one per read surface.
+func (r DirectoryRow) Hidden() bool { return r.Banned || r.Shadowbanned }
+
+// Directory lists every live handle joined to its player's moderation state.
 //
 // This exists because projections.db cannot be joined to events.db (§5.4): the
 // read API resolves player_id → handle from an in-memory map built by this
-// query at start and rebuilt whenever a handle is created, revoked or banned.
-// The join is within one file, so it is a plain SQL join.
+// query at start and rebuilt whenever a handle is created, revoked, banned or
+// shadowbanned. The join is within one file, so it is a plain SQL join.
 func (e *Events) Directory(ctx context.Context) ([]DirectoryRow, error) {
 	rows, err := e.Reader().QueryContext(ctx,
-		`SELECT h.handle, h.handle_lc, h.player_id, h.created_at, p.banned_at
-		 FROM handle h JOIN player p ON p.player_id = h.player_id
+		`SELECT h.handle, h.handle_lc, h.player_id, h.created_at, p.banned_at, sb.player_id
+		 FROM handle h
+		 JOIN player p ON p.player_id = h.player_id
+		 LEFT JOIN shadowban sb ON sb.player_id = h.player_id
 		 ORDER BY h.player_id, h.created_at, h.handle`)
 	if err != nil {
 		return nil, fmt.Errorf("store: read handle directory: %w", err)
@@ -42,11 +56,12 @@ func (e *Events) Directory(ctx context.Context) ([]DirectoryRow, error) {
 		var (
 			r      DirectoryRow
 			banned sql.NullInt64
+			shadow sql.NullInt64
 		)
-		if err := rows.Scan(&r.Handle, &r.HandleLC, &r.PlayerID, &r.CreatedAt, &banned); err != nil {
+		if err := rows.Scan(&r.Handle, &r.HandleLC, &r.PlayerID, &r.CreatedAt, &banned, &shadow); err != nil {
 			return nil, fmt.Errorf("store: scan handle directory: %w", err)
 		}
-		r.Banned = banned.Valid
+		r.Banned, r.Shadowbanned = banned.Valid, shadow.Valid
 		out = append(out, r)
 	}
 	return out, rows.Err()

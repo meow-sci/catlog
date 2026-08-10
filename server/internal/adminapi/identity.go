@@ -34,11 +34,21 @@ type IdentityDeps struct {
 //	POST /admin/purge             delete everything, keep the tombstone
 //	POST /admin/denylist/publish  regenerate the signed deny-list
 //	POST /admin/backup            quiesce the writer and copy events.db
+//	POST /admin/shadowban         withhold the log, keep accepting new events
+//	POST /admin/unshadowban       give the withheld log back
+//	POST /admin/shadowban/delete  destroy the withheld log, keep the ban
+//	GET  /admin/shadowban         the roster and its counts — the review queue
+//	GET  /admin/shadowban/events  read the withheld events themselves
 func (s *Server) RegisterIdentity(deps IdentityDeps) {
 	s.identity = deps
 	s.mux.HandleFunc("POST /admin/ban", s.handleBan)
 	s.mux.HandleFunc("POST /admin/unban", s.handleUnban)
 	s.mux.HandleFunc("POST /admin/purge", s.handlePurge)
+	s.mux.HandleFunc("POST /admin/shadowban", s.handleShadowban)
+	s.mux.HandleFunc("POST /admin/unshadowban", s.handleUnshadowban)
+	s.mux.HandleFunc("POST /admin/shadowban/delete", s.handleShadowbanDelete)
+	s.mux.HandleFunc("GET /admin/shadowban", s.handleShadowbanList)
+	s.mux.HandleFunc("GET /admin/shadowban/events", s.handleShadowbanEvents)
 	s.mux.HandleFunc("POST /admin/denylist/publish", s.handleDenyListPublish)
 	s.mux.HandleFunc("POST /admin/backup", s.handleBackup)
 }

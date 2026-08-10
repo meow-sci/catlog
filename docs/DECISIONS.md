@@ -21,15 +21,15 @@ commit. See [ARCHITECTURE.md](ARCHITECTURE.md#7-keeping-the-documentation-true) 
 ## Contents
 
 - **[Repository, toolchain & dependencies](#repository-toolchain--dependencies)** — `REPO-*`, 25 entries
-- **[Storage — Turso, schema & compression](#storage--turso-schema--compression)** — `STORE-*`, 16 entries
+- **[Storage — Turso, schema & compression](#storage--turso-schema--compression)** — `STORE-*`, 18 entries
 - **[Ingest, auth & the conformance vectors](#ingest-auth--the-conformance-vectors)** — `INGEST-*`, 25 entries
-- **[Identity, handles & moderation](#identity-handles--moderation)** — `IDENT-*`, 15 entries
-- **[Projector, boards & the read API](#projector-boards--the-read-api)** — `PROJ-*`, 100 entries
+- **[Identity, handles & moderation](#identity-handles--moderation)** — `IDENT-*`, 18 entries
+- **[Projector, boards & the read API](#projector-boards--the-read-api)** — `PROJ-*`, 103 entries
 - **[Archive & restore](#archive--restore)** — `ARCH-*`, 13 entries
 - **[The frontend](#the-frontend)** — `UI-*`, 44 entries
 - **[The mod and its KSA-free core](#the-mod-and-its-ksa-free-core)** — `MOD-*`, 79 entries
 - **[The load harness](#the-load-harness)** — `LOAD-*`, 26 entries
-- **[Containers, nginx & deployment](#containers-nginx--deployment)** — `OPS-*`, 25 entries
+- **[Containers, nginx & deployment](#containers-nginx--deployment)** — `OPS-*`, 26 entries
 - **[Documentation](#documentation)** — `DOCS-*`, 4 entries
 
 ---
@@ -328,6 +328,32 @@ On classic SQLite the implicit rowid tail makes `(player_id)` equivalent to `(pl
 
 ---
 
+### STORE-017 — `event.seq` is allocated explicitly, because a rowid reuses a deleted row's number and nothing would have noticed
+
+*Accepted · 2026-08-09 · WP-SB.*
+
+`event.seq` was the rowid, and SQLite assigns `max(rowid) + 1`. That is correct for an append-only table and `event` is not one: `PurgePlayer` deletes a player's rows (§4.7), and a shadow ban now moves them out (STORE-018). **Delete the row holding the highest seq and the next insert gets that number back.**
+
+The failure that follows is silent, which is why this is a schema change rather than a comment. `seq` is the projector's cursor and the archiver's cursor, and both have already passed the reused value: the re-issued event is stored, is never folded onto any board, and is never archived — with no error anywhere and no test in the suite that would notice. It also makes the shadow-ban tables unsound outright, because a withheld row and a live row would claim the same seq and the restore would collide.
+
+`event_seq(id = 1, next_seq)` is therefore an explicit, forward-only allocator. `InsertEvents` reserves a contiguous run inside the caller's transaction — one extra `SELECT` and `UPDATE` per *batch*, against two ECDSA verifications and a Brotli decode, so unmeasurable — and a `nil` querier now gets a transaction of its own, because the writer handle serializes statements and not sequences of them. `RestoreEvents` raises the floor past anything it inserted at an explicit seq (§5.10), and `OpenEvents` reconciles against `max(event.seq)` and `max(shadowban_event.seq)` at every start, so a row written by any other route cannot carry the hazard forward.
+
+**Gaps are expected and are not a defect.** A deduped batch leaves its reserved numbers unused. Every reader scans `seq > cursor` and none assumes density.
+
+The hazard was found by a *test*, not by review: `TestMixedEncPageReadsBothEncodings` inserts a legacy row without naming `seq` and then lost one of its sample events to `INSERT OR IGNORE`. That test now lifts the floor itself, which is exactly what real code does, and `TestSeqIsNeverHandedOutTwice` pins the guarantee directly.
+
+### STORE-018 — A shadow ban moves rows into `shadowban_event` rather than setting a flag, so exclusion is structural
+
+*Accepted · 2026-08-09 · WP-SB.*
+
+The obvious implementation of "hide this player's data" is a boolean and a `WHERE` clause. It was rejected: a predicate is something **every present and future read path has to remember**, and catlog has a lot of them — three raw event views, the SSE stream, the boards, the profiles, the feed, the census, the compare endpoint. One forgotten filter is a shadowbanned account back on a public surface, and the way you find out is somebody seeing it.
+
+Moving the rows makes the exclusion a property of the data rather than of the queries. Every public surface reads either the `event` table or a projection folded from it, so a withheld player is absent from both **by construction**, and a read path written next year inherits that without knowing this feature exists. It also makes the two decisions a review ends in trivially cheap and genuinely separate: restore is an `INSERT..SELECT` back, and delete-for-good is a `DELETE` against one table. Neither is reachable once the rows are gone, which is the entire reason a ban stopped deleting them.
+
+`shadowban_event` mirrors `event` column for column and **keeps the original `seq`**. That is load-bearing rather than tidy: a restore puts the events back in their original position in the log, so the rebuild that follows reproduces not just the same values but the same `updated_seq` tie-break — the rule that gives a record to whoever reached the number first. Restoring at the head of the log would have silently cost a restored player every tie they had won. 0004's allocator is what guarantees the number is still free while they are away.
+
+Two consequences recorded so they are not mistaken for oversights. **`PurgePlayer` deletes from both tables** — an account deletion that left a copy of the log behind would be a privacy failure dressed as a feature. And **the ingest write path forks once**, on a primary-key lookup per batch rather than a cached set: it is next to two signature verifications so the cost is invisible, and a cache here would be a coherence question on the one path where getting it wrong publishes a shadowbanned player's records to a leaderboard.
+
 ## Ingest, auth & the conformance vectors
 
 The §4.5.3 verification chain, the idempotency contract, and how the cross-language vectors stay byte-identical.
@@ -587,6 +613,36 @@ An earlier draft waited for any stat and then checked the board it named, which 
 A `catlogd` that outlives its test holds tursogo's exclusive whole-file lock (§5.4), which shuts every later process out of that database entirely — a silent, compounding failure that gets blamed on something else. Every child a fixture starts is registered, and `TestMain` kills and reaps whatever survives `m.Run()`, **failing an otherwise-passing run** so a leak cannot hide; a SIGINT handler does the same on Ctrl-C. `server.stop()` and `mockidp.stop()` now deregister unconditionally and `Wait()` after a `Kill()` (an unwaited child stays a zombie and may not release the lock), and the graceful window dropped from 30 s to 15 s so a wedged fixture is never itself the reason a run times out. Verified by removing the fixture's `t.Cleanup` and watching the run flip from PASS to FAIL with `killing stray catlogd (pid …)`. Not covered: `go test -timeout` firing, which panics the binary from Go's own watchdog and runs no cleanup or TestMain code at all.
 
 ---
+
+### IDENT-016 — A shadow ban is silent at ingest and loud on the read side, and that asymmetry is the design
+
+*Accepted · 2026-08-09 · WP-SB.*
+
+`ban` is the right tool when the decision is made. It is the wrong tool for the two cases that actually recur: somebody whose behaviour needs *reviewing* rather than punishing on the spot, and somebody who will simply make another account the moment they are told. `shadowban` is for those.
+
+It differs from a ban in exactly two ways. **The credential keeps working** — no revocation, no deny-list entry, no tombstone, `200` on every batch exactly as before — so the mod goes on shipping and everything it ships is withheld too. That is not decoration: a review needs the evidence to keep arriving, and a loud ban is the one thing guaranteed to stop it. And **nothing is deleted**, so both later decisions stay open (STORE-018).
+
+What it does *not* do is hide the account from itself. The handle leaves the directory immediately, like a ban's, so every public surface treats them as handle-less — which means a player who looks up their own profile finds it gone. **"Silent" means silent at ingest, not undetectable.** The alternative — a session-aware read path that renders a player their own withheld data — was rejected on sight: it means every public surface growing a "who is asking" parameter, for a deception catlog does not need to maintain. What is actually bought is that their *game* never errors, which is what keeps the data flowing.
+
+**Handles are deliberately not retired.** A ban retires them because a banned account is not coming back and the handle must never be claimable by an impersonator (D9). Retirement is permanent by construction, which is the wrong shape for a reversible action — and it buys nothing here, because the directory already makes the handle unresolvable and the account still owns it, so nobody else can take it meanwhile.
+
+### IDENT-017 — `shadowban-delete` is its own verb, and it is not `purge`
+
+*Accepted · 2026-08-09 · WP-SB.*
+
+Two temptations rejected. **A `-delete` flag on `shadowban`**: a destructive, irreversible action should never be one mistyped boolean away from a reversible one, so it is a separate route and a separate verb and it refuses to run without `-yes`. **Folding it into `purge`**: "I have reviewed this data and it goes" and "this person is gone" are different decisions, and an operator should be able to make the first without being forced into the second. `shadowban-delete` therefore leaves the account, its handles, its credentials and the shadow ban itself intact — so anything they ship next is withheld too — and destroys only the withheld events.
+
+It is also the one verb that does **not** queue a rebuild, which is worth stating because its absence looks like an omission. The events were already out of the log and already off every board; destroying them changes nothing a projection can see.
+
+### IDENT-018 — Constitution §8 forbids shadow-banning, and this is not that — recorded because the collision is real
+
+*Accepted · 2026-08-09 · WP-SB.*
+
+Constitution §8 and ROADMAP §3 both name "shadow-banning" as never to be built, so shipping a verb called `shadowban` needed settling rather than assuming. The prohibition is about **anti-cheat**: a machine inferring from the shape of someone's data that they are cheating, and silently voiding them. §8's own preamble already exempts what this is — *"bans, purges and deny-lists exist for abuse and decency, not for stat manipulation, and nothing in §8 constrains them"* — and §8's "what this principle does not govern" list has always had moderation in it.
+
+The distinguishing question, now written into the constitution: **who decided, and on what evidence.** A named administrator acting on behaviour, or a rule acting on statistics. Nothing in this feature reads a player's numbers.
+
+The name was kept rather than invented around. The alternatives considered were `withhold` and `quarantine`; the second collides with §8's vocabulary just as hard, and the first is a word nobody would search for. `shadowban` is what an operator will type and what a reader will recognise, and the cost of keeping it is three paragraphs of disambiguation in CONSTITUTION.md, ROADMAP.md and integrity-audit.md — which is cheaper than a term of art nobody else uses. The rule the collision teaches: **when code takes a name a document forbids, the document moves in the same commit**, or the next reader files it as a violation and is right to.
 
 ## Projector, boards & the read API
 
@@ -1283,6 +1339,44 @@ catlog has never been deployed and has never stored an event. When the event set
 **The mechanism stays, and that is the distinction worth holding on to.** `projector.Upcasters` is the right design (PROJ-015) — stored events are immutable forever and nothing may rewrite `events.db`, so the first genuine payload change has to be a registration rather than a migration project. Keeping an empty registry costs nothing and buys the seam. What was wrong was not the mechanism but *using* it: registering identity transforms that convert nothing, for versions nothing ever emitted, and then writing tests that made the fiction look load-bearing.
 
 ---
+
+### PROJ-101 — `projections.db` carries a build stamp, because "populated but short of history" is indistinguishable from "nobody has scored yet"
+
+*Accepted · 2026-08-09 · WP-SB.*
+
+PROJ-090 settled that a new fold becomes retroactive by rebuild and that no backfill mechanism should exist. It left open the half that actually bites in operation: **between the deploy and the rebuild, the new board is being served.** The projector's cursor only moves forward, so a board added today fills with events from today onwards — a board that is populated, plausible, and short by the whole of history. Nothing in the system could tell, because a partially-folded board and a board nobody has set a record on look identical.
+
+`proj_build` records the fold-set identity that produced the file: `stats.BuildID` over the projections schema version, every registered fold's name **in order**, and `stats.BuildVersion`. Order is part of the identity because folds are applied in sequence against a shared batch, so the same names in a different order are not guaranteed to produce the same projection.
+
+At startup a mismatch **suspends the incremental loop** and starts a rebuild (`[projector] auto_rebuild`, default on). Suspending is the whole decision, and the alternative — keep folding, rebuild when convenient — was rejected because it mixes two definitions of the boards in one database. Suspended, boards are **stale but never wrong**, and a board this deploy added reads *empty* rather than short-by-history. Empty is a state a reader understands; the other is not.
+
+Three cases are deliberately not suspended. A file whose checkpoint is 0 holds nothing, so folding forward from zero *is* a full build — it is stamped and the loop runs, which covers every fresh deployment and most tests. An in-memory projections database has no file to swap, so it logs loudly and carries on rather than parking forever. And the stamp is written **into the scratch file before the swap**, never onto the live one afterwards: the label and the rows it describes then land on disk together in one atomic rename, so no crash can leave a file claiming a build it does not hold.
+
+**This makes projections migrations additive-only**, and that is a new constraint worth naming. The live file is migrated in place at open so its existing boards stay readable while the rebuild runs; a destructive migration would damage the file that is still serving. Nothing is lost — a change that needs the old shape gone gets it from the rebuild, which builds a fresh database from every migration.
+
+### PROJ-102 — `stats.BuildVersion` is a hand-bumped constant, because a fold's name cannot report that its meaning changed
+
+*Accepted · 2026-08-09 · WP-SB.*
+
+Hashing the fold registry (PROJ-101) catches a board added, removed or renamed for free. It cannot catch the more common change: **a fold whose name is unchanged and whose behaviour is not** — a new threshold, a changed unit, a widened eligibility rule, a different tie-break, a corrected formula. Every one of those makes every projection built by the previous binary wrong, and leaves the registry byte-identical.
+
+Deriving it automatically was considered and dropped. Hashing the fold *source* would rebuild on a comment change and on every refactor, which trains an operator to ignore the signal; and it is not even sound, since a fold's behaviour also depends on the helpers it calls. There is no cheap correct derivation, so the honest answer is a constant a human bumps.
+
+It is the same discipline the repository already runs on: an event payload change bumps that event's `ver`, an endpoint shape change bumps its `ver`, a credential change bumps `format`. This is that rule applied to the read side, and it is documented in the constant's own doc comment because that is where somebody changing a fold will be looking. **The cost of forgetting is a board quietly short of history until the next nightly rebuild** — which is the failure mode D22's nightly backstop exists to catch, so the floor is one day rather than forever.
+
+### PROJ-103 — The rebuild runs detached, queues a follow-up, and stops holding the admin write lock
+
+*Accepted · 2026-08-09 · WP-SB.*
+
+`POST /admin/projections/rebuild` was synchronous and held the §5.4 admin mutex for its whole duration. At the measured fold rate (~3,300 events/s, two passes) that is about ten minutes on a million-event log, during which **no other admin operation could run at all** — no ban, no backup, no deny-list publication — and the operator watched a hung HTTP request with no idea how far along it was. That was tolerable while a rebuild was a nightly cron job. It is not, now that a rebuild is what a shadow ban and a boards deploy both need.
+
+Three changes. **Detached**: the endpoint answers `202` with a job and `GET /admin/projections/rebuild` reports phase, events scanned and head; `catlogctl rebuild` polls it and draws a progress line, so `^C` stops watching rather than stopping the rebuild. `{"wait": true}` survives for the callers that genuinely need the finished result in one call — `archive-restore -rebuild` and `catlog.sim` — and is documented as being for scripts rather than people.
+
+**No admin lock**: what needs serializing is the projections database, and the projector's own `applyMu` already does it. The mutex was protecting nothing that was not already protected.
+
+**A queue of exactly one**: a shadow ban applied while a rebuild is on its second pass is invisible to that rebuild — the scan already read those rows — so the file swapped in would still hold their records, and the only signal would be an operator spotting them on a board later. `RequestRebuild` records that one more pass is owed and the job runs it on completion. One is enough: the follow-up starts after every change that preceded it, so a queue deeper than one would only ever repeat work.
+
+Polling rather than SSE, deliberately: a rebuild is minutes long and its status is five integers. A second of latency on a progress bar does not justify a subscriber registry and its failure modes.
 
 ## Archive & restore
 
@@ -2711,6 +2805,16 @@ Everything that must survive a rebuild lives under that one root — databases, 
 
 
 ---
+
+### OPS-035 — The nightly maintenance script called three verbs that do not exist
+
+*Accepted · 2026-08-09 · WP-SB.*
+
+`catlog-nightly.sh` ran `catlogctl projections rebuild`, `catlogctl archive run` and a bare `catlogctl backup`. `catlogctl` has no sub-verbs: the verbs are `rebuild`, `archive` and `backup`, and the last requires a destination argument. **All three would have failed on the first line, under `set -e`.**
+
+It went unnoticed because the timer ships *disabled* (OPS: a timer that fails every night at 04:30 trains you to ignore it), so nothing had ever run it. Found while making the rebuild a routine operation, which is the thing this timer exists to perform — a nightly rebuild that has never once executed is not a correctness backstop, and D22 leans on it being one. The same wrong spelling had propagated into the Makefile's help text, `ops.yml`'s usage message and `restore.yml`'s post-restore step; all four are corrected.
+
+The general point, recorded because it will recur: **an operational script that no test runs is documentation that happens to be executable.** The mitigation available here was cheap — the verb names are checked against `catlogctl`'s own registry by reading it — and the timer being disabled by default is what turned a nightly outage into a latent one.
 
 ## Documentation
 

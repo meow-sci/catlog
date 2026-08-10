@@ -152,6 +152,16 @@ flush_rows = 500
 # one. 0 means the default (5 s).
 tick_s = 0
 
+# Rebuild the projections automatically when the file on disk was built by a
+# different fold set than this binary — a deploy that added a board, changed
+# one, or changed what one computes.
+#
+# On, catlogd handles a boards deploy by itself: it suspends the fold loop so no
+# half-built board is ever served, keeps answering reads from the old file, and
+# swaps the rebuilt one in when it is ready. Off leaves the loop suspended and
+# the boards frozen until `catlogctl rebuild` is run by hand.
+auto_rebuild = true
+
 # Goroutines that decode a batch's payloads before the serial fold. 0 means one
 # per core, less one for the ingest that produced the backlog.
 #

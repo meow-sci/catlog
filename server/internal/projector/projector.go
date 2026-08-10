@@ -74,6 +74,14 @@ type Options struct {
 	Decoders int
 	// Tick overrides [DefaultTick].
 	Tick time.Duration
+	// AutoRebuild lets the projector start a rebuild on its own when the live
+	// projections file was built by a fold set that is not this binary's
+	// ([Projector.checkBuild]). This is `[projections] auto_rebuild`, on by
+	// default in catlogd: a deploy that changes the boards should not depend on
+	// an operator remembering what it implies. Off leaves the loop suspended
+	// and the boards frozen until a rebuild is asked for by hand, which is the
+	// right choice only if the CPU cost has to be scheduled.
+	AutoRebuild bool
 	// Log receives one line per batch at debug and per rebuild at info.
 	Log *slog.Logger
 }
@@ -110,6 +118,14 @@ type Projector struct {
 	// the same projections database, and a rebuild also swaps the handle out
 	// from under it.
 	applyMu sync.Mutex
+
+	// rb is the background rebuild job: its status, its queue, and the flag
+	// that parks the fold loop when the live file was built by a different fold
+	// set. See job.go.
+	rb rebuildState
+	// autoRebuild is whether a stale build stamp at startup starts a rebuild by
+	// itself, or only warns.
+	autoRebuild bool
 
 	// skipped remembers which (type, ver) pairs have already been logged, so a
 	// million events from a newer mod produce one line rather than a million
@@ -165,24 +181,25 @@ func New(opts Options) (*Projector, error) {
 		opts.Tick = DefaultTick
 	}
 	return &Projector{
-		events:     opts.Events,
-		live:       opts.Live,
-		dir:        opts.Directory,
-		bcast:      opts.Broadcaster,
-		raw:        opts.Raw,
-		notify:     opts.Notify,
-		upcasters:  opts.Upcasters,
-		storeOpts:  opts.StoreOptions,
-		batchSize:  opts.BatchSize,
-		flushRows:  opts.FlushRows,
-		decoders:   opts.Decoders,
-		tick:       opts.Tick,
-		log:        opts.Log.With("component", "projector"),
-		folds:      stats.Folds(),
-		boardFolds: stats.SecondPassFolds(),
-		stateFolds: stats.StateFolds(),
-		skipped:    map[string]struct{}{},
-		done:       make(chan struct{}),
+		events:      opts.Events,
+		live:        opts.Live,
+		dir:         opts.Directory,
+		bcast:       opts.Broadcaster,
+		raw:         opts.Raw,
+		notify:      opts.Notify,
+		upcasters:   opts.Upcasters,
+		storeOpts:   opts.StoreOptions,
+		batchSize:   opts.BatchSize,
+		flushRows:   opts.FlushRows,
+		decoders:    opts.Decoders,
+		tick:        opts.Tick,
+		autoRebuild: opts.AutoRebuild,
+		log:         opts.Log.With("component", "projector"),
+		folds:       stats.Folds(),
+		boardFolds:  stats.SecondPassFolds(),
+		stateFolds:  stats.StateFolds(),
+		skipped:     map[string]struct{}{},
+		done:        make(chan struct{}),
 	}, nil
 }
 
@@ -191,6 +208,14 @@ func New(opts Options) (*Projector, error) {
 // so a restart with a large log catches up at full speed.
 func (p *Projector) Run(ctx context.Context) {
 	defer close(p.done)
+
+	// Before folding anything, decide whether this file is even ours to fold
+	// into: a deploy that changed the boards makes the incremental loop the
+	// wrong tool, and folding forward would produce a board short of history
+	// that reads exactly like a board nobody has scored on (job.go).
+	if err := p.checkBuild(ctx, p.autoRebuild); err != nil {
+		p.log.Error("could not read the projections build stamp", "err", err)
+	}
 
 	t := time.NewTicker(p.tick)
 	defer t.Stop()
@@ -258,6 +283,15 @@ func (p *Projector) Drain(ctx context.Context) (Progress, error) {
 // projection updates **and** the checkpoint in one transaction, then publish the
 // feed rows the transaction committed (§5.6).
 func (p *Projector) Step(ctx context.Context) (Progress, error) {
+	// A suspended loop is not an idle one: the file being served was built by a
+	// different fold set, and folding into it would mix two definitions of the
+	// boards in one database (job.go). The rebuild that lifts this is already
+	// running or already asked for; until it lands, the right thing to do with
+	// a new event is nothing, and it stays in the log waiting.
+	if p.Suspended() {
+		return Progress{LastSeq: p.CheckpointSeq()}, nil
+	}
+
 	p.applyMu.Lock()
 	defer p.applyMu.Unlock()
 

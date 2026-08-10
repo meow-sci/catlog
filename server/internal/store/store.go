@@ -213,6 +213,10 @@ func OpenEvents(ctx context.Context, path string, opts Options) (*Events, error)
 		_ = db.Close()
 		return nil, err
 	}
+	if err := e.reconcileSeqAllocator(ctx); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	return e, nil
 }
 

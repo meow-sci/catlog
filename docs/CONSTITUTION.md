@@ -81,8 +81,14 @@ One command must be able to remove a person and everything attached to them: eve
 streams, credentials, archive prefix — leaving a tombstone and a retired handle so the account
 cannot come back and the handle cannot be impersonated (D9, §4.7).
 
+One command must equally be able to act **without** destroying anything, because a decision made in
+the moment is not always the decision that should stand. A shadow ban withholds an account's log
+instead of deleting it: they disappear from every public surface immediately, their client keeps
+working so the evidence keeps arriving, and both later choices — give it back, or destroy it — are
+still open a week later (§4.7).
+
 *Why:* the owner is the entire moderation team. If removing a bad actor is a project, it will not
-happen. Note that this is *separate* from §8 below: bans, purges and deny-lists exist for abuse and
+happen — and if acting means destroying, the only options left are acting too readily or too late. Note that this is *separate* from §8 below: bans, purges and deny-lists exist for abuse and
 decency, not for stat manipulation, and nothing in §8 constrains them.
 
 ## 8. Anti-cheat is proportionate, or it does not exist
@@ -126,6 +132,14 @@ quarantine or pending-record pipelines, replay traces attached to record claims,
 and statistical outlier detection, suspicion multipliers or reputation scores, shadow-banning,
 community-report queues, and client attestation of any kind.
 
+**On "shadow-banning" in that list.** What is forbidden is *inferring* that someone is cheating from
+the shape of their data and silently voiding them — a machine deciding, without a human, that a
+number looks wrong. catlog does have a shadow-ban **moderation** verb (§4.7): an administrator names
+an account, for abuse or decency, and its log is withheld rather than deleted so the decision can be
+reviewed. That is §7's business and this principle does not reach it, per the exemption §7 states and
+the list below repeats. The distinguishing question is *who decided, and on what evidence* — a named
+person acting on behaviour, or a rule acting on statistics.
+
 ### What this principle does *not* govern
 
 Three things look like anti-cheat and are not. They are load-bearing for other reasons and this
@@ -133,7 +147,9 @@ principle is never a reason to remove them:
 
 - **Protocol hygiene** — signature verification, size caps, rate limits, strict framing, the
   known-type allow-list. These exist so an unauthenticated stranger cannot cost us CPU or disk.
-- **Moderation** — bans, purges, tombstones, handle retirement, the deny-list (§7 above).
+- **Moderation** — bans, shadow bans, purges, tombstones, handle retirement, the deny-list (§7
+  above). Always a human's decision about a named account's behaviour, never a machine's inference
+  from its numbers.
 - **Durability** — archive checksums, restore verification, backup integrity. These protect the
   log from bit rot and from us, not from players.
 

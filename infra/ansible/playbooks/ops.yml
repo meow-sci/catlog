@@ -184,7 +184,7 @@
         - name: Refuse to run nothing
           ansible.builtin.assert:
             that: catlog_ctl_cmd | default('') | length > 0
-            fail_msg: "Nothing to run. Usage: make ops-exec CMD='projections rebuild'"
+            fail_msg: "Nothing to run. Usage: make ops-exec CMD='rebuild'"
             quiet: true
 
         - name: Run it

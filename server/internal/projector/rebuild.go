@@ -38,6 +38,11 @@ type RebuildResult struct {
 	// KIAFlights is how many flights had a kitten.kia, i.e. how many the ±2 s
 	// crew-survival window could apply to (§4.2).
 	KIAFlights int64 `json:"kia_flights"`
+	// BuildID is the fold-set identity stamped into the new file (0005). A
+	// caller comparing it to `GET /admin/stats` is asking "is what is being
+	// served what this binary computes", which is the question the stamp
+	// exists to answer.
+	BuildID string `json:"build_id"`
 	// DurationMS is wall time for the whole rebuild including the swap.
 	DurationMS int64 `json:"duration_ms"`
 	// Path is the file that was swapped into place.
@@ -94,6 +99,7 @@ func (p *Projector) Rebuild(ctx context.Context) (RebuildResult, error) {
 	}
 
 	res := RebuildResult{LastSeq: head, Path: livePath}
+	p.setPhase(PhaseState, head)
 	kia, err := p.rebuildPass1(ctx, scratch, head)
 	if err != nil {
 		scratch.Close()
@@ -101,6 +107,7 @@ func (p *Projector) Rebuild(ctx context.Context) (RebuildResult, error) {
 	}
 	res.KIAFlights = int64(len(kia))
 
+	p.setPhase(PhaseBoards, head)
 	if err := p.rebuildPass2(ctx, scratch, head, kia, &res); err != nil {
 		scratch.Close()
 		return RebuildResult{}, err
@@ -113,6 +120,24 @@ func (p *Projector) Rebuild(ctx context.Context) (RebuildResult, error) {
 	}
 	res.Flights, res.Stats, res.Feed = counts.FlightState, counts.PlayerStat, counts.Feed
 
+	// The stamp goes into the scratch file, never onto the live one, and it
+	// goes in *before* the swap: the label and the rows it describes then land
+	// on disk together, in one atomic rename. A stamp written after the swap
+	// could survive a crash that the rows did not, which is the one way a file
+	// could claim a build it does not hold (0005).
+	res.BuildID = stats.BuildID(scratch.Version)
+	if err := scratch.SetBuild(ctx, nil, store.ProjectionBuild{
+		BuildID:       res.BuildID,
+		FoldVersion:   stats.BuildVersion,
+		SchemaVersion: scratch.Version,
+		BuiltFromSeq:  0,
+		BuiltAt:       p.nowMillis(),
+		Complete:      true,
+	}); err != nil {
+		scratch.Close()
+		return RebuildResult{}, err
+	}
+
 	// Close before the swap: the file lock must be released and the WAL folded
 	// back into the main file, or the rename would move a database whose newest
 	// writes live in a sidecar we are about to orphan (§5.4, WP1 A1).
@@ -120,6 +145,7 @@ func (p *Projector) Rebuild(ctx context.Context) (RebuildResult, error) {
 		return RebuildResult{}, fmt.Errorf("projector: close rebuild database: %w", err)
 	}
 
+	p.setPhase(PhaseSwapping, head)
 	if err := p.swapIn(ctx, livePath, rebuildPath); err != nil {
 		return RebuildResult{}, err
 	}
@@ -130,7 +156,7 @@ func (p *Projector) Rebuild(ctx context.Context) (RebuildResult, error) {
 	p.log.Info("projections rebuilt",
 		"events", res.Events, "skipped", res.Skipped, "last_seq", res.LastSeq,
 		"flights", res.Flights, "stats", res.Stats, "feed", res.Feed,
-		"kia_flights", res.KIAFlights, "duration_ms", res.DurationMS)
+		"kia_flights", res.KIAFlights, "build_id", res.BuildID, "duration_ms", res.DurationMS)
 	return res, nil
 }
 
@@ -253,6 +279,7 @@ func (p *Projector) scan(ctx context.Context, head int64, fn func([]store.Stored
 		if err := fn(evs); err != nil {
 			return err
 		}
+		p.addScanned(len(evs))
 		after = evs[len(evs)-1].Seq
 	}
 	return nil

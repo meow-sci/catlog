@@ -429,16 +429,58 @@ const EventInsertChunk = 500
 // two aggregates, and SQLite ignores an intra-statement duplicate exactly as
 // it ignores a stored one, so the totals cannot drift.
 //
+// `seq` is assigned from the `event_seq` allocator rather than left to the
+// rowid (0004), because rowid allocation reuses a number whose row was deleted
+// and both the projector and the archiver have already passed it.
+//
 // q is normally the caller's transaction — §4.5.3 step 13 puts the events, the
-// stream_state upsert and the ingest_batch row in one commit.
+// stream_state upsert and the ingest_batch row in one commit. A nil q gets a
+// transaction of its own, which the allocator's read-then-write requires.
 func (e *Events) InsertEvents(ctx context.Context, q Querier, playerID int64, evs []Event) (accepted, deduped int, err error) {
 	if q == nil {
-		q = e.autocommit()
+		// The seq allocator is a read followed by a write (0004), so it needs a
+		// transaction of its own when the caller did not bring one: the writer
+		// handle serializes *statements*, not sequences of them, and two
+		// autocommit inserts interleaving between the SELECT and the UPDATE
+		// would hand the same seq to both.
+		txErr := e.WithWriteTx(ctx, func(tx *sql.Tx) error {
+			var err error
+			accepted, deduped, err = e.InsertEvents(ctx, tx, playerID, evs)
+			return err
+		})
+		if txErr != nil {
+			return 0, 0, txErr
+		}
+		return accepted, deduped, nil
 	}
 	for i, ev := range evs {
 		if ev.Type == "" {
 			return 0, 0, fmt.Errorf("store: event %d has no type", i)
 		}
+	}
+	if len(evs) == 0 {
+		return 0, 0, nil
+	}
+
+	// seq is assigned explicitly rather than left to the rowid, so that a
+	// deletion can never cause one to be handed out twice (0004).
+	seq, err := e.reserveSeqs(ctx, q, len(evs))
+	if err != nil {
+		return 0, 0, err
+	}
+
+	// The one fork on the write path (0005). A shadowbanned player's batch is
+	// accepted, verified, deduped, sequenced and stored exactly like anyone
+	// else's — into the withheld table instead of the log. Nothing above this
+	// line knows, and nothing the client receives differs, which is what makes
+	// the ban silent: their mod keeps working and keeps producing the evidence
+	// the review reads.
+	withheld, err := e.Shadowbanned(ctx, q, playerID)
+	if err != nil {
+		return 0, 0, err
+	}
+	if withheld {
+		return e.insertWithheldEvents(ctx, q, playerID, evs, seq)
 	}
 
 	recv := e.nowMillis()
@@ -448,18 +490,18 @@ func (e *Events) InsertEvents(ctx context.Context, q Querier, playerID int64, ev
 
 		sb.Reset()
 		sb.WriteString(`INSERT OR IGNORE INTO event
-	  (event_id, player_id, flight_id, session_id, career, type, ver, sim_time, wall_time, recv_time, payload, enc)
+	  (seq, event_id, player_id, flight_id, session_id, career, type, ver, sim_time, wall_time, recv_time, payload, enc)
 	  VALUES `)
-		args := make([]any, 0, (end-start)*12)
+		args := make([]any, 0, (end-start)*13)
 		for i := start; i < end; i++ {
 			ev := evs[i]
 			payload, enc := e.encodePayload(ev.Payload)
 			if i > start {
 				sb.WriteByte(',')
 			}
-			sb.WriteString("(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+			sb.WriteString("(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
 			args = append(args,
-				ids.Bytes(ev.ID), playerID, ids.NullBytes(ev.FlightID), ids.NullBytes(ev.SessionID),
+				seq+int64(i), ids.Bytes(ev.ID), playerID, ids.NullBytes(ev.FlightID), ids.NullBytes(ev.SessionID),
 				nullString(ev.Career), ev.Type, ev.Ver, ev.SimTime, ev.WallTime, recv, payload, enc)
 		}
 		res, err := q.ExecContext(ctx, sb.String(), args...)
@@ -474,6 +516,78 @@ func (e *Events) InsertEvents(ctx context.Context, q Querier, playerID int64, ev
 		deduped += (end - start) - int(n)
 	}
 	return accepted, deduped, nil
+}
+
+// reserveSeqs hands out a contiguous run of n sequence numbers and advances the
+// allocator, both inside the caller's transaction (0004).
+//
+// The run is reserved whether or not every row in it lands: a batch that dedups
+// against `ev_dedup` leaves its reserved numbers unused, and that is the correct
+// outcome. Every reader scans `seq > cursor`; none assumes the column is dense.
+func (e *Events) reserveSeqs(ctx context.Context, q Querier, n int) (int64, error) {
+	if n <= 0 {
+		return 0, nil
+	}
+	var first int64
+	err := q.QueryRowContext(ctx, `SELECT next_seq FROM event_seq WHERE id = 1`).Scan(&first)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, errors.New("store: the event seq allocator row is missing")
+	}
+	if err != nil {
+		return 0, fmt.Errorf("store: reserve %d seqs: %w", n, err)
+	}
+	if _, err := q.ExecContext(ctx,
+		`UPDATE event_seq SET next_seq = ? WHERE id = 1`, first+int64(n)); err != nil {
+		return 0, fmt.Errorf("store: advance the seq allocator: %w", err)
+	}
+	return first, nil
+}
+
+// reconcileSeqAllocator lifts the allocator to the head of the log at open.
+//
+// It should never have anything to do: the allocator is the only source of a
+// live seq, and the one path that inserts at an explicit one raises the floor
+// itself ([Events.RestoreEvents]). It runs anyway, once per open, because the
+// failure it prevents is silent — a `next_seq` sitting below an occupied row
+// makes `INSERT OR IGNORE` drop a real event and report it as deduped — and
+// because the alternative to a cheap invariant here is trusting that no future
+// caller, migration or operator ever wrote a row another way.
+func (e *Events) reconcileSeqAllocator(ctx context.Context) error {
+	head, err := e.MaxSeq(ctx)
+	if err != nil {
+		return err
+	}
+	// A withheld row owns its seq exactly as firmly as a live one: it is coming
+	// back to that position if the ban is lifted (0005).
+	withheld, err := e.MaxWithheldSeq(ctx)
+	if err != nil {
+		return err
+	}
+	return e.RaiseSeqFloor(ctx, nil, max(head, withheld))
+}
+
+// RaiseSeqFloor lifts the allocator past seq, so that nothing inserted at an
+// explicit sequence number can later be collided with by an allocated one.
+//
+// It is what [Events.RestoreEvents] calls: a restore re-inserts archived events
+// at their original seq (§5.10), which the allocator knows nothing about, and a
+// restore into a database whose allocator sits below the restored range would
+// hand those numbers out a second time.
+//
+// Lowering is impossible by construction — the allocator only ever moves
+// forward, so calling this with an old seq is a no-op rather than an error.
+func (e *Events) RaiseSeqFloor(ctx context.Context, q Querier, seq int64) error {
+	if q == nil {
+		q = e.autocommit()
+	}
+	if seq <= 0 {
+		return nil
+	}
+	if _, err := q.ExecContext(ctx,
+		`UPDATE event_seq SET next_seq = ? WHERE id = 1 AND next_seq <= ?`, seq+1, seq); err != nil {
+		return fmt.Errorf("store: raise the seq floor to %d: %w", seq, err)
+	}
+	return nil
 }
 
 // nullString stores "" as SQL NULL. Every ULID column already distinguishes

@@ -236,6 +236,7 @@ func run(ctx context.Context, cfg config.Config, log *slog.Logger, ready func(pu
 		FlushRows:    cfg.Projector.FlushRows,
 		Decoders:     cfg.Projector.Decoders,
 		Tick:         time.Duration(cfg.Projector.TickS) * time.Second,
+		AutoRebuild:  cfg.Projector.AutoRebuild,
 		Log:          log,
 	})
 	if err != nil {

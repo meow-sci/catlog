@@ -275,6 +275,19 @@ type Projector struct {
 	// against worst-case lag after one. Zero means the projector's default
 	// (5 s).
 	TickS int `toml:"tick_s"`
+	// AutoRebuild lets catlogd rebuild the projections by itself when the file
+	// on disk was built by a different fold set than the running binary — a
+	// deploy that added a board, changed one, or changed what one computes
+	// (`stats.BuildVersion`).
+	//
+	// On, which is the default, a deploy needs no operator action: the fold
+	// loop is suspended so no half-built board is ever served, the old file
+	// keeps answering reads unchanged, and the rebuilt one is swapped in when
+	// it is ready. Off leaves the loop suspended and the boards frozen until
+	// `catlogctl rebuild` is run by hand — worth choosing only if the CPU has
+	// to be scheduled away from a busy hour, and worth remembering that boards
+	// stop advancing until it is.
+	AutoRebuild bool `toml:"auto_rebuild"`
 }
 
 // CORS is the [cors] section: which foreign origins may read the public §4.8
@@ -353,6 +366,7 @@ func Default() Config {
 			MinPlayers: 2,
 		},
 		Projector: Projector{
+			AutoRebuild: true,
 			// 1000 == projector.DefaultBatchSize and 500 ==
 			// stats.DefaultFlushRows; not imported, to keep config free of a
 			// dependency on the projection layer (same rule as the checkpoint

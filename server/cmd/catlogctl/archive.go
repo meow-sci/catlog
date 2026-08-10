@@ -173,9 +173,18 @@ func runArchiveRestore(args []string) error {
 	rctx, rcancel := context.WithTimeout(context.Background(), *timeout)
 	defer rcancel()
 
-	var rb projector.RebuildResult
-	if err := callAdmin(rctx, http.MethodPost, base+"/admin/projections/rebuild", struct{}{}, &rb); err != nil {
+	// `wait` rather than the status poll `catlogctl rebuild` uses: a restore is
+	// a one-shot disaster-recovery command whose whole value is "the log is
+	// back and the boards are built", so it should not return until both are
+	// true.
+	var st projector.RebuildStatus
+	req := adminapi.RebuildRequest{Reason: "an archive was restored", Wait: true}
+	if err := callAdmin(rctx, http.MethodPost, base+"/admin/projections/rebuild", req, &st); err != nil {
 		return err
+	}
+	rb := st.Result
+	if rb == nil {
+		return fmt.Errorf("the rebuild finished as %q but reported no result", st.Phase)
 	}
 	fmt.Printf("\nrebuilt %s in %d ms\n", rb.Path, rb.DurationMS)
 	fmt.Printf("  events folded:  %d (%d skipped)\n", rb.Events, rb.Skipped)

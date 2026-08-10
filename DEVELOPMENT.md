@@ -48,7 +48,7 @@ make dev
 |---|---|---|
 | `catlogd` | <http://127.0.0.1:8080> | The read API, the ingest endpoint, and the server-rendered datastar site |
 | `mockidp` | <http://127.0.0.1:9090> | Stand-in Discord, Google and GitHub |
-| `catlogd` admin | <http://127.0.0.1:6060> | Loopback-only admin API — seed, rebuild, stats, ban |
+| `catlogd` admin | <http://127.0.0.1:6060> | Loopback-only admin API — seed, rebuild, stats, ban, shadowban |
 
 Then: log in at <http://127.0.0.1:8080/login> through any `mockidp` button, claim a handle, download
 the credential file, and drive a real flight through the whole pipeline:
@@ -124,7 +124,7 @@ Five modes, in ascending order of how much they need to be real.
 
 | | What it covers |
 |---|---|
-| `make server-test` | Every Go package: the auth chain step by step, fold golden tests, migration idempotence, the rebuild-equals-incremental property, redaction, the unit formatter, secret hygiene. |
+| `make server-test` | Every Go package: the auth chain step by step, fold golden tests, migration idempotence, the rebuild-equals-incremental property, the seq allocator's no-reuse guarantee, the shadow-ban round trip, redaction, the unit formatter, secret hygiene. |
 | `make mod-test` | `catlog.lib`: detector edges, window boundaries, impact correlation, outbox pruning and crash recovery, the JWS/JWK implementation, the shipper's recovery table on a virtual clock, and the **assembly guard** that proves zero KSA references. |
 
 This is the one that must always be green.
@@ -283,7 +283,11 @@ nothing in `make test` touches docker.
 | Create signing keys | `make keys` |
 | Insert the demo dataset | `make seed` (or `POST :6060/admin/seed`) |
 | Regenerate conformance vectors | `make testvectors` — byte-identical every run |
-| Rebuild projections from the log | `POST :6060/admin/projections/rebuild` |
+| Rebuild projections from the log | `server/bin/catlogctl rebuild` (watches it; `-detach` to return, `-status` to check) |
+| See whether a rebuild is owed | `catlogctl stats` — `projector.build.stale` and `projector.rebuild.suspended` |
+| Withhold a player without telling them | `catlogctl shadowban -handle NAME -reason TEXT` |
+| Read what a withheld player sent | `catlogctl shadowban-review -handle NAME` |
+| Give a withheld player back | `catlogctl unshadowban -handle NAME` |
 | Look at the databases | `make db-snapshot` then open `./data-snapshot` |
 | Push one event and watch the feed | `POST :6060/admin/events` |
 | Move the server's clock (dev only) | `POST :6060/admin/clock` |
