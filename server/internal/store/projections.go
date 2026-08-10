@@ -903,3 +903,350 @@ func (p *Projections) SystemCareerCounts(ctx context.Context, hash string) ([]Sy
 	}
 	return out, rows.Err()
 }
+
+// CareerStatRow is a career_stat row plus the save metadata needed by public
+// read surfaces. Career is an internal key and must be relabelled before it
+// leaves the read API; Ordinal is the human-facing save number.
+type CareerStatRow struct {
+	PlayerID   int64
+	Career     string
+	System     string
+	Ordinal    int64
+	Stat       string
+	Value      float64
+	Context    json.RawMessage
+	UpdatedSeq int64
+}
+
+// CareerLeaderboard reads a career-scoped board page in canonical rank order.
+// An empty system means no filter; otherwise the denormalised career_stat
+// column makes the filter a direct predicate.
+func (p *Projections) CareerLeaderboard(
+	ctx context.Context, stat, system string, asc bool, limit, offset int,
+) ([]CareerStatRow, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	order := "DESC"
+	if asc {
+		order = "ASC"
+	}
+	query := `SELECT cs.player_id, cs.career, cs.system, c.ordinal,
+	                cs.stat, cs.value, cs.context, cs.updated_seq
+	         FROM career_stat cs
+	         JOIN career c ON c.player_id = cs.player_id AND c.career = cs.career
+	         WHERE cs.stat = ?`
+	args := []any{stat}
+	if system != "" {
+		query += ` AND cs.system = ?`
+		args = append(args, system)
+	}
+	query += ` ORDER BY cs.value ` + order + `, cs.updated_seq ASC, cs.player_id ASC, cs.career ASC
+	           LIMIT ? OFFSET ?`
+	args = append(args, limit, max(offset, 0))
+	rows, err := p.Reader().QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("store: read career leaderboard %q: %w", stat, err)
+	}
+	return scanCareerStatRows(rows)
+}
+
+// CareerStatsForPlayer reads every board row for one exact save in stat order.
+func (p *Projections) CareerStatsForPlayer(ctx context.Context, playerID int64, career string) ([]CareerStatRow, error) {
+	rows, err := p.Reader().QueryContext(ctx,
+		`SELECT cs.player_id, cs.career, cs.system, c.ordinal,
+		        cs.stat, cs.value, cs.context, cs.updated_seq
+		 FROM career_stat cs
+		 JOIN career c ON c.player_id = cs.player_id AND c.career = cs.career
+		 WHERE cs.player_id = ? AND cs.career = ? ORDER BY cs.stat`, playerID, career)
+	if err != nil {
+		return nil, fmt.Errorf("store: read career stats for player %d: %w", playerID, err)
+	}
+	return scanCareerStatRows(rows)
+}
+
+// CareerStatsForPlayers returns every matching save row owned by the supplied
+// players. A player-level summary is insufficient for rank correction because
+// one hidden player may own several saves ahead of a visible row.
+func (p *Projections) CareerStatsForPlayers(
+	ctx context.Context, stat, system string, playerIDs []int64,
+) ([]CareerStatRow, error) {
+	if len(playerIDs) == 0 {
+		return nil, nil
+	}
+	const chunk = 200
+	var out []CareerStatRow
+	for start := 0; start < len(playerIDs); start += chunk {
+		ids := playerIDs[start:min(start+chunk, len(playerIDs))]
+		args := make([]any, 0, len(ids)+2)
+		args = append(args, stat)
+		query := `SELECT cs.player_id, cs.career, cs.system, c.ordinal,
+		                 cs.stat, cs.value, cs.context, cs.updated_seq
+		          FROM career_stat cs
+		          JOIN career c ON c.player_id = cs.player_id AND c.career = cs.career
+		          WHERE cs.stat = ?`
+		if system != "" {
+			query += ` AND cs.system = ?`
+			args = append(args, system)
+		}
+		query += ` AND cs.player_id IN (` + placeholders(len(ids)) + `)`
+		for _, id := range ids {
+			args = append(args, id)
+		}
+		query += ` ORDER BY cs.player_id, cs.career`
+		rows, err := p.Reader().QueryContext(ctx, query, args...)
+		if err != nil {
+			return nil, fmt.Errorf("store: read career stats for players: %w", err)
+		}
+		part, err := scanCareerStatRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, part...)
+	}
+	return out, nil
+}
+
+// CareerStatAhead counts saves ahead of a value/tie pair. An empty system
+// means all systems; otherwise only saves in that system participate.
+func (p *Projections) CareerStatAhead(
+	ctx context.Context, stat, system string, value float64, seq int64, asc bool,
+) (int64, error) {
+	cmp := ">"
+	if asc {
+		cmp = "<"
+	}
+	query := `SELECT count(*) FROM career_stat
+	          WHERE stat = ? AND (value ` + cmp + ` ? OR (value = ? AND updated_seq < ?))`
+	args := []any{stat, value, value, seq}
+	if system != "" {
+		query += ` AND system = ?`
+		args = append(args, system)
+	}
+	var n int64
+	if err := p.Reader().QueryRowContext(ctx, query, args...).Scan(&n); err != nil {
+		return 0, fmt.Errorf("store: rank saves on %q: %w", stat, err)
+	}
+	return n, nil
+}
+
+// CareerStatEntrants counts saves, not players. career_stat's primary key is
+// (player_id, career, stat), so one player may contribute several entrants.
+func (p *Projections) CareerStatEntrants(ctx context.Context, stat, system string) (int64, error) {
+	query := `SELECT count(*) FROM career_stat WHERE stat = ?`
+	args := []any{stat}
+	if system != "" {
+		query += ` AND system = ?`
+		args = append(args, system)
+	}
+	var n int64
+	if err := p.Reader().QueryRowContext(ctx, query, args...).Scan(&n); err != nil {
+		return 0, fmt.Errorf("store: count save entrants on %q: %w", stat, err)
+	}
+	return n, nil
+}
+
+func scanCareerStatRows(rows *sql.Rows) ([]CareerStatRow, error) {
+	defer rows.Close()
+	var out []CareerStatRow
+	for rows.Next() {
+		var r CareerStatRow
+		var cx sql.NullString
+		if err := rows.Scan(&r.PlayerID, &r.Career, &r.System, &r.Ordinal,
+			&r.Stat, &r.Value, &cx, &r.UpdatedSeq); err != nil {
+			return nil, fmt.Errorf("store: scan career_stat: %w", err)
+		}
+		if cx.Valid && cx.String != "" {
+			r.Context = json.RawMessage(cx.String)
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// CareerRow is store-owned save state. The raw Career key is internal and must
+// be relabelled by readapi before publication.
+type CareerRow struct {
+	PlayerID      int64
+	Career        string
+	Ordinal       int64
+	System        string
+	SystemChanged bool
+	MaxSimT       float64
+	Rewound       bool
+	FirstSeq      int64
+	LastSeq       int64
+}
+
+// PlayerCareers returns a player's saves in ordinal order.
+func (p *Projections) PlayerCareers(ctx context.Context, playerID int64) ([]CareerRow, error) {
+	rows, err := p.Reader().QueryContext(ctx,
+		`SELECT player_id, career, ordinal, system, system_changed,
+		        max_sim_t, rewound, first_seq, last_seq
+		 FROM career WHERE player_id = ? ORDER BY ordinal, career`, playerID)
+	if err != nil {
+		return nil, fmt.Errorf("store: read careers for player %d: %w", playerID, err)
+	}
+	return scanCareerRows(rows)
+}
+
+// CareerByOrdinal resolves one player's public save number without exposing
+// the raw career key as an input to the read API.
+func (p *Projections) CareerByOrdinal(ctx context.Context, playerID, ordinal int64) (CareerRow, bool, error) {
+	var r CareerRow
+	var changed, rewound int64
+	err := p.Reader().QueryRowContext(ctx,
+		`SELECT player_id, career, ordinal, system, system_changed,
+		        max_sim_t, rewound, first_seq, last_seq
+		 FROM career WHERE player_id = ? AND ordinal = ?`, playerID, ordinal).
+		Scan(&r.PlayerID, &r.Career, &r.Ordinal, &r.System, &changed,
+			&r.MaxSimT, &rewound, &r.FirstSeq, &r.LastSeq)
+	if errors.Is(err, sql.ErrNoRows) {
+		return CareerRow{}, false, nil
+	}
+	if err != nil {
+		return CareerRow{}, false, fmt.Errorf("store: read career %d for player %d: %w", ordinal, playerID, err)
+	}
+	r.SystemChanged, r.Rewound = changed != 0, rewound != 0
+	return r, true, nil
+}
+
+func scanCareerRows(rows *sql.Rows) ([]CareerRow, error) {
+	defer rows.Close()
+	var out []CareerRow
+	for rows.Next() {
+		var r CareerRow
+		var changed, rewound int64
+		if err := rows.Scan(&r.PlayerID, &r.Career, &r.Ordinal, &r.System, &changed,
+			&r.MaxSimT, &rewound, &r.FirstSeq, &r.LastSeq); err != nil {
+			return nil, fmt.Errorf("store: scan career: %w", err)
+		}
+		r.SystemChanged, r.Rewound = changed != 0, rewound != 0
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// SystemStatRow is a system_stat row. System is public content identity, not a
+// per-player value and must not be relabelled.
+type SystemStatRow struct {
+	PlayerID   int64
+	System     string
+	Stat       string
+	Value      float64
+	Context    json.RawMessage
+	UpdatedSeq int64
+}
+
+// SystemLeaderboard reads a system-scoped board page in canonical rank order.
+// An empty system returns (player, system) pairs across every system.
+func (p *Projections) SystemLeaderboard(
+	ctx context.Context, stat, system string, asc bool, limit, offset int,
+) ([]SystemStatRow, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	order := "DESC"
+	if asc {
+		order = "ASC"
+	}
+	query := `SELECT player_id, system, stat, value, context, updated_seq
+	          FROM system_stat WHERE stat = ?`
+	args := []any{stat}
+	if system != "" {
+		query += ` AND system = ?`
+		args = append(args, system)
+	}
+	query += ` ORDER BY value ` + order + `, updated_seq ASC, player_id ASC, system ASC
+	           LIMIT ? OFFSET ?`
+	args = append(args, limit, max(offset, 0))
+	rows, err := p.Reader().QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("store: read system leaderboard %q: %w", stat, err)
+	}
+	return scanSystemStatRows(rows)
+}
+
+// SystemStatsForPlayer reads one player's rows for one exact system in stat order.
+func (p *Projections) SystemStatsForPlayer(ctx context.Context, playerID int64, system string) ([]SystemStatRow, error) {
+	rows, err := p.Reader().QueryContext(ctx,
+		`SELECT player_id, system, stat, value, context, updated_seq
+		 FROM system_stat WHERE player_id = ? AND system = ? ORDER BY stat`, playerID, system)
+	if err != nil {
+		return nil, fmt.Errorf("store: read system stats for player %d: %w", playerID, err)
+	}
+	return scanSystemStatRows(rows)
+}
+
+// SystemStatAhead counts (player, system) rows ahead of a value/tie pair.
+func (p *Projections) SystemStatAhead(
+	ctx context.Context, stat, system string, value float64, seq int64, asc bool,
+) (int64, error) {
+	cmp := ">"
+	if asc {
+		cmp = "<"
+	}
+	query := `SELECT count(*) FROM system_stat
+	          WHERE stat = ? AND (value ` + cmp + ` ? OR (value = ? AND updated_seq < ?))`
+	args := []any{stat, value, value, seq}
+	if system != "" {
+		query += ` AND system = ?`
+		args = append(args, system)
+	}
+	var n int64
+	if err := p.Reader().QueryRowContext(ctx, query, args...).Scan(&n); err != nil {
+		return 0, fmt.Errorf("store: rank system entrants on %q: %w", stat, err)
+	}
+	return n, nil
+}
+
+// SystemStatEntrants counts (player, system) pairs, not distinct players. A
+// player with rows in two systems contributes two entrants when unfiltered.
+func (p *Projections) SystemStatEntrants(ctx context.Context, stat, system string) (int64, error) {
+	query := `SELECT count(*) FROM system_stat WHERE stat = ?`
+	args := []any{stat}
+	if system != "" {
+		query += ` AND system = ?`
+		args = append(args, system)
+	}
+	var n int64
+	if err := p.Reader().QueryRowContext(ctx, query, args...).Scan(&n); err != nil {
+		return 0, fmt.Errorf("store: count system entrants on %q: %w", stat, err)
+	}
+	return n, nil
+}
+
+func scanSystemStatRows(rows *sql.Rows) ([]SystemStatRow, error) {
+	defer rows.Close()
+	var out []SystemStatRow
+	for rows.Next() {
+		var r SystemStatRow
+		var cx sql.NullString
+		if err := rows.Scan(&r.PlayerID, &r.System, &r.Stat, &r.Value, &cx, &r.UpdatedSeq); err != nil {
+			return nil, fmt.Errorf("store: scan system_stat: %w", err)
+		}
+		if cx.Valid && cx.String != "" {
+			r.Context = json.RawMessage(cx.String)
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// PlayerSystems returns metadata for every catalogue to which one of the
+// player's careers is bound, in catalogue first-seen order.
+func (p *Projections) PlayerSystems(ctx context.Context, playerID int64) ([]SystemRow, error) {
+	rows, err := p.Reader().QueryContext(ctx,
+		`SELECT s.hash, s.system_id, s.name, s.slug, s.home_body, s.body_count,
+		        CASE WHEN s.reported_complete <> 0 AND
+		          (SELECT count(*) FROM system_body b WHERE b.hash = s.hash) = s.body_count
+		        THEN 1 ELSE 0 END, s.first_seq
+		 FROM system s
+		 JOIN (SELECT DISTINCT system FROM career WHERE player_id = ? AND system <> '') c
+		   ON c.system = s.hash
+		 ORDER BY s.first_seq, s.hash`, playerID)
+	if err != nil {
+		return nil, fmt.Errorf("store: read systems for player %d: %w", playerID, err)
+	}
+	return scanSystems(rows)
+}
