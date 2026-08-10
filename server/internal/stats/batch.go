@@ -94,6 +94,9 @@ type Batch struct {
 	careerStats [numStatKinds]map[careerStatKey]*pendingCareerStat
 	systemStats [numStatKinds]map[systemStatKey]*pendingStat
 	periods     [numStatKinds]map[periodKey]*pendingStat
+	// badges is both the read-through existence cache and the first-write
+	// accumulator. Pending rows retain every column from the earliest seq.
+	badges map[badgeKey]*badgeEntry
 	// census is the event count per (type, period, bucket). One map rather than
 	// one per kind: there is only one rule — add — and the flush is one
 	// statement.
@@ -133,6 +136,7 @@ type Batch struct {
 	systemKeys     []string
 	systemBodyKeys []systemBodyKey
 	periodKeys     []periodKey
+	badgeKeys      []badgeKey
 	censusKeys     []censusKey
 	args           []any
 }
@@ -140,7 +144,7 @@ type Batch struct {
 // DefaultFlushRows is how many rows one flushed statement carries. Beyond a
 // few hundred the per-row cost is flat (5.5 µs at 50 rows, 5.2 µs at 200), so
 // this is chosen for a comfortable parameter count rather than for speed: the
-// widest row here binds seven columns, so a flush stays under 3,500 bound
+// widest row here binds nine columns, so a flush stays under 4,500 bound
 // parameters.
 const DefaultFlushRows = 500
 
@@ -166,6 +170,7 @@ func NewBatch(tx *sql.Tx, opts BatchOptions) *Batch {
 		careerKittens:  map[int64]map[careerKittenKey]*careerKittenEntry{},
 		values:         map[statKey]float64{},
 		careerValues:   map[careerStatKey]float64{},
+		badges:         map[badgeKey]*badgeEntry{},
 		census:         map[censusKey]*pendingCensus{},
 	}
 	for k := range b.stats {
@@ -1537,6 +1542,101 @@ func (b *Batch) CareerStatValue(ctx context.Context, playerID int64, career, sta
 	return v, nil
 }
 
+// --- badge_award -------------------------------------------------------------
+
+type badgeKey struct {
+	playerID int64
+	career   string
+	badge    string
+}
+
+type badgeEntry struct {
+	system      string
+	firstCareer string
+	earnedSeq   int64
+	earnedAt    int64
+	earnedSimT  sql.NullFloat64
+	context     any
+	exists      bool
+	pending     bool
+}
+
+// HasBadge reports whether a composite lifetime/save award exists, including a
+// row first offered by this batch but not yet flushed.
+func (b *Batch) HasBadge(ctx context.Context, playerID int64, career, badge string) (bool, error) {
+	k := badgeKey{playerID, career, badge}
+	if e, ok := b.badges[k]; ok {
+		return e.exists, nil
+	}
+	e := &badgeEntry{}
+	var one int
+	err := b.tx.QueryRowContext(ctx,
+		`SELECT 1 FROM badge_award WHERE player_id = ? AND career = ? AND badge = ?`,
+		playerID, career, badge).Scan(&one)
+	switch {
+	case err == nil:
+		e.exists = true
+	case errors.Is(err, sql.ErrNoRows):
+	case err != nil:
+		return false, fmt.Errorf("stats: read badge %s for player %d career %q: %w", badge, playerID, career, err)
+	}
+	b.badges[k] = e
+	return e.exists, nil
+}
+
+// putBadge retains the lowest-seq candidate and all provenance belonging to
+// that candidate. A row already loaded from SQL is immutable.
+func (b *Batch) putBadge(playerID int64, career, badge, system, firstCareer string, ev Event, context any) {
+	k := badgeKey{playerID, career, badge}
+	e, ok := b.badges[k]
+	if ok && e.exists && !e.pending {
+		return
+	}
+	if ok && e.pending && e.earnedSeq <= ev.Seq {
+		return
+	}
+	if !ok {
+		e = &badgeEntry{}
+		b.badges[k] = e
+	}
+	e.system = system
+	e.firstCareer = firstCareer
+	e.earnedSeq = ev.Seq
+	e.earnedAt = ev.RecvTime
+	e.earnedSimT = sql.NullFloat64{Float64: ev.SimTime, Valid: ev.HasSimTime}
+	e.context = context
+	e.exists = true
+	e.pending = true
+}
+
+func (b *Batch) flushBadges(ctx context.Context) error {
+	keys := b.badgeKeys[:0]
+	for k, e := range b.badges {
+		if e.pending {
+			keys = append(keys, k)
+		}
+	}
+	if len(keys) == 0 {
+		b.badgeKeys = keys
+		return nil
+	}
+	slices.SortFunc(keys, compareBadgeKey)
+	b.badgeKeys = keys
+	err := b.write(ctx, len(keys), 9,
+		`INSERT INTO badge_award (player_id, career, badge, system, first_career, earned_seq, earned_at, earned_sim_t, context) VALUES `,
+		` ON CONFLICT (player_id, career, badge) DO NOTHING`,
+		func(i int, args []any) []any {
+			k := keys[i]
+			e := b.badges[k]
+			e.pending = false
+			return append(args, k.playerID, k.career, k.badge, e.system, e.firstCareer, e.earnedSeq, e.earnedAt, e.earnedSimT, e.context)
+		})
+	if err != nil {
+		return fmt.Errorf("stats: flush badge_award: %w", err)
+	}
+	return nil
+}
+
 // statFlush is one kind's flush: the conflict clause that spells its rule.
 // Indexed by [statKind]; kindSet has no window form, so periodFlush leaves it
 // empty and nothing ever writes one.
@@ -1773,7 +1873,7 @@ func (b *Batch) flushCensus(ctx context.Context) error {
 func (b *Batch) Flush(ctx context.Context) error {
 	for _, fn := range []func(context.Context) error{
 		b.flushSystems, b.flushSystemBodies, b.flushFlights, b.flushCareers, b.flushBodies, b.flushCareerBodies,
-		b.flushKittens, b.flushCareerKittens, b.flushStats, b.flushCareerStats, b.flushSystemStats,
+		b.flushKittens, b.flushCareerKittens, b.flushStats, b.flushCareerStats, b.flushBadges, b.flushSystemStats,
 		b.flushPeriods, b.flushCensus,
 	} {
 		if err := fn(ctx); err != nil {
@@ -1872,6 +1972,16 @@ func compareSystemStatKey(x, y systemStatKey) int {
 		return c
 	}
 	return strings.Compare(x.stat, y.stat)
+}
+
+func compareBadgeKey(x, y badgeKey) int {
+	if c := cmpInt64(x.playerID, y.playerID); c != 0 {
+		return c
+	}
+	if c := strings.Compare(x.career, y.career); c != 0 {
+		return c
+	}
+	return strings.Compare(x.badge, y.badge)
 }
 
 func compareCareerKey(x, y careerKey) int {

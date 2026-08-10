@@ -364,11 +364,31 @@ applies every fold, and writes all projection updates **and** the checkpoint in 
 then pushes feed rows to the SSE broadcaster.
 
 **`stats.Batch` is why it is fast.** The projector used to issue about twenty-one SQL statements per
-event; folding is dominated by per-statement cost, so a batch now folds into a read-through cache and
-write-back accumulator, merges repeated writes to the same board, and flushes the survivors as a
+event; folding is dominated by per-statement cost, so a batch now folds into read-through caches and
+write-back accumulators, merges repeated board and badge writes, and flushes the survivors as a
 handful of multi-row statements. That took the fold from ~3,300 to ~29,000 events/s, which is enough
 to keep pace with ingest in real time. `TestBatchSizeDoesNotChangeTheProjection` is the test that
 holds it honest: the projection may not depend on where the batch boundaries fell.
+
+Badge writes use a composite `(player_id, career, badge)` pending key. The pending value keeps all
+first-award provenance together and is replaced only by a lower `earned_seq`; `HasBadge` reads that
+map before SQL and caches both presence and absence so same-batch composite logic sees unflushed
+awards without repeated queries. A row loaded from SQL is immutable in the cache. `flushBadges` runs
+immediately after `flushCareerStats` and before `flushSystemStats`, sorts by player id, career and
+badge, chunks nine-column rows by the Batch flush-row bound and uses
+`INSERT ... ON CONFLICT DO NOTHING`. The in-memory lowest-sequence merge and SQL no-op are both
+required: the former preserves the earliest candidate offered inside one flush window, while the
+latter preserves the row an earlier flush already committed. Cache entries survive a flush with
+their pending marker cleared (`stats/batch.go:1545-1638,1873-1884`).
+
+The shared `award` helper writes one lifetime candidate and, when a career exists, one independent
+per-save candidate with identical sequence, server receive time, nullable simulation time and
+context. `HasSimTime` distinguishes an absent clock from a real zero, and a context-encoding failure
+writes neither scope. It resolves the career's system once; the lifetime row retains that career as provenance,
+whereas the save row already carries it in its key. The helper does not decide eligibility and no
+badge fold calls it yet; registry membership is supplied by the future concrete fold rather than
+checked here. This plumbing therefore writes nothing during ordinary projection
+(`stats/fold.go:296-313`).
 
 State folds run `systemFold → flightFold → careerFold` before every board. `systemFold` is first
 because `system.discovered` precedes `session.started` in the same client boundary and board folds

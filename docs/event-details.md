@@ -2294,10 +2294,10 @@ board-metadata order purely so the two lists read the same way; no two board fol
 ### `stats.Batch` — the write-back accumulator
 
 `stats/batch.go`. In-memory read-through caches (`systems`, system bodies, `flights`, `careers`,
-`bodies`, `kittens`, `values`, career values and career systems) plus per-`statKind` write accumulators for player,
-career, system and period rows, flushed as multi-row statements (`DefaultFlushRows = 500`). Flush
-order is fixed and every widened key is sorted before writing, so a rebuild is byte-comparable to
-the incremental result.
+`bodies`, `kittens`, `values`, career values, career systems and badge awards) plus per-`statKind`
+write accumulators for player, career, system and period rows, flushed as multi-row statements
+(`DefaultFlushRows = 500`). Flush order is fixed and every widened key is sorted before writing, so
+a rebuild is byte-comparable to the incremental result.
 
 | kind | rule | `player_stat` guard | `player_stat_period` guard |
 |---|---|---|---|
@@ -2368,9 +2368,8 @@ that save's system and leaves `first_career` empty because its primary-key caree
 the provenance (`migrations/projections/0011_badges.sql:6-20`).
 
 The three read-order indexes are `badge_system(system, badge, earned_seq)`,
-`badge_holders(badge, earned_seq)` and `badge_by_career(player_id, career, earned_seq)`. No read API,
-badge registry or awarding fold exists in this slice; the table establishes the projection model
-they will use.
+`badge_holders(badge, earned_seq)` and `badge_by_career(player_id, career, earned_seq)`. The metadata
+registry is documented below. No read API or awarding fold exists yet.
 
 Within one projection build, an award is first-write via `INSERT ... ON CONFLICT DO NOTHING`.
 `earned_seq` is the first qualifying projector sequence, `earned_at` is that event's server
@@ -2392,6 +2391,42 @@ same first-award ordering. Purging their events makes the removal permanent. No 
 enumerates this table: structural log exclusion plus rebuild supplies Constitution §7's totality,
 while shared `system` and `system_body` rows remain catalogue facts rather than player awards
 (STORE-019).
+
+### Badge accumulator and dual-scope writer
+
+`stats.Batch` keys pending awards by `(player_id, career, badge)` and retains the complete candidate:
+system, lifetime `first_career`, `earned_seq`, `earned_at`, nullable `earned_sim_t` and encoded
+context. `putBadge` is first-write at both layers. In memory, a new candidate replaces an existing
+pending candidate only when its sequence is lower, and replaces the **whole** value so timestamp,
+career time, system, first-save provenance and context still belong to that earliest event. At SQL
+flush, `INSERT ... ON CONFLICT DO NOTHING` preserves any row already written by an earlier batch.
+The two rules together make projection output independent of projector and flush batch size; SQL
+cannot recover the earliest candidate if the pending map already overwrote it. A row loaded from
+SQL is immutable in the cache (`stats/batch.go:1545-1610`).
+
+`award` is the shared two-scope helper. It encodes context once and resolves the event career's
+known system once. It always offers the lifetime key `(player, '', badge)`, putting the event career
+in `first_career`; when the event has a career it also offers the independent per-save key and leaves
+`first_career` empty. Both candidates keep the same event sequence, server receive timestamp,
+nullable career clock and context. `HasSimTime` preserves the distinction between SQL NULL and a
+real clock reading of zero. If context encoding fails, neither scope is offered. Missing career
+identity still permits the lifetime candidate; missing system identity is retained honestly as the
+empty system rather than suppressing either scope.
+
+`award` deliberately performs no `scoreable` check. A later badge fold owns its predicate and
+eligibility because flightless events have no flight state to gate, while every flight-bearing fold
+must use the existing final-state rule. It also performs no registry check: a concrete fold supplies
+its compile-time or validated family key. The helper is plumbing, not a badge rule: no registered
+fold calls it yet, so the table remains empty from ordinary event projection
+(`stats/fold.go:296-313`).
+
+`HasBadge(player_id, career, badge)` is a composite-badge read-through: it checks the pending map
+before querying `badge_award`, caching both existence and absence, so a later event in the same
+projector batch observes an award not yet flushed to SQL. `flushBadges` sorts by player id, career
+and badge, writes bounded nine-column multi-row statements, and runs in `Batch.Flush` immediately
+after career-stat rows and before system-stat rows. A conflict is a successful no-op, not an update.
+The entries survive the flush as a read-through cache with `pending` cleared, matching the other
+Batch caches (`stats/batch.go:1564-1638,1873-1884,1977-1985`).
 
 ### Badge catalogue registry
 

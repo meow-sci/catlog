@@ -1898,6 +1898,31 @@ only; pure description and later award storage remain valid below it. Fixed badg
 listed. This task deliberately registers metadata without awarding folds, so documenting all 35
 fixed entries and three patterns does not imply that any is currently earnable.
 
+### PROJ-122 — Badge first-write semantics exist in both the pending map and SQL
+
+*Accepted · 2026-08-10 · Task F3.*
+
+`badge_award` promises the earliest qualifying event in the current projection, but SQL conflict
+handling can preserve only the earliest row that reaches SQL. Several candidates for one badge can
+arrive inside one projector batch before any statement runs. The pending accumulator must therefore
+retain the lowest sequence itself and replace the whole candidate together — system, first save,
+receive timestamp, optional career clock and context. Keeping a low sequence beside provenance from
+a later event would be a subtler lie than picking the later event outright. Once flushed,
+`ON CONFLICT DO NOTHING` is the matching half: a later batch must not update the earlier committed
+row. Together they make first-award identity independent of batch and flush boundaries.
+
+One helper offers the same qualifying event to lifetime and per-save scope. Duplicating that work in
+every future badge predicate would eventually omit one scope, encode context twice or resolve two
+different system/provenance answers. The helper always offers the lifetime row and adds the save row
+only when a career exists; it deliberately does not apply flight eligibility, because flightless
+badges have no flight to test and each flight-bearing fold must use the established final-state
+`scoreable` rule. `HasBadge` reads pending state before SQL for the same reason board and flight
+caches do: logic inside one projector batch must observe the same projection as logic split across
+two batches.
+
+This is write plumbing rather than feature exposure. No badge fold calls the helper yet, and no API
+or UI reads the rows, so documenting the machinery does not make the registered catalogue earnable.
+
 ## Archive & restore
 
 The filesystem archiver, the manifest, restore verification, and the R2 design that is deliberately not built.

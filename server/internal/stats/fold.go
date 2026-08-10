@@ -293,6 +293,25 @@ func encodeContext(m map[string]any) (any, error) {
 	return string(b), nil
 }
 
+// award records the first badge satisfaction in lifetime scope and, when the
+// event has a career, in that save's scope. Badge folds own eligibility; this
+// helper deliberately performs no scoreable or registry check.
+func award(ctx context.Context, b *Batch, ev Event, badge string, context map[string]any) error {
+	cx, err := encodeContext(context)
+	if err != nil {
+		return err
+	}
+	system, err := b.CareerSystem(ctx, ev.PlayerID, ev.Career)
+	if err != nil {
+		return err
+	}
+	b.putBadge(ev.PlayerID, "", badge, system, ev.Career, ev, cx)
+	if ev.Career != "" {
+		b.putBadge(ev.PlayerID, ev.Career, badge, system, "", ev, cx)
+	}
+	return nil
+}
+
 // scoreable reports whether an event may contribute to a board: it must belong
 // to a flight, and that flight must carry no flag bit (§5.6).
 //
