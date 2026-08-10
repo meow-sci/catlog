@@ -286,9 +286,9 @@ func TestBoardDirectionAndUnitsAreDerivedFromTheKey(t *testing.T) {
 		"fastest_to_orbit": {Stat: "fastest_to_orbit", Title: "Fastest to Orbit", Unit: "ms", Ascending: true, Career: true},
 		"career_playtime":  {Stat: "career_playtime", Title: "Longest Save", Unit: "ms", Career: true},
 		"play_sessions":    {Stat: "play_sessions", Title: "Play Sessions", Unit: "sessions"},
-		"fastest_to_luna":  {Stat: "fastest_to_luna", Title: "Fastest to Luna", Unit: "ms", Ascending: true, Career: true},
+		"fastest_to_luna":  {Stat: "fastest_to_luna", Title: "Fastest to Luna", Unit: "ms", Ascending: true, Career: true, BodyDerived: true},
 		"fastest_to_kerbin_ii": {
-			Stat: "fastest_to_kerbin_ii", Title: "Fastest to Kerbin Ii", Unit: "ms", Ascending: true, Career: true,
+			Stat: "fastest_to_kerbin_ii", Title: "Fastest to Kerbin Ii", Unit: "ms", Ascending: true, Career: true, BodyDerived: true,
 		},
 		"rud_total":         {Stat: "rud_total", Title: "Rapid Unscheduled Disassemblies", Unit: "RUDs"},
 		"rud_ground_impact": {Stat: "rud_ground_impact", Title: "RUDs — Ground Impact", Unit: "RUDs"},

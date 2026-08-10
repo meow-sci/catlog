@@ -80,7 +80,7 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	for _, stat := range FeaturedBoards {
-		board, known, err := s.deps.Read.Board(r.Context(), stat, stats.PeriodAllTime, "", FeaturedRows, 0)
+		board, known, err := s.deps.Read.Board(r.Context(), stat, stats.PeriodAllTime, "", stats.ScopePlayer, "", FeaturedRows, 0)
 		if err != nil {
 			s.serverError(w, r, err, "read the featured boards")
 			return
@@ -175,7 +175,7 @@ func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
 		offset = n
 	}
 
-	board, known, err := s.deps.Read.Board(r.Context(), r.PathValue("stat"), period, "", BoardRows, offset)
+	board, known, err := s.deps.Read.Board(r.Context(), r.PathValue("stat"), period, "", stats.ScopePlayer, "", BoardRows, offset)
 	switch {
 	case !known:
 		s.notFound(w, r, "No such leaderboard.")

@@ -207,6 +207,11 @@ type BoardSummary struct {
 	// Ascending reports that the smallest value ranks first — true for the
 	// career-time boards and false for every record and counter board.
 	Ascending bool `json:"ascending"`
+	// Scopes are the ranking dimensions accepted by the board endpoint.
+	Scopes []string `json:"scopes"`
+	// BodyDerived tells clients that the board key came from a body name, so a
+	// player-scope row may merge replaceable celestial systems.
+	BodyDerived bool `json:"body_derived,omitempty"`
 	// Count is how many players appear on the board. It counts rows, banned
 	// players included: an exact figure would need the whole board read and
 	// filtered on every request, and the number exists to say "this board has
@@ -240,6 +245,8 @@ type BoardResponse struct {
 	Unit  string `json:"unit"`
 	// Ascending reports that the smallest value ranks first (§4.8).
 	Ascending bool `json:"ascending"`
+	// Scope is the ranking dimension these rows came from.
+	Scope string `json:"scope"`
 	// Period is the window these rows cover: `alltime` unless `?period=` asked
 	// otherwise. Echoed so a client never has to remember what it requested.
 	Period string `json:"period"`
@@ -256,9 +263,17 @@ type BoardResponse struct {
 
 // BoardRow is one leaderboard entry (§4.8).
 type BoardRow struct {
-	Rank   int     `json:"rank"`
-	Handle string  `json:"handle"`
-	Value  float64 `json:"value"`
+	Rank   int    `json:"rank"`
+	Handle string `json:"handle"`
+	// Save is the player's own first-seen ordinal for this save. SaveID is the
+	// per-player public relabel of the private career key. Both are career-scope
+	// only; the raw career key is never published.
+	Save   int64  `json:"save,omitempty"`
+	SaveID string `json:"save_id,omitempty"`
+	// System is public content identity and is present on every career/system
+	// row whose system is known. Unlike SaveID, its hash is not relabelled.
+	System *SystemRef `json:"system,omitempty"`
+	Value  float64    `json:"value"`
 	// Context is the board's per-row detail (body, flight, energy_j …), stored
 	// verbatim as JSON by the fold. Absent for counter boards.
 	Context json.RawMessage `json:"context,omitempty"`
@@ -268,6 +283,14 @@ type BoardRow struct {
 	// loaded (§4.1). It qualifies the number and does nothing else: the row is
 	// ranked normally and the player is treated no differently.
 	Rewound bool `json:"rewound,omitempty"`
+}
+
+// SystemRef is the compact celestial-system identity carried by scoped rows.
+// Hash is the join key, Name is the human label, and Slug is the URL key.
+type SystemRef struct {
+	Hash string `json:"hash"`
+	Name string `json:"name"`
+	Slug string `json:"slug"`
 }
 
 func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
@@ -281,14 +304,44 @@ func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
 			"period must be one of "+strings.Join(stats.Periods(), ", "))
 		return
 	}
+	scope, ok := stats.ValidScope(r.URL.Query().Get("scope"))
+	if !ok {
+		s.writeError(w, http.StatusBadRequest, authz.CodeBadRequest,
+			"scope must be one of "+strings.Join(stats.Scopes(), ", "))
+		return
+	}
+	if scope != stats.ScopePlayer && period != stats.PeriodAllTime {
+		s.writeError(w, http.StatusBadRequest, authz.CodeBadRequest,
+			scope+" scope has no time windows")
+		return
+	}
 	bucket := r.URL.Query().Get("at")
 	if bucket != "" && (period == stats.PeriodAllTime || !stats.ParseBucket(period, bucket)) {
 		s.writeError(w, http.StatusBadRequest, authz.CodeBadRequest,
 			"at is not a well-formed "+period+" window")
 		return
 	}
+	system := r.URL.Query().Get("system")
+	if system != "" && scope == stats.ScopePlayer {
+		s.writeError(w, http.StatusBadRequest, authz.CodeBadRequest,
+			"system filtering needs scope=system or scope=career")
+		return
+	}
+	if system != "" {
+		var err error
+		system, ok, err = s.systemBySlug(r.Context(), system)
+		if err != nil {
+			s.fail(w, r, err, "resolve celestial system")
+			return
+		}
+		if !ok {
+			s.writeError(w, http.StatusNotFound, authz.CodeNotFound,
+				"catlog has never seen a system by that name")
+			return
+		}
+	}
 
-	out, known, err := s.Board(r.Context(), r.PathValue("stat"), period, bucket, limit, offset)
+	out, known, err := s.Board(r.Context(), r.PathValue("stat"), period, bucket, scope, system, limit, offset)
 	switch {
 	case !known:
 		s.writeError(w, http.StatusNotFound, authz.CodeNotFound, "no such leaderboard")
@@ -299,16 +352,15 @@ func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// visibleRows reads one page of a board with banned players removed.
-//
-// The filter cannot be pushed into SQL — `banned_at` is in the other database
-// file (§5.4) — so the page is assembled by over-fetching and dropping. Ranks
-// are positional over the visible rows, which is why a ban closes the gap it
-// leaves rather than leaving a hole in the numbering.
-func (s *Server) visibleRows(ctx context.Context, stat, period, bucket string, asc bool, limit, offset int) ([]store.StatRow, []string, error) {
+type rowSource[T any] func(limit, offset int) ([]T, error)
+
+// visiblePage reads one typed page with hidden players removed. The SQL source
+// differs by scope (and later by badges/challenges); the bounded over-fetch,
+// drop and positional-rank semantics deliberately do not.
+func visiblePage[T any](s *Server, limit, offset int, playerID func(T) int64, source rowSource[T]) ([]T, []string, error) {
 	need := offset + limit
 	var (
-		visible []store.StatRow
+		visible []T
 		handles []string
 		scanned int
 	)
@@ -321,16 +373,7 @@ func (s *Server) visibleRows(ctx context.Context, stat, period, bucket string, a
 		if scanned == 0 {
 			page = min(max(need*4, need+16), scanPage)
 		}
-		var batch []store.StatRow
-		err := s.deps.Projections.With(func(p *store.Projections) error {
-			var err error
-			if period == stats.PeriodAllTime {
-				batch, err = p.Leaderboard(ctx, stat, asc, page, scanned)
-			} else {
-				batch, err = p.LeaderboardPeriod(ctx, stat, period, bucket, asc, page, scanned)
-			}
-			return err
-		})
+		batch, err := source(page, scanned)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -339,7 +382,7 @@ func (s *Server) visibleRows(ctx context.Context, stat, period, bucket string, a
 		}
 		scanned += len(batch)
 		for _, row := range batch {
-			handle, ok := s.deps.Directory.Handle(row.PlayerID)
+			handle, ok := s.deps.Directory.Handle(playerID(row))
 			if !ok {
 				continue // banned, purged, or holding no handle yet
 			}
@@ -357,6 +400,55 @@ func (s *Server) visibleRows(ctx context.Context, stat, period, bucket string, a
 		return nil, nil, nil
 	}
 	return visible[offset:], handles[offset:], nil
+}
+
+func (s *Server) visiblePlayerRows(
+	ctx context.Context, stat, period, bucket string, asc bool, limit, offset int,
+) ([]store.StatRow, []string, error) {
+	source := func(page, scanned int) ([]store.StatRow, error) {
+		var rows []store.StatRow
+		err := s.deps.Projections.With(func(p *store.Projections) error {
+			var err error
+			if period == stats.PeriodAllTime {
+				rows, err = p.Leaderboard(ctx, stat, asc, page, scanned)
+			} else {
+				rows, err = p.LeaderboardPeriod(ctx, stat, period, bucket, asc, page, scanned)
+			}
+			return err
+		})
+		return rows, err
+	}
+	return visiblePage(s, limit, offset, func(row store.StatRow) int64 { return row.PlayerID }, source)
+}
+
+func (s *Server) visibleCareerRows(
+	ctx context.Context, stat, system string, asc bool, limit, offset int,
+) ([]store.CareerStatRow, []string, error) {
+	source := func(page, scanned int) ([]store.CareerStatRow, error) {
+		var rows []store.CareerStatRow
+		err := s.deps.Projections.With(func(p *store.Projections) error {
+			var err error
+			rows, err = p.CareerLeaderboard(ctx, stat, system, asc, page, scanned)
+			return err
+		})
+		return rows, err
+	}
+	return visiblePage(s, limit, offset, func(row store.CareerStatRow) int64 { return row.PlayerID }, source)
+}
+
+func (s *Server) visibleSystemRows(
+	ctx context.Context, stat, system string, asc bool, limit, offset int,
+) ([]store.SystemStatRow, []string, error) {
+	source := func(page, scanned int) ([]store.SystemStatRow, error) {
+		var rows []store.SystemStatRow
+		err := s.deps.Projections.With(func(p *store.Projections) error {
+			var err error
+			rows, err = p.SystemLeaderboard(ctx, stat, system, asc, page, scanned)
+			return err
+		})
+		return rows, err
+	}
+	return visiblePage(s, limit, offset, func(row store.SystemStatRow) int64 { return row.PlayerID }, source)
 }
 
 // paging reads and clamps ?limit= and ?offset= (§4.8).

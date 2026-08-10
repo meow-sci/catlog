@@ -1568,6 +1568,40 @@ to eight hash characters, and collisions receive `-2`, `-3`, … in ascending fi
 Sequence order is already the projector's deterministic total order, so the readable address is
 stable across rebuilds and batch sizes without a Unicode library or a mutable slug registry.
 
+### PROJ-110 — Board scope is an explicit read dimension, and identity travels only as far as comparison requires
+
+*Accepted · 2026-08-10 · Task B1.*
+
+Every board has player, career and celestial-system projections, so the read API advertises those
+three scopes on every index row and echoes the selected scope on every detail response. Making scope
+an explicit query dimension keeps one board key equal to one achievement rule (PROJ-104) and lets a
+client discover the available comparisons without a second board registry. `body_derived` is
+authoritative metadata rather than prefix logic copied into each client: it warns that player scope
+may merge like-named bodies from different game content, while system scope is the comparable view.
+
+Rolling periods remain player-only. A career is already a time scope, and crossing it with buckets
+would multiply players × boards × saves × windows; system periods would introduce the same storage
+dimension without a named player question to justify it. The API rejects those combinations instead
+of returning an empty or silently all-time answer. Likewise `?system=` is rejected in player scope:
+`player_stat` has already merged a player's systems, so accepting the predicate would claim a
+precision the stored row cannot supply. Career and system scopes resolve the filter's public slug or
+hash to the content hash they actually store.
+
+Rows carry exactly the identity their comparison needs. Career rows expose a per-player save ordinal
+and the existing per-player career relabel, never the install-derived raw career key (PROJ-049).
+System-capable rows expose the raw content hash plus name and slug, because equality across players
+is the purpose of that hash and relabelling it would destroy the join. Player rows expose neither:
+their projection has already merged both dimensions. This separation makes the privacy boundary
+visible in the response shape rather than dependent on a caller remembering which opaque token is
+safe.
+
+All three scopes share the same over-fetch-and-drop visibility pass. Published ranks close gaps left
+by banned, purged or handleless accounts, while index counts and entrant denominators remain the raw
+ban-inclusive projection counts. Exact filtered totals would require scanning whole boards on every
+request; keeping the existing cheap denominator and exact visible positional rank preserves the
+cacheable read surface Constitution §2 requires without letting a hidden account occupy a displayed
+position.
+
 ## Archive & restore
 
 The filesystem archiver, the manifest, restore verification, and the R2 design that is deliberately not built.

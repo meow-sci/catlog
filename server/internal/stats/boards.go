@@ -73,6 +73,10 @@ type Board struct {
 	// context therefore carries `career` (and may be qualified by the career's
 	// rewind mark). See career.go.
 	Career bool `json:"career"`
+	// BodyDerived is true when the board key is derived from a celestial-body
+	// name. It is metadata for readers: player scope merges replaceable systems,
+	// while system scope is the comparable question.
+	BodyDerived bool `json:"body_derived,omitempty"`
 }
 
 // fixedBoards is the §5.6 table, in display order: the "how did you survive
@@ -199,6 +203,10 @@ type family struct {
 	prefix string
 	// after is the fixed board this family's members are listed under.
 	after string
+	// bodyDerived marks families whose keys are built from body names. Keeping
+	// the fact on the family makes future data-derived families opt in here,
+	// rather than teaching each reader about key prefixes.
+	bodyDerived bool
 	// board derives one member's metadata from its stat key and suffix.
 	board func(stat, suffix string) Board
 }
@@ -210,8 +218,9 @@ var families = []family{{
 		return Board{Stat: stat, Title: "RUDs — " + titleize(cause), Unit: "RUDs"}
 	},
 }, {
-	prefix: "fastest_to_",
-	after:  StatFastestToOrbit,
+	prefix:      "fastest_to_",
+	after:       StatFastestToOrbit,
+	bodyDerived: true,
 	board: func(stat, body string) Board {
 		return Board{Stat: stat, Title: "Fastest to " + titleize(body), Unit: "ms", Ascending: true, Career: true}
 	},
@@ -310,7 +319,9 @@ func Describe(stat string) (Board, bool) {
 		if !ok || norm != suffix {
 			return Board{}, false
 		}
-		return f.board(stat, suffix), true
+		b := f.board(stat, suffix)
+		b.BodyDerived = f.bodyDerived
+		return b, true
 	}
 	return Board{}, false
 }

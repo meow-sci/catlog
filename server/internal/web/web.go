@@ -73,7 +73,7 @@ type Read interface {
 	// Board takes the window as well as the page. `/boards/{stat}` now offers a
 	// period selector, so this site passes through whatever `?period=` named
 	// rather than always asking for `alltime`.
-	Board(ctx context.Context, stat, period, bucket string, limit, offset int) (readapi.BoardResponse, bool, error)
+	Board(ctx context.Context, stat, period, bucket, scope, system string, limit, offset int) (readapi.BoardResponse, bool, error)
 	Player(ctx context.Context, handle string) (readapi.PlayerResponse, bool, error)
 	// PlayerEvents is the raw log behind `/p/{handle}/events`.
 	PlayerEvents(ctx context.Context, handle, typ string, before int64, limit int) (readapi.EventsResponse, bool, error)

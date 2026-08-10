@@ -49,7 +49,7 @@ func (f *fakeRead) BoardList(context.Context) (readapi.BoardsResponse, error) {
 	return f.boards, f.err
 }
 
-func (f *fakeRead) Board(_ context.Context, stat, period, _ string, limit, offset int) (readapi.BoardResponse, bool, error) {
+func (f *fakeRead) Board(_ context.Context, stat, period, _, _, _ string, limit, offset int) (readapi.BoardResponse, bool, error) {
 	f.lastPeriod, f.lastOffset = period, offset
 	if f.err != nil {
 		return readapi.BoardResponse{}, true, f.err

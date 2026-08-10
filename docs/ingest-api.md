@@ -223,8 +223,8 @@ Cookie `catlog_sess` (prod: `__Host-catlog_sess`): value `b64u(user_key) + "." +
 
 All responses `Cache-Control: public, s-maxage=30, stale-while-revalidate=300` except SSE.
 
-- `GET /v1/leaderboards` → `{"min_players": n, "boards": [{"stat": "biggest_lithobrake_survived", "title": s, "unit": "m/s", "ascending": false, "count": n}]}`
-- `GET /v1/leaderboards/{stat}?limit=50&offset=0` (limit ≤ 200) → `{"stat": s, "ascending": b, "rows": [{"rank": 1, "handle": s, "value": f, "context": {…}, "updated": unix_ms, "rewound"?: true}]}`
+- `GET /v1/leaderboards` → `{"min_players": n, "boards": [{"stat": "biggest_lithobrake_survived", "title": s, "unit": "m/s", "ascending": false, "count": n, "periods": ["alltime", "daily", "weekly", "monthly", "yearly"], "scopes": ["player", "career", "system"], "body_derived"?: true}]}`
+- `GET /v1/leaderboards/{stat}?scope=player&period=alltime&system=<slug-or-hash>&limit=50&offset=0` (limit ≤ 200) → `{"stat": s, "title": s, "unit": s, "ascending": b, "scope": "player" | "career" | "system", "period": s, "bucket"?: s, "limit": n, "offset": n, "rows": [{"rank": 1, "handle": s, "save"?: n, "save_id"?: s, "system"?: {"hash": s, "name": s, "slug": s}, "value": f, "context"?: {…}, "updated": unix_ms, "rewound"?: true}]}`
 - `GET /v1/players/{handle}` → `{"handle": s, "since": unix_ms, "stats": [{"stat": s, "title": s, "unit": s, "value": f, "ascending": b, "rank": n, "players": n, "context": {…}, "updated": unix_ms, "rewound"?: true}]}` (404 if unknown/banned)
 - `GET /v1/players?q=whis&limit=20` → `{"query": s, "limit": n, "handles": [s], "truncated"?: true}` — handle search
 - `GET /v1/players/{handle}/events?limit=50&before=<cursor>&type=<event type>` → `{"handle": s, "limit": n, "type"?: s, "next"?: <cursor>, "events": [{"seq": n, "id": ulid, "type": s, "ver": n, "session"?: ulid, "flight"?: ulid, "career"?: s, "sim_t"?: f, "recv": unix_ms, "payload": {…}}]}` (404 if unknown/banned)
@@ -238,6 +238,75 @@ All responses `Cache-Control: public, s-maxage=30, stale-while-revalidate=300` e
 - `GET /v1/systems/{slug-or-hash}` → `{"hash": s, "system_id": s, "name": s, "slug": s, "home_body": s, "roots": [s], "players": n, "careers": n, "complete": b, "bodies": [{"body": s, "name": s, "class": s, "kind": s, "rank": n, "parent"?: s, "radius_m": f, "mass_kg": f, "soi_m": f, "atmo_m": f, "ocean_m": f, "angvel": f, "axis": {"x": f, "y": f, "z": f}, "sma_m"?: f, "ecc"?: f, "inc_deg"?: f, "lan_deg"?: f, "argp_deg"?: f, "t_pe"?: f, "period_s"?: f, "ccf_to_cce_t0": {"x": f, "y": f, "z": f, "w": f}}]}` (404 if unknown)
 
 `ascending` and `players` on a profile row are what a profile page needs to render "#3 of 41" without also fetching the board index; `players` is the board's row count, banned players included, exactly like `count` above — the rank is filtered, so a rank is never *worse* than that denominator implies.
+
+### Leaderboard scopes — `GET /v1/leaderboards`, `GET /v1/leaderboards/{stat}`
+
+Every board has the same three scopes, advertised in index order as `player`, `career`, `system`:
+
+- `player` ranks each account's lifetime row. It is the default when `scope` is omitted.
+- `career` ranks saves. One player may therefore occupy more than one row.
+- `system` ranks each `(player, celestial system)` pair. One player may occupy one row in each
+  system they have played.
+
+The index remains one row per board. Its `count` is the all-time **player-scope** row count, including
+banned players; it is not a save count or a `(player, system)` count and does not change with a
+requested scope. `min_players` is evaluated against that same all-time player scope. `periods`
+advertises the five windows available to player scope, while `scopes` always advertises all three
+comparison units.
+
+`body_derived: true` is emitted for a board family whose key comes from a body name, currently
+`fastest_to_<body>`. It is a client hint, not an eligibility rule: player scope may merge results
+from different celestial-system definitions on such a board, while system scope asks the comparable
+question. The server's board metadata is authoritative; clients must not infer the hint again from
+the stat prefix.
+
+The detail endpoint accepts these combinations:
+
+| Query | Result |
+|---|---|
+| no `scope`, `period` or `system` | player scope, all time, no system filter |
+| `scope=player&period=<window>` | the existing player window; `at` selects its bucket and defaults to the server's current bucket |
+| `scope=career` or `scope=system` | all-time rows in that scope |
+| `scope=career&system=<slug-or-hash>` | saves bound to the resolved system |
+| `scope=system&system=<slug-or-hash>` | `(player, system)` rows for the resolved system |
+| an unknown `period` | `400 bad_request`: `period must be one of alltime, daily, weekly, monthly, yearly` |
+| `at` with `alltime`, or an `at` that does not match its period | `400 bad_request`: `at is not a well-formed <period> window` |
+| any other `scope` | `400 bad_request`: `scope must be one of player, career, system` |
+| career/system scope with a non-all-time `period` | `400 bad_request`: `<scope> scope has no time windows` |
+| player scope with `system` | `400 bad_request`: `system filtering needs scope=system or scope=career` |
+| an unknown system slug or hash | `404 not_found`: `catlog has never seen a system by that name` |
+| an unknown board key | `404 not_found`: `no such leaderboard` |
+
+`period` still defaults to `alltime`; its accepted values and `at` validation are unchanged. Career
+scope is already a time scope, and crossing either non-player scope with rolling buckets would add
+the unbounded storage dimension players × boards × buckets × careers/systems for no useful question.
+There are therefore no career- or system-period rows to serve. `system` is resolved by public slug
+or raw content hash and then used as an exact hash predicate; omitting it means every system.
+`limit` defaults to 50 and clamps to 1–200; `offset` defaults to 0 and clamps negative values to 0.
+A non-integer value is `400 bad_request` with `<name> must be an integer`.
+
+The envelope echoes the effective `scope`, `period`, paging and optional bucket. Row fields then
+depend on scope:
+
+- A player row has the existing `rank`, `handle`, `value`, optional `context`, `updated` and optional
+  `rewound`. It has no `save`, `save_id` or `system`: `player_stat` has already merged the player's
+  saves and systems into one value.
+- A career row additionally carries `save`, the player's stable first-seen ordinal for that save,
+  and `save_id`, a stable 16-character Crockford relabel scoped to that player. It carries `system`
+  when the save's system is known. `rewound` is emitted when true on **any** career-scope board row,
+  not only a career-time board, because it qualifies the save rather than the stat.
+- A system row carries `system` and no save fields. It represents one `(player, system)` pair.
+
+When present, `system` is always the complete `{"hash", "name", "slug"}` reference. The raw hash is
+deliberately public: it fingerprints common game content and must remain the same across players to be useful.
+The raw §4.1 career key is never public because it is install-derived and could link one person's
+accounts (PROJ-049); neither `save` nor `save_id` is a global identity.
+
+All scopes use the same hidden-account filter. `rank` is positional over visible rows, so removing a
+banned, purged or handleless row closes the gap and paging offsets apply to the visible ordering.
+Aggregate counts and entrant denominators remain raw and ban-inclusive, matching the existing board
+and profile contract; filtering them exactly would require reading the whole board on every request.
+This is the final pre-launch v1 shape, so there is no read-API version bump.
 
 ### Celestial systems — `GET /v1/systems`, `GET /v1/systems/{slug-or-hash}`
 
@@ -324,7 +393,7 @@ Everything else is published. Flight and session ids are per-occurrence ULIDs wi
 
 `user_key` appears in no read-API response and never has.
 
-`ascending` is `true` on the career-time boards (`fastest_to_orbit`, `fastest_to_<body>`), where the value is seconds since the career began and the **smallest** value ranks first; it is `false` on every record and counter board. The tie rule does not change with it: an equal value keeps the earlier claimant's rank. `rewound` is emitted only when true, and only on a career-time row whose career has had an earlier save loaded — it qualifies the number and has no other effect (see [events.md](events.md)).
+`ascending` is `true` on the career-time boards (`fastest_to_orbit`, `fastest_to_<body>`), where the value is milliseconds since the career began and the **smallest** value ranks first; it is `false` on every record and counter board. The tie rule does not change with it: an equal value keeps the earlier claimant's rank. In player scope, `rewound` is emitted only when true on a career-time row whose winning save has had an earlier state loaded. In career scope it may qualify any row belonging to a rewound save. It changes neither eligibility nor rank (see [events.md](events.md)).
 
 **The board list is not fixed, and a client must not treat it as one.** Most stat keys are compile-time constants — one per fold — but two families are not: `fastest_to_<body>` and `rud_<cause>` take their second half from the event stream, because KSA's celestial systems are game content and `body` is opaque to the server ([events.md](events.md)). Titles, units and `ascending` are derived from the key, so a board for a place nobody has ever named in this repository arrives fully described. `min_players` is how many *distinct* players such a board needs before it is listed here (default 2, `[boards] min_players`); below that it is still served at `/v1/leaderboards/{stat}` and still appears on the profile of whoever is on it, it is just not in the index. A key that is neither a fixed board nor a family board anybody holds a value on is a 404.
 ### The live streams — `GET /v1/feed/stream`, `GET /v1/events/stream`

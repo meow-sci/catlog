@@ -3,6 +3,7 @@ package readapi
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sync"
 	"time"
 
@@ -101,7 +102,8 @@ func (s *Server) BoardList(ctx context.Context) (BoardsResponse, error) {
 		out.Boards = append(out.Boards, BoardSummary{
 			Stat: b.Stat, Title: b.Title, Unit: b.Unit,
 			Ascending: b.Ascending, Count: counts[b.Stat],
-			Periods: stats.Periods(),
+			Periods: stats.Periods(), Scopes: stats.Scopes(),
+			BodyDerived: b.BodyDerived,
 		})
 	}
 	return out, nil
@@ -114,7 +116,9 @@ func (s *Server) BoardList(ctx context.Context) (BoardsResponse, error) {
 // nobody has ever scored on. A family board that exists but is not yet *listed*
 // is still served: the alternative is a profile row that links to a 404, and a
 // player's own achievement being hidden from them until somebody else repeats it.
-func (s *Server) Board(ctx context.Context, stat, period, bucket string, limit, offset int) (BoardResponse, bool, error) {
+func (s *Server) Board(
+	ctx context.Context, stat, period, bucket, scope, system string, limit, offset int,
+) (BoardResponse, bool, error) {
 	board, ok, err := s.board(ctx, stat)
 	if err != nil || !ok {
 		return BoardResponse{}, false, err
@@ -128,9 +132,58 @@ func (s *Server) Board(ctx context.Context, stat, period, bucket string, limit, 
 		bucket, _ = stats.CurrentBucket(period, s.deps.Now().UnixMilli())
 	}
 
-	rows, handles, err := s.visibleRows(ctx, stat, period, bucket, board.Ascending, limit, offset)
-	if err != nil {
-		return BoardResponse{}, true, err
+	var rows []boardPageRow
+	var handles []string
+	switch scope {
+	case stats.ScopePlayer:
+		playerRows, visibleHandles, err := s.visiblePlayerRows(
+			ctx, stat, period, bucket, board.Ascending, limit, offset)
+		if err != nil {
+			return BoardResponse{}, true, err
+		}
+		handles = visibleHandles
+		rows = make([]boardPageRow, 0, len(playerRows))
+		for _, row := range playerRows {
+			career := ""
+			if board.Career {
+				career = careerOf(row)
+			}
+			rows = append(rows, boardPageRow{
+				PlayerID: row.PlayerID, Career: career, Value: row.Value,
+				Context: row.Context, UpdatedSeq: row.UpdatedSeq,
+			})
+		}
+	case stats.ScopeCareer:
+		careerRows, visibleHandles, err := s.visibleCareerRows(
+			ctx, stat, system, board.Ascending, limit, offset)
+		if err != nil {
+			return BoardResponse{}, true, err
+		}
+		handles = visibleHandles
+		rows = make([]boardPageRow, 0, len(careerRows))
+		for _, row := range careerRows {
+			rows = append(rows, boardPageRow{
+				PlayerID: row.PlayerID, Career: row.Career, System: row.System,
+				Save: row.Ordinal, Value: row.Value, Context: row.Context,
+				UpdatedSeq: row.UpdatedSeq,
+			})
+		}
+	case stats.ScopeSystem:
+		systemRows, visibleHandles, err := s.visibleSystemRows(
+			ctx, stat, system, board.Ascending, limit, offset)
+		if err != nil {
+			return BoardResponse{}, true, err
+		}
+		handles = visibleHandles
+		rows = make([]boardPageRow, 0, len(systemRows))
+		for _, row := range systemRows {
+			rows = append(rows, boardPageRow{
+				PlayerID: row.PlayerID, System: row.System, Value: row.Value,
+				Context: row.Context, UpdatedSeq: row.UpdatedSeq,
+			})
+		}
+	default:
+		return BoardResponse{}, true, fmt.Errorf("readapi: unsupported board scope %q", scope)
 	}
 
 	seqs := make([]int64, 0, len(rows))
@@ -142,7 +195,21 @@ func (s *Server) Board(ctx context.Context, stat, period, bucket string, limit, 
 		return BoardResponse{}, true, err
 	}
 
-	rewound, err := s.rewound(ctx, board, rows)
+	careerKeys := make([]careerKey, 0, len(rows))
+	systemHashes := make([]string, 0, len(rows))
+	for _, row := range rows {
+		if row.Career != "" {
+			careerKeys = append(careerKeys, careerKey{row.PlayerID, row.Career})
+		}
+		if row.System != "" {
+			systemHashes = append(systemHashes, row.System)
+		}
+	}
+	rewound, err := s.rewoundCareers(ctx, careerKeys)
+	if err != nil {
+		return BoardResponse{}, true, err
+	}
+	systems, err := s.systemRefs(ctx, systemHashes)
 	if err != nil {
 		return BoardResponse{}, true, err
 	}
@@ -150,14 +217,25 @@ func (s *Server) Board(ctx context.Context, stat, period, bucket string, limit, 
 	out := BoardResponse{
 		Stat: board.Stat, Title: board.Title, Unit: board.Unit,
 		Ascending: board.Ascending,
-		Period:    period, Bucket: bucket,
+		Scope:     scope, Period: period, Bucket: bucket,
 		Limit: limit, Offset: offset,
 		Rows: make([]BoardRow, 0, len(rows)),
 	}
 	for i, row := range rows {
+		var systemRef *SystemRef
+		if row.System != "" {
+			ref, exists := systems[row.System]
+			if !exists {
+				return BoardResponse{}, true, fmt.Errorf("readapi: no metadata for system %q", row.System)
+			}
+			systemRef = &ref
+		}
 		out.Rows = append(out.Rows, BoardRow{
 			Rank:   offset + i + 1,
 			Handle: handles[i],
+			Save:   row.Save,
+			SaveID: Label(row.PlayerID, kindCareer, row.Career),
+			System: systemRef,
 			Value:  row.Value,
 			// A career-time row's context carries the §4.1 career key, which is
 			// derived from the mod's install id and would link one person's two
@@ -165,10 +243,20 @@ func (s *Server) Board(ctx context.Context, stat, period, bucket string, limit, 
 			// other context blob passes through as the bytes the fold wrote.
 			Context: Redact(row.PlayerID, row.Context),
 			Updated: times[row.UpdatedSeq],
-			Rewound: rewound[rowKey(row)],
+			Rewound: rewound[careerKey{row.PlayerID, row.Career}],
 		})
 	}
 	return out, true, nil
+}
+
+type boardPageRow struct {
+	PlayerID   int64
+	Career     string
+	System     string
+	Save       int64
+	Value      float64
+	Context    json.RawMessage
+	UpdatedSeq int64
 }
 
 // board resolves a stat key to the board it names, reporting false for a key
@@ -217,24 +305,25 @@ func careerOf(row store.StatRow) string {
 	return c.Career
 }
 
-func rowKey(row store.StatRow) careerKey { return careerKey{row.PlayerID, careerOf(row)} }
-
 type careerKey struct {
 	player int64
 	career string
 }
 
-// rewound resolves the §4.1 rewind mark for a page of career-time rows: one
-// query per distinct player on the page, and none at all for a board whose
-// values are not career times.
-func (s *Server) rewound(ctx context.Context, board stats.Board, rows []store.StatRow) (map[careerKey]bool, error) {
-	if !board.Career || len(rows) == 0 {
+// rewoundCareers resolves the §4.1 rewind mark for the exact save represented
+// by each row. Career-scope boards always supply their own career, even when the
+// board's value is not a career-relative time. Player scope supplies a career
+// only for the career-time boards whose context carries one.
+func (s *Server) rewoundCareers(ctx context.Context, keys []careerKey) (map[careerKey]bool, error) {
+	if len(keys) == 0 {
 		return nil, nil
 	}
 	byPlayer := map[int64][]string{}
-	for _, row := range rows {
-		if c := careerOf(row); c != "" {
-			byPlayer[row.PlayerID] = append(byPlayer[row.PlayerID], c)
+	seen := map[careerKey]bool{}
+	for _, key := range keys {
+		if key.career != "" && !seen[key] {
+			byPlayer[key.player] = append(byPlayer[key.player], key.career)
+			seen[key] = true
 		}
 	}
 	out := map[careerKey]bool{}
@@ -250,6 +339,45 @@ func (s *Server) rewound(ctx context.Context, board stats.Board, rows []store.St
 		}
 		for career := range marked {
 			out[careerKey{player, career}] = true
+		}
+	}
+	return out, nil
+}
+
+// systemBySlug resolves the URL-facing slug or an already-canonical hash.
+func (s *Server) systemBySlug(ctx context.Context, key string) (string, bool, error) {
+	var row store.SystemRow
+	var ok bool
+	err := s.deps.Projections.With(func(p *store.Projections) error {
+		var err error
+		row, ok, err = p.SystemBySlugOrHash(ctx, key)
+		return err
+	})
+	return row.Hash, ok, err
+}
+
+// systemRefs resolves every distinct system carried by one page in one query.
+func (s *Server) systemRefs(ctx context.Context, hashes []string) (map[string]SystemRef, error) {
+	if len(hashes) == 0 {
+		return nil, nil
+	}
+	wanted := make(map[string]bool, len(hashes))
+	for _, hash := range hashes {
+		wanted[hash] = true
+	}
+	var rows []store.SystemRow
+	err := s.deps.Projections.With(func(p *store.Projections) error {
+		var err error
+		rows, err = p.Systems(ctx)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]SystemRef, len(wanted))
+	for _, row := range rows {
+		if wanted[row.Hash] {
+			out[row.Hash] = SystemRef{Hash: row.Hash, Name: row.Name, Slug: row.Slug}
 		}
 	}
 	return out, nil
