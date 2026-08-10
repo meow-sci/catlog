@@ -32,22 +32,19 @@ func TestChallengeAPIHasExactJSONAndLookup(t *testing.T) {
 	}
 }
 
-func TestChallengeCatalogueIsIntentionallyEmptyAtH2(t *testing.T) {
-	if got := Challenges(); len(got) != 0 {
-		t.Fatalf("H2 shipped %d challenge definitions, want none: %+v", len(got), got)
+func TestChallengeCatalogueReturnsACloneAndLookupIsExact(t *testing.T) {
+	want := Challenges()
+	if len(want) != 6 {
+		t.Fatalf("shipped %d challenge definitions, want six: %+v", len(want), want)
 	}
 	if _, ok := ChallengeByKey("not_shipped"); ok {
 		t.Error("unknown challenge resolved")
 	}
 	got := Challenges()
+	got[0].Title = "Changed"
 	got = append(got, validTestChallenge("caller_mutation"))
-	if len(Challenges()) != 0 {
+	if current := Challenges(); len(current) != 6 || current[0].Title != want[0].Title {
 		t.Error("caller mutated the compile-time challenge catalogue")
-	}
-	for _, name := range FoldNames() {
-		if strings.HasPrefix(name, challengeFoldPrefix) {
-			t.Errorf("H2 registered challenge fold %q before the fold-shape task", name)
-		}
 	}
 }
 

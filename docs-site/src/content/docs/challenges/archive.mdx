@@ -1,0 +1,15 @@
+---
+title: Challenge archive
+description: Every weekly challenge catlog has shipped, with its rule, scope and UTC window.
+sidebar:
+  order: 2
+---
+
+import ChallengeDetail from "../../../components/ChallengeDetail.astro";
+import { CHALLENGES } from "../../../data/challenges";
+
+Challenge definitions stay here after their window closes. See [how challenges
+work](/catlog/challenges/) for the receive-time deadline, scopes and rebuild rules shared by every
+entry.
+
+{CHALLENGES.map((challenge) => <ChallengeDetail challenge={challenge.challenge} />)}

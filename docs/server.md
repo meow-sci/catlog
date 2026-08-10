@@ -208,7 +208,7 @@ byte-identical across events. Rows written either way stay readable, so the swit
 | `system` | One immutable first-seen identity/header per celestial-system hash: raw system id, display name, stable URL slug, home body, declared body count, monotone reported-complete bit and first seq (migration 0008) |
 | `system_body` | One immutable first-seen catalogue row per `(hash, body)`, including opaque game class, semantic kind, forest topology, physical values, orientation and optional orbital elements (migration 0008) |
 | `badge_award` | Current-projection merit-badge awards at lifetime and per-save scope, with first-award sequence, server receive time, optional career time and provenance (migration 0011) |
-| `challenge_stat` | Retained ranked values for explicitly dated challenges at player, save or system scope (migration 0013); H1 establishes storage only, before challenge definitions and folds |
+| `challenge_stat` | Retained ranked values for compile-time, explicitly dated challenges at player, save or system scope (migration 0013) |
 | `challenge_member` | Retained distinct facts used by set-valued challenge rules, with first sequence and the same scope sentinels as `challenge_stat` (migration 0013) |
 | `feed` | The activity feed, capped at 500 rows |
 | `event_census` | One row per `(type, period, bucket)` — what makes `GET /v1/stats` affordable |
@@ -282,11 +282,11 @@ contributed last.
 Challenge rows have no retention. They do not reuse `player_stat_period`, whose calendar buckets
 are deliberately aged out: the archive of a closed challenge is part of the feature. Definitions
 live in the server's compile-time `stats.Challenge` registry so an incremental fold and a later
-rebuild cannot silently apply different mutable rules. The registry and executable rule map remain
-intentionally empty through H3; catlogd validates their one-to-one construction, keys, windows,
-scopes, board collisions and fold identities before creating runtime state. Generic challenge folds
-now occupy the second-pass slot after badges and before the event census, but the empty registry
-means none is currently returned and no result read exists. The batch foundation
+rebuild cannot silently apply different mutable rules. Six Week 33 definitions and executable rules
+ship in catalogue order; catlogd validates their one-to-one construction, keys, windows, scopes,
+board collisions and fold identities before creating runtime state. Generic challenge folds occupy
+the second-pass slot after badges and before the event census. No challenge result read exists yet.
+The batch foundation
 loads one scoped `challenge_member` set on demand, merges pending additions, and flushes new members
 in deterministic key order. `challenge_stat` contributions likewise merge in per-kind pending maps
 and flush in sorted composite-key order with the same strict record/best/count SQL guards as boards.
@@ -294,6 +294,20 @@ Together those paths make future challenge results independent of projector batc
 Both challenge tables are player-owned structural projections for moderation/rebuild purposes.
 `ProjectionCounts` and the cached public collection census expose their current row counts as
 `challenge_stat`/`challenge_member` and `challenge_stats`/`challenge_members`, respectively.
+
+The starter rules exercise all three scopes and all three merge kinds. Heavy Lift Week and Feather
+Touch resolve a career's bound system and its cached `home_body` rather than assuming a stock home;
+the former requires an achieved home-body orbit with positive current mass, while the latter takes
+the positive vertical speed of a surviving away-body landing. From Scratch To Orbit is a save-scoped
+minimum of present career `sim_t` converted to milliseconds. Tumbleweek counts tumble events, and
+Full House records positive recovered crew. Every one explicitly applies flight eligibility.
+
+Coasting Class is the set-valued rule. It accepts a nonempty SOI destination only when
+`flight_state` proves a not-later `flight.started` with present `engine_count == 0`, then inserts
+`<system>\x00<body>` into system-scoped `challenge_member` and records the read-through count. The
+member is created only after all gates, so powered and out-of-window visits do not poison novelty;
+including the system in both scope and member keeps identical body keys in different systems
+distinct. Zero engines is not “no propulsion”, and a missing engine count never becomes zero.
 
 Awards are insert-once inside one projection build: the first qualifying event keeps its
 `earned_seq`, matching server-side `recv_time` in `earned_at`, nullable event career clock in

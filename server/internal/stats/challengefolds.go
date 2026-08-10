@@ -3,6 +3,8 @@ package stats
 import (
 	"context"
 	"fmt"
+
+	"github.com/meow-sci/catlog/server/internal/ids"
 )
 
 type challengeValue func(context.Context, *Batch, Event) (float64, map[string]any, bool, error)
@@ -19,9 +21,118 @@ type challengeRule struct {
 	value challengeValue
 }
 
-// H3 ships the generic fold shape but no rules. H4 adds one entry here for each
-// Challenge literal in challengeCatalogue.
-var challengeRules = map[string]challengeRule{}
+var challengeRules = map[string]challengeRule{
+	"heavy_lift_week": {kind: kindRecord, value: heavyLiftWeekValue},
+	"speedrun_orbit":  {kind: kindBest, value: speedrunOrbitValue},
+	"tumbleweek":      {kind: kindCount, value: tumbleweekValue},
+	"coasting_class":  {kind: kindRecord, value: coastingClassValue},
+	"feather_touch":   {kind: kindBest, value: featherTouchValue},
+	"full_house":      {kind: kindRecord, value: fullHouseValue},
+}
+
+func heavyLiftWeekValue(ctx context.Context, b *Batch, ev Event) (float64, map[string]any, bool, error) {
+	p, ok := payloadOf[VehicleOrbit](ev)
+	if !ok || p.Phase != "achieved" || p.MassKg <= 0 {
+		return 0, nil, false, nil
+	}
+	ok, err := scoreable(ctx, ev, b)
+	if err != nil || !ok {
+		return 0, nil, false, err
+	}
+	home, known, err := b.CareerHomeBody(ctx, ev.PlayerID, ev.Career)
+	if err != nil || !known || p.Body != home {
+		return 0, nil, false, err
+	}
+	return p.MassKg, map[string]any{
+		"body": p.Body, "flight": ids.String(ev.FlightID),
+	}, true, nil
+}
+
+func speedrunOrbitValue(ctx context.Context, b *Batch, ev Event) (float64, map[string]any, bool, error) {
+	p, ok := payloadOf[VehicleOrbit](ev)
+	if !ok || p.Phase != "achieved" || !ev.HasCareer() || !ev.HasSimTime {
+		return 0, nil, false, nil
+	}
+	ok, err := scoreable(ctx, ev, b)
+	if err != nil || !ok {
+		return 0, nil, false, err
+	}
+	return careerMillis(ev.SimTime), map[string]any{
+		"body": p.Body, "flight": ids.String(ev.FlightID),
+	}, true, nil
+}
+
+func tumbleweekValue(ctx context.Context, b *Batch, ev Event) (float64, map[string]any, bool, error) {
+	if _, ok := payloadOf[KittenTumble](ev); !ok {
+		return 0, nil, false, nil
+	}
+	ok, err := scoreable(ctx, ev, b)
+	return 1, nil, ok, err
+}
+
+func coastingClassValue(ctx context.Context, b *Batch, ev Event) (float64, map[string]any, bool, error) {
+	p, ok := payloadOf[VehicleSOI](ev)
+	if !ok || p.ToBody == "" {
+		return 0, nil, false, nil
+	}
+	ok, err := scoreable(ctx, ev, b)
+	if err != nil || !ok {
+		return 0, nil, false, err
+	}
+	state, found, err := b.Flight(ctx, ev.FlightID)
+	if err != nil || !found || !state.HasStartFactAt(ev.Seq, state.EngineCount.Valid) || state.EngineCount.Int64 != 0 {
+		return 0, nil, false, err
+	}
+	system, err := b.CareerSystem(ctx, ev.PlayerID, ev.Career)
+	if err != nil || system == "" {
+		return 0, nil, false, err
+	}
+	member := system + "\x00" + p.ToBody
+	added, err := b.AddChallengeMember(ctx, ev.PlayerID, "", system, "coasting_class", member, ev.Seq)
+	if err != nil || !added {
+		return 0, nil, false, err
+	}
+	n, err := b.ChallengeMemberCount(ctx, ev.PlayerID, "", system, "coasting_class")
+	if err != nil {
+		return 0, nil, false, err
+	}
+	return float64(n), map[string]any{
+		"body": p.ToBody, "flight": ids.String(ev.FlightID),
+	}, true, nil
+}
+
+func featherTouchValue(ctx context.Context, b *Batch, ev Event) (float64, map[string]any, bool, error) {
+	p, ok := payloadOf[VehicleLanded](ev)
+	if !ok || p.VerticalSpeedMs <= 0 {
+		return 0, nil, false, nil
+	}
+	ok, err := survivedLanding(ctx, b, ev, p)
+	if err != nil || !ok {
+		return 0, nil, false, err
+	}
+	home, known, err := b.CareerHomeBody(ctx, ev.PlayerID, ev.Career)
+	if err != nil || !known || p.Body == home {
+		return 0, nil, false, err
+	}
+	return p.VerticalSpeedMs, map[string]any{
+		"body": p.Body, "flight": ids.String(ev.FlightID),
+		"horizontal_speed_ms": p.HorizontalSpeedMs, "crew_count": p.CrewCount,
+	}, true, nil
+}
+
+func fullHouseValue(ctx context.Context, b *Batch, ev Event) (float64, map[string]any, bool, error) {
+	p, ok := payloadOf[FlightEnded](ev)
+	if !ok || p.Reason != "recovered" || p.CrewCount < 1 {
+		return 0, nil, false, nil
+	}
+	ok, err := scoreable(ctx, ev, b)
+	if err != nil || !ok {
+		return 0, nil, false, err
+	}
+	return float64(p.CrewCount), map[string]any{
+		"body": p.Body, "flight": ids.String(ev.FlightID),
+	}, true, nil
+}
 
 // challengeFold is one challenge's rule. The receive-time gate deliberately
 // runs before the arbitrary value function.

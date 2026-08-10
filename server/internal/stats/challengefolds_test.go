@@ -4,7 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -423,12 +425,15 @@ func TestChallengeDefinitionNameChangesBuildID(t *testing.T) {
 }
 
 func TestChallengeConstructionAndSecondPassUseActualValidation(t *testing.T) {
-	if len(ChallengeFolds()) != 0 {
-		t.Fatal("H3 shipped a concrete challenge fold")
+	if len(ChallengeFolds()) != 6 {
+		t.Fatalf("concrete challenge folds = %d, want six", len(ChallengeFolds()))
 	}
 	second := SecondPassFolds()
 	boards, badges := len(BoardFolds()), len(BadgeFolds())
-	if second[boards].Name() != BadgeFolds()[0].Name() || second[boards+badges].Name() != LogFolds()[0].Name() {
+	challenges := len(ChallengeFolds())
+	if second[boards].Name() != BadgeFolds()[0].Name() ||
+		second[boards+badges].Name() != ChallengeFolds()[0].Name() ||
+		second[boards+badges+challenges].Name() != LogFolds()[0].Name() {
 		t.Errorf("second-pass order is not board -> badge -> challenge -> log: %v", foldNames(second))
 	}
 	if err := ValidateChallenges(); err != nil {
@@ -446,6 +451,306 @@ func TestChallengeConstructionAndSecondPassUseActualValidation(t *testing.T) {
 	_, err := challengeFoldsFor([]Challenge{syntheticChallenge("missing_rule", ScopePlayer)}, nil)
 	if err == nil || !strings.Contains(err.Error(), "rule count") {
 		t.Errorf("missing executable rule = %v", err)
+	}
+}
+
+func starterEvent(seq int64, career string, flight ids.ID, typ string, payload any) Event {
+	return Event{
+		Seq: seq, PlayerID: 1, Career: career, FlightID: flight, Type: typ,
+		RecvTime: week33Opens, Payload: payload,
+	}
+}
+
+func starterSystem(seq int64, career, system, home string) Event {
+	return starterEvent(seq, career, ids.Zero, "system.discovered", SystemDiscovered{
+		System: system, ID: system, Name: system, Home: home, Bodies: 3, Complete: true,
+	})
+}
+
+func starterRuleResult(t *testing.T, setup []Event, candidate Event, value challengeValue) (float64, map[string]any, bool) {
+	t.Helper()
+	p := testutil.MemProjections(t)
+	var gotValue float64
+	var gotContext map[string]any
+	var gotOK bool
+	if err := p.WithWriteTx(t.Context(), func(tx *sql.Tx) error {
+		b := NewBatch(tx, BatchOptions{})
+		for _, ev := range setup {
+			for _, fold := range StateFolds() {
+				if err := fold.Apply(t.Context(), b, ev); err != nil {
+					return err
+				}
+			}
+		}
+		var err error
+		gotValue, gotContext, gotOK, err = value(t.Context(), b, candidate)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return gotValue, gotContext, gotOK
+}
+
+func TestStarterChallengeCatalogueAndTypeScriptMirror(t *testing.T) {
+	want := []Challenge{
+		{Key: "heavy_lift_week", Title: "Heavy Lift Week", Blurb: "Get the heaviest payload you can into orbit. The number is what the whole vehicle weighed the moment it got there, propellant included — catlog cannot tell the cargo from the rocket, and does not try.", Opens: week33Opens, Closes: week33Closes, Unit: "kg", Scope: ScopeSystem},
+		{Key: "speedrun_orbit", Title: "From Scratch To Orbit", Blurb: "Start a save and get to orbit. The clock is the game clock, counted from the beginning of that save.", Opens: week33Opens, Closes: week33Closes, Unit: "ms", Ascending: true, Scope: ScopeCareer},
+		{Key: "tumbleweek", Title: "Tumbleweek", Blurb: "The most kitten tumbles", Opens: week33Opens, Closes: week33Closes, Unit: "tumbles", Scope: ScopePlayer},
+		{Key: "coasting_class", Title: "Coasting Class", Blurb: "The most distinct worlds reached in-window on flights that launched with no engine installed. RCS thrusters and other non-engine propulsion still qualify.", Opens: week33Opens, Closes: week33Closes, Unit: "bodies", Scope: ScopeSystem},
+		{Key: "feather_touch", Title: "Feather Touch", Blurb: "The gentlest surviving landing away from that system's home body", Opens: week33Opens, Closes: week33Closes, Unit: "m/s", Ascending: true, Scope: ScopeSystem},
+		{Key: "full_house", Title: "Full House", Blurb: "The most kittens brought home in one piece at once", Opens: week33Opens, Closes: week33Closes, Unit: "kittens", Scope: ScopePlayer},
+	}
+	if got := Challenges(); !slices.Equal(got, want) {
+		t.Fatalf("challenge catalogue = %+v, want %+v", got, want)
+	}
+	if got := foldNames(ChallengeFolds()); !slices.Equal(got, []string{
+		"challenge:heavy_lift_week", "challenge:speedrun_orbit", "challenge:tumbleweek",
+		"challenge:coasting_class", "challenge:feather_touch", "challenge:full_house",
+	}) {
+		t.Errorf("challenge fold order = %v", got)
+	}
+	_, here, _, _ := runtime.Caller(0)
+	ts, err := os.ReadFile(filepath.Join(filepath.Dir(here), "../../../docs-site/src/data/challenges.ts"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(ts)
+	for _, c := range want {
+		start := strings.Index(text, `challenge: "`+c.Key+`"`)
+		if start < 0 {
+			t.Errorf("TypeScript mirror is missing %q", c.Key)
+			continue
+		}
+		end := strings.Index(text[start:], "\n  },")
+		if end < 0 {
+			t.Fatalf("TypeScript mirror entry %q has no object boundary", c.Key)
+		}
+		block := text[start : start+end]
+		for _, token := range []string{
+			`title: "` + c.Title + `"`, `"` + c.Blurb + `"`, `opens: WEEK_33_OPENS`,
+			`closes: WEEK_33_CLOSES`, `unit: "` + c.Unit + `"`,
+			fmt.Sprintf("ascending: %t", c.Ascending), `scope: "` + c.Scope + `"`,
+		} {
+			if !strings.Contains(block, token) {
+				t.Errorf("TypeScript mirror entry %q lacks %q", c.Key, token)
+			}
+		}
+	}
+	if strings.Count(text, "opens: WEEK_33_OPENS") != 6 || strings.Count(text, "closes: WEEK_33_CLOSES") != 6 {
+		t.Error("TypeScript mirror does not apply the exact Week 33 window to all six entries")
+	}
+	if !strings.Contains(text, "const WEEK_33_OPENS = 1_786_320_000_000") ||
+		!strings.Contains(text, "const WEEK_33_CLOSES = 1_786_924_800_000") {
+		t.Error("TypeScript mirror Week 33 constants differ from the Go registry")
+	}
+	names := FoldNames()
+	without := slices.DeleteFunc(slices.Clone(names), func(name string) bool { return strings.HasPrefix(name, challengeFoldPrefix) })
+	if buildIDForNames(13, names) == buildIDForNames(13, without) {
+		t.Error("six shipped challenge fold identities did not change BuildID")
+	}
+}
+
+func TestEveryStarterChallengePositiveRuleAndScope(t *testing.T) {
+	const career, system = "startercareer001", "starter-system"
+	flight := ids.ID{1, 2, 3}
+	zero := 0
+	events := []Event{
+		starterSystem(1, career, system, "home"),
+		starterEvent(2, career, flight, "flight.started", FlightStarted{Body: "home", EngineCount: &zero}),
+		func() Event {
+			e := starterEvent(3, career, flight, "vehicle.orbit", VehicleOrbit{Phase: "achieved", Body: "home", MassKg: 1200})
+			e.HasSimTime, e.SimTime = true, 42
+			return e
+		}(),
+		starterEvent(4, career, flight, "kitten.tumble", KittenTumble{Kid: "kit", Body: "home"}),
+		starterEvent(5, career, flight, "vehicle.soi", VehicleSOI{FromBody: "home", ToBody: "moon"}),
+		starterEvent(6, career, flight, "vehicle.landed", VehicleLanded{Body: "moon", VerticalSpeedMs: 1.25, HorizontalSpeedMs: 2, CrewCount: 2, Survived: true}),
+		starterEvent(7, career, flight, "flight.ended", FlightEnded{Reason: "recovered", CrewCount: 4, Body: "home"}),
+	}
+	p := testutil.MemProjections(t)
+	applyChallengeBatches(t, p, events, ChallengeFolds(), DefaultFlushRows, false)
+	rows := challengeRows(t, p)
+	if len(rows) != 6 {
+		t.Fatalf("starter rows = %+v, want all six", rows)
+	}
+	byKey := make(map[string]challengeTestRow, len(rows))
+	for _, row := range rows {
+		byKey[row.challenge] = row
+	}
+	checks := map[string]challengeTestRow{
+		"heavy_lift_week": {career: "", system: system, value: 1200, context: `{"body":"home","flight":"` + ids.String(flight) + `"}`},
+		"speedrun_orbit":  {career: career, system: system, value: 42000, context: `{"body":"home","flight":"` + ids.String(flight) + `"}`},
+		"tumbleweek":      {career: "", system: "", value: 1, context: ""},
+		"coasting_class":  {career: "", system: system, value: 1, context: `{"body":"moon","flight":"` + ids.String(flight) + `"}`},
+		"feather_touch":   {career: "", system: system, value: 1.25, context: `{"body":"moon","crew_count":2,"flight":"` + ids.String(flight) + `","horizontal_speed_ms":2}`},
+		"full_house":      {career: "", system: "", value: 4, context: `{"body":"home","flight":"` + ids.String(flight) + `"}`},
+	}
+	for key, want := range checks {
+		got, ok := byKey[key]
+		if !ok || got.career != want.career || got.system != want.system || got.value != want.value || got.context != want.context {
+			t.Errorf("%s row = %+v, want career=%q system=%q value=%v context=%s", key, got, want.career, want.system, want.value, want.context)
+		}
+		if strings.Contains(got.context, career) {
+			t.Errorf("%s context leaked raw career: %s", key, got.context)
+		}
+	}
+}
+
+func TestEveryStarterChallengeNegativePredicatesAndThresholds(t *testing.T) {
+	const career, system = "negativecareer1", "negative-system"
+	flight := ids.ID{9}
+	zero, one := 0, 1
+	discovery := starterSystem(1, career, system, "home")
+	zeroStart := starterEvent(2, career, flight, "flight.started", FlightStarted{Body: "home", EngineCount: &zero})
+	poweredStart := starterEvent(2, career, flight, "flight.started", FlightStarted{Body: "home", EngineCount: &one})
+	missingStart := starterEvent(2, career, flight, "flight.started", FlightStarted{Body: "home"})
+	flag := starterEvent(3, career, flight, "flight.flagged", FlightFlagged{Flag: "teleport"})
+	tests := []struct {
+		name      string
+		setup     []Event
+		candidate Event
+		value     challengeValue
+	}{
+		{"heavy zero mass", []Event{discovery, zeroStart}, starterEvent(4, career, flight, "vehicle.orbit", VehicleOrbit{Phase: "achieved", Body: "home"}), heavyLiftWeekValue},
+		{"heavy escaped", []Event{discovery, zeroStart}, starterEvent(4, career, flight, "vehicle.orbit", VehicleOrbit{Phase: "escaped", Body: "home", MassKg: 10}), heavyLiftWeekValue},
+		{"heavy away", []Event{discovery, zeroStart}, starterEvent(4, career, flight, "vehicle.orbit", VehicleOrbit{Phase: "achieved", Body: "moon", MassKg: 10}), heavyLiftWeekValue},
+		{"heavy missing system home", []Event{zeroStart}, starterEvent(4, career, flight, "vehicle.orbit", VehicleOrbit{Phase: "achieved", Body: "home", MassKg: 10}), heavyLiftWeekValue},
+		{"speedrun no simulation time", []Event{discovery, zeroStart}, starterEvent(4, career, flight, "vehicle.orbit", VehicleOrbit{Phase: "achieved", Body: "home"}), speedrunOrbitValue},
+		{"speedrun no career", []Event{zeroStart}, func() Event {
+			e := starterEvent(4, "", flight, "vehicle.orbit", VehicleOrbit{Phase: "achieved", Body: "home"})
+			e.HasSimTime = true
+			return e
+		}(), speedrunOrbitValue},
+		{"tumble wrong event", []Event{zeroStart}, starterEvent(4, career, flight, "vehicle.soi", VehicleSOI{ToBody: "moon"}), tumbleweekValue},
+		{"coasting missing engine", []Event{discovery, missingStart}, starterEvent(4, career, flight, "vehicle.soi", VehicleSOI{ToBody: "moon"}), coastingClassValue},
+		{"coasting powered", []Event{discovery, poweredStart}, starterEvent(4, career, flight, "vehicle.soi", VehicleSOI{ToBody: "moon"}), coastingClassValue},
+		{"coasting empty body", []Event{discovery, zeroStart}, starterEvent(4, career, flight, "vehicle.soi", VehicleSOI{}), coastingClassValue},
+		{"feather zero vertical speed", []Event{discovery, zeroStart}, starterEvent(4, career, flight, "vehicle.landed", VehicleLanded{Body: "moon", Survived: true}), featherTouchValue},
+		{"feather did not survive", []Event{discovery, zeroStart}, starterEvent(4, career, flight, "vehicle.landed", VehicleLanded{Body: "moon", VerticalSpeedMs: 1}), featherTouchValue},
+		{"feather home body", []Event{discovery, zeroStart}, starterEvent(4, career, flight, "vehicle.landed", VehicleLanded{Body: "home", VerticalSpeedMs: 1, Survived: true}), featherTouchValue},
+		{"full house not recovered", []Event{zeroStart}, starterEvent(4, career, flight, "flight.ended", FlightEnded{Reason: "destroyed", CrewCount: 4}), fullHouseValue},
+		{"full house empty", []Event{zeroStart}, starterEvent(4, career, flight, "flight.ended", FlightEnded{Reason: "recovered"}), fullHouseValue},
+		{"flight flag excludes heavy", []Event{discovery, zeroStart, flag}, starterEvent(4, career, flight, "vehicle.orbit", VehicleOrbit{Phase: "achieved", Body: "home", MassKg: 10}), heavyLiftWeekValue},
+		{"flight flag excludes tumble", []Event{zeroStart, flag}, starterEvent(4, career, flight, "kitten.tumble", KittenTumble{Body: "home"}), tumbleweekValue},
+		{"flight flag excludes coasting", []Event{discovery, zeroStart, flag}, starterEvent(4, career, flight, "vehicle.soi", VehicleSOI{ToBody: "moon"}), coastingClassValue},
+		{"flight flag excludes feather", []Event{discovery, zeroStart, flag}, starterEvent(4, career, flight, "vehicle.landed", VehicleLanded{Body: "moon", VerticalSpeedMs: 1, Survived: true}), featherTouchValue},
+		{"flight flag excludes full house", []Event{zeroStart, flag}, starterEvent(4, career, flight, "flight.ended", FlightEnded{Reason: "recovered", CrewCount: 4}), fullHouseValue},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if value, cx, ok := starterRuleResult(t, tc.setup, tc.candidate, tc.value); ok {
+				t.Errorf("candidate contributed value=%v context=%v", value, cx)
+			}
+		})
+	}
+
+	zeroTime := starterEvent(4, career, flight, "vehicle.orbit", VehicleOrbit{Phase: "achieved", Body: "home"})
+	zeroTime.HasSimTime = true
+	if value, _, ok := starterRuleResult(t, []Event{discovery, zeroStart}, zeroTime, speedrunOrbitValue); !ok || value != 0 {
+		t.Errorf("valid zero career time = %v,%v; want scored zero", value, ok)
+	}
+}
+
+func TestCoastingClassMembersArePostGateSystemScopedAndBatchIndependent(t *testing.T) {
+	const careerA, careerB = "coastcareer0001", "coastcareer0002"
+	const systemA, systemB = "coast-system-a", "coast-system-b"
+	powered, zero := 2, 0
+	flight1, flight2, flight3 := ids.ID{1}, ids.ID{2}, ids.ID{3}
+	history := []Event{
+		starterSystem(1, careerA, systemA, "home-a"),
+		starterEvent(2, careerA, flight1, "flight.started", FlightStarted{EngineCount: &powered}),
+		starterEvent(3, careerA, flight1, "vehicle.soi", VehicleSOI{ToBody: "shared"}),
+		starterEvent(4, careerA, flight2, "flight.started", FlightStarted{EngineCount: &zero}),
+		func() Event {
+			e := starterEvent(5, careerA, flight2, "vehicle.soi", VehicleSOI{ToBody: "shared"})
+			e.RecvTime = week33Opens - 1
+			return e
+		}(),
+		starterEvent(6, careerA, flight2, "vehicle.soi", VehicleSOI{ToBody: "shared"}),
+		starterEvent(7, careerA, flight2, "vehicle.soi", VehicleSOI{ToBody: "shared"}),
+		starterEvent(8, careerA, flight2, "vehicle.soi", VehicleSOI{ToBody: "other"}),
+		starterEvent(9, careerA, ids.Zero, "system.body", SystemBody{System: systemA, Body: "system-root", Name: "System Root", Kind: "star"}),
+		starterEvent(10, careerA, flight2, "vehicle.soi", VehicleSOI{ToBody: "system-root"}),
+		starterSystem(11, careerB, systemB, "home-b"),
+		starterEvent(12, careerB, flight3, "flight.started", FlightStarted{EngineCount: &zero}),
+		starterEvent(13, careerB, flight3, "vehicle.soi", VehicleSOI{ToBody: "shared"}),
+	}
+	var wantRows []challengeTestRow
+	var wantMembers []string
+	for _, tc := range []struct {
+		name      string
+		batchSize int
+		refined   bool
+	}{{"one", 1, false}, {"large", DefaultFlushRows, false}, {"rebuild", 2, true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := testutil.MemProjections(t)
+			applyChallengeBatches(t, p, history, ChallengeFolds(), tc.batchSize, tc.refined)
+			var rows []challengeTestRow
+			for _, row := range challengeRows(t, p) {
+				if row.challenge == "coasting_class" {
+					rows = append(rows, row)
+				}
+			}
+			members := dumpChallengeMembers(t, p)
+			if wantRows == nil {
+				wantRows, wantMembers = rows, members
+			} else if !slices.Equal(rows, wantRows) || !slices.Equal(members, wantMembers) {
+				t.Errorf("rows/members = %+v/%v, want %+v/%v", rows, members, wantRows, wantMembers)
+			}
+			if len(rows) != 2 || rows[0].system != systemA || rows[0].value != 3 || rows[1].system != systemB || rows[1].value != 1 {
+				t.Errorf("system-scoped rows = %+v", rows)
+			}
+			if len(members) != 4 {
+				t.Errorf("members = %v, want powered visit excluded, later zero-engine visit and both systems retained", members)
+			}
+		})
+	}
+}
+
+func dumpChallengeMembers(t *testing.T, p *store.Projections) []string {
+	t.Helper()
+	rows, err := p.Reader().QueryContext(t.Context(), `
+		SELECT system, member, first_seq FROM challenge_member
+		WHERE challenge = 'coasting_class' ORDER BY system, member`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var system, member string
+		var seq int64
+		if err := rows.Scan(&system, &member, &seq); err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, fmt.Sprintf("%s/%q/%d", system, member, seq))
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+func TestLateFlagRemovesStarterChallengeResultsOnRebuild(t *testing.T) {
+	const career, system = "flagcareer000001", "flag-system"
+	zero := 0
+	flight := ids.ID{7}
+	history := []Event{
+		starterSystem(1, career, system, "home"),
+		starterEvent(2, career, flight, "flight.started", FlightStarted{EngineCount: &zero}),
+		starterEvent(3, career, flight, "vehicle.orbit", VehicleOrbit{Phase: "achieved", Body: "home", MassKg: 10}),
+		starterEvent(4, career, flight, "flight.flagged", FlightFlagged{Flag: "teleport"}),
+	}
+	history[2].HasSimTime, history[2].SimTime = true, 5
+	incremental := testutil.MemProjections(t)
+	applyChallengeBatches(t, incremental, history, ChallengeFolds(), 1, false)
+	if got := len(challengeRows(t, incremental)); got != 2 {
+		t.Fatalf("incremental rows = %d, want optimistic heavy+speedrun", got)
+	}
+	rebuilt := testutil.MemProjections(t)
+	applyChallengeBatches(t, rebuilt, history, ChallengeFolds(), 1, true)
+	if got := challengeRows(t, rebuilt); len(got) != 0 {
+		t.Errorf("late-flagged starter results survived rebuild: %+v", got)
 	}
 }
 

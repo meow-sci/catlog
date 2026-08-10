@@ -2439,10 +2439,9 @@ definition/rule/fold-count disagreement, missing or invalid rules, duplicate or 
 `challenge:<key>` fold identities,
 and any key that `stats.Describe` recognises as a fixed or dynamic board. Definitions are never
 runtime configuration: there is no definition table, admin mutation or challenge result API.
-The shipped catalogue and executable rule map remain intentionally empty through H3, so no gameplay
-event yet feeds either table. The generic machinery is registered between badge and log folds in
-the shared second pass; once definitions exist its exact order is boards, badges, challenges,
-event census. The collection census nevertheless includes both row counts, and moderation treats
+The generic machinery is registered between badge and log folds in the shared second pass; its exact
+order is boards, badges, challenges, event census. The collection census includes both row counts,
+and moderation treats
 both tables as player-owned facts removed by structural log exclusion plus rebuild.
 
 Each executable `challengeFold` applies the receive-time gate **before** calling its arbitrary value
@@ -2467,6 +2466,42 @@ earlier contribution until a late `flight.flagged` arrives, while refined rebuil
 flight state and removes it. Conversely, adding a named challenge fold changes `BuildID`; rebuilding
 then discovers qualifying events from a past window without changing their receive-time deadline
 (PROJ-090).
+
+#### Week 33 starter challenges
+
+All six shipped definitions use the literal UTC receive-time window
+`[1786320000000, 1786924800000)`, or 2026-08-10 00:00 through 2026-08-17 00:00.
+There is no shared challenge calendar. Every candidate below is flight-bearing and explicitly calls
+`scoreable`; a flagged flight contributes nothing, and a late flag removes an optimistic result on
+refined rebuild.
+
+| Key | Kind and scope | Source and exact predicate | Unit | Context |
+|---|---|---|---|---|
+| `heavy_lift_week` | record, system | achieved `vehicle.orbit`; `mass_kg > 0`; the event career resolves to a known system whose `home_body` exactly equals the orbit's canonical `body` | `kg` | `body`, `flight` |
+| `speedrun_orbit` | best, save | achieved `vehicle.orbit`; career present; `sim_t` present (a real zero is allowed); value is `sim_t × 1000` | `ms` | `body`, `flight` |
+| `tumbleweek` | count, player | each `kitten.tumble`, using the same event source and flag eligibility as `kitten_tumbles` | `tumbles` | none |
+| `coasting_class` | record, system | `vehicle.soi` with nonempty canonical `to_body`; the flight has an earlier-or-same-sequence `flight.started` whose `engine_count` is known and exactly zero | `bodies` | last qualifying `body`, `flight` |
+| `feather_touch` | best, system | surviving `vehicle.landed`; `vertical_speed_ms > 0`; the event career resolves to a known system and the canonical landing `body` differs from its `home_body` | `m/s` | `body`, `flight`, `horizontal_speed_ms`, `crew_count` |
+| `full_house` | record, player | `flight.ended` with `reason == "recovered"` and `crew_count >= 1` | `kittens` | `body`, `flight` |
+
+Heavy Lift Week uses “payload” in the ordinary player sense: the value is the whole vehicle's
+current mass at the instant orbit was achieved, propellant included. KSA exposes no dependable
+cargo/booster split here, and catlog does not claim one. Home and away are never hardcoded to Earth:
+both predicates resolve `event career → career.system → system.home_body`, including system headers
+pending in the same batch, and refuse missing identity.
+
+Coasting Class means **no engine installed when the flight began**, not no propulsion. A missing
+`engine_count` is unknown and fails; only known zero qualifies. RCS, decoupler springs and docking
+push-off can still move such a vehicle. Only after the receive-time, scoreable, body, start-order,
+exact-zero and system gates pass does the fold insert member `<system>\x00<body>` into
+`challenge_member` at system scope `('', <system>)`. It then records the read-through member count.
+It never reads or writes `career_body`: an earlier powered or out-of-window visit therefore cannot
+suppress a later qualifying visit, the same body in two systems is distinct, and parentless system
+roots are ordinary members.
+
+These contexts are projector-authored minimal provenance and never carry the raw career. There is
+still no challenge result read API or visitor result page at this boundary; the player-facing docs
+archive describes the compile-time definitions only.
 
 ### Badge accumulator and dual-scope writer
 

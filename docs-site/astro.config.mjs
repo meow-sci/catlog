@@ -75,7 +75,10 @@ export default defineConfig({
         },
         {
           label: "Challenges",
-          items: [{ label: "How challenges work", slug: "challenges" }],
+          items: [
+            { label: "How challenges work", slug: "challenges" },
+            { label: "Challenge archive", slug: "challenges/archive" },
+          ],
         },
         {
           label: "Reference",

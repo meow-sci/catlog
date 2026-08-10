@@ -2151,6 +2151,32 @@ can discover an old qualifying event without reopening a deadline. H3 keeps both
 and rule map empty: generic machinery is testable with injected synthetic definitions, while no
 player-visible contest exists until H4 lands metadata and executable rules together.
 
+### PROJ-132 — Starter challenges use observable payload facts and system identity, not inferred vehicle intent
+
+*Accepted · 2026-08-10 · Task H4.*
+
+The first six challenges deliberately exercise record, best and count writes across player, save
+and per-system scope under one explicit Week 33 receive-time window. Their predicates reuse facts
+the ordinary boards already trust: achieved orbit, present career clock, tumble, surviving landing,
+recovered crew and the immutable launch-time engine count. Every flight-bearing rule calls
+`scoreable` itself. This keeps each contest explainable in one look and lets D22's refined rebuild
+remove a contribution when a later flag completed the flight's state.
+
+“Payload” is retained because it is the word players use, but its definition is deliberately the
+whole vehicle's current mass at orbit achievement, propellant included. KSA has no dependable
+payload/cargo split at that point, so inventing one would turn a measured event field into an
+inference. Heavy Lift and Feather Touch resolve the event save's system home rather than hardcoding
+Earth; this makes the comparison valid for replaceable catalogues and refuses missing provenance
+instead of guessing.
+
+Coasting Class similarly says “no engine installed”, not “no propulsion”. Only a present
+`engine_count == 0` qualifies; RCS, springs and docking push-off remain possible and are stated rather
+than detected. Its member is written only after window, eligibility, ordered launch fact and system
+gates, using `<system>\x00<body>` in the dedicated read-through set. Reusing `career_body` would let
+an earlier powered or out-of-window visit suppress a valid later one. No physics plausibility or
+forgery detector is added: signatures cannot make an attacker-controlled client truthful, and
+Constitution §8 says the complexity budget belongs elsewhere.
+
 ## Archive & restore
 
 The filesystem archiver, the manifest, restore verification, and the R2 design that is deliberately not built.

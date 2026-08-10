@@ -173,6 +173,21 @@ func (b *Batch) UpsertSystem(ctx context.Context, p SystemDiscovered, seq int64)
 	return nil
 }
 
+// CareerHomeBody resolves a save's immutable system binding to that system's
+// canonical home body, including discoveries pending in this batch. A missing
+// career, binding, system header or home body is unknown rather than a default.
+func (b *Batch) CareerHomeBody(ctx context.Context, playerID int64, career string) (string, bool, error) {
+	system, err := b.CareerSystem(ctx, playerID, career)
+	if err != nil || system == "" {
+		return "", false, err
+	}
+	e, err := b.systemEntry(ctx, system)
+	if err != nil || !e.exists || e.homeBody == "" {
+		return "", false, err
+	}
+	return e.homeBody, true, nil
+}
+
 func (b *Batch) flushSystems(ctx context.Context) error {
 	if len(b.dirtySystems) == 0 {
 		return nil

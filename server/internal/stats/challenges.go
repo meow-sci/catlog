@@ -10,8 +10,8 @@ import (
 // state, so incremental projection and rebuild apply the same rules.
 //
 // Adding a challenge whose window is already past is valid: the next rebuild
-// folds its result from retained history (PROJ-090). H2 deliberately ships no
-// definitions; H4 adds the first literals alongside their folds.
+// folds its result from retained history (PROJ-090). Definitions and their
+// executable rules always land together.
 type Challenge struct {
 	Key   string `json:"challenge"`
 	Title string `json:"title"`
@@ -28,10 +28,56 @@ type Challenge struct {
 	Scope string `json:"scope"`
 }
 
-// challengeCatalogue is intentionally empty at the H2 boundary. Challenge
-// definitions and their folds land together in H4; this slice is the single
-// compile-time insertion point for those literals.
-var challengeCatalogue = []Challenge{}
+const (
+	// 2026-08-10T00:00:00Z .. 2026-08-17T00:00:00Z
+	week33Opens  int64 = 1_786_320_000_000
+	week33Closes int64 = 1_786_924_800_000
+)
+
+// challengeCatalogue is the single compile-time insertion point for curated
+// definitions. Windows are explicit on every literal: there is no mutable or
+// runtime-relative challenge calendar.
+var challengeCatalogue = []Challenge{
+	{
+		Key: "heavy_lift_week", Title: "Heavy Lift Week",
+		Blurb: "Get the heaviest payload you can into orbit. The number is what the whole " +
+			"vehicle weighed the moment it got there, propellant included — catlog cannot " +
+			"tell the cargo from the rocket, and does not try.",
+		Opens: week33Opens, Closes: week33Closes,
+		Unit: "kg", Scope: ScopeSystem,
+	},
+	{
+		Key: "speedrun_orbit", Title: "From Scratch To Orbit",
+		Blurb: "Start a save and get to orbit. The clock is the game clock, counted from the beginning of that save.",
+		Opens: week33Opens, Closes: week33Closes,
+		Unit: "ms", Ascending: true, Scope: ScopeCareer,
+	},
+	{
+		Key: "tumbleweek", Title: "Tumbleweek",
+		Blurb: "The most kitten tumbles",
+		Opens: week33Opens, Closes: week33Closes,
+		Unit: "tumbles", Scope: ScopePlayer,
+	},
+	{
+		Key: "coasting_class", Title: "Coasting Class",
+		Blurb: "The most distinct worlds reached in-window on flights that launched with no engine installed. " +
+			"RCS thrusters and other non-engine propulsion still qualify.",
+		Opens: week33Opens, Closes: week33Closes,
+		Unit: "bodies", Scope: ScopeSystem,
+	},
+	{
+		Key: "feather_touch", Title: "Feather Touch",
+		Blurb: "The gentlest surviving landing away from that system's home body",
+		Opens: week33Opens, Closes: week33Closes,
+		Unit: "m/s", Ascending: true, Scope: ScopeSystem,
+	},
+	{
+		Key: "full_house", Title: "Full House",
+		Blurb: "The most kittens brought home in one piece at once",
+		Opens: week33Opens, Closes: week33Closes,
+		Unit: "kittens", Scope: ScopePlayer,
+	},
+}
 
 // Challenges returns a copy of the compile-time catalogue in display order.
 func Challenges() []Challenge { return slices.Clone(challengeCatalogue) }
