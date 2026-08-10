@@ -2,13 +2,114 @@ package projector_test
 
 import (
 	"context"
+	"fmt"
+	"reflect"
 	"testing"
 	"time"
 
+	"github.com/meow-sci/catlog/server/internal/ids"
 	"github.com/meow-sci/catlog/server/internal/projector"
 	"github.com/meow-sci/catlog/server/internal/stats"
 	"github.com/meow-sci/catlog/server/internal/store"
 )
+
+const moderationSystem = "moderation-system-hash"
+
+func moderationHistory(career string, f int) []store.Event {
+	flightID := flight(f)
+	return []store.Event{
+		discovery(career, moderationSystem),
+		rootBody(moderationSystem),
+		inCareer(ev(ids.Zero, "session.started", stats.SessionStarted{}, 0), career),
+		inCareer(ev(flightID, "flight.started", stats.FlightStarted{
+			VehicleName: "Moderated", Body: "earth", MassKg: 100, PartCount: 3, CrewCount: 1,
+		}, 10), career),
+		inCareer(ev(flightID, "vehicle.staging", stats.VehicleStaging{StageIndex: 0}, 12), career),
+		inCareer(ev(flightID, "vehicle.soi", stats.VehicleSOI{FromBody: "earth", ToBody: "luna"}, 20), career),
+		inCareer(ev(flightID, "vehicle.impact", stats.VehicleImpact{
+			SpeedMs: 25, EnergyJ: 1000, Survived: true, Body: "luna", CrewCount: 1,
+		}, 25), career),
+		inCareer(ev(flightID, "flight.ended", stats.FlightEnded{Reason: "recovered", CrewCount: 1}, 30), career),
+		inCareer(ev(ids.Zero, "roster.snapshot", stats.RosterSnapshot{Kittens: []stats.RosterKitten{{
+			Kid: "kid-" + career, Name: "Comet", TravelledM: 50, FastestMs: 5,
+			Missions: 1, MissionTimeS: 30,
+		}}}, 31), career),
+	}
+}
+
+// playerProjectionRows is every current player-owned projection family. The
+// system catalogue and event census are deliberately absent: they are shared
+// facts, not private rows. Future tables are added by their owning moderation
+// task rather than guessed here.
+func playerProjectionRows(t *testing.T, r *rig, playerID int64, handle string) map[string][]string {
+	t.Helper()
+	queries := map[string]string{
+		"player_stat":        `SELECT player_id, stat, value, context, updated_seq FROM player_stat WHERE player_id = %d ORDER BY stat`,
+		"career_stat":        `SELECT player_id, career, system, stat, value, context, updated_seq FROM career_stat WHERE player_id = %d ORDER BY career, stat`,
+		"system_stat":        `SELECT player_id, system, stat, value, context, updated_seq FROM system_stat WHERE player_id = %d ORDER BY system, stat`,
+		"flight_state":       `SELECT hex(flight_id), player_id, flags, ended_reason, crew, body, started_seq FROM flight_state WHERE player_id = %d ORDER BY hex(flight_id)`,
+		"player_body":        `SELECT player_id, kind, body, first_seq, first_sim_t FROM player_body WHERE player_id = %d ORDER BY kind, body`,
+		"career_body":        `SELECT player_id, career, system, kind, body, first_seq, first_sim_t FROM career_body WHERE player_id = %d ORDER BY career, kind, body`,
+		"kitten":             `SELECT player_id, kid, name, travelled_m, fastest_ms, missions, mission_time_s, kia, updated_seq FROM kitten WHERE player_id = %d ORDER BY kid`,
+		"career_kitten":      `SELECT player_id, career, system, kid, name, travelled_m, fastest_ms, missions, mission_time_s, kia, updated_seq FROM career_kitten WHERE player_id = %d ORDER BY career, kid`,
+		"career":             `SELECT player_id, career, ordinal, system, system_changed, max_sim_t, rewound, first_seq, last_seq FROM career WHERE player_id = %d ORDER BY career`,
+		"player_stat_period": `SELECT player_id, stat, period, bucket, value, context, updated_seq FROM player_stat_period WHERE player_id = %d ORDER BY stat, period, bucket`,
+	}
+	out := make(map[string][]string, len(queries)+1)
+	err := r.live.With(func(p *store.Projections) error {
+		for name, query := range queries {
+			rows, err := dump(t.Context(), p, fmt.Sprintf(query, playerID))
+			if err != nil {
+				return fmt.Errorf("%s: %w", name, err)
+			}
+			out[name] = rows
+		}
+		rows, err := dump(t.Context(), p, `SELECT at, handle, type, summary FROM feed WHERE handle = '`+handle+`' ORDER BY id`)
+		out["feed"] = rows
+		return err
+	})
+	if err != nil {
+		t.Fatalf("read player-owned projections: %v", err)
+	}
+	return out
+}
+
+func requirePopulatedPlayerProjections(t *testing.T, rows map[string][]string) {
+	t.Helper()
+	for table, values := range rows {
+		if len(values) == 0 {
+			t.Errorf("fixture produced no %s rows", table)
+		}
+	}
+}
+
+func requireNoPlayerProjections(t *testing.T, rows map[string][]string) {
+	t.Helper()
+	for table, values := range rows {
+		if len(values) != 0 {
+			t.Errorf("private %s rows survived: %v", table, values)
+		}
+	}
+}
+
+func sharedCatalogueRows(t *testing.T, r *rig) (systems, bodies []string) {
+	t.Helper()
+	err := r.live.With(func(p *store.Projections) error {
+		var err error
+		// first_seq is intentionally omitted: removing the first reporter makes
+		// the earliest remaining report the catalogue's new provenance, while
+		// the shared content itself must remain.
+		if systems, err = dump(t.Context(), p, `SELECT hash, system_id, name, slug, home_body, body_count, reported_complete FROM system ORDER BY hash`); err != nil {
+			return err
+		}
+		bodies, err = dump(t.Context(), p, `SELECT hash, body, name, class, kind, rank, parent FROM system_body ORDER BY hash, body`)
+		return err
+	})
+	if err != nil {
+		t.Fatalf("read shared catalogue: %v", err)
+	}
+	return systems, bodies
+}
 
 // statRows is every board row a player holds, keyed by stat.
 func statRows(t *testing.T, r *rig, playerID int64) map[string]float64 {
@@ -41,15 +142,15 @@ func TestShadowbanLeavesTheBoardsOnRebuild(t *testing.T) {
 	r := newRig(t)
 	subject, bystander := r.player("griefer"), r.player("honest_cat")
 
-	r.ship(subject, cleanHistory(1)...)
-	r.ship(bystander, cleanHistory(100)...)
+	r.ship(subject, moderationHistory("subject-career", 1)...)
+	r.ship(bystander, moderationHistory("bystander-career", 100)...)
 	r.drain()
 
-	before := statRows(t, r, subject)
-	if len(before) == 0 {
-		t.Fatal("the subject holds no board rows, so this test would prove nothing")
-	}
-	bystanderBefore := statRows(t, r, bystander)
+	before := playerProjectionRows(t, r, subject, "griefer")
+	requirePopulatedPlayerProjections(t, before)
+	bystanderBefore := playerProjectionRows(t, r, bystander, "honest_cat")
+	requirePopulatedPlayerProjections(t, bystanderBefore)
+	systemsBefore, bodiesBefore := sharedCatalogueRows(t, r)
 
 	moved, err := r.events.ShadowbanPlayer(t.Context(), subject, rigNow.UnixMilli(), "harassment")
 	if err != nil {
@@ -63,23 +164,20 @@ func TestShadowbanLeavesTheBoardsOnRebuild(t *testing.T) {
 	// cursor only moves forward, so removing events from the log cannot take
 	// back what they already scored. This is exactly why every moderation verb
 	// queues a rebuild, and why the handle directory hides them meanwhile.
-	if got := statRows(t, r, subject); len(got) != len(before) {
-		t.Errorf("board rows changed without a rebuild: %d, want %d", len(got), len(before))
+	if got := playerProjectionRows(t, r, subject, "griefer"); !reflect.DeepEqual(got, before) {
+		t.Error("player-owned projections changed before the rebuild cutover")
 	}
 
 	r.rebuild()
 
-	if got := statRows(t, r, subject); len(got) != 0 {
-		t.Errorf("the shadowbanned player still holds %d board rows after a rebuild: %v", len(got), got)
+	requireNoPlayerProjections(t, playerProjectionRows(t, r, subject, "griefer"))
+	if after := playerProjectionRows(t, r, bystander, "honest_cat"); !reflect.DeepEqual(after, bystanderBefore) {
+		t.Error("the bystander's projections changed during the shadow-ban rebuild")
 	}
-	after := statRows(t, r, bystander)
-	if len(after) != len(bystanderBefore) {
-		t.Errorf("the bystander holds %d board rows, want %d", len(after), len(bystanderBefore))
-	}
-	for stat, want := range bystanderBefore {
-		if after[stat] != want {
-			t.Errorf("the bystander's %s moved: %v, want %v", stat, after[stat], want)
-		}
+	systemsAfter, bodiesAfter := sharedCatalogueRows(t, r)
+	if !reflect.DeepEqual(systemsAfter, systemsBefore) || !reflect.DeepEqual(bodiesAfter, bodiesBefore) {
+		t.Errorf("shared system catalogue changed: before=%v/%v after=%v/%v",
+			systemsBefore, bodiesBefore, systemsAfter, bodiesAfter)
 	}
 }
 
@@ -89,32 +187,26 @@ func TestShadowbanLeavesTheBoardsOnRebuild(t *testing.T) {
 func TestUnshadowbanRestoresEveryRecord(t *testing.T) {
 	r := newRig(t)
 	subject := r.player("griefer")
-	r.ship(subject, cleanHistory(1)...)
+	r.ship(subject, moderationHistory("subject-career", 1)...)
 	r.drain()
 	r.rebuild()
-	before := statRows(t, r, subject)
+	before := playerProjectionRows(t, r, subject, "griefer")
+	requirePopulatedPlayerProjections(t, before)
 
 	if _, err := r.events.ShadowbanPlayer(t.Context(), subject, rigNow.UnixMilli(), "under review"); err != nil {
 		t.Fatalf("ShadowbanPlayer: %v", err)
 	}
 	r.rebuild()
-	if got := statRows(t, r, subject); len(got) != 0 {
-		t.Fatalf("still on %d boards while withheld", len(got))
-	}
+	requireNoPlayerProjections(t, playerProjectionRows(t, r, subject, "griefer"))
 
 	if _, err := r.events.UnshadowbanPlayer(t.Context(), subject); err != nil {
 		t.Fatalf("UnshadowbanPlayer: %v", err)
 	}
 	r.rebuild()
 
-	after := statRows(t, r, subject)
-	if len(after) != len(before) {
-		t.Fatalf("holds %d board rows after the restore, want the original %d", len(after), len(before))
-	}
-	for stat, want := range before {
-		if after[stat] != want {
-			t.Errorf("%s = %v after the round trip, want %v", stat, after[stat], want)
-		}
+	after := playerProjectionRows(t, r, subject, "griefer")
+	if !reflect.DeepEqual(after, before) {
+		t.Errorf("player projections differ after restore:\nbefore=%v\nafter=%v", before, after)
 	}
 }
 
@@ -129,14 +221,56 @@ func TestWithheldEventsNeverFoldIncrementally(t *testing.T) {
 	if _, err := r.events.ShadowbanPlayer(t.Context(), subject, rigNow.UnixMilli(), "abuse"); err != nil {
 		t.Fatalf("ShadowbanPlayer: %v", err)
 	}
-	r.ship(subject, cleanHistory(1)...)
+	r.ship(subject, moderationHistory("subject-career", 1)...)
 	r.drain()
 
-	if got := statRows(t, r, subject); len(got) != 0 {
-		t.Errorf("a shadowbanned player scored %d boards incrementally: %v", len(got), got)
-	}
+	requireNoPlayerProjections(t, playerProjectionRows(t, r, subject, "griefer"))
 	if n, err := r.events.CountWithheldEvents(t.Context(), subject); err != nil || n == 0 {
 		t.Errorf("withheld count = %d (err %v), want the shipped events", n, err)
+	}
+}
+
+func TestPurgeLeavesNoPlayerOwnedProjectionRowsAfterRebuild(t *testing.T) {
+	r := newRig(t)
+	subject, bystander := r.player("deleted_cat"), r.player("honest_cat")
+	history := moderationHistory("deleted-career", 200)
+	r.ship(subject, history...)
+	r.ship(bystander, moderationHistory("bystander-career", 300)...)
+	r.drain()
+
+	before := playerProjectionRows(t, r, subject, "deleted_cat")
+	requirePopulatedPlayerProjections(t, before)
+	bystanderBefore := playerProjectionRows(t, r, bystander, "honest_cat")
+	systemsBefore, bodiesBefore := sharedCatalogueRows(t, r)
+
+	counts, err := r.events.PurgePlayer(t.Context(), subject)
+	if err != nil {
+		t.Fatalf("PurgePlayer: %v", err)
+	}
+	if counts.Events != int64(len(history)) || counts.Withheld != 0 || counts.Handles != 1 {
+		t.Errorf("purge counts = %+v, want %d live events, one handle, and no withheld events", counts, len(history))
+	}
+	if n, err := r.events.CountEvents(t.Context(), subject); err != nil || n != 0 {
+		t.Errorf("live private log rows after purge = %d (err %v)", n, err)
+	}
+	if n, err := r.events.CountWithheldEvents(t.Context(), subject); err != nil || n != 0 {
+		t.Errorf("withheld private log rows after purge = %d (err %v)", n, err)
+	}
+
+	// Like shadow-ban, events.db changes first and the old projection file
+	// remains untouched until the atomic rebuild swap.
+	if got := playerProjectionRows(t, r, subject, "deleted_cat"); !reflect.DeepEqual(got, before) {
+		t.Error("purge mutated projections before the rebuild cutover")
+	}
+	r.rebuild()
+	requireNoPlayerProjections(t, playerProjectionRows(t, r, subject, "deleted_cat"))
+	if after := playerProjectionRows(t, r, bystander, "honest_cat"); !reflect.DeepEqual(after, bystanderBefore) {
+		t.Error("the bystander's projections changed during the purge rebuild")
+	}
+	systemsAfter, bodiesAfter := sharedCatalogueRows(t, r)
+	if !reflect.DeepEqual(systemsAfter, systemsBefore) || !reflect.DeepEqual(bodiesAfter, bodiesBefore) {
+		t.Errorf("purge removed shared catalogue rows: before=%v/%v after=%v/%v",
+			systemsBefore, bodiesBefore, systemsAfter, bodiesAfter)
 	}
 }
 

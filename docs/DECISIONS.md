@@ -354,6 +354,26 @@ Moving the rows makes the exclusion a property of the data rather than of the qu
 
 Two consequences recorded so they are not mistaken for oversights. **`PurgePlayer` deletes from both tables** — an account deletion that left a copy of the log behind would be a privacy failure dressed as a feature. And **the ingest write path forks once**, on a primary-key lookup per batch rather than a cached set: it is next to two signature verifications so the cost is invisible, and a cache here would be a coherence question on the one path where getting it wrong publishes a shadowbanned player's records to a leaderboard.
 
+### STORE-019 — Player-owned projections inherit moderation from the log; shared system catalogues remain
+
+*Accepted · 2026-08-10 · Task A9.*
+
+No projection table is enumerated by the shadow-ban or purge path, and the new player-owned tables
+need no moderation wiring. A shadow ban moves the player's rows out of `event`; a purge deletes that
+player from both `event` and `shadowban_event`. The next rebuild therefore cannot see those events
+and cannot reproduce any of their `career_stat`, `system_stat`, `career_body` or `career_kitten`
+rows. This is the same structural exclusion STORE-018 chose over a flag: a projection added later
+inherits it automatically, while a per-table delete list would make every new projection a chance
+to forget the Constitution §7 guarantee. The handle directory hides the account while stale live
+projections await that rebuild.
+
+`system` and `system_body` are intentionally different. They are immutable catalogue facts keyed by
+a content hash, not rows owned by the player who happened to report them. Removing one account must
+not directly erase a catalogue other players use, and leaving an otherwise unreferenced catalogue
+behind publishes no identity or achievement. A rebuild reproduces it when the remaining live log
+still reports it and naturally drops it otherwise; moderation is required to remove the player's
+binding and derived achievements, not common game content.
+
 ## Ingest, auth & the conformance vectors
 
 The §4.5.3 verification chain, the idempotency contract, and how the cross-language vectors stay byte-identical.
