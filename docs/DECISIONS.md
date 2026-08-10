@@ -20,17 +20,17 @@ commit. See [ARCHITECTURE.md](ARCHITECTURE.md#7-keeping-the-documentation-true) 
 
 ## Contents
 
-- **[Repository, toolchain & dependencies](#repository-toolchain--dependencies)** — `REPO-*`, 25 entries
-- **[Storage — Turso, schema & compression](#storage--turso-schema--compression)** — `STORE-*`, 18 entries
-- **[Ingest, auth & the conformance vectors](#ingest-auth--the-conformance-vectors)** — `INGEST-*`, 25 entries
-- **[Identity, handles & moderation](#identity-handles--moderation)** — `IDENT-*`, 18 entries
-- **[Projector, boards & the read API](#projector-boards--the-read-api)** — `PROJ-*`, 108 entries
-- **[Archive & restore](#archive--restore)** — `ARCH-*`, 13 entries
-- **[The frontend](#the-frontend)** — `UI-*`, 44 entries
-- **[The mod and its KSA-free core](#the-mod-and-its-ksa-free-core)** — `MOD-*`, 79 entries
-- **[The load harness](#the-load-harness)** — `LOAD-*`, 26 entries
-- **[Containers, nginx & deployment](#containers-nginx--deployment)** — `OPS-*`, 26 entries
-- **[Documentation](#documentation)** — `DOCS-*`, 4 entries
+- **[Repository, toolchain & dependencies](#repository-toolchain--dependencies)** — `REPO-*`
+- **[Storage — Turso, schema & compression](#storage--turso-schema--compression)** — `STORE-*`
+- **[Ingest, auth & the conformance vectors](#ingest-auth--the-conformance-vectors)** — `INGEST-*`
+- **[Identity, handles & moderation](#identity-handles--moderation)** — `IDENT-*`
+- **[Projector, boards & the read API](#projector-boards--the-read-api)** — `PROJ-*`
+- **[Archive & restore](#archive--restore)** — `ARCH-*`
+- **[The frontend](#the-frontend)** — `UI-*`
+- **[The mod and its KSA-free core](#the-mod-and-its-ksa-free-core)** — `MOD-*`
+- **[The load harness](#the-load-harness)** — `LOAD-*`
+- **[Containers, nginx & deployment](#containers-nginx--deployment)** — `OPS-*`
+- **[Documentation](#documentation)** — `DOCS-*`
 
 ---
 
@@ -4042,3 +4042,14 @@ Those are different useful surfaces, and hiding one behind a generic “live res
 reader guess which representation they would get. The pages also state that a challenge is a dated
 leaderboard whose standings do not alter ordinary boards or attach a second score to a profile;
 without that boundary, “temporary challenge” could sound like a modifier applied to every ranking.
+
+### DOCS-009 — The decision-log contents names areas and prefixes, not manually counted entries
+
+*Accepted · 2026-08-10 · Task J1.*
+
+The J1 coverage audit found six of the eleven entry totals in this file's Contents stale even though
+their links and area prefixes were correct. Those totals duplicate information already expressed by
+the headings, add nothing to navigation or next-number selection, and require every unrelated
+decision to edit a distant line. The Contents therefore keeps only each area's link and prefix.
+Audits derive counts and maxima from headings when they need them; the document no longer carries a
+second hand-maintained answer that can silently disagree with its own entries.
