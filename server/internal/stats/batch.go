@@ -792,6 +792,32 @@ func (b *Batch) AddCareerBody(ctx context.Context, ev Event, kind, body string) 
 	return true, nil
 }
 
+// AddCareerSetMember records a save-scoped member in career_body while allowing
+// the save's system to remain unknown. E3 uses body as the generic member slot
+// for kind orbit_kid; SOI and landed keep using AddCareerBody, whose stronger
+// known-system requirement is unchanged.
+func (b *Batch) AddCareerSetMember(ctx context.Context, ev Event, kind, member string) (bool, error) {
+	if ev.Career == "" {
+		return false, nil
+	}
+	system, err := b.CareerSystem(ctx, ev.PlayerID, ev.Career)
+	if err != nil {
+		return false, err
+	}
+	m, err := b.playerCareerBodies(ctx, ev.PlayerID)
+	if err != nil {
+		return false, err
+	}
+	k := careerBodyKey{ev.Career, kind, member}
+	if _, ok := m[k]; ok {
+		return false, nil
+	}
+	e := &careerBodyEntry{system: system, firstSeq: ev.Seq}
+	m[k] = e
+	b.touchCareerBody(playerCareerBodyKey{ev.PlayerID, k}, e)
+	return true, nil
+}
+
 // LowerCareerBodyTime keeps the earliest arrival time for a body in one save.
 func (b *Batch) LowerCareerBodyTime(ctx context.Context, ev Event, kind, body string, t float64) error {
 	if ev.Career == "" {
@@ -826,6 +852,46 @@ func (b *Batch) CareerBodyCount(ctx context.Context, playerID int64, career, kin
 		}
 	}
 	return n, nil
+}
+
+// CareerSetCount reports every save-scoped row of kind for a player. Unlike a
+// body union, identical members in two careers are two distinct facts.
+func (b *Batch) CareerSetCount(ctx context.Context, playerID int64, kind string) (int64, error) {
+	m, err := b.playerCareerBodies(ctx, playerID)
+	if err != nil {
+		return 0, err
+	}
+	var n int64
+	for k := range m {
+		if k.kind == kind {
+			n++
+		}
+	}
+	return n, nil
+}
+
+// SystemCareerSetCount reports every save-scoped row of kind across this
+// player's careers bound to the event's system. It counts rows, not a union of
+// member strings, so the same kid in two saves remains two kittens. known is
+// false while the current save has no system binding.
+func (b *Batch) SystemCareerSetCount(ctx context.Context, ev Event, kind string) (n int64, known bool, err error) {
+	if ev.Career == "" {
+		return 0, false, nil
+	}
+	system, err := b.CareerSystem(ctx, ev.PlayerID, ev.Career)
+	if err != nil || system == "" {
+		return 0, false, err
+	}
+	m, err := b.playerCareerBodies(ctx, ev.PlayerID)
+	if err != nil {
+		return 0, false, err
+	}
+	for k, e := range m {
+		if e.system == system && k.kind == kind {
+			n++
+		}
+	}
+	return n, true, nil
 }
 
 // SystemBodyCount reports the union across this player's saves in the event's

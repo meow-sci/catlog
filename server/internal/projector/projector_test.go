@@ -534,7 +534,8 @@ func TestRebuildEqualsIncrementalForCareerScope(t *testing.T) {
 	r.ship(whiskers,
 		withoutSimTime(inCareer(ev(fa, "vehicle.staging", stats.VehicleStaging{StageIndex: 0}, 12), careerA)),
 		inCareer(ev(fa, "vehicle.soi", stats.VehicleSOI{FromBody: "earth", ToBody: "luna"}, 20), careerA),
-		inCareer(ev(fa, "flight.ended", stats.FlightEnded{Reason: "recovered", CrewCount: 1}, 30), careerA),
+		inCareer(ev(fa, "vehicle.orbit", stats.VehicleOrbit{Phase: "achieved", Body: "earth"}, 25), careerA),
+		inCareer(ev(fa, "flight.ended", stats.FlightEnded{Reason: "recovered", CrewCount: 1, Kids: []string{"kid-a"}}, 30), careerA),
 		withoutSimTime(inCareer(ev(ids.Zero, "roster.snapshot", stats.RosterSnapshot{Kittens: []stats.RosterKitten{{
 			Kid: "kid-a", Name: "Comet", TravelledM: 50, FastestMs: 5, Missions: 1, MissionTimeS: 30,
 		}}}, 31), careerA)),
@@ -542,7 +543,8 @@ func TestRebuildEqualsIncrementalForCareerScope(t *testing.T) {
 	r.ship(mittens,
 		inCareer(ev(fc, "flight.started", stats.FlightStarted{VehicleName: "C", Body: "earth", MassKg: 80}, 10), careerC),
 		inCareer(ev(fc, "vehicle.soi", stats.VehicleSOI{FromBody: "earth", ToBody: "luna"}, 20), careerC),
-		inCareer(ev(fc, "flight.ended", stats.FlightEnded{Reason: "recovered", CrewCount: 1}, 30), careerC),
+		inCareer(ev(fc, "vehicle.orbit", stats.VehicleOrbit{Phase: "achieved", Body: "earth"}, 25), careerC),
+		inCareer(ev(fc, "flight.ended", stats.FlightEnded{Reason: "recovered", CrewCount: 1, Kids: []string{"kid-c"}}, 30), careerC),
 	)
 	r.ship(whiskers,
 		discovery(careerB, hash),
@@ -634,6 +636,13 @@ func TestBatchSizeDoesNotChangeTheProjection(t *testing.T) {
 			// write to the same key.
 			r.ship(p, cleanHistory(1+i*10)...)
 			r.ship(p, cleanHistory(101+i*10)...)
+			career := fmt.Sprintf("batch-career-%04d", i)
+			f := flight(700 + i)
+			r.ship(p,
+				discovery(career, "batch-system"),
+				inCareer(ev(f, "vehicle.orbit", stats.VehicleOrbit{Phase: "achieved", Body: "earth"}, 1), career),
+				inCareer(ev(f, "flight.ended", stats.FlightEnded{Reason: "recovered", Kids: []string{"batch-kid"}}, 2), career),
+			)
 		}
 		r.drain()
 		return r.snapshot()
@@ -649,6 +658,9 @@ func TestBatchSizeDoesNotChangeTheProjection(t *testing.T) {
 	if values["1/"+stats.StatPartsLost] != 28 || values["1/"+stats.StatBiggestPartsLost] != 14 {
 		t.Fatalf("part-board fixture = sum %v, biggest %v; want 28 and 14",
 			values["1/"+stats.StatPartsLost], values["1/"+stats.StatBiggestPartsLost])
+	}
+	if values["1/"+stats.StatKittensToOrbitAndBack] != 1 {
+		t.Fatalf("orbit-kitten batch fixture = %v, want 1", values["1/"+stats.StatKittensToOrbitAndBack])
 	}
 
 	for _, batchSize := range []int{2, 3, 17, projector.DefaultBatchSize, 10_000} {

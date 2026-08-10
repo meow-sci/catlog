@@ -218,8 +218,12 @@ crossing careers with rolling buckets would add an unbounded fourth storage dime
 are empty until their board folds land; migration 0006 establishes the final schema first.
 
 `career_body` has primary key `(player_id, career, kind, body)` and an index on
-`(player_id, system, kind, body)` for distinct-body system unions. Its implemented kinds are `'soi'`
-and `'landed'`; `first_sim_t` is populated only for SOI arrivals. `career_kitten` has primary key
+`(player_id, system, kind, body)` for distinct-member system unions. Its implemented kinds are
+`'soi'`, `'landed'` and `'orbit_kid'`; the last stores the kitten id in the existing `body` member
+column and is never written to `player_body`. `first_sim_t` is populated only for SOI arrivals.
+Adding `'orbit_kid'` changes no schema: it reuses the generic member column and migration 0007
+table unchanged.
+`career_kitten` has primary key
 `(player_id, career, kid)`, plus indexes on `(player_id, career)` and `(player_id, system)`. Both
 tables denormalise `system` from the career, and both are rebuildable additions from migration 0007.
 
@@ -347,7 +351,7 @@ an inference about why it changed.
 
 ### The boards
 
-Forty-five fixed keys, in publish order — which is the order `FixedBoards()` returns and therefore
+Forty-six fixed keys, in publish order — which is the order `FixedBoards()` returns and therefore
 the order `GET /v1/leaderboards` lists them, grouped by kind rather than by source event:
 
 - **records** — `biggest_lithobrake_survived`, `peak_g_survived`, `max_q_survived`,
@@ -357,7 +361,8 @@ the order `GET /v1/leaderboards` lists them, grouped by kind rather than by sour
   `most_parts`, `biggest_stack`, `biggest_crew`, `biggest_recovery`, `most_stages`, `longest_eva`;
 - **counters** — `kitten_tumbles`, `rud_total`, `orbits_achieved`, `soi_bodies`, `landed_bodies`,
   `landings`, `dockings`, `stagings`, `splashdowns`, `evas`, `flameouts`, `engine_ignitions`,
-  `kittens_recovered`, then append-only `botched_landings` and `parts_lost`;
+  `kittens_recovered`, then append-only `botched_landings`, `parts_lost` and
+  `kittens_to_orbit_and_back`;
 - **derived totals and per-kitten records** — `distance_travelled`, `top_kitten_distance`,
   `top_kitten_missions`;
 - **career time and save-native boards** — `fastest_to_orbit`, `career_playtime`, `play_sessions`;

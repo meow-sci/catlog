@@ -26,10 +26,11 @@ func moderationHistory(career string, f int) []store.Event {
 		}, 10), career),
 		inCareer(ev(flightID, "vehicle.staging", stats.VehicleStaging{StageIndex: 0}, 12), career),
 		inCareer(ev(flightID, "vehicle.soi", stats.VehicleSOI{FromBody: "earth", ToBody: "luna"}, 20), career),
+		inCareer(ev(flightID, "vehicle.orbit", stats.VehicleOrbit{Phase: "achieved", Body: "earth"}, 22), career),
 		inCareer(ev(flightID, "vehicle.impact", stats.VehicleImpact{
 			SpeedMs: 25, EnergyJ: 1000, Survived: true, Body: "luna", CrewCount: 1,
 		}, 25), career),
-		inCareer(ev(flightID, "flight.ended", stats.FlightEnded{Reason: "recovered", CrewCount: 1}, 30), career),
+		inCareer(ev(flightID, "flight.ended", stats.FlightEnded{Reason: "recovered", CrewCount: 1, Kids: []string{"kid-" + career}}, 30), career),
 		inCareer(ev(ids.Zero, "roster.snapshot", stats.RosterSnapshot{Kittens: []stats.RosterKitten{{
 			Kid: "kid-" + career, Name: "Comet", TravelledM: 50, FastestMs: 5,
 			Missions: 1, MissionTimeS: 30,

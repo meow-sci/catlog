@@ -38,7 +38,7 @@ export interface Board {
 
 const UNIVERSAL_SCOPES: Board["scopes"] = ["player", "career", "system"];
 
-/** The 45 fixed boards, in the order the site publishes them. */
+/** The 46 fixed boards, in the order the site publishes them. */
 const BOARD_DEFINITIONS: Omit<Board, "scopes">[] = [
   {
     stat: "biggest_lithobrake_survived",
@@ -638,9 +638,26 @@ const BOARD_DEFINITIONS: Omit<Board, "scopes">[] = [
       "The flight was flagged.",
     ],
   },
+  {
+    stat: "kittens_to_orbit_and_back",
+    title: "Kittens To Orbit And Home",
+    unit: "kittens",
+    ascending: false,
+    career: false,
+    from: ["flight.ended"],
+    what: "How many save-local kittens rode home on a recovered flight that had reached orbit.",
+    how: "Each kitten aboard at recovery counts once per save. The player view adds distinct save-and-kitten pairs across all saves; the system view does the same across saves whose celestial system is known. A kitten who boarded after orbit counts, while one who transferred away before recovery does not, because the recovery-time crew list is authoritative.",
+    excluded: [
+      "The flight never reached orbit.",
+      "The flight did not end recovered.",
+      "Nobody was aboard at recovery.",
+      "The flight was flagged.",
+      "Only the celestial-system view skips a save whose system is unknown; its player and save counts still move.",
+    ],
+  },
 ];
 
-// Scope is deliberately attached here rather than repeated on 45 entries. A
+// Scope is deliberately attached here rather than repeated on 46 entries. A
 // board added to the catalog receives every scope automatically; there is no
 // opt-out registry to forget to update.
 export const BOARDS: Board[] = BOARD_DEFINITIONS.map((board) => ({

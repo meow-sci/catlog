@@ -140,6 +140,7 @@ func BoardFolds() []Fold {
 		toBodyFold{},
 		careerPlaytimeFold{},
 		countFold{stat: StatPlaySessions, eventType: "session.started"},
+		kittensToOrbitFold{},
 	}
 }
 
@@ -215,9 +216,9 @@ func addCount(ctx context.Context, b *Batch, ev Event, stat string, delta float6
 	return periodAdd(ctx, b, ev, stat, delta)
 }
 
-// setValue writes a derived total, replacing whatever was there. Used by the two
-// boards whose value is a function of another table (`soi_bodies` counts
-// player_body, `distance_travelled` sums kitten) rather than an accumulation.
+// setValue writes a derived total, replacing whatever was there. Used by
+// set-backed and derived-total boards whose value is a function of another
+// table rather than an accumulation.
 func setValue(ctx context.Context, b *Batch, ev Event, stat string, value float64) error {
 	// A derived total's *window* value is what it grew by inside that window —
 	// "distance travelled this month", not "lifetime distance as of this
@@ -243,8 +244,8 @@ func setValue(ctx context.Context, b *Batch, ev Event, stat string, value float6
 // Separate from [setValue] rather than folded into it because a derived total is
 // a function of another table, and the per-save figure is a different query from
 // the lifetime one. A fan-out here would write the lifetime number into a row
-// labelled with one save — wrong, and wrong invisibly. The three folds that use
-// setValue each compute their own career figure and call this beside it.
+// labelled with one save — wrong, and wrong invisibly. Each fold that uses
+// setValue computes its own career figure and calls this beside it.
 //
 // There is no period form: setValue's window write is an increase read from the
 // previous value, and a career scope has no windows (see 0006_career_scope.sql).

@@ -425,7 +425,7 @@ and `projector.Upcasters` has nothing registered (PROJ-100).
 | 2 | `system.discovered` | 1 | **1** | **no — locked** | event (session boundary) | `system`; one-time career→system binding |
 | 3 | `system.body` | 1 | **1** | yes | event (system-load survey) | immutable `system_body` catalogue |
 | 4 | `flight.started` | 1 | 1 | **no — locked** | polled-discovery | `flight_state` launch facts, `heaviest_launch`, `most_parts`, `biggest_crew`, `biggest_stack` |
-| 5 | `flight.ended` | 1 | 1 | **no — locked** | event (+ passive net) | `flight_state`, `kittens_recovered`, `biggest_recovery`, feed |
+| 5 | `flight.ended` | 1 | 1 | **no — locked** | event (+ passive net) | `flight_state`, `kittens_recovered`, `biggest_recovery`, `kittens_to_orbit_and_back`, feed |
 | 6 | `flight.flagged` | 1 | 1 | **no — locked** | event (4 of 5) / passive (`tuning`) | `flight_state` → **excludes everything** |
 | 7 | `vehicle.situation` | 1 | 1 | yes | passive | `softest_touchdown`, `landed_bodies`, `splashdowns`, `player_body`, `career_body` |
 | 8 | `vehicle.atmosphere` | 1 | 1 | yes | passive | `flight_state` space milestone, `fastest_entry` |
@@ -877,9 +877,10 @@ once-only latch shared by both emitters.
 but `putRecord` of the single largest `crew_count` rather than a running sum) and the feed
 (`stats/feed.go:78-84`). The two recovery boards are deliberately different achievements: forty solo
 recoveries and one nine-seat station crew return are the same number on `kittens_recovered` and very
-different on `biggest_recovery`. `flight.ended` carries no `body`, so `biggest_recovery`'s context
-takes it from `flight_state` via `flightBody` (`:1094-1107`) — free, because `scoreable` has already
-loaded that row into the batch cache.
+different on `biggest_recovery`. Although `flight.ended` now carries `body`, `biggest_recovery` keeps
+its established context source from `flight_state` via `flightBody` — free, because `scoreable` has
+already loaded that row into the batch cache. The recovered event's ordered `kids` list now also
+feeds `kittens_to_orbit_and_back`; its exact set fold is documented below.
 
 `flight_state.ended_reason` is what the rebuild refinement of `peak_g_survived` **and**
 `max_q_survived` tests (`Recovered()`, `stats/flight.go:88`).
@@ -887,7 +888,8 @@ loaded that row into the batch cache.
 **`flight.ended.body` is decoded and unused.** `flight_state.body` still comes from `flight.started`
 via `flightFold`, so a flight whose `flight.started` was never folded still has an empty body even
 though its `flight.ended` now carries one. Reading it would be a rebuild-only improvement and is out
-of scope; `kids`, `lat` and `lon` are likewise decoded and read by nothing.
+of scope; `lat` and `lon` are likewise decoded and read by nothing. `kids` is authoritative input to
+`kittens_to_orbit_and_back`.
 
 **Vectors.** `batch-001.ndjson` lines 27 (`recovered`, crew and position), 28 (the safety net: `despawned`, `crew_count` 0, `kids` `[]`, `body: "unknown"`, no position) and 32 (`destroyed`).
 
@@ -2261,7 +2263,7 @@ system → flight_state → career
 → orbits_achieved → soi_bodies → landed_bodies
 → dockings → stagings → splashdowns → evas → flameouts → engine_ignitions → kittens_recovered
 → distance_travelled(+top_kitten_distance, +top_kitten_missions) → fastest_to_orbit
-→ fastest_to_body → census
+→ fastest_to_body → career_playtime → play_sessions → kittens_to_orbit_and_back → census
 ```
 
 Order matters in three places: `systemFold` must precede `careerFold` and every board because a
@@ -2346,11 +2348,11 @@ row context carries `career`.
 
 **Every board has player, career and system scope.** Scope is a ranking dimension, not a second board
 key: player scope ranks players, career scope ranks `(player, save)` pairs, and system scope ranks
-`(player, celestial system)` pairs. This applies to all 45 fixed rows below and all three dynamic
+`(player, celestial system)` pairs. This applies to all 46 fixed rows below and all three dynamic
 families, with no opt-out list. `Career` in the table is unrelated: it says the board's *value* is a
 time measured from the start of a career.
 
-### The 45 fixed boards, in display order
+### The 46 fixed boards, in display order
 
 `stats/boards.go`. Display order **is** publish order — it is the order `FixedBoards()`
 returns and therefore the order `GET /v1/leaderboards` lists — and it is grouped by kind rather than
@@ -2406,6 +2408,10 @@ dynamic families slot under `kitten_tumbles`, `rud_total` and `fastest_to_orbit`
 | 43 | `botched_landings` | Did Not Land On Their Feet | `tumbles` | no | no | `kitten.tumble` | count (`from == "airborne"`) |
 | 44 | `parts_lost` | Parts In Lost Vehicles | `parts` | no | no | `vehicle.rud` | count (+`part_count`) |
 | 45 | `biggest_parts_lost` | Biggest Vehicle Lost | `parts` | no | no | `vehicle.rud` | record (max) |
+| 46 | `kittens_to_orbit_and_back` | Kittens To Orbit And Home | `kittens` | no | no | `flight.ended` | count (set-backed) |
+
+The appended row is `StatKittensToOrbitAndBack` (`stats/boards.go:22`), with its fixed metadata at
+`stats/boards.go:153`.
 
 **Four boards carry an empty `Unit` on purpose** — `roundest_orbit` (an eccentricity is
 dimensionless) and `most_parts` / `most_stages` / `biggest_stack` (bare counts of a thing the title
@@ -2595,9 +2601,27 @@ there.
 
 **`biggest_recovery`** — `recoveryFold`, `:726-754`. `flight.ended` with `reason == "recovered" &&
 crew_count >= 1`, `putRecord` of `crew_count`. The counterpart of `kittens_recovered`, which sums:
-forty solo recoveries and one nine-seat crew return are equal there and very different here. `body`
-comes from `flight_state` (`flightBody`, `:1094-1107`) because the payload carries none — free,
-because `scoreable` has already cached that row.
+forty solo recoveries and one nine-seat crew return are equal there and very different here. Its
+established `body` context still comes from `flight_state` (`flightBody`) even though the payload now
+carries one — free, because `scoreable` has already cached that row.
+
+**`kittens_to_orbit_and_back`** — `kittensToOrbitFold` (`boards.go:1351-1411`; registered at
+`fold.go:143`) reads `flight.ended` only when
+`reason == "recovered"` and the ordered `kids` list is nonempty, applies `scoreable`, then requires
+the joined `flight_state` to carry `MilestoneOrbit`. Each recovery-time kitten is inserted as a
+save-local `career_body(kind='orbit_kid', body=kid)` member. A repeated `(career, kid)` is a no-op;
+the same kid label in another save is a second member. On every new member the fold independently
+recomputes the player total across all `(career, kid)` rows, that save's total, and — only when the
+career has a known system — the total across that player's saves in the same system. It writes the
+three derived values with `setValue`, `setCareerValue` and `setSystemValue`; every row context is
+SQL NULL. The save-local insert is `AddCareerSetMember` (`batch.go:795-819`); its three count reads
+are `CareerBodyCount`, `CareerSetCount` and `SystemCareerSetCount` (`batch.go:843-895`).
+
+The fold iterates `kids` in wire order, never through a map. Current contexts are empty and the
+final counts are set-valued, but preserving insertion order keeps replay deterministic and prevents
+future provenance from acquiring Go-map order. “Back” means a KSA recovery: the game permits that
+only on the system's home body, at rest and in contact. The crew list at recovery is authoritative,
+so a kitten who boarded after orbit counts and one who transferred away before recovery does not.
 
 **`most_stages`** — `stagesFold`, `:756-785`. `putRecord` of **`stage_index + 1`**: the index is
 zero-based and read in the postfix, so `+1` is "how many stages have fired". **No `> 0` gate**, for
@@ -2899,16 +2923,26 @@ implies having entered its SOI.
 ### `career_body`
 
 `career_body(player_id, career, system, kind, body, first_seq, first_sim_t,
-PRIMARY KEY(player_id, career, kind, body))`. It is the save-local sibling of `player_body`, written
-from the same qualifying `vehicle.soi` and `vehicle.situation` events. **`kind` has the same two
-implemented values:** `'soi'` and `'landed'`. `system` is denormalised from the career so a system
-scope can count the distinct-body union across that player's saves without a join; when the system
-is not known, no scoped row is inserted.
+PRIMARY KEY(player_id, career, kind, body))`. It is a save-local set table. **`kind` has three
+implemented values:** `'soi'` and `'landed'` store a celestial body from qualifying
+`vehicle.soi` / `vehicle.situation`; `'orbit_kid'` stores a recovered kitten id in the existing
+`body` column. That name now reads generically as “the set member”; renaming it would change no
+semantics and require a needless schema migration.
+
+`'orbit_kid'` is deliberately **not** written to `player_body`. Kitten ids omit career, so identical
+roster names in two saves must remain two `(career, kid)` members rather than collapse into one
+lifetime row. `system` is denormalised from the career. An unknown system still permits the
+player-wide and save-local counts; only the system-scoped board write is absent. For an
+`'orbit_kid'` member, `first_seq` is the recovery event that first added it and `first_sim_t` remains
+NULL.
 
 Its primary key makes novelty local to one save. `soi_bodies` and `landed_bodies` therefore advance
 independently at player and career scope, while system scope counts `DISTINCT body` across all
 matching career rows. `first_sim_t` has the same seconds/NULL meaning as on `player_body`, and is
 lowered only for `'soi'` rows so `fastest_to_<body>` can use the correct per-save arrival.
+`kittens_to_orbit_and_back` instead counts distinct `'orbit_kid'` members independently across all
+`(career, kid)` rows for player scope, one career for save scope, and all known-system careers for
+system scope. `player_body` remains unchanged with only `'soi'` and `'landed'`.
 
 ### `kitten`
 
@@ -3002,6 +3036,8 @@ fold writes. Surfaced as `collection.projected` / `collection.lag` and `projecto
 | A tumble is a botched landing only when the open-set discriminator is exactly `"airborne"`; `"grounded"`, `"unknown"` and future values remain ordinary tumbles | exact `From == "airborne"` | `tumbleFold` |
 | A body that cannot form a safe dynamic stat still moves `kitten_tumbles` and, when airborne, `botched_landings`; only `tumbles_on_<body>` is absent | `TumblesOnStat` / `familyStat` refuses the family key after the fixed writes | `stats/boards.go` |
 | An unreadable whole-vehicle part count moves the RUD total and cause family but neither part board | `PartCount <= 0` returns after the existing RUD writes | `rudPartsFold`; PROJ-088 |
+| `kittens_to_orbit_and_back` requires a recovered ending, at least one recovery-time kitten, an orbit milestone on that flight and an unflagged flight | payload predicates → `scoreable` → `flight_state.milestones & MilestoneOrbit` | `kittensToOrbitFold` |
+| An unknown career system still moves the player and save `kittens_to_orbit_and_back` sets but produces no system-scoped row | `SystemCareerSetCount` returns `known=false`; the first two independent counts were already written | `stats/batch.go` |
 | Launch-pad impacts never score — on **both** impact boards | `!LaunchPad` | `stats/boards.go:390` |
 | Crewless impacts never score — on **both** impact boards | `CrewCount >= 1` | `stats/boards.go:390` |
 | An impact within 5 s of a teleport is not recorded at all | `Vehicle.IsImpactFxSuppressed()` | `Patcher.cs:423-424,455-456` |

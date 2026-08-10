@@ -300,7 +300,7 @@ export const EVENTS: CatlogEvent[] = [
       },
       { key: "lon", unit: "°", optional: true, what: "The east-west half of the same position." },
     ],
-    feeds: ["kittens_recovered", "biggest_recovery"],
+    feeds: ["kittens_recovered", "biggest_recovery", "kittens_to_orbit_and_back"],
     page: "sessions-and-flights",
   },
   {

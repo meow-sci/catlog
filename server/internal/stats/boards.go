@@ -19,6 +19,7 @@ const (
 	StatBotchedLandings           = "botched_landings"
 	StatPartsLost                 = "parts_lost"
 	StatBiggestPartsLost          = "biggest_parts_lost"
+	StatKittensToOrbitAndBack     = "kittens_to_orbit_and_back"
 	StatRUDTotal                  = "rud_total"
 	StatOrbitsAchieved            = "orbits_achieved"
 	StatSOIBodies                 = "soi_bodies"
@@ -149,6 +150,7 @@ var fixedBoards = func() []Board {
 		rec(StatBotchedLandings, "Did Not Land On Their Feet", "tumbles"),
 		rec(StatPartsLost, "Parts In Lost Vehicles", "parts"),
 		rec(StatBiggestPartsLost, "Biggest Vehicle Lost", "parts"),
+		rec(StatKittensToOrbitAndBack, "Kittens To Orbit And Home", "kittens"),
 	}
 }()
 
@@ -1344,6 +1346,68 @@ func (recoveredFold) Apply(ctx context.Context, b *Batch, ev Event) error {
 		return err
 	}
 	return addCount(ctx, b, ev, StatKittensRecovered, float64(p.CrewCount))
+}
+
+// kittensToOrbitFold counts distinct (career, kid) pairs whose flight reached
+// orbit and later ended recovered with that kitten still aboard. The set lives
+// in career_body under kind orbit_kid: its body column is the generic set
+// member here, deliberately not a celestial body. It never writes player_body:
+// kid omits career, so roster identity must be interpreted per save rather than
+// collapsed across careers.
+type kittensToOrbitFold struct{}
+
+func (kittensToOrbitFold) Name() string { return StatKittensToOrbitAndBack }
+
+func (kittensToOrbitFold) Apply(ctx context.Context, b *Batch, ev Event) error {
+	p, ok := payloadOf[FlightEnded](ev)
+	if !ok || p.Reason != "recovered" || len(p.Kids) == 0 {
+		return nil
+	}
+	ok, err := scoreable(ctx, ev, b)
+	if err != nil || !ok {
+		return err
+	}
+	flight, found, err := b.Flight(ctx, ev.FlightID)
+	if err != nil || !found || flight.Milestones&MilestoneOrbit == 0 {
+		return err
+	}
+
+	// Keep wire order. The totals and NULL contexts are order-insensitive today,
+	// but the insertion sequence is part of deterministic replay and must not be
+	// replaced by map iteration if later provenance is added.
+	for _, kid := range p.Kids {
+		added, err := b.AddCareerSetMember(ctx, ev, "orbit_kid", kid)
+		if err != nil {
+			return err
+		}
+		if !added {
+			continue
+		}
+		lifetime, err := b.CareerSetCount(ctx, ev.PlayerID, "orbit_kid")
+		if err != nil {
+			return err
+		}
+		if err := setValue(ctx, b, ev, StatKittensToOrbitAndBack, float64(lifetime)); err != nil {
+			return err
+		}
+		career, err := b.CareerBodyCount(ctx, ev.PlayerID, ev.Career, "orbit_kid")
+		if err != nil {
+			return err
+		}
+		if err := setCareerValue(ctx, b, ev, StatKittensToOrbitAndBack, float64(career)); err != nil {
+			return err
+		}
+		system, known, err := b.SystemCareerSetCount(ctx, ev, "orbit_kid")
+		if err != nil {
+			return err
+		}
+		if known {
+			if err := setSystemValue(ctx, b, ev, StatKittensToOrbitAndBack, float64(system)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // distanceFold implements `distance_travelled` (§5.6): the sum of the per-save

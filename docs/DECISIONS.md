@@ -1767,6 +1767,32 @@ remain unchanged because this is a new projection over an already-final payload,
 schema revision. Both fixed rows append after the earlier 43, preserving every existing published
 position.
 
+### PROJ-117 — Orbit-and-home kittens are a save-local set resolved by the recovery-time crew list
+
+*Accepted · 2026-08-10 · Task E3.*
+
+A kitten counts when a flight that reached orbit later ends recovered with that kitten aboard. The
+orbit fact comes from `flight_state.milestones`, not a temporary correlation between two events that
+may be arbitrarily far apart. “Home” deliberately means KSA recovery: the game offers recovery only
+on the system's home body, while at rest and in contact. Landing elsewhere and staying there is not
+home under the only boundary the game exposes honestly.
+
+The ordered `flight.ended.kids` list is authoritative. A kitten who boards after orbit and rides
+home counts; one who was aboard at orbit but transfers away before recovery does not. Tracking every
+seat transfer through EVA, boarding and docking would create a larger state machine to answer a
+question the recovery event already answers directly. Iterating that list in wire order also keeps
+replay deterministic; current board contexts are NULL, but map iteration must not make later
+provenance byte-unstable.
+
+Membership is stored as `career_body(kind='orbit_kid', body=kid)`. The existing `body` column is the
+generic set-member slot and needs no rename or migration. `player_body` remains unchanged: kitten
+ids omit career, so putting them in the lifetime table would collapse identically named kittens from
+different saves. Instead the player value counts every `(career, kid)` member, the career value
+counts one save, and the system value counts rows across that player's saves with the known system.
+Those three totals are recomputed and written independently; an unknown system suppresses only the
+system row. The new fold's stable identity `kittens_to_orbit_and_back` changes `BuildID` and
+backfills immutable history without an event-version, wire, schema or `BuildVersion` change.
+
 ## Archive & restore
 
 The filesystem archiver, the manifest, restore verification, and the R2 design that is deliberately not built.
