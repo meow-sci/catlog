@@ -50,6 +50,10 @@ type CareerState struct {
 	// LastSeq is the latest event attributed to this save, whether or not it
 	// carried a clock reading, scored, or belonged to a flagged flight.
 	LastSeq int64
+	// Ordinal is this save's per-player sequence number, 1-based, assigned in
+	// first-seen order. It is what a public surface shows in place of the career
+	// id, which can never be published raw (PROJ-049).
+	Ordinal int64
 }
 
 // careerFold maintains `career`. It runs alongside [flightFold], before the

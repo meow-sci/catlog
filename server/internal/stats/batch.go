@@ -72,8 +72,12 @@ type Batch struct {
 	// flush, because after one it holds exactly what the database holds.
 	flights map[ids.ID]*flightEntry
 	careers map[careerKey]*careerEntry
-	bodies  map[int64]map[bodyKey]*bodyEntry
-	kittens map[int64]map[string]*kittenEntry
+	// careerOrdinals is the next-save sequence high-water per player. It is
+	// loaded once per player per batch and advanced as new careers are first
+	// seen, so several saves created in one batch receive distinct ordinals.
+	careerOrdinals map[int64]int64
+	bodies         map[int64]map[bodyKey]*bodyEntry
+	kittens        map[int64]map[string]*kittenEntry
 	// values caches `player_stat.value` for the one helper that has to read it
 	// back (setValue, for its window delta).
 	values       map[statKey]float64
@@ -139,15 +143,16 @@ type BatchOptions struct {
 // NewBatch opens an incremental batch over tx.
 func NewBatch(tx *sql.Tx, opts BatchOptions) *Batch {
 	b := &Batch{
-		tx:           tx,
-		flushRows:    opts.FlushRows,
-		flights:      map[ids.ID]*flightEntry{},
-		careers:      map[careerKey]*careerEntry{},
-		bodies:       map[int64]map[bodyKey]*bodyEntry{},
-		kittens:      map[int64]map[string]*kittenEntry{},
-		values:       map[statKey]float64{},
-		careerValues: map[careerStatKey]float64{},
-		census:       map[censusKey]*pendingCensus{},
+		tx:             tx,
+		flushRows:      opts.FlushRows,
+		flights:        map[ids.ID]*flightEntry{},
+		careers:        map[careerKey]*careerEntry{},
+		careerOrdinals: map[int64]int64{},
+		bodies:         map[int64]map[bodyKey]*bodyEntry{},
+		kittens:        map[int64]map[string]*kittenEntry{},
+		values:         map[statKey]float64{},
+		careerValues:   map[careerStatKey]float64{},
+		census:         map[censusKey]*pendingCensus{},
 	}
 	for k := range b.stats {
 		b.stats[k] = map[statKey]*pendingStat{}
@@ -352,6 +357,7 @@ type careerEntry struct {
 	rewound  bool
 	firstSeq int64
 	lastSeq  int64
+	ordinal  int64
 	system   string
 	exists   bool
 	dirty    bool
@@ -364,8 +370,8 @@ func (b *Batch) careerEntry(ctx context.Context, k careerKey) (*careerEntry, err
 	e := &careerEntry{}
 	var rewound int64
 	err := b.tx.QueryRowContext(ctx,
-		`SELECT max_sim_t, rewound, first_seq, last_seq, system FROM career WHERE player_id = ? AND career = ?`,
-		k.playerID, k.career).Scan(&e.maxSimT, &rewound, &e.firstSeq, &e.lastSeq, &e.system)
+		`SELECT max_sim_t, rewound, first_seq, last_seq, ordinal, system FROM career WHERE player_id = ? AND career = ?`,
+		k.playerID, k.career).Scan(&e.maxSimT, &rewound, &e.firstSeq, &e.lastSeq, &e.ordinal, &e.system)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 	case err != nil:
@@ -384,6 +390,30 @@ func (b *Batch) touchCareer(k careerKey, e *careerEntry) {
 	}
 }
 
+// nextOrdinal is the sequence number the next new save of this player takes.
+//
+// Read once per player per batch from the table, then advanced in memory, so a
+// batch that first sees three of a player's saves numbers them 1, 2, 3 in seq
+// order rather than three times 1.
+//
+// Replay-stable by construction: careers are first seen in ascending seq order
+// on both the incremental and the rebuild path, so the same save gets the same
+// number every time. That is what lets the ordinal be a URL segment.
+func (b *Batch) nextOrdinal(ctx context.Context, playerID int64) (int64, error) {
+	if n, ok := b.careerOrdinals[playerID]; ok {
+		b.careerOrdinals[playerID] = n + 1
+		return n + 1, nil
+	}
+	var high int64
+	err := b.tx.QueryRowContext(ctx,
+		`SELECT COALESCE(MAX(ordinal), 0) FROM career WHERE player_id = ?`, playerID).Scan(&high)
+	if err != nil {
+		return 0, fmt.Errorf("stats: read career ordinal high-water for %d: %w", playerID, err)
+	}
+	b.careerOrdinals[playerID] = high + 1
+	return high + 1, nil
+}
+
 // EnsureCareer creates the career's row if it has none and records this event
 // as its latest activity, even when the event has no clock reading or score.
 func (b *Batch) EnsureCareer(ctx context.Context, playerID int64, career string, seq int64) error {
@@ -393,7 +423,12 @@ func (b *Batch) EnsureCareer(ctx context.Context, playerID int64, career string,
 		return err
 	}
 	if !e.exists {
+		ordinal, err := b.nextOrdinal(ctx, playerID)
+		if err != nil {
+			return err
+		}
 		e.exists, e.maxSimT, e.rewound, e.firstSeq = true, 0, false, seq
+		e.ordinal = ordinal
 	}
 	e.lastSeq = seq
 	b.touchCareer(k, e)
@@ -426,7 +461,12 @@ func (b *Batch) AdvanceCareer(ctx context.Context, playerID int64, career string
 	}
 	switch {
 	case !e.exists:
+		ordinal, err := b.nextOrdinal(ctx, playerID)
+		if err != nil {
+			return err
+		}
 		e.exists, e.maxSimT, e.rewound, e.firstSeq = true, simT, false, seq
+		e.ordinal = ordinal
 	case simT > e.maxSimT:
 		e.maxSimT = simT
 	}
@@ -440,15 +480,15 @@ func (b *Batch) flushCareers(ctx context.Context) error {
 		return nil
 	}
 	slices.SortFunc(b.dirtyCareers, compareCareerKey)
-	err := b.write(ctx, len(b.dirtyCareers), 6,
-		`INSERT INTO career (player_id, career, max_sim_t, rewound, first_seq, last_seq) VALUES `,
+	err := b.write(ctx, len(b.dirtyCareers), 7,
+		`INSERT INTO career (player_id, career, max_sim_t, rewound, first_seq, last_seq, ordinal) VALUES `,
 		` ON CONFLICT (player_id, career) DO UPDATE SET
 		   max_sim_t = excluded.max_sim_t, rewound = excluded.rewound, last_seq = excluded.last_seq`,
 		func(i int, args []any) []any {
 			k := b.dirtyCareers[i]
 			e := b.careers[k]
 			e.dirty = false
-			return append(args, k.playerID, k.career, e.maxSimT, boolInt(e.rewound), e.firstSeq, e.lastSeq)
+			return append(args, k.playerID, k.career, e.maxSimT, boolInt(e.rewound), e.firstSeq, e.lastSeq, e.ordinal)
 		})
 	if err != nil {
 		return fmt.Errorf("stats: flush career: %w", err)
@@ -466,6 +506,7 @@ func (b *Batch) Career(ctx context.Context, playerID int64, career string) (Care
 	return CareerState{
 		PlayerID: playerID, Career: career,
 		MaxSimT: e.maxSimT, Rewound: e.rewound, FirstSeq: e.firstSeq, LastSeq: e.lastSeq,
+		Ordinal: e.ordinal,
 	}, true, nil
 }
 

@@ -2,6 +2,7 @@ package stats_test
 
 import (
 	"database/sql"
+	"maps"
 	"testing"
 
 	"github.com/meow-sci/catlog/server/internal/ids"
@@ -16,6 +17,9 @@ import (
 
 // otherCareer is a second save belonging to the same player.
 const otherCareer = "testcareer000002"
+
+// thirdCareer is a third save belonging to the same player.
+const thirdCareer = "testcareer000003"
 
 // wantRow asserts a stat row exactly, context and seq included — the context is
 // where the career a record was set in is recorded, so these boards need it.
@@ -32,12 +36,13 @@ type careerRow struct {
 	rewound  bool
 	firstSeq int64
 	lastSeq  int64
+	ordinal  int64
 }
 
 func readCareers(t *testing.T, proj *store.Projections) map[string]careerRow {
 	t.Helper()
 	rows, err := proj.Reader().QueryContext(t.Context(),
-		`SELECT career, max_sim_t, rewound, first_seq, last_seq FROM career WHERE player_id = 1 ORDER BY career`)
+		`SELECT career, max_sim_t, rewound, first_seq, last_seq, ordinal FROM career WHERE player_id = 1 ORDER BY career`)
 	if err != nil {
 		t.Fatalf("read career: %v", err)
 	}
@@ -50,7 +55,7 @@ func readCareers(t *testing.T, proj *store.Projections) map[string]careerRow {
 			r       careerRow
 			rewound int64
 		)
-		if err := rows.Scan(&career, &r.maxSimT, &rewound, &r.firstSeq, &r.lastSeq); err != nil {
+		if err := rows.Scan(&career, &r.maxSimT, &rewound, &r.firstSeq, &r.lastSeq, &r.ordinal); err != nil {
 			t.Fatalf("scan career: %v", err)
 		}
 		r.rewound = rewound != 0
@@ -58,6 +63,35 @@ func readCareers(t *testing.T, proj *store.Projections) map[string]careerRow {
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatalf("read career: %v", err)
+	}
+	return out
+}
+
+type careerOrdinalKey struct {
+	player int64
+	career string
+}
+
+func readCareerOrdinals(t *testing.T, proj *store.Projections) map[careerOrdinalKey]int64 {
+	t.Helper()
+	rows, err := proj.Reader().QueryContext(t.Context(),
+		`SELECT player_id, career, ordinal FROM career ORDER BY player_id, first_seq`)
+	if err != nil {
+		t.Fatalf("read career ordinals: %v", err)
+	}
+	defer rows.Close()
+
+	out := map[careerOrdinalKey]int64{}
+	for rows.Next() {
+		var key careerOrdinalKey
+		var ordinal int64
+		if err := rows.Scan(&key.player, &key.career, &ordinal); err != nil {
+			t.Fatalf("scan career ordinal: %v", err)
+		}
+		out[key] = ordinal
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read career ordinals: %v", err)
 	}
 	return out
 }
@@ -271,6 +305,94 @@ func TestBoardDirectionAndUnitsAreDerivedFromTheKey(t *testing.T) {
 }
 
 // --- careers and the rewind mark ----------------------------------------------
+
+func TestCareerOrdinalsAreAssignedInFirstSeenOrder(t *testing.T) {
+	proj := testutil.MemProjections(t)
+	apply(t, proj, []input{
+		{career: otherCareer, typ: "session.started", payload: stats.SessionStarted{ModVer: "0.1.0"}, simT: 10},
+		{player: bob, career: thirdCareer, typ: "session.started", payload: stats.SessionStarted{ModVer: "0.1.0"}, simT: 20},
+		{typ: "session.started", payload: stats.SessionStarted{ModVer: "0.1.0"}, simT: 30},
+		{career: otherCareer, flight: flightN(1), typ: "vehicle.staging", payload: stats.VehicleStaging{StageIndex: 0}, simT: 40},
+		{career: thirdCareer, typ: "session.started", payload: stats.SessionStarted{ModVer: "0.1.0"}, simT: 50},
+	}, 0, false)
+
+	got := readCareerOrdinals(t, proj)
+	want := map[careerOrdinalKey]int64{
+		{player: alice, career: otherCareer}:   1,
+		{player: alice, career: defaultCareer}: 2,
+		{player: alice, career: thirdCareer}:   3,
+		{player: bob, career: thirdCareer}:     1,
+	}
+	if !maps.Equal(got, want) {
+		t.Errorf("career ordinals = %v, want %v", got, want)
+	}
+}
+
+func TestCareerOrdinalSurvivesLaterEvents(t *testing.T) {
+	proj := testutil.MemProjections(t)
+	apply(t, proj, []input{
+		{typ: "session.started", payload: stats.SessionStarted{ModVer: "0.1.0"}, simT: 10},
+		{career: otherCareer, typ: "session.started", payload: stats.SessionStarted{ModVer: "0.1.0"}, simT: 20},
+	}, 0, false)
+	apply(t, proj, []input{
+		{career: otherCareer, flight: flightN(1), typ: "vehicle.staging", payload: stats.VehicleStaging{StageIndex: 0}, simT: 30},
+		{flight: flightN(2), typ: "vehicle.staging", payload: stats.VehicleStaging{StageIndex: 0}, simT: 40},
+	}, 2, false)
+
+	got := readCareerOrdinals(t, proj)
+	if got[careerOrdinalKey{player: alice, career: defaultCareer}] != 1 {
+		t.Errorf("first career ordinal = %d, want 1", got[careerOrdinalKey{player: alice, career: defaultCareer}])
+	}
+	if got[careerOrdinalKey{player: alice, career: otherCareer}] != 2 {
+		t.Errorf("second career ordinal = %d, want 2", got[careerOrdinalKey{player: alice, career: otherCareer}])
+	}
+}
+
+func TestBatchSizeDoesNotChangeOrdinals(t *testing.T) {
+	in := []input{
+		{career: otherCareer, typ: "session.started", payload: stats.SessionStarted{ModVer: "0.1.0"}, simT: 10},
+		{typ: "session.started", payload: stats.SessionStarted{ModVer: "0.1.0"}, simT: 20},
+		{career: otherCareer, flight: flightN(1), typ: "vehicle.staging", payload: stats.VehicleStaging{StageIndex: 0}, simT: 30},
+		{career: thirdCareer, typ: "session.started", payload: stats.SessionStarted{ModVer: "0.1.0"}, simT: 40},
+		{flight: flightN(2), typ: "vehicle.staging", payload: stats.VehicleStaging{StageIndex: 0}, simT: 50},
+	}
+
+	var want map[careerOrdinalKey]int64
+	for _, batchSize := range []int{1, 2, 1000} {
+		proj := testutil.MemProjections(t)
+		for start := 0; start < len(in); start += batchSize {
+			end := min(start+batchSize, len(in))
+			apply(t, proj, in[start:end], int64(start), false)
+		}
+		got := readCareerOrdinals(t, proj)
+		if want == nil {
+			want = got
+			continue
+		}
+		if !maps.Equal(got, want) {
+			t.Errorf("batch size %d ordinals = %v, want %v", batchSize, got, want)
+		}
+	}
+}
+
+func TestRebuildReproducesOrdinals(t *testing.T) {
+	in := []input{
+		{career: otherCareer, typ: "session.started", payload: stats.SessionStarted{ModVer: "0.1.0"}, simT: 10},
+		{typ: "session.started", payload: stats.SessionStarted{ModVer: "0.1.0"}, simT: 20},
+		{career: otherCareer, flight: flightN(1), typ: "vehicle.staging", payload: stats.VehicleStaging{StageIndex: 0}, simT: 30},
+		{career: thirdCareer, typ: "session.started", payload: stats.SessionStarted{ModVer: "0.1.0"}, simT: 40},
+	}
+
+	incremental := testutil.MemProjections(t)
+	apply(t, incremental, in, 0, false)
+	rebuilt := testutil.MemProjections(t)
+	apply(t, rebuilt, in, 0, true)
+
+	want := readCareerOrdinals(t, incremental)
+	if got := readCareerOrdinals(t, rebuilt); !maps.Equal(got, want) {
+		t.Errorf("rebuilt career ordinals = %v, want %v", got, want)
+	}
+}
 
 func TestCareerTracksItsHighWaterMark(t *testing.T) {
 	f := flightN(1)
