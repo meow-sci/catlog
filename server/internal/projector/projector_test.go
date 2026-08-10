@@ -179,6 +179,30 @@ func ev(flight ids.ID, typ string, payload any, simT float64) store.Event {
 	}
 }
 
+func inCareer(event store.Event, career string) store.Event {
+	event.Career = career
+	return event
+}
+
+func withoutSimTime(event store.Event) store.Event {
+	event.SimTime = sql.NullFloat64{}
+	return event
+}
+
+func discovery(career, hash string) store.Event {
+	return inCareer(ev(ids.Zero, "system.discovered", stats.SystemDiscovered{
+		System: hash, ID: "Sol", Name: "Solar System", Home: "earth", Bodies: 1, Complete: true,
+	}, 0), career)
+}
+
+func rootBody(hash string) store.Event {
+	return ev(ids.Zero, "system.body", stats.SystemBody{
+		System: hash, Body: "sol", Name: "Sol", Class: "Star", Kind: "star", Rank: 0,
+		RadiusM: 1, MassKg: 2, SoiM: 0, AtmoM: 0, OceanM: 0, AngVel: 3,
+		Axis: stats.Vec3{Y: 1}, CcfToCceT0: stats.Quat{W: 1},
+	}, 0)
+}
+
 func flight(n int) ids.ID {
 	var id ids.ID
 	id[0] = 0x02
@@ -242,6 +266,7 @@ type snapshot struct {
 	Systems       []string
 	SystemBodies  []string
 	Periods       []string
+	Census        []string
 	Feed          []string
 	Cursor        int64
 }
@@ -252,22 +277,22 @@ func (r *rig) snapshot() snapshot {
 	err := r.live.With(func(p *store.Projections) error {
 		ctx := r.t.Context()
 		var err error
-		if s.Stats, err = dump(ctx, p, `SELECT player_id, stat, value, coalesce(context,''), updated_seq FROM player_stat ORDER BY player_id, stat`); err != nil {
+		if s.Stats, err = dump(ctx, p, `SELECT player_id, stat, value, context, updated_seq FROM player_stat ORDER BY player_id, stat`); err != nil {
 			return err
 		}
-		if s.CareerStats, err = dump(ctx, p, `SELECT player_id, career, system, stat, value, coalesce(context,''), updated_seq FROM career_stat ORDER BY player_id, career, stat`); err != nil {
+		if s.CareerStats, err = dump(ctx, p, `SELECT player_id, career, system, stat, value, context, updated_seq FROM career_stat ORDER BY player_id, career, stat`); err != nil {
 			return err
 		}
-		if s.SystemStats, err = dump(ctx, p, `SELECT player_id, system, stat, value, coalesce(context,''), updated_seq FROM system_stat ORDER BY player_id, system, stat`); err != nil {
+		if s.SystemStats, err = dump(ctx, p, `SELECT player_id, system, stat, value, context, updated_seq FROM system_stat ORDER BY player_id, system, stat`); err != nil {
 			return err
 		}
-		if s.Flights, err = dump(ctx, p, `SELECT hex(flight_id), player_id, flags, coalesce(ended_reason,''), coalesce(crew,-1), coalesce(body,''), started_seq FROM flight_state ORDER BY hex(flight_id)`); err != nil {
+		if s.Flights, err = dump(ctx, p, `SELECT hex(flight_id), player_id, flags, ended_reason, crew, body, started_seq FROM flight_state ORDER BY hex(flight_id)`); err != nil {
 			return err
 		}
-		if s.Bodies, err = dump(ctx, p, `SELECT player_id, kind, body, first_seq FROM player_body ORDER BY player_id, kind, body`); err != nil {
+		if s.Bodies, err = dump(ctx, p, `SELECT player_id, kind, body, first_seq, first_sim_t FROM player_body ORDER BY player_id, kind, body`); err != nil {
 			return err
 		}
-		if s.CareerBodies, err = dump(ctx, p, `SELECT player_id, career, system, kind, body, first_seq, coalesce(first_sim_t,-1) FROM career_body ORDER BY player_id, career, kind, body`); err != nil {
+		if s.CareerBodies, err = dump(ctx, p, `SELECT player_id, career, system, kind, body, first_seq, first_sim_t FROM career_body ORDER BY player_id, career, kind, body`); err != nil {
 			return err
 		}
 		if s.Kittens, err = dump(ctx, p, `SELECT player_id, kid, name, travelled_m, fastest_ms, missions, mission_time_s, kia, updated_seq FROM kitten ORDER BY player_id, kid`); err != nil {
@@ -282,10 +307,13 @@ func (r *rig) snapshot() snapshot {
 		if s.Systems, err = dump(ctx, p, `SELECT hash, system_id, name, slug, home_body, body_count, reported_complete, first_seq FROM system ORDER BY hash`); err != nil {
 			return err
 		}
-		if s.SystemBodies, err = dump(ctx, p, `SELECT hash, body, name, class, kind, rank, coalesce(parent,''), radius_m, mass_kg, soi_m, atmo_m, ocean_m, angvel, axis_x, axis_y, axis_z, coalesce(sma_m,-1), coalesce(ecc,-1), coalesce(inc_deg,-1), coalesce(lan_deg,-1), coalesce(argp_deg,-1), coalesce(t_pe,-1), coalesce(period_s,-1), ccf_to_cce_t0_x, ccf_to_cce_t0_y, ccf_to_cce_t0_z, ccf_to_cce_t0_w, first_seq FROM system_body ORDER BY hash, body`); err != nil {
+		if s.SystemBodies, err = dump(ctx, p, `SELECT hash, body, name, class, kind, rank, parent, radius_m, mass_kg, soi_m, atmo_m, ocean_m, angvel, axis_x, axis_y, axis_z, sma_m, ecc, inc_deg, lan_deg, argp_deg, t_pe, period_s, ccf_to_cce_t0_x, ccf_to_cce_t0_y, ccf_to_cce_t0_z, ccf_to_cce_t0_w, first_seq FROM system_body ORDER BY hash, body`); err != nil {
 			return err
 		}
-		if s.Periods, err = dump(ctx, p, `SELECT player_id, stat, period, bucket, value, coalesce(context,''), updated_seq FROM player_stat_period ORDER BY player_id, stat, period, bucket`); err != nil {
+		if s.Periods, err = dump(ctx, p, `SELECT player_id, stat, period, bucket, value, context, updated_seq FROM player_stat_period ORDER BY player_id, stat, period, bucket`); err != nil {
+			return err
+		}
+		if s.Census, err = dump(ctx, p, `SELECT type, period, bucket, n, first_seq, last_seq, first_at, last_at FROM event_census ORDER BY type, period, bucket`); err != nil {
 			return err
 		}
 		if s.Feed, err = dump(ctx, p, `SELECT at, handle, type, summary FROM feed ORDER BY id`); err != nil {
@@ -349,6 +377,34 @@ func diff(t *testing.T, label string, got, want []string) {
 	}
 	t.Errorf("%s differs:\n incremental: %s\n rebuild:     %s",
 		label, strings.Join(want, "\n              "), strings.Join(got, "\n              "))
+}
+
+// diffSnapshot is the canonical column-for-column equivalence proof. Keep the
+// table list here in lockstep with snapshot: adding a field without comparing
+// it must fail review visibly rather than silently weakening the rebuild test.
+func diffSnapshot(t *testing.T, got, want snapshot, feedContentOnly bool) {
+	t.Helper()
+	diff(t, "player_stat", got.Stats, want.Stats)
+	diff(t, "career_stat", got.CareerStats, want.CareerStats)
+	diff(t, "system_stat", got.SystemStats, want.SystemStats)
+	diff(t, "flight_state", got.Flights, want.Flights)
+	diff(t, "player_body", got.Bodies, want.Bodies)
+	diff(t, "career_body", got.CareerBodies, want.CareerBodies)
+	diff(t, "kitten", got.Kittens, want.Kittens)
+	diff(t, "career_kitten", got.CareerKittens, want.CareerKittens)
+	diff(t, "career", got.Careers, want.Careers)
+	diff(t, "system", got.Systems, want.Systems)
+	diff(t, "system_body", got.SystemBodies, want.SystemBodies)
+	diff(t, "player_stat_period", got.Periods, want.Periods)
+	diff(t, "event_census", got.Census, want.Census)
+	if feedContentOnly {
+		diff(t, "feed", withoutAt(got.Feed), withoutAt(want.Feed))
+	} else {
+		diff(t, "feed", got.Feed, want.Feed)
+	}
+	if got.Cursor != want.Cursor {
+		t.Errorf("checkpoint = %d, want %d", got.Cursor, want.Cursor)
+	}
 }
 
 // --- the tests ---------------------------------------------------------------
@@ -422,16 +478,9 @@ func TestCheckpointResumesMidStreamWithoutDoubleCounting(t *testing.T) {
 	fresh.drain()
 	want := fresh.snapshot()
 
-	diff(t, "player_stat", got.Stats, want.Stats)
-	diff(t, "flight_state", got.Flights, want.Flights)
-	diff(t, "kitten", got.Kittens, want.Kittens)
-	diff(t, "career_kitten", got.CareerKittens, want.CareerKittens)
 	// The two rigs inserted their events at slightly different wall times, so
 	// the feed's server-assigned `at` legitimately differs; the content must not.
-	diff(t, "feed", withoutAt(got.Feed), withoutAt(want.Feed))
-	if got.Cursor != want.Cursor {
-		t.Errorf("checkpoint = %d, want %d", got.Cursor, want.Cursor)
-	}
+	diffSnapshot(t, got, want, true)
 }
 
 func TestRebuildEqualsIncrementalForAnUnflaggedHistory(t *testing.T) {
@@ -453,20 +502,110 @@ func TestRebuildEqualsIncrementalForAnUnflaggedHistory(t *testing.T) {
 	}
 	rebuilt := r.snapshot()
 
-	diff(t, "player_stat", rebuilt.Stats, incremental.Stats)
-	diff(t, "flight_state", rebuilt.Flights, incremental.Flights)
-	diff(t, "player_body", rebuilt.Bodies, incremental.Bodies)
-	diff(t, "career_body", rebuilt.CareerBodies, incremental.CareerBodies)
-	diff(t, "kitten", rebuilt.Kittens, incremental.Kittens)
-	diff(t, "career_kitten", rebuilt.CareerKittens, incremental.CareerKittens)
-	diff(t, "player_stat_period", rebuilt.Periods, incremental.Periods)
-	diff(t, "feed", rebuilt.Feed, incremental.Feed)
-	if rebuilt.Cursor != incremental.Cursor {
-		t.Errorf("checkpoint after rebuild = %d, want %d", rebuilt.Cursor, incremental.Cursor)
-	}
+	diffSnapshot(t, rebuilt, incremental, false)
 	if len(incremental.Stats) == 0 {
 		t.Fatal("the fixture produced no stats, so the comparison proved nothing")
 	}
+}
+
+func TestRebuildEqualsIncrementalForCareerScope(t *testing.T) {
+	r := newRig(t, func(o *projector.Options) { o.BatchSize = 3 })
+	whiskers := r.player("whiskers")
+	mittens := r.player("mittens")
+	const (
+		careerA = "career-a"
+		careerB = "career-b"
+		careerC = "career-c"
+		hash    = "system-hash"
+	)
+	fa, fb, fc := flight(300), flight(301), flight(302)
+
+	// Insert across players in the order an ingest stream can interleave saves.
+	// Discovery leads every career's first session/score, matching the final mod.
+	r.ship(whiskers, discovery(careerA, hash), rootBody(hash))
+	r.ship(whiskers, inCareer(ev(ids.Zero, "session.started", stats.SessionStarted{}, 0), careerA))
+	r.ship(mittens, discovery(careerC, hash))
+	r.ship(whiskers, inCareer(ev(fa, "flight.started", stats.FlightStarted{
+		VehicleName: "A", Body: "earth", MassKg: 100, PartCount: 2, CrewCount: 1,
+	}, 10), careerA))
+	r.ship(mittens, inCareer(ev(ids.Zero, "session.started", stats.SessionStarted{}, 0), careerC))
+	r.ship(whiskers,
+		withoutSimTime(inCareer(ev(fa, "vehicle.staging", stats.VehicleStaging{StageIndex: 0}, 12), careerA)),
+		inCareer(ev(fa, "vehicle.soi", stats.VehicleSOI{FromBody: "earth", ToBody: "luna"}, 20), careerA),
+		inCareer(ev(fa, "flight.ended", stats.FlightEnded{Reason: "recovered", CrewCount: 1}, 30), careerA),
+		withoutSimTime(inCareer(ev(ids.Zero, "roster.snapshot", stats.RosterSnapshot{Kittens: []stats.RosterKitten{{
+			Kid: "kid-a", Name: "Comet", TravelledM: 50, FastestMs: 5, Missions: 1, MissionTimeS: 30,
+		}}}, 31), careerA)),
+	)
+	r.ship(mittens,
+		inCareer(ev(fc, "flight.started", stats.FlightStarted{VehicleName: "C", Body: "earth", MassKg: 80}, 10), careerC),
+		inCareer(ev(fc, "vehicle.soi", stats.VehicleSOI{FromBody: "earth", ToBody: "luna"}, 20), careerC),
+		inCareer(ev(fc, "flight.ended", stats.FlightEnded{Reason: "recovered", CrewCount: 1}, 30), careerC),
+	)
+	r.ship(whiskers,
+		discovery(careerB, hash),
+		inCareer(ev(ids.Zero, "session.started", stats.SessionStarted{}, 0), careerB),
+		// The flag precedes every candidate on fb. This is the equality case,
+		// deliberately not D22's separately pinned late-flag divergence.
+		inCareer(ev(fb, "flight.flagged", stats.FlightFlagged{Flag: "teleport", Detail: "pre-score"}, 1), careerB),
+		inCareer(ev(fb, "flight.started", stats.FlightStarted{VehicleName: "Flagged", Body: "earth", MassKg: 99999}, 2), careerB),
+		inCareer(ev(fb, "telemetry.window", tw("earth", 99999, 99999, 99), 3), careerB),
+		inCareer(ev(fb, "flight.ended", stats.FlightEnded{Reason: "recovered"}, 4), careerB),
+		// An event with no career still contributes to lifetime/log projections.
+		ev(ids.Zero, "session.started", stats.SessionStarted{}, 40),
+	)
+
+	r.drain()
+	incremental := r.snapshot()
+	for name, rows := range map[string][]string{
+		"career": incremental.Careers, "career_stat": incremental.CareerStats,
+		"system_stat": incremental.SystemStats, "career_body": incremental.CareerBodies,
+		"career_kitten": incremental.CareerKittens, "system": incremental.Systems,
+		"system_body": incremental.SystemBodies, "event_census": incremental.Census,
+	} {
+		if len(rows) == 0 {
+			t.Fatalf("fixture produced no %s rows", name)
+		}
+	}
+	if got := statMap(t, incremental)["1/heaviest_launch"]; got == 99999 {
+		t.Fatal("the pre-flagged flight scored, so this history is a late-flag divergence")
+	}
+
+	r.rebuild()
+	diffSnapshot(t, r.snapshot(), incremental, false)
+}
+
+func TestSystemDiscoveryPrecedesFirstScoreInFinalPipeline(t *testing.T) {
+	r := newRig(t, func(o *projector.Options) { o.BatchSize = 100 })
+	p := r.player("whiskers")
+	const career, hash = "career-final", "final-system-hash"
+	f := flight(350)
+	r.ship(p,
+		discovery(career, hash),
+		rootBody(hash),
+		inCareer(ev(ids.Zero, "session.started", stats.SessionStarted{}, 0), career),
+		inCareer(ev(f, "flight.started", stats.FlightStarted{
+			VehicleName: "First", Body: "earth", MassKg: 42, PartCount: 1,
+		}, 1), career),
+		inCareer(ev(f, "flight.ended", stats.FlightEnded{Reason: "recovered"}, 2), career),
+	)
+	r.drain()
+	incremental := r.snapshot()
+	if len(incremental.Careers) != 1 || !strings.Contains(incremental.Careers[0], "system="+hash) {
+		t.Fatalf("career was not bound before its first score: %v", incremental.Careers)
+	}
+	if len(incremental.CareerStats) == 0 || len(incremental.SystemStats) == 0 {
+		t.Fatalf("discovery did not reach both scoped rows: career=%v system=%v",
+			incremental.CareerStats, incremental.SystemStats)
+	}
+	for _, row := range append(slices.Clone(incremental.CareerStats), incremental.SystemStats...) {
+		if !strings.Contains(row, "system="+hash) {
+			t.Fatalf("scoped row has the wrong system: %s", row)
+		}
+	}
+
+	r.rebuild()
+	diffSnapshot(t, r.snapshot(), incremental, false)
 }
 
 func TestBatchSizeDoesNotChangeTheProjection(t *testing.T) {
@@ -508,17 +647,7 @@ func TestBatchSizeDoesNotChangeTheProjection(t *testing.T) {
 	for _, batchSize := range []int{2, 3, 17, 1000} {
 		t.Run(fmt.Sprintf("batch=%d", batchSize), func(t *testing.T) {
 			got := fold(t, batchSize)
-			diff(t, "player_stat", got.Stats, want.Stats)
-			diff(t, "flight_state", got.Flights, want.Flights)
-			diff(t, "player_body", got.Bodies, want.Bodies)
-			diff(t, "career_body", got.CareerBodies, want.CareerBodies)
-			diff(t, "kitten", got.Kittens, want.Kittens)
-			diff(t, "career_kitten", got.CareerKittens, want.CareerKittens)
-			diff(t, "player_stat_period", got.Periods, want.Periods)
-			diff(t, "feed", got.Feed, want.Feed)
-			if got.Cursor != want.Cursor {
-				t.Errorf("checkpoint = %d, want %d", got.Cursor, want.Cursor)
-			}
+			diffSnapshot(t, got, want, false)
 		})
 	}
 }
