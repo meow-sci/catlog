@@ -2031,7 +2031,7 @@ type**. `flight` = `tracker.FlightFor(window.VehicleId)`.
 instant (`EventFactory.FromWindow`, `:32-40`) — which is why in-session emission is slightly out of
 order by design.
 
-**Payload** — `TelemetryWindowPayload`, `Payloads.cs:346-365`. `agg` = `{"min", "max", "mean", "last"}`
+**Payload** — `TelemetryWindowPayload`, `Payloads.cs:407-429`. `agg` = `{"min", "max", "mean", "last"}`
 (`Agg`, `:13-17`); an empty fold yields `Agg(0,0,0,0)`.
 
 | Key | Type | Units | Optional | Source |
@@ -2044,11 +2044,21 @@ order by design.
 | `surface_speed_ms` | agg | m/s | no | `Vehicle.GetSurfaceSpeed()` (`KSA/Vehicle.cs:2759`) |
 | `orbital_speed_ms` | agg | m/s | no | `Vehicle.OrbitalSpeed` (`KSA/Vehicle.cs:581`) |
 | `accel_ms2` | agg | m/s² | no | `Vehicle.AccelerationBody.Length()` (`KSA/Vehicle.cs:557`, a `double3`) |
-| `peak_g` | number | g | **YES — omitted entirely** when no sample carried a reading | `[JsonIgnore(WhenWritingNull)]`, `Payloads.cs:355-357`; fold `WindowAccumulator.cs:140-141` |
-| `max_q_pa` | number | Pa | **YES — omitted** under the same rule | `Payloads.cs:358-360`; `WindowAccumulator.cs:142-143` |
+| `peak_g` | number | g | **YES — omitted entirely** when no sample carried a reading | `[JsonIgnore(WhenWritingNull)]`, `Payloads.cs:416-418`; fold `WindowAccumulator.cs:148-149` |
+| `max_q_pa` | number | Pa | **YES — omitted** under the same rule | `Payloads.cs:419-421`; `WindowAccumulator.cs:150-151` |
 | `mass_kg_last` | number | kg | no | mass at the **end** of the window |
-| `radar_alt_m` | **agg** | m above the surface beneath | **YES — omitted entirely** when no sample carried a reading | `Payloads.cs:362-364`. Folded over **only** the samples that had a terrain reading — the `peak_g` rule, applied to an aggregate. |
+| `radar_alt_m` | **agg** | m above the surface beneath | **YES — omitted entirely** when no sample carried a reading | `Payloads.cs:423-425`. Folded over **only** the samples that had a terrain reading — the `peak_g` rule, applied to an aggregate. |
 | `warp_max` | number | × | no | The highest `Universe.SimulationSpeed` (`KSA/Universe.cs:100`) seen in the window. **`1` is real time, and `1` is also the unreadable fallback — never `0`**, because an unreadable warp is not a stopped clock. |
+| `state` | object `{pos,vel}` of `{x,y,z}` numbers | `pos`: m; `vel`: m/s | **YES — whole object omitted** unless all six numbers are finite and belong to `body` | State at the **last sample**, in the parent-body-centred inertial (CCI) frame; `TelemetrySnapshot.State` → `WindowAccumulator._state` → `TelemetryWindowPayload.State` (`TelemetrySnapshot.cs:126-130`; `WindowAccumulator.cs:157-180`; `Payloads.cs:403-429`). |
+
+**`state` is one atomic, last-sample reading, not an aggregate.** A mean position has no useful
+physical meaning, and position without velocity can only be interpolated; the pair can be
+propagated even when a neighbouring passive window was pruned. Every sample assignment, including
+`null`, replaces the prior `_state` (`WindowAccumulator.cs:157-162`), just as the sample replaces
+`body` and `mass_kg_last`. Thus a failed read or an SOI/body change at the end of a window clears an
+older valid state rather than mislabelling old-parent coordinates with the new `body`. One
+non-finite/unreadable component omits the whole object: no component is zero-filled and no origin
+fallback is emitted.
 
 **`radar_alt_m`'s population is not `n`.** `n` remains the total sample count; the aggregate is
 folded only over the samples that carried a reading, and the key is absent altogether when none did —
@@ -2094,13 +2104,25 @@ windows. `Add` handles a backwards `sim_t` jump by **discarding** the partial wi
 already been closed.
 
 **Game source.** The whole snapshot is built by `VehicleTelemetry.Sample(vehicle, simT, wallMs)`
-(`:129-180`), one per live vehicle per due tick, from `CatlogRuntime.SamplePass` (`:484-490`). **A
-vehicle whose read throws is omitted from the frame, never zero-filled** (`:174-179`) — a zeroed
+(`:160-231`), one per live vehicle per due tick, from `CatlogRuntime.SamplePass` (`:490-510`). **A
+vehicle whose read throws is omitted from the frame, never zero-filled** (`VehicleTelemetry.cs:225-230`;
+`CatlogRuntime.cs:502-508`) — a zeroed
 snapshot fed to a prev/curr comparator manufactures phantom SOI changes (`body → ""`) and phantom
 orbit-achieved edges (`ecc → 0`), and both of those score.
 
+`VehicleTelemetry.StateOf` (`:233-272`) reads `Orbit.StateVectors` by ref, then
+`StateVectors.PositionCci` and `VelocityCci`. The game declares that ref-read property at
+`KSA/Orbit.cs:1150`, the readonly fields at `KSA/StateVectors.cs:6-14`, and transforms both vectors
+through `Orb2ParentCci` in `Orbit.GetStateVectorsAt` (`KSA/Orbit.cs:2107-2113`). The result is raw game
+metres and metres per second relative to `Orbit.Parent` in that parent's centred inertial frame.
+The method re-reads and normalises `Orbit.Parent` and requires it to equal the snapshot `body` before
+accepting all six finite components; any read failure returns `null` while retaining the rest of the
+sample.
+
 **Classification.** **PASSIVE** — this is the archetype. 2 Hz sampling, 30 sim-second aggregation
-window, no debounce.
+window, no debounce. It is the registry's only `KindPassive` event and the outbox's only prunable
+record. Putting path state here means it is deliberately shed before any discrete gameplay event
+when the local spool is under pressure.
 
 **Server.** Six boards read it.
 
@@ -2126,9 +2148,10 @@ meaningful, and a probe that never came back still got there. It is barometric, 
 landing scores its elevation and a low pass over a canyon does not.
 
 All six share `windowContext` (`:493-499`) — `{"body", "flight", "t1_sim"}`, `t1_sim` in **seconds**.
-`accel_ms2`, `mass_kg_last`, `n`, `t0_sim`, `warp_max` and every aggregate member that is not
+`state`, `accel_ms2`, `mass_kg_last`, `n`, `t0_sim`, `warp_max` and every aggregate member that is not
 `alt_m.max` / `surface_speed_ms.max` / `orbital_speed_ms.max` / `radar_alt_m.min` are decoded and
-read by no fold.
+read by no fold. `state` is future visualisation material only; it changes no projection, board or
+feed context.
 
 **`warp_max` decodes as `0` when a payload does not carry it, not as `1`.** The intended default is
 `1` — a stopped clock is not a legal warp — but Go's zero value for the field is `0` and nothing reads
@@ -2136,10 +2159,11 @@ it today, so this is currently invisible. If a future reader wants it, **`0` mus
 "absent" at the read site**. PROJ-098.
 
 **Vectors.** `batch-001.ndjson` lines 11 and 15 — the pair that pins the `agg` objects and the
-omit-don't-zero optionals from both sides. Line 11 is an ascent with `peak_g`, `max_q_pa` and
+omit-don't-zero optionals from both sides. Line 11 is an ascent with `peak_g`, `max_q_pa`,
 the `radar_alt_m` aggregate all **present**, `warp_max: 1`, `n: 60`, `t0_sim: 100.5`, `t1_sim: 130.5`
-— exactly a 30 s window at 2 Hz. Line 15 is the same type coasting at `warp_max: 1000` with all three
-**absent** and `n: 3`, which is the warp short-window case above made testable.
+and a complete finite `state` — exactly a 30 s window at 2 Hz with the atomic state-present case.
+Line 15 is the same type coasting at `warp_max: 1000` with all four optional readings **absent** and
+`n: 3`, which makes both the warp short-window and state-absence cases testable.
 
 ---
 
@@ -2887,7 +2911,7 @@ fold writes. Surfaced as `collection.projected` / `collection.lag` and `projecto
 | A manual destroy also flips `survived` | `EndFlight` tells the correlator first | `EventPipeline.cs:398-399` |
 | An impact within ±2 s of a `kitten.kia` **that named a flight** (rebuild only) — on **both** impact boards | `b.KIANear`, via the shared `survivedImpact`; the index is fed only by flight-bearing KIAs, and the mod attributes one only when it can prove it | `stats/boards.go:397-401`; `projector/rebuild.go:163`; MOD-073 |
 | `peak_g_survived` **and** `max_q_survived` require the flight ended `recovered` (rebuild only) | `st.Recovered()`, via the shared `survivedLoad` | `stats/boards.go:485-487` |
-| Absent `peak_g` / `max_q_pa` ≠ 0 | `*float64` + omit-don't-zero on the wire | `stats/payload.go`; `Payloads.cs:355-360` |
+| Absent `peak_g` / `max_q_pa` ≠ 0 | `*float64` + omit-don't-zero on the wire | `stats/payload.go`; `Payloads.cs:416-421` |
 | Absent `lat` / `lon` / `radar_alt_m` ≠ 0 — a zeroed latitude is the equator and a zeroed radar altitude is the ground | `*float64` / `*Agg` + omit-don't-zero on the wire | `stats/payload.go`; MOD-078 |
 | An unwritten orbit figure does not count — `ap_m == 0` (conic not `Bound`), `ecc == 0` or `inc_deg == 0` (unread) | `value > 0` on all four shape boards | `stats/boards.go:663-665` |
 | A touchdown *from* an unreadable situation does not count — `"unknown"` is refused, not merely treated as contact-free | `knownSituation(from)` | `stats/situation.go`; `stats/boards.go:843` |
@@ -3000,9 +3024,9 @@ rather than on Go map order, so a rebuild reproduces the incremental `context` b
 
 | File | Pins |
 |---|---|
-| `batches/batch-001.ndjson` | 32 envelopes, one line each; SHA-256 `cb52ab2dbbb46ab778fe33a48ad6379e4241cfe4aca3f31f4cbe5c45a777e2ee` |
+| `batches/batch-001.ndjson` | 32 envelopes, one line each; SHA-256 `02c8d4018e2ac1d6b61133369d743540b1267659a5e3278e9c8757fded50e833` |
 | `batches/batch-001.br` | the Brotli body as sent |
-| `batches/batch-001.bh.txt` | `Pl2bpW2Lj6Gm6u5ykEfMfzIChnxhgIEdS9WvzpHCfyY` — base64url SHA-256 of the compressed body |
+| `batches/batch-001.bh.txt` | `8P6l0Wfm_uWU3urqN6OuUMDRqthX_MgLi7AOPiILHjs` — base64url SHA-256 of the compressed body |
 | `keys/*`, `license/*`, `proofs/*`, `expected/verify-results.json` | the credential / JWS layer, not events |
 
 **Covered by a vector: 25 of 25.** Every registered type appears at least once, at the `ver` the
@@ -3017,14 +3041,15 @@ to say.
 |---|---|---|
 | `system.discovered` | 1, 5 | line 1 is complete and precedes its catalogue; line 5 is `complete: false` and has no body rows. |
 | `system.body` | 2, 3, 4 | line 2 is a root with `parent` and all six orbital-shape keys absent; line 3 is a bound body with `parent`, all six shape keys and finite period present; line 4 is an unbound body with the six shape keys present and `period_s` absent. All three carry finite normalised orientations. |
-| `telemetry.window` | 11, 15 | line 11 carries `peak_g`, `max_q_pa` **and** the `radar_alt_m` aggregate, `n` 60, `warp_max` 1; line 15 is the same type on rails at 1000× warp with all three **absent** and `n` 3. A consumer that reads an absent optional as `0` passes line 11 and fails line 15. |
+| `telemetry.window` | 11, 15 | line 11 carries `peak_g`, `max_q_pa`, the `radar_alt_m` aggregate and a complete finite `state`, with `n` 60 and `warp_max` 1; line 15 is the same type on rails at 1000× warp with all four **absent** and `n` 3. The pair pins atomic state presence/absence as well as omit-don't-zero. |
 | `flight.started` | 7, 21 | line 7 is crewed with `kids` populated, `stage_count` 3 and `lat` / `lon` present, while `engine_count` is **absent**; line 21 is an uncrewed probe with explicit `engine_count: 0`, `kids` `[]`, `stage_count` 0 and `lat` / `lon` absent. The pair separates unknown from meaningful zero. |
 | `flight.ended` | 26, 27, 31 | `recovered` with crew and a position; the silent-removal safety net (`despawned`, `crew_count` 0, `kids` `[]`, `body: "unknown"`, no position); and `destroyed`. |
 | `vehicle.docked` / `vehicle.undocked` | 17, 22 | `other_flight` **null** and `other_flight` a ULID — the one in-payload `null` in the taxonomy. |
 
 Between them the lines pin an array field (`kids`, `roster.snapshot.kittens`), an optional present
 **and** absent for the same field on the same type, a nested object (`agg`), a nested *optional*
-object (`telemetry.window`'s `radar_alt_m`), an in-payload `null`, and all three envelope `flight`
+object (`telemetry.window`'s `radar_alt_m`), a nested optional state object with two nested vectors,
+an in-payload `null`, and all three envelope `flight`
 cases — always non-null, always null, and conditionally null (`kitten.tumble`, `kitten.kia`, both
 naming a flight). Line 19 additionally pins `kitten.tumble.from: "airborne"`, including the open-set
 string that distinguishes a failed landing from a grounded trip without changing the current count

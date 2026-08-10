@@ -299,5 +299,6 @@ public sealed class OutboxDbTests
         T0Sim: i * 30.0, T1Sim: (i * 30.0) + 29.5, N: 60, Body: "earth",
         AltM: new Agg(0, 1, 0.5, 1), SurfaceSpeedMs: new Agg(0, 1, 0.5, 1),
         OrbitalSpeedMs: new Agg(0, 1, 0.5, 1), AccelMs2: new Agg(0, 1, 0.5, 1),
-        PeakG: null, MaxQPa: null, MassKgLast: 1_000, RadarAltM: null, WarpMax: 1);
+        PeakG: null, MaxQPa: null, MassKgLast: 1_000, RadarAltM: null, WarpMax: 1,
+        State: null);
 }

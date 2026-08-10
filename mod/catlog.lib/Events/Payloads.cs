@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Text.Json.Serialization;
+using MeowSci.Catlog.Lib.Telemetry;
 
 namespace MeowSci.Catlog.Lib.Events;
 
@@ -399,6 +400,10 @@ public sealed record RosterSnapshotPayload(
 /// a reader can tell a 60-sample window from the handful of samples a 10 000× warp leaves behind,
 /// not so anything can be rejected on it.
 /// </param>
+/// <param name="State">
+/// Last sample's body-centred inertial position and velocity, or null when the complete reading
+/// was unavailable or did not belong to <paramref name="Body"/>.
+/// </param>
 public sealed record TelemetryWindowPayload(
     [property: JsonPropertyName("t0_sim")] double T0Sim,
     [property: JsonPropertyName("t1_sim")] double T1Sim,
@@ -418,4 +423,7 @@ public sealed record TelemetryWindowPayload(
     [property: JsonPropertyName("radar_alt_m")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     Agg? RadarAltM,
-    [property: JsonPropertyName("warp_max")] double WarpMax);
+    [property: JsonPropertyName("warp_max")] double WarpMax,
+    [property: JsonPropertyName("state")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    StateVec? State);

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using MeowSci.Catlog.Lib.Detect;
 using MeowSci.Catlog.Lib.Events;
+using MeowSci.Catlog.Lib.Telemetry;
 using Xunit;
 
 namespace MeowSci.Catlog.Lib.Tests.Detect;
@@ -232,5 +233,48 @@ public sealed class WindowAccumulatorTests
         ClosedWindow closed = Assert.IsType<ClosedWindow>(accumulator.Add(TestData.Snapshot(simT: 10)));
 
         Assert.Equal(1, closed.Payload.WarpMax);
+    }
+
+    [Fact]
+    public void State_IsTheLastSamplesCompleteReading_NotAnAggregate()
+    {
+        var accumulator = new WindowAccumulator(10.0);
+        var first = new StateVec(new Vec3(1, 2, 3), new Vec3(4, 5, 6));
+        var last = new StateVec(new Vec3(10, 20, 30), new Vec3(40, 50, 60));
+        accumulator.Add(TestData.Snapshot(simT: 0, state: first));
+        accumulator.Add(TestData.Snapshot(simT: 1, state: last));
+
+        ClosedWindow closed = Assert.IsType<ClosedWindow>(accumulator.Flush("v1"));
+
+        Assert.Same(last, closed.Payload.State);
+    }
+
+    [Fact]
+    public void BodyChange_WithUnreadableFinalStateClearsTheOldParentState()
+    {
+        var accumulator = new WindowAccumulator(10.0);
+        var earth = new StateVec(new Vec3(1, 2, 3), new Vec3(4, 5, 6));
+        accumulator.Add(TestData.Snapshot(simT: 0, body: "earth", state: earth));
+        accumulator.Add(TestData.Snapshot(simT: 1, body: "duna", state: null));
+
+        ClosedWindow closed = Assert.IsType<ClosedWindow>(accumulator.Flush("v1"));
+
+        Assert.Equal("duna", closed.Payload.Body);
+        Assert.Null(closed.Payload.State);
+    }
+
+    [Fact]
+    public void BodyChange_CarriesOnlyTheNewParentsFinalState()
+    {
+        var accumulator = new WindowAccumulator(10.0);
+        var earth = new StateVec(new Vec3(1, 2, 3), new Vec3(4, 5, 6));
+        var duna = new StateVec(new Vec3(7, 8, 9), new Vec3(10, 11, 12));
+        accumulator.Add(TestData.Snapshot(simT: 0, body: "earth", state: earth));
+        accumulator.Add(TestData.Snapshot(simT: 1, body: "duna", state: duna));
+
+        ClosedWindow closed = Assert.IsType<ClosedWindow>(accumulator.Flush("v1"));
+
+        Assert.Equal("duna", closed.Payload.Body);
+        Assert.Same(duna, closed.Payload.State);
     }
 }

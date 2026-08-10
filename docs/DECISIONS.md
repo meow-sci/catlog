@@ -2784,6 +2784,34 @@ This completes the final pre-launch `vehicle.orbit` `ver: 1` shape under DOCS-00
 deployed event history or old client population to upcast, so minting a v2 would preserve a contract
 nobody has consumed and make the two implementations carry needless compatibility machinery.
 
+### MOD-085 — Vessel state is atomic last-sample data on the one passive, prunable event
+
+*Accepted · 2026-08-10 · Task D3c.*
+
+A position sequence can only be interpolated; position plus velocity can be propagated. At the
+30-sim-second telemetry cadence, especially under warp, interpolation alone is visibly wrong near
+periapsis and a dropped neighbour would otherwise leave an unbridgeable hole. Each window therefore
+carries the last sample's complete state when available. It is not averaged—a mean position is not a
+physical state—and every sample replaces the previous value, including with absence, so an SOI
+transition cannot attach old-parent coordinates to a new `body`.
+
+The six numbers are one fact. If one is non-finite or unreadable, or the re-read parent does not
+match the payload body, the whole object is omitted. A partial vector or fabricated origin would be
+smaller to encode but would turn missing evidence into a real location and make a future renderer
+confidently wrong. The recorded frame is exactly KSA's parent-body-centred inertial frame, with
+position in metres and velocity in metres per second; no global-frame conversion is inferred.
+
+The placement is the decisive tradeoff. `telemetry.window` is the registry's only passive event and
+the outbox's only prunable record, so path detail is shed before every discrete gameplay fact when a
+player's local spool is under pressure. Putting the same material on any event type would make it
+undroppable. The measured cost supports that choice: a deterministic 12-player, 45-simulated-minute
+loadgen corpus contained 7,391 events and 4,581 states; removing only each state member from otherwise
+byte-identical NDJSON and recompressing with production Brotli changed 567,760 bytes to 572,354—an
+increase of 4,594 bytes, **0.809%**, far below the roughly one-third reconsideration gate.
+
+No fold reads the state and no board changes. This is the final pre-launch `telemetry.window` `ver: 1`
+shape under DOCS-005, so there is no fictional version bump or upcaster for undeployed history.
+
 ## The load harness
 
 `catlog.loadgen`: many randomised players through the real pipeline, and what one laptop actually does.

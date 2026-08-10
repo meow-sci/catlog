@@ -4,7 +4,9 @@ using System.Text.Json.Serialization;
 
 namespace MeowSci.Catlog.Lib.Telemetry;
 
-/// <summary>A KSA-free three-component vector used by the immutable system catalogue.</summary>
+/// <summary>
+/// A KSA-free immutable three-component vector shared by the system catalogue and vehicle state.
+/// </summary>
 public sealed record Vec3(
     [property: JsonPropertyName("x")] double X,
     [property: JsonPropertyName("y")] double Y,

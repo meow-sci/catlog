@@ -558,6 +558,10 @@ func batch001() []byte {
 			"mass_kg_last":     9800.25,
 			"radar_alt_m":      agg(0, 41880.5, 20940.25, 41880.5),
 			"warp_max":         1,
+			"state": map[string]any{
+				"pos": map[string]any{"x": 6557100.375, "y": -182500.25, "z": 42125.5},
+				"vel": map[string]any{"x": 215.75, "y": 7640.5, "z": -38.125},
+			},
 		},
 	}, {
 		label: "ev-7", typ: "vehicle.atmosphere", ver: 1, flight: &mission, simT: 145,

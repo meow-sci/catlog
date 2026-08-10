@@ -1,5 +1,7 @@
+using System.Linq;
 using System.Text.Json;
 using MeowSci.Catlog.Lib.Events;
+using MeowSci.Catlog.Lib.Telemetry;
 using MeowSci.Catlog.Lib.Util;
 using Xunit;
 
@@ -113,7 +115,8 @@ public sealed class EventEnvelopeTests
             T0Sim: 0, T1Sim: 29.5, N: 60, Body: "earth",
             AltM: new Agg(0, 1, 0.5, 1), SurfaceSpeedMs: new Agg(0, 1, 0.5, 1),
             OrbitalSpeedMs: new Agg(0, 1, 0.5, 1), AccelMs2: new Agg(0, 1, 0.5, 1),
-            PeakG: null, MaxQPa: null, MassKgLast: 1_000, RadarAltM: null, WarpMax: 1);
+            PeakG: null, MaxQPa: null, MassKgLast: 1_000, RadarAltM: null, WarpMax: 1,
+            State: null);
 
         using JsonDocument document = JsonDocument.Parse(
             TestData.Envelope(type: EventTypes.TelemetryWindow, payload: payload).ToNdjsonLine());
@@ -132,7 +135,7 @@ public sealed class EventEnvelopeTests
             AltM: new Agg(0, 1, 0.5, 1), SurfaceSpeedMs: new Agg(0, 1, 0.5, 1),
             OrbitalSpeedMs: new Agg(0, 1, 0.5, 1), AccelMs2: new Agg(0, 1, 0.5, 1),
             PeakG: 4.25, MaxQPa: 31_000, MassKgLast: 1_000,
-            RadarAltM: new Agg(2, 900, 400, 2), WarpMax: 1);
+            RadarAltM: new Agg(2, 900, 400, 2), WarpMax: 1, State: null);
 
         using JsonDocument document = JsonDocument.Parse(
             TestData.Envelope(type: EventTypes.TelemetryWindow, payload: payload).ToNdjsonLine());
@@ -140,6 +143,28 @@ public sealed class EventEnvelopeTests
 
         Assert.Equal(4.25, body.GetProperty("peak_g").GetDouble());
         Assert.Equal(31_000, body.GetProperty("max_q_pa").GetDouble());
+    }
+
+    [Fact]
+    public void TelemetryWindow_StateIsAtomicOptionalAndOrderedLast()
+    {
+        var origin = new StateVec(new Vec3(0, 0, 0), new Vec3(0, 0, 0));
+        var payload = new TelemetryWindowPayload(
+            T0Sim: 0, T1Sim: 29.5, N: 60, Body: "earth",
+            AltM: new Agg(0, 1, 0.5, 1), SurfaceSpeedMs: new Agg(0, 1, 0.5, 1),
+            OrbitalSpeedMs: new Agg(0, 1, 0.5, 1), AccelMs2: new Agg(0, 1, 0.5, 1),
+            PeakG: null, MaxQPa: null, MassKgLast: 1_000, RadarAltM: null, WarpMax: 1,
+            State: origin);
+
+        using JsonDocument present = JsonDocument.Parse(CatlogJson.Serialize(payload));
+        JsonElement state = present.RootElement.GetProperty("state");
+        Assert.Equal(["pos", "vel"], state.EnumerateObject().Select(static p => p.Name).ToArray());
+        Assert.Equal(["x", "y", "z"], state.GetProperty("pos").EnumerateObject().Select(static p => p.Name).ToArray());
+        Assert.Equal(0, state.GetProperty("pos").GetProperty("x").GetDouble());
+        Assert.Equal("state", present.RootElement.EnumerateObject().Last().Name);
+
+        using JsonDocument absent = JsonDocument.Parse(CatlogJson.Serialize(payload with { State = null }));
+        Assert.False(absent.RootElement.TryGetProperty("state", out _));
     }
 
     [Fact]

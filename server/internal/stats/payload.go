@@ -282,6 +282,13 @@ type RosterSnapshot struct {
 	Kittens []RosterKitten `json:"kittens"`
 }
 
+// StateVec is a position in metres and velocity in metres per second, both
+// relative to the TelemetryWindow body in its inertial frame.
+type StateVec struct {
+	Pos Vec3 `json:"pos"`
+	Vel Vec3 `json:"vel"`
+}
+
 // TelemetryWindow is `telemetry.window`: one per vehicle per 30 s of sim time.
 type TelemetryWindow struct {
 	T0Sim          float64  `json:"t0_sim"`
@@ -304,6 +311,9 @@ type TelemetryWindow struct {
 	// time. **Descriptive only** (Constitution §8): it may annotate a row, and
 	// it may never reject or disqualify one. It is not a cheat signal.
 	WarpMax float64 `json:"warp_max"`
+	// State is absent when any of its six components was unreadable. A pointer
+	// keeps absence distinct from the legitimate all-zero origin vector.
+	State *StateVec `json:"state"`
 }
 
 // SessionStarted is `session.started`.
@@ -323,6 +333,8 @@ type SystemDiscovered struct {
 	Complete bool   `json:"complete"`
 }
 
+// Vec3 is the shared three-dimensional vector shape used by catalogue axes
+// and body-centred inertial vehicle state.
 type Vec3 struct {
 	X float64 `json:"x"`
 	Y float64 `json:"y"`

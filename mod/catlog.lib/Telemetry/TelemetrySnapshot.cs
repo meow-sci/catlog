@@ -123,6 +123,12 @@ public sealed record TelemetrySnapshot(
     /// <summary>Orbital period in seconds, or 0 for an unbound trajectory.</summary>
     public double PeriodS { get; init; }
 
+    /// <summary>
+    /// Body-centred inertial position and velocity at this sample, or null unless all six
+    /// components were finite and relative to <see cref="Body"/>.
+    /// </summary>
+    public StateVec? State { get; init; }
+
     /// <summary>The conic class, supplied by the game project. See <see cref="OrbitClass"/>.</summary>
     public OrbitClass OrbitClass { get; init; } = OrbitClass.Unknown;
 

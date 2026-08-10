@@ -800,7 +800,7 @@ export const EVENTS: CatlogEvent[] = [
     cause:
       "This is the background telemetry. Catlog samples each live vehicle twice a second and folds 30 game-seconds of samples into one summary — 60 samples in a full window.",
     source:
-      "Altitude above mean radius, surface speed, orbital speed and acceleration, each as a minimum, maximum, mean and last value. Height above the ground is folded the same way, over only the samples that had a ground reading. Peak g and peak dynamic pressure are included only when the game actually computed them.",
+      "Altitude above mean radius, surface speed, orbital speed and acceleration, each as a minimum, maximum, mean and last value. Height above the ground is folded the same way, over only the samples that had a ground reading. Peak g and peak dynamic pressure are included only when the game actually computed them. When the complete reading is available, the final sample also carries position and velocity relative to the world named by the window.",
     gate: "A window also closes early when the flight ends, when a vehicle disappears, or when the game shuts down — those windows are short. Loading a save discards the partial window rather than folding two timelines together.",
     fields: [
       { key: "t0_sim", unit: "s", what: "Game time of the first sample." },
@@ -834,6 +834,12 @@ export const EVENTS: CatlogEvent[] = [
         key: "warp_max",
         unit: "",
         what: "The highest time-warp speed during the window; `1` is real time. It says how much game happened per sample, so a reader can tell a full 60-sample window from the handful a deep warp leaves behind. Descriptive only — it disqualifies nothing and is not a cheat signal.",
+      },
+      {
+        key: "state",
+        unit: "m and m/s",
+        optional: true,
+        what: "Position and velocity at the final sample, measured relative to the world named by `body` in a non-rotating frame. All six coordinates are kept together; the whole reading is left out if any part is unavailable or no longer belongs to that world.",
       },
     ],
     feeds: [

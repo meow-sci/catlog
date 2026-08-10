@@ -94,9 +94,18 @@ Kitten identity: `kid` = lowercase Crockford base32 of the first 10 bytes of `SH
 | `kitten.kia` | `{"kid": s, "name": s, "context": "rud"\|"manual_destroy"\|"unknown"}` |
 | `roster.snapshot` | `{"kittens": [{"kid": s, "name": s, "travelled_m": f, "fastest_ms": f, "missions": i, "mission_time_s": f, "kia": b}]}` — every 10 min of play, and on session end |
 | `flight.flagged` | `{"flag": "teleport"\|"refuel"\|"resource_edit"\|"console"\|"tuning", "detail": s}` |
-| `telemetry.window` | `{"t0_sim": f, "t1_sim": f, "n": i, "body": s, "alt_m": agg, "surface_speed_ms": agg, "orbital_speed_ms": agg, "accel_ms2": agg, "peak_g": f?, "max_q_pa": f?, "mass_kg_last": f, "radar_alt_m": agg?, "warp_max": f}` — one per vehicle per 30 s sim-time of active flight |
+| `telemetry.window` | `{"t0_sim": f, "t1_sim": f, "n": i, "body": s, "alt_m": agg, "surface_speed_ms": agg, "orbital_speed_ms": agg, "accel_ms2": agg, "peak_g": f?, "max_q_pa": f?, "mass_kg_last": f, "radar_alt_m": agg?, "warp_max": f, "state": {"pos": {"x": f, "y": f, "z": f}, "vel": {"x": f, "y": f, "z": f}}?}` — one per vehicle per 30 s sim-time of active flight |
 
 ### Payload rules a decoder has to get right
+
+**A state vector is atomic and belongs to the window's last sample.** When present,
+`telemetry.window.state.pos` is position in metres and `state.vel` is velocity in metres per second,
+both relative to the parent named by `body` in that body's centred inertial (CCI) frame. It is the
+last sample's state, not an aggregate. The entire `state` object is omitted when any of its six
+components is non-finite or unreadable, or when the parent-body association cannot be shown to match
+`body`; individual components are never zero-filled and an origin is never fabricated. A later
+sample with no valid state clears an earlier one, so an SOI change cannot leave coordinates from one
+body labelled as another.
 
 **A tumble says what movement state it came from.** `kitten.tumble.from` is the kitten's previous
 locomotion mode, lowercased. It is an open set: today's useful distinction is `"airborne"` (a

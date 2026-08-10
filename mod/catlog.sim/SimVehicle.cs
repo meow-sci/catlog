@@ -130,6 +130,9 @@ public sealed class SimVehicle
     /// <summary>Orbital period in seconds, or 0 for an unbound trajectory.</summary>
     public double PeriodS { get; set; }
 
+    /// <summary>Body-centred inertial state at the current sample, when modelled.</summary>
+    public StateVec? State { get; set; }
+
     /// <summary>The conic class the game project would report.</summary>
     public OrbitClass OrbitClass { get; set; }
 
@@ -171,6 +174,7 @@ public sealed class SimVehicle
         ArgpDeg = ArgpDeg,
         TPe = TPe,
         PeriodS = PeriodS,
+        State = State,
         OrbitClass = OrbitClass,
         CrewCount = CrewCount,
         PartCount = PartCount,
@@ -209,6 +213,9 @@ public sealed class SimVehicle
         Ecc = apAltM <= peAltM ? 0.0 : (apAltM - peAltM) / (apAltM + peAltM + 2 * 600_000);
         SmaM = 600_000 + ((apAltM + peAltM) * 0.5);
         PeriodS = 2 * System.Math.PI * SmaM / System.Math.Max(1, orbitalSpeedMs);
+        State = new StateVec(
+            new Vec3(SmaM, 0, 0),
+            new Vec3(0, orbitalSpeedMs, 0));
         OrbitClass = OrbitClass.Bound;
         OrbitalSpeedMs = orbitalSpeedMs;
         SurfaceSpeedMs = surfaceSpeedMs;

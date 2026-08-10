@@ -24,6 +24,7 @@ public sealed partial class EventTypesTests
         Assert.Equal(1, EventTypes.VersionOf(EventTypes.FlightStarted));
         Assert.Equal(1, EventTypes.VersionOf(EventTypes.KittenTumble));
         Assert.Equal(1, EventTypes.VersionOf(EventTypes.VehicleOrbit));
+        Assert.Equal(1, EventTypes.VersionOf(EventTypes.TelemetryWindow));
     }
 
     [Fact]

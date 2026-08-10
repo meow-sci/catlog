@@ -208,6 +208,7 @@ public static class VehicleTelemetry
                 // OrbitData's unbound Period is NaN today, but classify explicitly: a future game
                 // returning a finite sentinel must not turn an open trajectory into a closed one.
                 PeriodS = conic == OrbitClass.Bound ? Sanitize.Finite(orbit.Period) : 0.0,
+                State = StateOf(orbit, body),
                 OrbitClass = conic,
                 CrewCount = CrewCount(vehicle),
                 PartCount = PartCount(vehicle),
@@ -224,6 +225,47 @@ public static class VehicleTelemetry
         catch (Exception ex)
         {
             // Omit, never zero-fill (WP7 requirement 7). The caller logs once per session.
+            Faults.Note(ex);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Reads one complete parent-body-centred inertial state vector, or null when any component or
+    /// its parent-body association is unreadable.
+    /// </summary>
+    /// <param name="orbit">The vehicle's current orbit.</param>
+    /// <param name="body">The body name already placed on the snapshot.</param>
+    /// <returns>The complete state, or null; individual failed components are never zero-filled.</returns>
+    [KsaAnchor("Orbit.StateVectors; StateVectors.PositionCci/VelocityCci; Orbit.Parent",
+        SourceFile = "KSA/Orbit.cs:1150,2107-2112 / KSA/StateVectors.cs:6-14",
+        Verified = "2026-08-10", GameVersion = "2026.8.5.5168", Risk = ChurnRisk.Low,
+        Notes = "StateVectors is a ref readonly Orbit property. GetStateVectorsAt transforms the orbital "
+                + "position and velocity through Orb2ParentCci, so both vectors are relative to Orbit.Parent "
+                + "in its inertial frame; units are metres and metres per second.")]
+    private static StateVec? StateOf(Orbit orbit, string body)
+    {
+        try
+        {
+            // Re-read the association after the vector source was selected. A concurrent SOI
+            // transition must omit state rather than label old-parent coordinates with a new body.
+            if (!StringComparer.Ordinal.Equals(body, BodyName(orbit.Parent)))
+                return null;
+
+            ref readonly StateVectors sv = ref orbit.StateVectors;
+            double3 pos = sv.PositionCci;
+            double3 vel = sv.VelocityCci;
+            if (!double.IsFinite(pos.X) || !double.IsFinite(pos.Y) || !double.IsFinite(pos.Z)
+                || !double.IsFinite(vel.X) || !double.IsFinite(vel.Y) || !double.IsFinite(vel.Z))
+            {
+                return null;
+            }
+
+            return StateVec.FiniteOrNull(pos.X, pos.Y, pos.Z, vel.X, vel.Y, vel.Z);
+        }
+        catch (Exception ex)
+        {
+            // State is optional: keep the otherwise valid sample and omit the atomic reading.
             Faults.Note(ex);
             return null;
         }

@@ -91,6 +91,11 @@ changes and phantom orbit-achieved edges, and those score.
 - **Telemetry windows are half-open in sim time** — a window opened at `t0` covers `t0 ≤ t < t0+30`,
   and a flight ending flushes its partial window before `flight.ended`, so the seconds before a RUD
   are not discarded.
+- **A telemetry state vector is the last sample, not an aggregate.** Position is metres and velocity
+  is metres/second in the named body's centred inertial frame. Every sample replaces the prior
+  nullable state, including with null, so a failed read or SOI change at the end cannot leave an
+  older body's coordinates under a newer `body`. All six components travel together or the whole
+  object is omitted; no component is zero-filled and no origin is fabricated.
 - **RUD facts are captured in the existing `Universe.DestroyVehicleFromEvent` prefix**, while the
   whole vehicle is still intact. `part_count` is `Vehicle.Parts.Count` at that boundary and falls
   back to 0 if the read fails. KSA reports the whole-vehicle destruction; it does not supply an
@@ -253,7 +258,7 @@ The only code that touches KSA, and deliberately thin: everything else is a call
 | `Mod.cs` | Lifecycle, config load, the status window (F10) |
 | `StatusWindow.cs` | Read-only ImGui rows: patches, vehicles, session, install, **event types**, recorded/queued counts, last ship, health. The *Event types* row reads `all reported`, or `N off in catlog.toml: <names>` in the warning colour — a player who switched something off months ago and forgot is otherwise looking at an empty board with no visible cause. It reports; it does not edit ([ROADMAP.md](ROADMAP.md)) |
 | `Patcher.cs` | The Harmony patches, each carrying its `ksa-integration.md` table row as a comment |
-| `VehicleTelemetry.cs` | **Every** KSA read, each with a `[KsaAnchor]`. Its 2 Hz orbit snapshot reads the complete milestone element set once: semi-major axis in metres, node/periapsis angles converted radians→degrees, absolute periapsis game time in seconds, and period in seconds |
+| `VehicleTelemetry.cs` | **Every** KSA read, each with a `[KsaAnchor]`. Its 2 Hz orbit snapshot reads the complete milestone element set once, plus an atomic parent-body-centred inertial position/velocity state. The state is accepted only when all six components are finite and its re-read parent still matches the snapshot body |
 | `SystemSurvey.cs` | The one-per-launch celestial forest survey, canonical system hash inputs and immutable cache; every KSA read carries a `[KsaAnchor]` |
 | `PolledSignals.cs` | The 2 Hz poll, vehicle tracking, and the roster read at **two cadences** — an allocation-free KIA scan every tick, the `roster.snapshot` payload only when one is due. It retains each kitten's previous locomotion mode and reports that mode through a total lowercase mapper when the state enters tumbling; an unseen value becomes `"unknown"`. It raises the tumble signal on the kitten's own EVA vehicle, which is what gives `kitten.tumble` its flight; the `KillCrew` patch in `Patcher.cs` raises the crew-kill signal that gives `kitten.kia` its own |
 | `CatlogRuntime.cs`, `ModPaths.cs`, `KsaAnchor.cs` | Wiring, paths, the anchor attribute |
@@ -414,6 +419,33 @@ installs, and the guard tests over `mod/catlog`'s sources are unaffected by it.
 
 Running it, and how to make the numbers mean something, is in
 [../DEVELOPMENT.md](../DEVELOPMENT.md#5-load-testing--make-loadgen).
+
+### Measured cost of `telemetry.window.state`
+
+The final-v1 state shape was measured on 2026-08-10 rather than estimated. This deterministic,
+realistic loadgen corpus ran 12 players for 45 simulated minutes through the real detector,
+accumulator, outbox, signer and production Brotli compressor:
+
+```sh
+make loadgen SERVER_URL=http://127.0.0.1:18080 ADMIN_URL=http://127.0.0.1:6060 \
+  PLAYERS=12 DURATION=45m SEED=4242 NAMESPACE=d3c-state-cost \
+  CONCURRENCY=12 BATCH=2000 SHIP_AGE=1h AUTH=admin READERS=0 \
+  MODERATION=0 TOO_NEW=0 REPORT=json \
+  LOADGEN_ARGS='--no-feed --no-dedup-probe'
+```
+
+A loopback capture retained the exact `.br` request bodies. A temporary .NET measurement helper
+referenced `catlog.lib`, decompressed each body with production `BrotliCodec`, removed only the
+balanced `,"state":{...}` member from `telemetry.window` lines (all other NDJSON bytes stayed
+identical), and recompressed with the same codec. The 12 batches contained 7,391 events and 4,581
+state-bearing windows. They measured 5,411,205 raw / 572,354 Brotli bytes with state and 4,978,266
+raw / 567,760 Brotli bytes without it: **4,594 compressed bytes, or 0.809%, of growth**. The command,
+seed and namespace reproduce the corpus construction; reproduce the comparison by capturing the
+request bodies on the loopback `SERVER_URL`, applying that exact state-only byte removal, and
+recompressing both forms with `BrotliCodec`. The capture proxy, batches and helper used for this run
+were temporary measurement artifacts and are not committed or claimed to remain available. The
+proxy did not alter captured request bodies; its forwarded requests were not used as measurement
+evidence.
 
 ## §7.5 Test suites
 
