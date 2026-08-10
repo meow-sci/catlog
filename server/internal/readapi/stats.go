@@ -153,6 +153,10 @@ type CollectionStats struct {
 	// immutable catalogue rows catlog has projected.
 	Systems      int64 `json:"systems"`
 	SystemBodies int64 `json:"system_bodies"`
+	// Badges is how many distinct badge keys have a lifetime holder; BadgeAwards
+	// is every current lifetime and per-save award row.
+	Badges      int64 `json:"badges"`
+	BadgeAwards int64 `json:"badge_awards"`
 	// Bodies is how many distinct celestial bodies anybody has reached.
 	//
 	// The one number here catlog could not have known in advance: bodies are
@@ -230,6 +234,7 @@ func (s *Server) buildStats(ctx context.Context, now time.Time) (StatsResponse, 
 		haveBusy bool
 		days     int64
 		counts   store.ProjectionCounts
+		badges   map[string]int64
 		cursor   int64
 	)
 	rolling := stats.RollingPeriods()
@@ -259,6 +264,9 @@ func (s *Server) buildStats(ctx context.Context, now time.Time) (StatsResponse, 
 			return err
 		}
 		if counts, err = p.Counts(ctx); err != nil {
+			return err
+		}
+		if badges, err = p.BadgeCounts(ctx); err != nil {
 			return err
 		}
 		cursor, err = p.Checkpoint(ctx, nil, store.AllProjections)
@@ -313,6 +321,8 @@ func (s *Server) buildStats(ctx context.Context, now time.Time) (StatsResponse, 
 		Kittens:        counts.Kitten,
 		Systems:        counts.System,
 		SystemBodies:   counts.SystemBody,
+		Badges:         int64(len(badges)),
+		BadgeAwards:    counts.BadgeAward,
 		Bodies:         counts.Bodies,
 		FeedRows:       counts.Feed,
 		LogHead:        head,

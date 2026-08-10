@@ -244,6 +244,21 @@ and leave `first_career` empty because `career` already identifies the save. Mig
 the projection schema to version 11, and `ProjectionCounts.BadgeAward` includes the table in the
 admin projection census (`store/projections.go:716,754`).
 
+The store read seam exposes complete `BadgeRow` values, including `system`, lifetime
+`first_career`, nullable `earned_sim_t` and nullable JSON context. `BadgesForPlayer` always applies
+an exact career filter: the empty sentinel means lifetime, not every scope. Unfiltered holder reads
+use only those lifetime rows. A system-filtered holder read instead ranks nonempty per-save rows in
+that system by `(earned_seq, career)`, keeps one row per player, and then orders players by
+`(earned_seq, player_id)`. This includes a player whose lifetime first award belongs to another
+system without counting several qualifying saves as several holders. `BadgeHolderCount` uses the
+same population, and `BadgeCounts` groups lifetime rows only
+(`store/projections.go`, merit-badge reads).
+
+`GET /v1/stats` reports `collection.badges` as the number of badge keys with at least one lifetime
+holder and `collection.badge_awards` as all current lifetime plus per-save award rows. Both are part
+of the existing whole-response cache keyed by projection `WriteGen` with a 10-second TTL; no badge
+holder or player-award endpoint is registered yet (`readapi/stats.go`).
+
 Awards are insert-once inside one projection build: the first qualifying event keeps its
 `earned_seq`, matching server-side `recv_time` in `earned_at`, nullable event career clock in
 `earned_sim_t`, and nullable JSON `context`. `earned_at` never trusts the client's wall clock.

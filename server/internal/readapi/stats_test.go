@@ -179,11 +179,13 @@ func TestStatsOnAnEmptyCollection(t *testing.T) {
 	}
 }
 
-func TestStatsCountsSystemsAndBodiesAndCachesByProjectionGeneration(t *testing.T) {
+func TestStatsCountsSystemsBodiesAndBadgesAndCachesByGenerationAndTTL(t *testing.T) {
 	f := newFixture(t)
 	counting := &countingLive{p: f.proj}
+	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
 	srv, err := readapi.New(readapi.Deps{
 		Projections: counting, Events: f.events, Directory: f.dir,
+		Now: func() time.Time { return now },
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -193,7 +195,8 @@ func TestStatsCountsSystemsAndBodiesAndCachesByProjectionGeneration(t *testing.T
 		t.Fatal(err)
 	}
 	afterFirst := counting.calls
-	if first.Collection.Systems != 0 || first.Collection.SystemBodies != 0 {
+	if first.Collection.Systems != 0 || first.Collection.SystemBodies != 0 ||
+		first.Collection.Badges != 0 || first.Collection.BadgeAwards != 0 {
 		t.Fatalf("empty system census = %+v", first.Collection)
 	}
 	if _, err := srv.Stats(t.Context()); err != nil {
@@ -202,10 +205,24 @@ func TestStatsCountsSystemsAndBodiesAndCachesByProjectionGeneration(t *testing.T
 	if counting.calls != afterFirst {
 		t.Errorf("cached stats queried projections again: %d -> %d", afterFirst, counting.calls)
 	}
+	now = now.Add(11 * time.Second)
+	if _, err := srv.Stats(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if counting.calls == afterFirst {
+		t.Error("stats cache did not expire after its ten-second TTL")
+	}
+	afterTTL := counting.calls
 
 	seedSystem(t, f, "hash-sol", "Sol", "Solar System", "solar-system", 2, 1, 1)
 	seedRoot(t, f, "hash-sol", "sol", "Sol", 0, 1)
 	seedOrbitingBody(t, f, "hash-sol")
+	f.projWrite(`INSERT INTO badge_award
+		(player_id, career, badge, system, first_career, earned_seq, earned_at)
+		VALUES
+		(1, '', 'first_flight', 'hash-sol', 'save-a', 1, 1001),
+		(1, 'save-a', 'first_flight', 'hash-sol', '', 1, 1001),
+		(2, '', 'first_orbit', 'hash-sol', 'save-b', 2, 1002)`)
 	updated, err := srv.Stats(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -214,7 +231,11 @@ func TestStatsCountsSystemsAndBodiesAndCachesByProjectionGeneration(t *testing.T
 		t.Errorf("system census = %d systems, %d bodies, want 1 and 2",
 			updated.Collection.Systems, updated.Collection.SystemBodies)
 	}
-	if counting.calls == afterFirst {
+	if updated.Collection.Badges != 2 || updated.Collection.BadgeAwards != 3 {
+		t.Errorf("badge census = %d keys, %d awards, want 2 and 3",
+			updated.Collection.Badges, updated.Collection.BadgeAwards)
+	}
+	if counting.calls == afterTTL {
 		t.Error("projection write generation did not invalidate the stats cache")
 	}
 }

@@ -232,7 +232,7 @@ All responses `Cache-Control: public, s-maxage=30, stale-while-revalidate=300` e
 - `GET /v1/players/{handle}/events?limit=50&before=<cursor>&type=<event type>` → `{"handle": s, "limit": n, "type"?: s, "next"?: <cursor>, "events": [{"seq": n, "id": ulid, "type": s, "ver": n, "session"?: ulid, "flight"?: ulid, "career"?: s, "sim_t"?: f, "recv": unix_ms, "payload": {…}}]}` (404 if unknown/banned)
 - `GET /v1/events?limit=50&before=<cursor>&type=<event type>&handle=<handle>` → the same envelope with every player's events mixed together, newest first; each row additionally carries `"handle": s`. `?handle=` narrows to one player (404 if unknown/banned, the same one answer); the unfiltered envelope omits `handle`.
 - `GET /v1/events/stream?type=<event type>&handle=<handle>` → live raw events as SSE (no cache)
-- `GET /v1/stats` → `{"generated": unix_ms, "events": {"total": n, "types": [{"type": s, "count": n, "share": f, "first"?: unix_ms, "last"?: unix_ms}], "windows": [{"period": s, "bucket": s, "count": n, "types": [...]}], "first"?: unix_ms, "last"?: unix_ms, "days": n, "per_day": f, "busiest"?: {"period": s, "bucket": s, "count": n}, "daily": [...]}, "collection": {"boards": n, "placements": n, "types": n, "handles": n, "scoring_players": n, "flights": n, "flagged_flights": n, "careers": n, "rewound_careers": n, "kittens": n, "systems": n, "system_bodies": n, "bodies": n, "feed_rows": n, "log_head": n, "projected": n, "lag": n}}` — the collection census; see below
+- `GET /v1/stats` → `{"generated": unix_ms, "events": {"total": n, "types": [{"type": s, "count": n, "share": f, "first"?: unix_ms, "last"?: unix_ms}], "windows": [{"period": s, "bucket": s, "count": n, "types": [...]}], "first"?: unix_ms, "last"?: unix_ms, "days": n, "per_day": f, "busiest"?: {"period": s, "bucket": s, "count": n}, "daily": [...]}, "collection": {"boards": n, "placements": n, "types": n, "handles": n, "scoring_players": n, "flights": n, "flagged_flights": n, "careers": n, "rewound_careers": n, "kittens": n, "systems": n, "system_bodies": n, "badges": n, "badge_awards": n, "bodies": n, "feed_rows": n, "log_head": n, "projected": n, "lag": n}}` — the collection census; see below
 - `GET /v1/feed?limit=30` → `{"limit": n, "rows": [{"id": n, "at": unix_ms, "handle": s, "type": s, "summary": s}]}` — the JSON activity feed, newest first; `limit` clamps to the feed table's cap (500)
 - `GET /v1/feed/stream` → the same rows live, as SSE (no cache)
 - `GET /v1/compare?handles=a,b,c` → `{"handles": [{"handle": s, "found": b, "since"?: unix_ms}], "boards": [{"stat": s, "title": s, "unit": s, "ascending": b, "players": n, "rows": [{"handle": s, "value": f, "rank": n, "system"?: {"hash": s, "name": s, "slug": s}, "context": {…}, "updated": unix_ms, "rewound"?: true}]}]}`
@@ -416,6 +416,10 @@ Three things worth knowing before comparing numbers:
 - **The all-time total is a stored row, not a sum of the types.** A type this build cannot name is in the total and absent from the breakdown, which is the honest way round.
 
 `collection.bodies` is the one figure catlog could not have known in advance: bodies are opaque strings on the wire and the server keeps no list of them, so it counts the ones players actually reached. `collection.systems` and `collection.system_bodies` instead count the stored shared system-header and catalogue-body projection rows. They describe what players' mods surveyed, not a built-in allow-list, and a catalogue body need not have been visited to count there.
+
+`collection.badges` counts distinct badge keys with a lifetime holder; it is not the fixed catalogue
+size. `collection.badge_awards` counts all current award rows at lifetime and per-save scope. Both
+are rebuildable current-projection counts and share the response's `(WriteGen, 10 s TTL)` cache.
 
 ### Handle search — `GET /v1/players?q=`
 

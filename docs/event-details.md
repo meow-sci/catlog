@@ -2369,7 +2369,22 @@ the provenance (`migrations/projections/0011_badges.sql:6-20`).
 
 The three read-order indexes are `badge_system(system, badge, earned_seq)`,
 `badge_holders(badge, earned_seq)` and `badge_by_career(player_id, career, earned_seq)`. The metadata
-registry is documented below. No read API or awarding fold exists yet.
+registry is documented below.
+
+The store reads preserve every award field and keep raw save identity below the read-API boundary.
+`BadgesForPlayer(player, career)` filters the career exactly, including the empty lifetime sentinel.
+An unfiltered holder list/count likewise uses only lifetime rows. A system-filtered holder query
+cannot filter lifetime provenance: a player may first earn the badge in one system and earn it again
+in a later save in another. It therefore considers nonempty per-save rows in the requested system,
+selects one deterministic earliest row per player by `earned_seq` then raw-career tie-break, and
+orders the resulting holders by `earned_seq` then `player_id`. Counts use the identical population,
+so saves never inflate the holder denominator. `BadgeCounts` groups lifetime rows only
+(`store/projections.go`, merit-badge reads).
+
+The only public F6 use is the collection census: `GET /v1/stats` adds `collection.badges`, the number
+of distinct keys with a lifetime holder, and `collection.badge_awards`, the total lifetime plus
+per-save award rows. They share the response's `(WriteGen, 10 s TTL)` memoization. Individual badge
+and player-award endpoints remain absent until G1.
 
 Within one projection build, an award is first-write via `INSERT ... ON CONFLICT DO NOTHING`.
 `earned_seq` is the first qualifying projector sequence, `earned_at` is that event's server

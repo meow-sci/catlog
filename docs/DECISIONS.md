@@ -1985,6 +1985,26 @@ catalogue changes `BuildID` and rebuilds existing immutable history. The existin
 `BuildVersion` need no further bump: F5 adds named folds, while PROJ-123 already bumped the one
 existing fold whose meaning changed.
 
+### PROJ-125 — System-filtered badge holders are deduplicated from per-save awards, not lifetime provenance
+
+*Accepted · 2026-08-10 · Task F6.*
+
+The lifetime badge row is the canonical unfiltered holder because its primary key already permits
+one row per player and badge. It cannot answer a system filter: it retains only the system of the
+current projection's first award, so filtering it would omit a player who later earned the same
+badge in another system. System-filtered reads therefore use per-save rows in that system and select
+one deterministic earliest row per player by earning sequence and then raw-career tie-break. Counts
+use the same distinct-player population. This preserves later-system participation without letting
+one player's several saves inflate holders or the denominator.
+
+Store rows retain system, lifetime first-save provenance, nullable simulation time and nullable
+context because G1 needs all of them, but the raw career values remain below the read-API identity
+boundary. F6 deliberately registers no badge endpoints early. Its only public addition is the
+bounded collection census: `badges` counts distinct keys with lifetime holders, while
+`badge_awards` counts every lifetime and per-save row. Reusing the existing whole-response cache on
+projection `WriteGen` plus the 10-second TTL keeps the extra group-by off repeated origin requests
+and ensures a committed projection write invalidates the answer immediately.
+
 ## Archive & restore
 
 The filesystem archiver, the manifest, restore verification, and the R2 design that is deliberately not built.

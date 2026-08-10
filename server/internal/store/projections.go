@@ -364,6 +364,136 @@ func scanStatRows(rows *sql.Rows) ([]StatRow, error) {
 	return out, rows.Err()
 }
 
+// --- merit badges ------------------------------------------------------------
+
+// BadgeRow is one current-projection merit-badge award. Career is the award
+// scope: empty for lifetime and the raw save key for a per-save award.
+// FirstCareer is provenance for a lifetime row only. Both raw career fields
+// remain store-internal inputs to the read API's ordinal/relabel boundary.
+type BadgeRow struct {
+	PlayerID    int64
+	Career      string
+	Badge       string
+	System      string
+	FirstCareer string
+	EarnedSeq   int64
+	EarnedAt    int64
+	EarnedSimT  sql.NullFloat64
+	Context     json.RawMessage
+}
+
+const badgeColumns = `player_id, career, badge, system, first_career, earned_seq, earned_at, earned_sim_t, context`
+
+// BadgesForPlayer reads one player's awards in first-earned order. Career is
+// an exact scope filter: empty reads lifetime rows, never all scopes.
+func (p *Projections) BadgesForPlayer(ctx context.Context, playerID int64, career string) ([]BadgeRow, error) {
+	rows, err := p.Reader().QueryContext(ctx,
+		`SELECT `+badgeColumns+` FROM badge_award
+		 WHERE player_id = ? AND career = ?
+		 ORDER BY earned_seq ASC, badge ASC`, playerID, career)
+	if err != nil {
+		return nil, fmt.Errorf("store: read badges for player %d scope %q: %w", playerID, career, err)
+	}
+	return scanBadgeRows(rows)
+}
+
+// BadgeHolders reads one deterministic row per player, first-earned first.
+// Without a system filter the lifetime row is canonical. With a system filter
+// lifetime provenance is insufficient: a player may first earn elsewhere, so
+// per-save rows in that system are ranked and only the earliest save survives.
+func (p *Projections) BadgeHolders(ctx context.Context, badge, system string, limit, offset int) ([]BadgeRow, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	if system == "" {
+		rows, err = p.Reader().QueryContext(ctx,
+			`SELECT `+badgeColumns+` FROM badge_award
+			 WHERE badge = ? AND career = ''
+			 ORDER BY earned_seq ASC, player_id ASC LIMIT ? OFFSET ?`,
+			badge, limit, max(offset, 0))
+	} else {
+		rows, err = p.Reader().QueryContext(ctx,
+			`WITH ranked AS (
+			   SELECT `+badgeColumns+`,
+			          row_number() OVER (
+			            PARTITION BY player_id ORDER BY earned_seq ASC, career ASC
+			          ) AS holder_row
+			     FROM badge_award
+			    WHERE badge = ? AND system = ? AND career <> ''
+			 )
+			 SELECT `+badgeColumns+` FROM ranked WHERE holder_row = 1
+			 ORDER BY earned_seq ASC, player_id ASC LIMIT ? OFFSET ?`,
+			badge, system, limit, max(offset, 0))
+	}
+	if err != nil {
+		return nil, fmt.Errorf("store: read holders of badge %q in system %q: %w", badge, system, err)
+	}
+	return scanBadgeRows(rows)
+}
+
+// BadgeCounts is the lifetime holder census by badge. Per-save rows are never
+// included, so one player contributes at most one holder to each key.
+func (p *Projections) BadgeCounts(ctx context.Context) (map[string]int64, error) {
+	rows, err := p.Reader().QueryContext(ctx,
+		`SELECT badge, count(*) FROM badge_award WHERE career = '' GROUP BY badge`)
+	if err != nil {
+		return nil, fmt.Errorf("store: count badge holders: %w", err)
+	}
+	defer rows.Close()
+	out := map[string]int64{}
+	for rows.Next() {
+		var badge string
+		var n int64
+		if err := rows.Scan(&badge, &n); err != nil {
+			return nil, fmt.Errorf("store: scan badge holder count: %w", err)
+		}
+		out[badge] = n
+	}
+	return out, rows.Err()
+}
+
+// BadgeHolderCount is the denominator matching [Projections.BadgeHolders].
+func (p *Projections) BadgeHolderCount(ctx context.Context, badge, system string) (int64, error) {
+	query := `SELECT count(*) FROM badge_award WHERE badge = ? AND career = ''`
+	args := []any{badge}
+	if system != "" {
+		query = `SELECT count(DISTINCT player_id) FROM badge_award
+		         WHERE badge = ? AND system = ? AND career <> ''`
+		args = append(args, system)
+	}
+	var n int64
+	if err := p.Reader().QueryRowContext(ctx, query, args...).Scan(&n); err != nil {
+		return 0, fmt.Errorf("store: count holders of badge %q in system %q: %w", badge, system, err)
+	}
+	return n, nil
+}
+
+func scanBadgeRows(rows *sql.Rows) ([]BadgeRow, error) {
+	defer rows.Close()
+	var out []BadgeRow
+	for rows.Next() {
+		var (
+			r  BadgeRow
+			cx sql.NullString
+		)
+		if err := rows.Scan(
+			&r.PlayerID, &r.Career, &r.Badge, &r.System, &r.FirstCareer,
+			&r.EarnedSeq, &r.EarnedAt, &r.EarnedSimT, &cx,
+		); err != nil {
+			return nil, fmt.Errorf("store: scan badge award: %w", err)
+		}
+		if cx.Valid && cx.String != "" {
+			r.Context = json.RawMessage(cx.String)
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 func placeholders(n int) string {
 	if n <= 0 {
 		return ""
