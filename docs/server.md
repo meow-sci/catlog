@@ -202,7 +202,7 @@ byte-identical across events. Rows written either way stay readable, so the swit
 | `flight_state` | Per flight: exclusion flags, ending/launch facts, first nonempty career, and set-only achievement milestones. Migration 0009 owns nullable `engine_count`; migration 0010 adds `milestones`, `part_count`, `launch_mass_kg` and `career` |
 | `career` | Per save: sim-time high-water and rewind mark, first/last event seq, public ordinal, first celestial-system identity and non-punitive `system_changed` provenance mark; `last_seq` advances on every attributed event, including non-scoring and flagged activity |
 | `player_body` | Distinct bodies per player and `kind` — `'soi'` (entered) and `'landed'` (touched down) — plus first-arrival times, which only `'soi'` rows carry |
-| `career_body` | Distinct bodies per save and `kind`, with the career's system identity denormalised for union-across-saves system counts; its novelty signal is independent of `player_body` (migration 0007) |
+| `career_body` | Distinct members per save and `kind`, with the career's system identity denormalised; SOI `first_sim_t` supports per-save arrival sprints, and its novelty signal is independent of `player_body` (migration 0007) |
 | `kitten` | Per-kitten totals folded from `roster.snapshot` |
 | `career_kitten` | Per-save kitten totals folded from `roster.snapshot`, with system identity denormalised; unlike `kitten`, it does not merge same-named kittens from different saves (migration 0007) |
 | `system` | One immutable first-seen identity/header per celestial-system hash: raw system id, display name, stable URL slug, home body, declared body count, monotone reported-complete bit and first seq (migration 0008) |
@@ -223,6 +223,11 @@ are empty until their board folds land; migration 0006 establishes the final sch
 column and is never written to `player_body`. `first_sim_t` is populated only for SOI arrivals.
 Adding `'orbit_kid'` changes no schema: it reuses the generic member column and migration 0007
 table unchanged.
+For `kind='soi'`, `first_sim_t` is the earliest observed arrival in that save. The world-sprint
+projections count rows at or before their flat duration threshold per save, then retain the best
+single-save result at player and known-system scope; they never union early arrivals from several
+saves. A timed SOI member may carry an empty system so the save and player sprint results survive
+missing system identity; only the system-scoped result is omitted.
 `career_kitten` has primary key
 `(player_id, career, kid)`, plus indexes on `(player_id, career)` and `(player_id, system)`. Both
 tables denormalise `system` from the career, and both are rebuildable additions from migration 0007.
@@ -351,7 +356,7 @@ an inference about why it changed.
 
 ### The boards
 
-Forty-eight fixed keys, in publish order — which is the order `FixedBoards()` returns and therefore
+Fifty fixed keys, in publish order — which is the order `FixedBoards()` returns and therefore
 the order `GET /v1/leaderboards` lists them, grouped by kind rather than by source event:
 
 - **records** — `biggest_lithobrake_survived`, `peak_g_survived`, `max_q_survived`,
@@ -366,7 +371,8 @@ the order `GET /v1/leaderboards` lists them, grouped by kind rather than by sour
 - **derived totals and per-kitten records** — `distance_travelled`, `top_kitten_distance`,
   `top_kitten_missions`;
 - **career time and save-native boards** — `fastest_to_orbit`, `career_playtime`, `play_sessions`;
-- **append-only records** — `biggest_parts_lost`, `biggest_crew_wreck`.
+- **append-only records and best-save results** — `biggest_parts_lost`, `biggest_crew_wreck`,
+  `bodies_by_1y`, `bodies_by_10y`.
 
 `docs/event-details.md` carries the canonical table: title, unit, direction, source event and fold
 kind for every one of them, plus the eligibility rule board by board. Four of them

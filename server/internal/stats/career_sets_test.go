@@ -237,20 +237,142 @@ func TestARosterSnapshotWithNoCareerWritesNoCareerKittenRow(t *testing.T) {
 	}
 }
 
-func TestUnknownSystemWritesNoCareerSetRows(t *testing.T) {
+func TestUnknownSystemKeepsSprintCareerFactsButNoSystemRows(t *testing.T) {
 	p := testutil.MemProjections(t)
 	seedCareerSet(t, p, defaultCareer, "", 1)
 	apply(t, p, []input{
 		{flight: flightN(1), typ: "vehicle.soi", payload: stats.VehicleSOI{ToBody: "luna"}},
 		{typ: "roster.snapshot", payload: stats.RosterSnapshot{Kittens: []stats.RosterKitten{{Kid: "k1", Name: "Mittens", TravelledM: 10}}}},
 	}, 0, false)
-	for _, table := range []string{"career_body", "career_kitten"} {
-		var n int
-		if err := p.Reader().QueryRowContext(t.Context(), `SELECT count(*) FROM `+table).Scan(&n); err != nil {
-			t.Fatal(err)
+	var bodies, kittens int
+	if err := p.Reader().QueryRowContext(t.Context(), `SELECT count(*) FROM career_body`).Scan(&bodies); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Reader().QueryRowContext(t.Context(), `SELECT count(*) FROM career_kitten`).Scan(&kittens); err != nil {
+		t.Fatal(err)
+	}
+	if bodies != 1 || kittens != 0 {
+		t.Errorf("unknown-system career sets = bodies %d, kittens %d; want sprint SOI 1, roster 0", bodies, kittens)
+	}
+	player := readStats(t, p)
+	career := readSetScopeRows(t, p, "career_stat", "career")
+	systems := readSetScopeRows(t, p, "system_stat", "system")
+	for _, stat := range []string{stats.StatBodiesBy1Y, stats.StatBodiesBy10Y} {
+		if got := player["1/"+stat].Value; got != 1 {
+			t.Errorf("unknown-system player %s = %v, want 1", stat, got)
 		}
-		if n != 0 {
-			t.Errorf("%s rows = %d, want 0 while system is unknown", table, n)
+		if got := career[defaultCareer+"/"+stat].value; got != 1 {
+			t.Errorf("unknown-system career %s = %v, want 1", stat, got)
+		}
+		for key := range systems {
+			if strings.HasSuffix(key, "/"+stat) {
+				t.Errorf("unknown system wrote %s row %q", stat, key)
+			}
+		}
+	}
+}
+
+func TestBodySprintsUseBestSaveAndInclusiveThresholds(t *testing.T) {
+	const unknownCareer = "testcareer000004"
+	p := testutil.MemProjections(t)
+	seedCareerSet(t, p, defaultCareer, testSystem, 1)
+	seedCareerSet(t, p, otherCareer, testSystem, 2)
+	seedCareerSet(t, p, thirdCareer, otherSystem, 3)
+	seedCareerSet(t, p, unknownCareer, "", 4)
+
+	year := float64(stats.SprintYearSeconds)
+	tenYears := 10 * year
+	cleanA, cleanB, cleanC := flightN(40), flightN(41), flightN(42)
+	flagged := flightN(43)
+	apply(t, p, []input{
+		// Exact boundaries are included; just-over values are excluded from that
+		// sprint while remaining eligible for a later threshold.
+		{career: defaultCareer, flight: cleanA, typ: "vehicle.soi", simT: year, payload: stats.VehicleSOI{ToBody: "boundary-1y"}},
+		{career: defaultCareer, flight: cleanA, typ: "vehicle.soi", simT: year + 1, payload: stats.VehicleSOI{ToBody: "over-1y"}},
+		{career: defaultCareer, flight: cleanA, typ: "vehicle.soi", simT: tenYears, payload: stats.VehicleSOI{ToBody: "boundary-10y"}},
+		{career: defaultCareer, flight: cleanA, typ: "vehicle.soi", simT: tenYears + 1, payload: stats.VehicleSOI{ToBody: "over-10y"}},
+		// An unkeyable opaque body still belongs to the save-backed set even
+		// though it cannot form a fastest_to_<body> stat key.
+		{career: defaultCareer, flight: cleanA, typ: "vehicle.soi", simT: 10, payload: stats.VehicleSOI{ToBody: "bad/body"}},
+		// This body starts just outside one year and crosses the boundary on a
+		// later replay of an earlier save clock.
+		{career: defaultCareer, flight: cleanA, typ: "vehicle.soi", simT: year + 2, payload: stats.VehicleSOI{ToBody: "rewound"}},
+		// Empty destination is not an entered SOI; absent and negative clocks are
+		// not silently interpreted as zero.
+		{career: defaultCareer, flight: cleanA, typ: "vehicle.soi", simT: 1, payload: stats.VehicleSOI{}},
+		{career: defaultCareer, flight: cleanA, typ: "vehicle.soi", noSimT: true, payload: stats.VehicleSOI{ToBody: "no-clock"}},
+		{career: defaultCareer, flight: cleanA, typ: "vehicle.soi", simT: -1, payload: stats.VehicleSOI{ToBody: "negative-clock"}},
+		{career: defaultCareer, flight: flagged, typ: "flight.flagged", payload: stats.FlightFlagged{Flag: "teleport"}},
+		{career: defaultCareer, flight: flagged, typ: "vehicle.soi", simT: 1, payload: stats.VehicleSOI{ToBody: "flagged"}},
+	}, 0, false)
+
+	// A second transaction exercises read-through from flushed career_body and
+	// proves a repeated body lowers first_sim_t across the inclusive boundary.
+	apply(t, p, []input{
+		{career: defaultCareer, flight: cleanA, typ: "vehicle.soi", simT: year - 1, payload: stats.VehicleSOI{ToBody: "rewound"}},
+		// Same body in another save is distinct there. The first system's answer
+		// is the best one save (3), never a five-body union across these careers.
+		{career: otherCareer, flight: cleanB, typ: "vehicle.soi", simT: 1, payload: stats.VehicleSOI{ToBody: "boundary-1y"}},
+		{career: otherCareer, flight: cleanB, typ: "vehicle.soi", simT: 2, payload: stats.VehicleSOI{ToBody: "b-two"}},
+		{career: otherCareer, flight: cleanB, typ: "vehicle.soi", simT: 3, payload: stats.VehicleSOI{ToBody: "b-three"}},
+		// A different system has the best one-year save and therefore represents
+		// the player lifetime maximum without merging system sets.
+		{career: thirdCareer, flight: cleanC, typ: "vehicle.soi", simT: 1, payload: stats.VehicleSOI{ToBody: "c-one"}},
+		{career: thirdCareer, flight: cleanC, typ: "vehicle.soi", simT: 2, payload: stats.VehicleSOI{ToBody: "c-two"}},
+		{career: thirdCareer, flight: cleanC, typ: "vehicle.soi", simT: 3, payload: stats.VehicleSOI{ToBody: "c-three"}},
+		{career: thirdCareer, flight: cleanC, typ: "vehicle.soi", simT: 4, payload: stats.VehicleSOI{ToBody: "c-four"}},
+		// Unknown system still advances its save and lifetime candidates, but
+		// cannot create a comparable system row.
+		{career: unknownCareer, flight: flightN(44), typ: "vehicle.soi", simT: 1, payload: stats.VehicleSOI{ToBody: "u-one"}},
+		{career: unknownCareer, flight: flightN(44), typ: "vehicle.soi", simT: 2, payload: stats.VehicleSOI{ToBody: "u-two"}},
+	}, 11, false)
+
+	player := readStats(t, p)
+	careerRows := readSetScopeRows(t, p, "career_stat", "career")
+	systemRows := readSetScopeRows(t, p, "system_stat", "system")
+	for stat, want := range map[string]struct {
+		player, careerA, careerB, careerC, unknown, systemA, systemC float64
+		playerSeq                                                    int64
+	}{
+		stats.StatBodiesBy1Y:  {4, 3, 3, 4, 2, 3, 4, 19},
+		stats.StatBodiesBy10Y: {5, 5, 3, 4, 2, 5, 4, 6},
+	} {
+		if got := player["1/"+stat]; got.Value != want.player || got.Context != "" || got.Seq != want.playerSeq {
+			t.Errorf("player %s = %+v, want %v with NULL context at seq %d", stat, got, want.player, want.playerSeq)
+		}
+		for career, value := range map[string]float64{
+			defaultCareer: want.careerA, otherCareer: want.careerB,
+			thirdCareer: want.careerC, unknownCareer: want.unknown,
+		} {
+			if got := careerRows[career+"/"+stat]; got.value != value || got.context != "" {
+				t.Errorf("career %s %s = %+v, want %v with NULL context", career, stat, got, value)
+			}
+		}
+		if got := systemRows[testSystem+"/"+stat]; got.value != want.systemA || got.context != "" {
+			t.Errorf("system A %s = %+v, want %v with NULL context", stat, got, want.systemA)
+		}
+		if got := systemRows[otherSystem+"/"+stat]; got.value != want.systemC || got.context != "" {
+			t.Errorf("system C %s = %+v, want %v with NULL context", stat, got, want.systemC)
+		}
+		var systemCount int
+		for key := range systemRows {
+			if strings.HasSuffix(key, "/"+stat) {
+				systemCount++
+			}
+		}
+		if systemCount != 2 {
+			t.Errorf("%s system rows = %d in %v, want only known systems", stat, systemCount, systemRows)
+		}
+	}
+
+	for _, table := range []string{"player_stat", "career_stat", "system_stat"} {
+		var nonNull int
+		query := fmt.Sprintf(`SELECT count(*) FROM %s WHERE stat IN (?, ?) AND context IS NOT NULL`, table)
+		if err := p.Reader().QueryRowContext(t.Context(), query, stats.StatBodiesBy1Y, stats.StatBodiesBy10Y).Scan(&nonNull); err != nil {
+			t.Fatalf("read %s sprint contexts: %v", table, err)
+		}
+		if nonNull != 0 {
+			t.Errorf("%s has %d non-NULL sprint contexts, want zero", table, nonNull)
 		}
 	}
 }

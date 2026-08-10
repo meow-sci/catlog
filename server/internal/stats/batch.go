@@ -794,8 +794,9 @@ func (b *Batch) AddCareerBody(ctx context.Context, ev Event, kind, body string) 
 
 // AddCareerSetMember records a save-scoped member in career_body while allowing
 // the save's system to remain unknown. E3 uses body as the generic member slot
-// for kind orbit_kid; SOI and landed keep using AddCareerBody, whose stronger
-// known-system requirement is unchanged.
+// for kind orbit_kid. E5 also uses it to retain timed SOI membership for player
+// and career sprint results when the system is unknown. Ordinary SOI/landed
+// novelty and scoped-union writes keep using AddCareerBody's known-system path.
 func (b *Batch) AddCareerSetMember(ctx context.Context, ev Event, kind, member string) (bool, error) {
 	if ev.Career == "" {
 		return false, nil
@@ -852,6 +853,68 @@ func (b *Batch) CareerBodyCount(ctx context.Context, playerID int64, career, kin
 		}
 	}
 	return n, nil
+}
+
+// CareerBodyCountBefore counts one save's distinct members whose first clock
+// reading is at or before threshold. NULL clocks are absent facts, not zeroes.
+func (b *Batch) CareerBodyCountBefore(ctx context.Context, playerID int64, career, kind string, threshold float64) (int64, error) {
+	m, err := b.playerCareerBodies(ctx, playerID)
+	if err != nil {
+		return 0, err
+	}
+	var n int64
+	for k, e := range m {
+		if k.career == career && k.kind == kind && e.firstSimT.Valid && e.firstSimT.Float64 <= threshold {
+			n++
+		}
+	}
+	return n, nil
+}
+
+// BodyCountBefore returns the largest qualifying count achieved by any one of
+// the player's saves. It intentionally reads career_body rather than unioning
+// player_body across saves.
+func (b *Batch) BodyCountBefore(ctx context.Context, playerID int64, kind string, threshold float64) (int64, error) {
+	m, err := b.playerCareerBodies(ctx, playerID)
+	if err != nil {
+		return 0, err
+	}
+	counts := map[string]int64{}
+	var best int64
+	for k, e := range m {
+		if k.kind != kind || !e.firstSimT.Valid || e.firstSimT.Float64 > threshold {
+			continue
+		}
+		counts[k.career]++
+		best = max(best, counts[k.career])
+	}
+	return best, nil
+}
+
+// SystemBodyCountBefore returns the largest qualifying count in any one save
+// bound to the event's system. It does not union repeated body names or distinct
+// bodies across careers. ok is false while the current save's system is unknown.
+func (b *Batch) SystemBodyCountBefore(ctx context.Context, ev Event, kind string, threshold float64) (n int64, ok bool, err error) {
+	if ev.Career == "" {
+		return 0, false, nil
+	}
+	system, err := b.CareerSystem(ctx, ev.PlayerID, ev.Career)
+	if err != nil || system == "" {
+		return 0, false, err
+	}
+	m, err := b.playerCareerBodies(ctx, ev.PlayerID)
+	if err != nil {
+		return 0, false, err
+	}
+	counts := map[string]int64{}
+	for k, e := range m {
+		if e.system != system || k.kind != kind || !e.firstSimT.Valid || e.firstSimT.Float64 > threshold {
+			continue
+		}
+		counts[k.career]++
+		n = max(n, counts[k.career])
+	}
+	return n, true, nil
 }
 
 // CareerSetCount reports every save-scoped row of kind for a player. Unlike a

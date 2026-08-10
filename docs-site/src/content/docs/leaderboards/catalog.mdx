@@ -1,7 +1,7 @@
 ---
 title: Every board
 description: >-
-  All 48 fixed leaderboards and the three board families, with the events behind
+  All 50 fixed leaderboards and the three board families, with the events behind
   each one and every rule that disqualifies a value.
 sidebar:
   order: 2
@@ -10,7 +10,7 @@ sidebar:
 import { Aside } from "@astrojs/starlight/components";
 import BoardDetail from "../../../components/BoardDetail.astro";
 
-Forty-eight fixed boards, in the order they are published, then the three families whose
+Fifty fixed boards, in the order they are published, then the three families whose
 members appear as people tumble on new worlds, reach new worlds and find new ways to lose a vehicle.
 The newest fixed boards appear after the original 42 so their published positions do not move.
 
@@ -237,6 +237,23 @@ does not claim what happened to them here.** Most Kittens Aboard A Lost Vehicle 
 single crew; Kittens Aboard Lost Vehicles adds the crews across qualifying RUDs. Neither counts
 individual bodies, parts, crashes or explosions, and catlog does not publish a kittens-scuttled
 board.
+
+<BoardDetail stat="bodies_by_1y" />
+<BoardDetail stat="bodies_by_10y" />
+
+These are best-save challenges. A save counts each different world first reached at or before the
+exact limit; the player view keeps the best one save, and the celestial-system view keeps the best
+one save using that system. Neither view joins early arrivals from several saves into a result no
+single save achieved. Loading an older point can move a world's first known arrival earlier, so
+catlog checks the save's result again on every qualifying arrival rather than only when a world is
+new.
+
+If a save's celestial system is not known yet, its save and player results still move; only the
+celestial-system view is absent until there is a system identity to rank under.
+
+A catlog year here is exactly **365 days**: 31,536,000 seconds. Ten years is exactly 315,360,000
+seconds. It is a flat duration used by catlog, not the orbital period of Earth or any other world,
+and no fact about the current celestial system defines it.
 
 ## The three families
 

@@ -640,6 +640,8 @@ func TestBatchSizeDoesNotChangeTheProjection(t *testing.T) {
 			f := flight(700 + i)
 			r.ship(p,
 				discovery(career, "batch-system"),
+				inCareer(ev(f, "vehicle.soi", stats.VehicleSOI{FromBody: "earth", ToBody: "batch-one"}, 1), career),
+				inCareer(ev(f, "vehicle.soi", stats.VehicleSOI{FromBody: "batch-one", ToBody: "batch-two"}, 2), career),
 				inCareer(ev(f, "vehicle.orbit", stats.VehicleOrbit{Phase: "achieved", Body: "earth"}, 1), career),
 				inCareer(ev(f, "flight.ended", stats.FlightEnded{Reason: "recovered", Kids: []string{"batch-kid"}}, 2), career),
 			)
@@ -665,6 +667,10 @@ func TestBatchSizeDoesNotChangeTheProjection(t *testing.T) {
 	if values["1/"+stats.StatKittensWrecked] != 6 || values["1/"+stats.StatBiggestCrewWreck] != 3 {
 		t.Fatalf("crew-wreck batch fixture = sum %v, biggest %v; want 6 and 3",
 			values["1/"+stats.StatKittensWrecked], values["1/"+stats.StatBiggestCrewWreck])
+	}
+	if values["1/"+stats.StatBodiesBy1Y] != 2 || values["1/"+stats.StatBodiesBy10Y] != 2 {
+		t.Fatalf("body-sprint batch fixture = 1y %v, 10y %v; want 2 and 2",
+			values["1/"+stats.StatBodiesBy1Y], values["1/"+stats.StatBodiesBy10Y])
 	}
 
 	for _, batchSize := range []int{2, 3, 17, projector.DefaultBatchSize, 10_000} {

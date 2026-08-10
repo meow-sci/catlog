@@ -430,7 +430,7 @@ and `projector.Upcasters` has nothing registered (PROJ-100).
 | 7 | `vehicle.situation` | 1 | 1 | yes | passive | `softest_touchdown`, `landed_bodies`, `splashdowns`, `player_body`, `career_body` |
 | 8 | `vehicle.atmosphere` | 1 | 1 | yes | passive | `flight_state` space milestone, `fastest_entry` |
 | 9 | `vehicle.orbit` | 1 | 1 | yes | passive | `flight_state` orbit milestone, `orbits_achieved`, `highest_apoapsis`, `lowest_orbit`, `roundest_orbit`, `steepest_orbit`, `heaviest_to_orbit`, `fastest_to_orbit`, feed |
-| 10 | `vehicle.soi` | 1 | 1 | yes | passive | conditional `flight_state` other-SOI milestone, `soi_bodies`, `fastest_to_<body>`, `player_body`, `career_body`, feed |
+| 10 | `vehicle.soi` | 1 | 1 | yes | passive | conditional `flight_state` other-SOI milestone, `soi_bodies`, `fastest_to_<body>`, `bodies_by_1y`, `bodies_by_10y`, `player_body`, `career_body`, feed |
 | 11 | `vehicle.rud` | 1 | 1 | yes | event | `rud_total`, `rud_<cause>`, `parts_lost`, `biggest_parts_lost`, `biggest_crew_wreck`, `kittens_wrecked`, feed |
 | 12 | `vehicle.impact` | 1 | 1 | yes | event (1-frame hold) | `biggest_lithobrake_survived`, `biggest_impact_energy`, feed |
 | 13 | `vehicle.landed` | 1 | 1 | yes | passive (1-frame hold) | conditional `flight_state` landed milestone, `softest_landing`, `landings`, feed |
@@ -479,7 +479,7 @@ What a player gives up per type, the nineteen that can be switched off:
 | `vehicle.situation` | `softest_touchdown`, `landed_bodies`, `splashdowns` | `player_body` and `career_body` stop updating from situation changes. **`vehicle.landed` still fires** — the filter is applied at the pipeline funnel, after detection, so suppressing one of the pair does not suppress the other |
 | `vehicle.atmosphere` | `fastest_entry` | — |
 | `vehicle.orbit` | `orbits_achieved`, `fastest_to_orbit`, `highest_apoapsis`, `lowest_orbit`, `roundest_orbit`, `steepest_orbit`, `heaviest_to_orbit` | feed rows |
-| `vehicle.soi` | `soi_bodies`, and the whole `fastest_to_<body>` family | `player_body`, `career_body`, feed rows |
+| `vehicle.soi` | `soi_bodies`, `bodies_by_1y`, `bodies_by_10y`, and the whole `fastest_to_<body>` family | `player_body`, `career_body`, feed rows |
 | `vehicle.rud` | `rud_total`, every `rud_<cause>` board, `parts_lost`, `biggest_parts_lost`, `biggest_crew_wreck`, `kittens_wrecked` | RUD, lost-vehicle-size and aboard-lost-vehicle projections stop moving. `vehicle.impact.survived` is unaffected — the correlator computes it before `Add` |
 | `vehicle.impact` | `biggest_lithobrake_survived`, `biggest_impact_energy` | feed rows |
 | `vehicle.landed` | `softest_landing`, `landings` | feed rows. **`landed_bodies` is unaffected** — it reads `vehicle.situation`, which is where the same edge is also reported |
@@ -1246,18 +1246,25 @@ Sampled at 2 Hz.
 
 **Classification.** **PASSIVE**, 2 s debounce, blank-guarded, baseline seeds silently.
 
-**Server.** Two folds, in this order (the order matters):
+**Server.** Three folds, in this order (the order matters):
 
-1. `soiFold` (`stats/boards.go:505-523`) — `b.AddBody(playerID, "soi", to_body, seq)` reports whether
+1. `soiFold` (`stats/boards.go:1210-1258`) — `b.AddBody(playerID, "soi", to_body, seq)` reports whether
    the `player_body` row was **new**; only then `addCount(soi_bodies, 1)`. No `count(*)`, correct
    under replay (PROJ-011).
-2. `toBodyFold` (`:659-693`) — **always** lowers `player_body.first_sim_t` (seconds) for that body,
-   regardless of whether a board key can be built (`:673-679`), then `putBest(fastest_to_<body>, …)`
-   when `FastestToStat(to_body)` succeeds.
+2. `toBodyFold` (`:1690-1737`) — after the shared career/clock/flag gate, ensures a save-local
+   `'soi'` member even when the system is unknown (`:1711-1722`), then **always** lowers both
+   lifetime and save `first_sim_t` values (seconds), regardless of whether a board key can be
+   built. It finally `putBest(fastest_to_<body>, …)` when `FastestToStat(to_body)` succeeds.
+3. `bodySprintFold` (`:1739-1791`, stable name `body_sprints`, registered `fold.go:144`) runs after
+   those lowered times. For each inclusive threshold it writes the current save's distinct-body
+   count, the best one-save count across the player, and — when the current save has a known
+   system — the best one-save count among that player's saves in that system. All three contexts
+   are SQL NULL.
 
-`soiFold` must precede `toBodyFold` because `LowerBodyTime` is a no-op if the row does not exist
-(`batch.go:538-540`). Body names are **never** validated against a list: a `to_body` that cannot be a
-stat key still counts towards `soi_bodies` and still records `first_sim_t`.
+`soiFold` must precede `toBodyFold` because the latter lowers the rows' time, and `toBodyFold` must
+precede `bodySprintFold` so the same event's earlier arrival is visible in the recomputed count.
+Body names are **never** validated against a list: a `to_body` that cannot be a stat key still
+counts towards `soi_bodies`, still records `first_sim_t`, and still counts in both sprint boards.
 
 Before those board folds, `flightFold` may OR set-only `MilestoneOtherSOI`, but only when all three
 facts are known at the SOI event: nonempty `to_body`, an actual `flight.started` with
@@ -2270,17 +2277,17 @@ system → flight_state → career
 → highest_apoapsis → lowest_orbit → roundest_orbit → steepest_orbit → softest_touchdown
 → heaviest_launch → most_parts → biggest_crew → biggest_recovery → most_stages → longest_eva
 → kitten_tumbles(+botched_landings, +tumbles_on_<body>)
-→ rud_total(+rud_<cause>, +parts_lost, +biggest_parts_lost)
+→ rud_total(+rud_<cause>, +parts_lost, +biggest_parts_lost, +biggest_crew_wreck, +kittens_wrecked)
 → orbits_achieved → soi_bodies → landed_bodies
 → dockings → stagings → splashdowns → evas → flameouts → engine_ignitions → kittens_recovered
 → distance_travelled(+top_kitten_distance, +top_kitten_missions) → fastest_to_orbit
-→ fastest_to_body → career_playtime → play_sessions → kittens_to_orbit_and_back → census
+→ fastest_to_body → career_playtime → play_sessions → kittens_to_orbit_and_back → body_sprints → census
 ```
 
 Order matters in three places: `systemFold` must precede `careerFold` and every board because a
 same-batch discovery binds the career before its session and scores are folded; `flightFold` must
-precede every board (the flag check); and `soiFold` must precede `toBodyFold` (row existence for
-`LowerBodyTime`). Everything else is listed in
+precede every board (the flag check); and `soiFold` → `toBodyFold` → `bodySprintFold` establishes,
+lowers and then counts the save-local SOI times. Everything else is listed in
 board-metadata order purely so the two lists read the same way; no two board folds write the same
 `(player_id, stat)`.
 
@@ -2359,11 +2366,11 @@ row context carries `career`.
 
 **Every board has player, career and system scope.** Scope is a ranking dimension, not a second board
 key: player scope ranks players, career scope ranks `(player, save)` pairs, and system scope ranks
-`(player, celestial system)` pairs. This applies to all 48 fixed rows below and all three dynamic
+`(player, celestial system)` pairs. This applies to all 50 fixed rows below and all three dynamic
 families, with no opt-out list. `Career` in the table is unrelated: it says the board's *value* is a
 time measured from the start of a career.
 
-### The 48 fixed boards, in display order
+### The 50 fixed boards, in display order
 
 `stats/boards.go`. Display order **is** publish order — it is the order `FixedBoards()`
 returns and therefore the order `GET /v1/leaderboards` lists — and it is grouped by kind rather than
@@ -2422,9 +2429,11 @@ dynamic families slot under `kitten_tumbles`, `rud_total` and `fastest_to_orbit`
 | 46 | `kittens_to_orbit_and_back` | Kittens To Orbit And Home | `kittens` | no | no | `flight.ended` | count (set-backed) |
 | 47 | `biggest_crew_wreck` | Most Kittens Aboard A Lost Vehicle | `kittens` | no | no | `vehicle.rud` | record (max) |
 | 48 | `kittens_wrecked` | Kittens Aboard Lost Vehicles | `kittens` | no | no | `vehicle.rud` | count (+`crew_count`) |
+| 49 | `bodies_by_1y` | Worlds In The First Year | `bodies` | no | no | `vehicle.soi` | set-derived best save |
+| 50 | `bodies_by_10y` | Worlds In Ten Years | `bodies` | no | no | `vehicle.soi` | set-derived best save |
 
-The final three appended constants are at `stats/boards.go:22-24`; their fixed metadata is at
-`stats/boards.go:155-157`.
+The final five appended constants are at `stats/boards.go:22-26`; their fixed metadata is at
+`stats/boards.go:161-165`.
 
 **Four boards carry an empty `Unit` on purpose** — `roundest_orbit` (an eccentricity is
 dimensionless) and `most_parts` / `most_stages` / `biggest_stack` (bare counts of a thing the title
@@ -2742,6 +2751,25 @@ board *unit string* `"ms"` is milliseconds, whereas a payload key ending `_ms` i
 (`units/units.go:424-432`). `sim_t` stays **seconds** on the wire and in `player_body.first_sim_t`;
 only the projection value is converted (PROJ-029 / PROJ-047).
 
+**The two world-sprint boards** — `bodies_by_1y` and `bodies_by_10y` are written together by
+`bodySprintFold` (`boards.go:1739-1791`, stable name `body_sprints`). They use
+`SprintYearSeconds = 365 * 24 * 3600` (`:67-69`): exactly 31,536,000 seconds and 315,360,000 seconds.
+Both boundaries are inclusive. This “year” is catlog's flat duration unit, matching the duration
+ladder in `server/internal/units`; it is not any celestial body's orbital period and requires no
+game or system-catalogue read.
+
+The fold runs on every `vehicle.soi` with a nonempty destination, career, nonnegative `sim_t` and a
+scoreable flight. It does not wait for a new set member: `toBodyFold` may lower an existing
+`career_body.first_sim_t` after a rewind, and that lower time can move a body across a threshold.
+`CareerBodyCountBefore` counts distinct qualifying bodies in the current save;
+`BodyCountBefore` takes the maximum of those per-save counts for player scope; and
+`SystemBodyCountBefore` takes the maximum one-save count among that player's saves bound to the
+current system (`batch.go:857-917`). Neither broader scope unions early bodies from different saves.
+The three values are computed independently through `setCareerValue`, `setValue` and, only when the
+system is known, `setSystemValue`; all contexts are SQL NULL. An unknown system therefore omits only
+the system row while the save and player results still move. The `kindSet` merge updates a row only
+when its value changes, so an equal best from another save preserves the earlier `updated_seq`.
+
 ### The rewind mark
 
 Written by `careerFold` into `career.rewound`, **never** into `player_stat.context` (PROJ-026).
@@ -2959,10 +2987,18 @@ player-wide and save-local counts; only the system-scoped board write is absent.
 `'orbit_kid'` member, `first_seq` is the recovery event that first added it and `first_sim_t` remains
 NULL.
 
+For `'soi'`, `soiFold` still uses the known-system `AddCareerBody` path for the scoped
+`soi_bodies` set. Separately, `toBodyFold` ensures a save-local timed member through
+`AddCareerSetMember`, so an unknown system does not erase a meaningful save/player sprint arrival;
+only `bodies_by_1y` / `bodies_by_10y` system scope is absent.
+
 Its primary key makes novelty local to one save. `soi_bodies` and `landed_bodies` therefore advance
 independently at player and career scope, while system scope counts `DISTINCT body` across all
 matching career rows. `first_sim_t` has the same seconds/NULL meaning as on `player_body`, and is
 lowered only for `'soi'` rows so `fastest_to_<body>` can use the correct per-save arrival.
+The same save-local arrival times feed `bodies_by_1y` and `bodies_by_10y`: each career counts its
+distinct bodies at or before the exact threshold, while player and system scope keep the maximum
+one-career result rather than unioning bodies across careers.
 `kittens_to_orbit_and_back` instead counts distinct `'orbit_kid'` members independently across all
 `(career, kid)` rows for player scope, one career for save scope, and all known-system careers for
 system scope. `player_body` remains unchanged with only `'soi'` and `'landed'`.
@@ -3063,6 +3099,10 @@ fold writes. Surfaced as `collection.projected` / `collection.lag` and `projecto
 | A cause that cannot form a family key still moves every independently qualifying part and crew board | `RUDStat` failure skips only the cause-family write | `rudPartsFold` |
 | `kittens_to_orbit_and_back` requires a recovered ending, at least one recovery-time kitten, an orbit milestone on that flight and an unflagged flight | payload predicates → `scoreable` → `flight_state.milestones & MilestoneOrbit` | `kittensToOrbitFold` |
 | An unknown career system still moves the player and save `kittens_to_orbit_and_back` sets but produces no system-scoped row | `SystemCareerSetCount` returns `known=false`; the first two independent counts were already written | `stats/batch.go` |
+| A world sprint requires a nonempty destination, career, present nonnegative clock and unflagged flight | payload gate → `careerTime` → `scoreable` | `bodySprintFold` |
+| A world first reached exactly at 31,536,000 s or 315,360,000 s counts; a later arrival does not | `first_sim_t <= threshold` | `CareerBodyCountBefore`, `BodyCountBefore`, `SystemBodyCountBefore` |
+| A repeated SOI may lower an existing arrival across a sprint threshold after a rewind | `toBodyFold` lowers before `bodySprintFold` recomputes on every qualifying SOI | `BoardFolds` order |
+| An unknown career system still moves save and player sprint results but produces no system-scoped row | `SystemBodyCountBefore` returns `ok=false` after the first two independent writes | `bodySprintFold` |
 | Launch-pad impacts never score — on **both** impact boards | `!LaunchPad` | `stats/boards.go:390` |
 | Crewless impacts never score — on **both** impact boards | `CrewCount >= 1` | `stats/boards.go:390` |
 | An impact within 5 s of a teleport is not recorded at all | `Vehicle.IsImpactFxSuppressed()` | `Patcher.cs:423-424,455-456` |

@@ -442,7 +442,7 @@ export const EVENTS: CatlogEvent[] = [
       { key: "from_body", unit: "", what: "The world you left." },
       { key: "to_body", unit: "", what: "The world you arrived at." },
     ],
-    feeds: ["soi_bodies", "fastest_to_<body>"],
+    feeds: ["soi_bodies", "fastest_to_<body>", "bodies_by_1y", "bodies_by_10y"],
     page: "vehicle",
   },
   {

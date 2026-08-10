@@ -194,6 +194,31 @@ func TestPartsLostPeriodsSumAndKeepTheBiggestLoss(t *testing.T) {
 	}
 }
 
+func TestBodySprintPeriodsTrackGrowthOfTheBestSave(t *testing.T) {
+	f1, f2 := flightN(1), flightN(2)
+	august := ms(t, "2026-08-07T09:00:00Z")
+	september := ms(t, "2026-09-02T09:00:00Z")
+	got := foldPeriods(t, []input{
+		{career: defaultCareer, flight: f1, typ: "vehicle.soi", simT: 1, recvMS: august, payload: stats.VehicleSOI{ToBody: "a-one"}},
+		{career: defaultCareer, flight: f1, typ: "vehicle.soi", simT: 2, recvMS: august + 1, payload: stats.VehicleSOI{ToBody: "a-two"}},
+		// The second save does not move the player maximum until its third body.
+		{career: otherCareer, flight: f2, typ: "vehicle.soi", simT: 1, recvMS: august + 2, payload: stats.VehicleSOI{ToBody: "b-one"}},
+		{career: otherCareer, flight: f2, typ: "vehicle.soi", simT: 2, recvMS: september, payload: stats.VehicleSOI{ToBody: "b-two"}},
+		{career: otherCareer, flight: f2, typ: "vehicle.soi", simT: 3, recvMS: september + 1, payload: stats.VehicleSOI{ToBody: "b-three"}},
+	})
+	for _, stat := range []string{stats.StatBodiesBy1Y, stats.StatBodiesBy10Y} {
+		for key, want := range map[string]float64{
+			"1/" + stat + "/daily/2026-08-07": 2,
+			"1/" + stat + "/daily/2026-09-02": 1,
+			"1/" + stat + "/yearly/2026":      3,
+		} {
+			if got[key] != want {
+				t.Errorf("%s = %v, want %v", key, got[key], want)
+			}
+		}
+	}
+}
+
 // TestPeriodRecordsKeepTheBestInEachWindow: a record board's window value is the
 // best achieved *inside* that window, so a later worse attempt does not lower it
 // and a later better one does raise it.

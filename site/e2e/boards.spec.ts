@@ -78,6 +78,8 @@ const FIXED_BOARDS = [
   "kittens_to_orbit_and_back",
   "biggest_crew_wreck",
   "kittens_wrecked",
+  "bodies_by_1y",
+  "bodies_by_10y",
 ];
 
 const DYNAMIC_BOARD_FAMILIES = ["fastest_to_", "rud_", "tumbles_on_"] as const;

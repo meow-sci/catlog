@@ -38,7 +38,7 @@ export interface Board {
 
 const UNIVERSAL_SCOPES: Board["scopes"] = ["player", "career", "system"];
 
-/** The 48 fixed boards, in the order the site publishes them. */
+/** The 50 fixed boards, in the order the site publishes them. */
 const BOARD_DEFINITIONS: Omit<Board, "scopes">[] = [
   {
     stat: "biggest_lithobrake_survived",
@@ -677,9 +677,41 @@ const BOARD_DEFINITIONS: Omit<Board, "scopes">[] = [
     how: "Adds the positive crew count from each qualifying whole-vehicle RUD. It is an occupancy total, not a count of deaths or destroyed bodies; an unusable cause label does not stop this board moving.",
     excluded: ["Nobody was aboard.", "The flight was flagged."],
   },
+  {
+    stat: "bodies_by_1y",
+    title: "Worlds In The First Year",
+    unit: "bodies",
+    ascending: false,
+    career: false,
+    from: ["vehicle.soi"],
+    what: "The most different worlds reached in one save during its first 365 days.",
+    how: "A save counts each world whose first arrival was at or before 31,536,000 seconds on its career clock. Your player result is your best single save, never a union across saves; a celestial-system result is the best one save using that system.",
+    excluded: [
+      "A world's first arrival was later than 31,536,000 seconds.",
+      "An arrival with no save or career-clock reading.",
+      "The flight was flagged.",
+      "Only the celestial-system view skips a save whose system is unknown; its player and save results still move.",
+    ],
+  },
+  {
+    stat: "bodies_by_10y",
+    title: "Worlds In Ten Years",
+    unit: "bodies",
+    ascending: false,
+    career: false,
+    from: ["vehicle.soi"],
+    what: "The most different worlds reached in one save during its first ten flat 365-day years.",
+    how: "A save counts each world whose first arrival was at or before 315,360,000 seconds on its career clock. Your player result is your best single save, never a union across saves; a celestial-system result is the best one save using that system.",
+    excluded: [
+      "A world's first arrival was later than 315,360,000 seconds.",
+      "An arrival with no save or career-clock reading.",
+      "The flight was flagged.",
+      "Only the celestial-system view skips a save whose system is unknown; its player and save results still move.",
+    ],
+  },
 ];
 
-// Scope is deliberately attached here rather than repeated on 48 entries. A
+// Scope is deliberately attached here rather than repeated on 50 entries. A
 // board added to the catalog receives every scope automatically; there is no
 // opt-out registry to forget to update.
 export const BOARDS: Board[] = BOARD_DEFINITIONS.map((board) => ({

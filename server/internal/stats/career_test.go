@@ -3,6 +3,7 @@ package stats_test
 import (
 	"database/sql"
 	"maps"
+	"strings"
 	"testing"
 
 	"github.com/meow-sci/catlog/server/internal/ids"
@@ -249,12 +250,17 @@ func TestFastestToBodySkipsANameThatCannotBeAStatKey(t *testing.T) {
 
 	got := readStats(t, proj)
 	for stat := range got {
-		if stat != "1/soi_bodies" && stat != "1/career_playtime" {
+		if strings.HasPrefix(stat, "1/fastest_to_") {
 			t.Errorf("a malformed body name produced the stat %q", stat)
 		}
 	}
 	if got["1/soi_bodies"].Value != 1 {
 		t.Errorf("soi_bodies = %v, want 1 — the visit still happened", got["1/soi_bodies"].Value)
+	}
+	for _, stat := range []string{"1/bodies_by_1y", "1/bodies_by_10y"} {
+		if got[stat].Value != 1 {
+			t.Errorf("%s = %v, want 1 — opaque bodies still count in save sprints", stat, got[stat].Value)
+		}
 	}
 	var first sql.NullFloat64
 	if err := proj.Reader().QueryRowContext(t.Context(),

@@ -141,6 +141,7 @@ func BoardFolds() []Fold {
 		careerPlaytimeFold{},
 		countFold{stat: StatPlaySessions, eventType: "session.started"},
 		kittensToOrbitFold{},
+		bodySprintFold{},
 	}
 }
 

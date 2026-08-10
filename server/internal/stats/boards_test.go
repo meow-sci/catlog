@@ -357,6 +357,8 @@ func TestLandedAndVisitedBodiesAreSeparateSets(t *testing.T) {
 	}, 0, false)
 	want(t, readStats(t, proj), map[string]float64{
 		"1/soi_bodies":        2,
+		"1/bodies_by_1y":      2,
+		"1/bodies_by_10y":     2,
 		"1/fastest_to_mun":    0,
 		"1/fastest_to_duna":   0,
 		"1/landed_bodies":     1,

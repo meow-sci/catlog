@@ -22,6 +22,8 @@ const (
 	StatKittensToOrbitAndBack     = "kittens_to_orbit_and_back"
 	StatBiggestCrewWreck          = "biggest_crew_wreck"
 	StatKittensWrecked            = "kittens_wrecked"
+	StatBodiesBy1Y                = "bodies_by_1y"
+	StatBodiesBy10Y               = "bodies_by_10y"
 	StatRUDTotal                  = "rud_total"
 	StatOrbitsAchieved            = "orbits_achieved"
 	StatSOIBodies                 = "soi_bodies"
@@ -61,6 +63,10 @@ const (
 	StatCareerPlaytime      = "career_playtime"
 	StatPlaySessions        = "play_sessions"
 )
+
+// SprintYearSeconds is catlog's flat 365-day duration year. It deliberately
+// does not come from any celestial body's orbital period.
+const SprintYearSeconds = 365 * 24 * 3600
 
 // Board is the metadata `GET /v1/leaderboards` publishes for one stat (§4.8).
 type Board struct {
@@ -155,6 +161,8 @@ var fixedBoards = func() []Board {
 		rec(StatKittensToOrbitAndBack, "Kittens To Orbit And Home", "kittens"),
 		rec(StatBiggestCrewWreck, "Most Kittens Aboard A Lost Vehicle", "kittens"),
 		rec(StatKittensWrecked, "Kittens Aboard Lost Vehicles", "kittens"),
+		rec(StatBodiesBy1Y, "Worlds In The First Year", "bodies"),
+		rec(StatBodiesBy10Y, "Worlds In Ten Years", "bodies"),
 	}
 }()
 
@@ -1700,10 +1708,13 @@ func (toBodyFold) Apply(ctx context.Context, b *Batch, ev Event) error {
 		return err
 	}
 
-	// soiFold owns the row's existence; this only ever lowers its time. It runs
-	// after soiFold (fold order in fold.go), so the row is already there. The
-	// coalesce covers a row soiFold inserted on a career-less event, which has
-	// no time yet — min() over NULL is NULL in SQLite.
+	// soiFold normally owns the row's existence. The set-member call is a no-op
+	// for that known-system row and creates the save-local row when the system is
+	// still unknown, because the sprint's player and career answers remain
+	// meaningful even though no comparable system row can be written.
+	if _, err := b.AddCareerSetMember(ctx, ev, "soi", p.ToBody); err != nil {
+		return err
+	}
 	if err := b.LowerBodyTime(ctx, ev.PlayerID, "soi", p.ToBody, t); err != nil {
 		return err
 	}
@@ -1723,4 +1734,58 @@ func (toBodyFold) Apply(ctx context.Context, b *Batch, ev Event) error {
 		"from":   p.FromBody,
 		"flight": ids.String(ev.FlightID),
 	})
+}
+
+// bodySprintFold derives save-native SOI counts after toBodyFold has lowered
+// the current career_body.first_sim_t. A year is catlog's flat 365-day duration
+// unit, not a planet's orbital period: celestial-system content never defines a
+// server leaderboard threshold.
+//
+// Each scope asks a different question. Career is this save's distinct bodies;
+// player is the best single save, never a union across saves; system is the best
+// single save bound to that system. All use an inclusive at-or-before boundary.
+type bodySprintFold struct{}
+
+func (bodySprintFold) Name() string { return "body_sprints" }
+
+func (bodySprintFold) Apply(ctx context.Context, b *Batch, ev Event) error {
+	p, ok := payloadOf[VehicleSOI](ev)
+	if !ok || p.ToBody == "" {
+		return nil
+	}
+	if _, ok, err := careerTime(ctx, ev, b); err != nil || !ok {
+		return err
+	}
+	for _, sprint := range []struct {
+		stat      string
+		threshold float64
+	}{
+		{StatBodiesBy1Y, SprintYearSeconds},
+		{StatBodiesBy10Y, 10 * SprintYearSeconds},
+	} {
+		career, err := b.CareerBodyCountBefore(ctx, ev.PlayerID, ev.Career, "soi", sprint.threshold)
+		if err != nil {
+			return err
+		}
+		if err := setCareerValue(ctx, b, ev, sprint.stat, float64(career)); err != nil {
+			return err
+		}
+		player, err := b.BodyCountBefore(ctx, ev.PlayerID, "soi", sprint.threshold)
+		if err != nil {
+			return err
+		}
+		if err := setValue(ctx, b, ev, sprint.stat, float64(player)); err != nil {
+			return err
+		}
+		system, known, err := b.SystemBodyCountBefore(ctx, ev, "soi", sprint.threshold)
+		if err != nil {
+			return err
+		}
+		if known {
+			if err := setSystemValue(ctx, b, ev, sprint.stat, float64(system)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }

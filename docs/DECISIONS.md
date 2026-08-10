@@ -1819,6 +1819,31 @@ to a person for using a game action. That fails Constitution §8's consequence t
 occupancy boards narrowly tied to physics RUDs avoids implying that refusal through a different
 title or formula.
 
+### PROJ-119 — World sprints rank one save against flat inclusive duration limits
+
+*Accepted · 2026-08-10 · Task E5/E6.*
+
+The community question is how many distinct worlds one save reached early, so each result remains
+save-native. Career scope counts that save; player scope keeps the best one-save count; and
+system scope keeps the best one-save count among the player's saves in that system. Unioning bodies
+across saves would publish a tour no single career completed and would make the save view disagree
+with the ordinary board about what achievement it ranks.
+
+A year is exactly `365 * 24 * 3600` seconds: a flat duration already shared with catlog's duration
+formatting, not Earth's or any other body's orbital period. Taking it from game content would make
+the same stat mean different durations in different systems and reintroduce a celestial fact the
+server intentionally does not own. The boundaries are inclusive: an arrival at exactly 31,536,000
+or 315,360,000 seconds satisfies “in the first year” or “in ten years” rather than losing on a
+floating-point fencepost.
+
+Every qualifying SOI recomputes both boards after lowering that save's earliest arrival time. This
+is necessary because loading an earlier save can make a repeated body's arrival cross a threshold;
+running only on set novelty would leave the projection stale. Player, save and system values are
+queried and written independently, never mirrored. An unknown system suppresses only the system
+write, because the save and player answers remain meaningful without a comparison identity. The
+new stable fold identity `body_sprints` changes `BuildID` so immutable history backfills, while the
+event wire, schema and `BuildVersion` remain unchanged.
+
 ## Archive & restore
 
 The filesystem archiver, the manifest, restore verification, and the R2 design that is deliberately not built.
