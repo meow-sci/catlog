@@ -155,6 +155,8 @@ func New(deps Deps) (*Server, error) {
 // the cross-origin read headers (cors.go). `/v1/ingest`, `/api/*`, `/auth/*` and
 // the admin mux are mounted elsewhere and stay same-origin.
 func (s *Server) Register(mux *http.ServeMux) {
+	s.public(mux, "/v1/systems", s.handleSystems)
+	s.public(mux, "/v1/systems/{slug}", s.handleSystem)
 	s.public(mux, "/v1/leaderboards", s.handleBoards)
 	s.public(mux, "/v1/leaderboards/{stat}", s.handleBoard)
 	s.public(mux, "/v1/players", s.handleSearch)

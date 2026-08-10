@@ -234,8 +234,49 @@ All responses `Cache-Control: public, s-maxage=30, stale-while-revalidate=300` e
 - `GET /v1/feed?limit=30` → `{"limit": n, "rows": [{"id": n, "at": unix_ms, "handle": s, "type": s, "summary": s}]}` — the JSON activity feed, newest first; `limit` clamps to the feed table's cap (500)
 - `GET /v1/feed/stream` → the same rows live, as SSE (no cache)
 - `GET /v1/compare?handles=a,b,c` → `{"handles": [{"handle": s, "found": b, "since"?: unix_ms}], "boards": [{"stat": s, "title": s, "unit": s, "ascending": b, "players": n, "rows": [{"handle": s, "value": f, "rank": n, "context": {…}, "updated": unix_ms, "rewound"?: true}]}]}`
+- `GET /v1/systems` → `{"systems": [{"hash": s, "system_id": s, "name": s, "slug": s, "home_body": s, "bodies": n, "complete": b, "players": n, "careers": n}]}`
+- `GET /v1/systems/{slug-or-hash}` → `{"hash": s, "system_id": s, "name": s, "slug": s, "home_body": s, "roots": [s], "players": n, "careers": n, "complete": b, "bodies": [{"body": s, "name": s, "class": s, "kind": s, "rank": n, "parent"?: s, "radius_m": f, "mass_kg": f, "soi_m": f, "atmo_m": f, "ocean_m": f, "angvel": f, "axis": {"x": f, "y": f, "z": f}, "sma_m"?: f, "ecc"?: f, "inc_deg"?: f, "lan_deg"?: f, "argp_deg"?: f, "t_pe"?: f, "period_s"?: f, "ccf_to_cce_t0": {"x": f, "y": f, "z": f, "w": f}}]}` (404 if unknown)
 
 `ascending` and `players` on a profile row are what a profile page needs to render "#3 of 41" without also fetching the board index; `players` is the board's row count, banned players included, exactly like `count` above — the rank is filtered, so a rank is never *worse* than that denominator implies.
+
+### Celestial systems — `GET /v1/systems`, `GET /v1/systems/{slug-or-hash}`
+
+The index returns every recorded system in first-seen order. `players` is the number of distinct
+players whose `career` rows are bound to the system; `careers` is the number of those rows. These
+counts deliberately come from `career`, not `system_stat`: loading a system is enough to make it
+visible even if that save never scores. `bodies` on an index entry is the body count declared by the
+system header.
+
+The detail path accepts either the public slug or the raw content hash. This lets a consumer that
+already holds a hash fetch the catalogue without first reading the index; an exact hash match takes
+precedence if a string could resolve both ways. An unknown slug or hash is `404 not_found` in the
+standard error shape. A successful lookup is `200`; an unexpected projection read failure is
+`500 internal`. These are v1 endpoints in the final pre-launch contract, so adding them does not
+bump an earlier read-API version.
+
+`bodies` in the detail response is the complete catalogue, ordered by canonical body key. `roots`
+is every body's canonical key whose `parent` is absent, in that same order. A client must not assume
+there is exactly one root: `rank` is the body's depth from its own root. `parent` and all seven orbit
+fields are omitted when they were absent from the catalogue; the other fields, including the axis
+and orientation-at-time-zero quaternion, are always present. All numeric values are finite.
+
+`complete` is effective completeness:
+
+```
+reported_complete && len(bodies) == declared body count
+```
+
+It is never the reported header bit alone. A missing body therefore cannot turn a partial catalogue
+into a complete one.
+
+The detail endpoint is deliberately not paged. A celestial system is bounded, and the future 3D
+renderer needs every body's physical properties, orbit, rotation axis/rate and orientation together
+to place bodies and ground tracks exactly. Paging an object that is always consumed whole would add
+state and failure modes without reducing the work. This makes system detail the one public catlog
+response that may be large: stock `SolDense` has 3,215 bodies and is roughly one megabyte of JSON.
+That is accepted because the catalogue is immutable and CDN-cacheable. It still uses the same
+`Cache-Control: public, s-maxage=30, stale-while-revalidate=300` as every other public read response;
+there is intentionally no route-specific longer cache lifetime.
 
 ### The collection census — `GET /v1/stats`
 

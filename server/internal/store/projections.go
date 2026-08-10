@@ -866,3 +866,40 @@ func (p *Projections) SystemBodies(ctx context.Context, hash string) ([]SystemBo
 	}
 	return out, rows.Err()
 }
+
+// SystemCareerCount is one player's number of careers bound to a system.
+// Keeping the player dimension lets the read API remove players hidden by the
+// events-database directory before publishing either aggregate.
+type SystemCareerCount struct {
+	Hash     string
+	PlayerID int64
+	Careers  int64
+}
+
+// SystemCareerCounts groups the career table by system and player. An empty
+// hash returns every system; a non-empty hash narrows the result for detail
+// reads. Score tables are deliberately not involved: loading a system is
+// enough to count even when the career never moved a board.
+func (p *Projections) SystemCareerCounts(ctx context.Context, hash string) ([]SystemCareerCount, error) {
+	query := `SELECT system, player_id, count(*) FROM career WHERE system <> ''`
+	var args []any
+	if hash != "" {
+		query += ` AND system = ?`
+		args = append(args, hash)
+	}
+	query += ` GROUP BY system, player_id ORDER BY system, player_id`
+	rows, err := p.Reader().QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("store: read system career counts: %w", err)
+	}
+	defer rows.Close()
+	var out []SystemCareerCount
+	for rows.Next() {
+		var r SystemCareerCount
+		if err := rows.Scan(&r.Hash, &r.PlayerID, &r.Careers); err != nil {
+			return nil, fmt.Errorf("store: scan system career count: %w", err)
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
