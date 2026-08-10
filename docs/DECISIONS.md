@@ -886,6 +886,11 @@ The sharp edge of a movable clock is now four tests rather than a note. §4.5.3 
 
 That entry justified an eleven-name list read off `Content/Core/Astronomicals.xml` on the grounds that `vehicle.soi.to_body` is client text and a key built from client text would let anyone mint a leaderboard. The premise was right and the remedy was wrong. KSA's celestial systems are **hand-authored content that ships as data and that mods extend or replace**, `docs/events.md` has said from the beginning that `body` is "opaque to server", and a compiled-in list is guaranteed to be wrong for somebody — silently, because a player who reaches a body we never heard of simply gets no board and no error. `stats.TimedBodies` and `stats.RUDCauses` are deleted. `fastest_to_<body>` and `rud_<cause>` are now **families**: the fold builds the key from the value the event carried, and the same argument applies to causes — a destruction cause a future build adds gets its own board instead of vanishing into `rud_total`. The six §4.2 causes survive only as *fixture data* in `internal/seed`, which is what they always were.
 
+The later system catalogue and everywhere badges do not reverse this decision: their body set is
+reported by KSA into the immutable log for one content-derived system, never compiled into the
+server. The permanent refusal and its current system-aware boundary are recorded in
+[ROADMAP.md](ROADMAP.md#a-server-side-catalogue-of-celestial-body-names).
+
 ### PROJ-034 — A family board is listed once at least two distinct players are on it, and that one clause is the whole of the mitigation (owner's call)
 
 *Accepted · 2026-08-07 · WP-DYNBOARDS.*
@@ -4070,3 +4075,20 @@ removed once their owning references are correct, while genuine documented imple
 remain. This keeps an audit from repeatedly treating completed work as open and makes the remaining
 items actionable. The audit also verified the registries and conformance vectors against code rather
 than changing their already-correct counts, order or hashes.
+
+### DOCS-011 — The roadmap separates available KSA evidence from promised product work
+
+*Accepted · 2026-08-10 · Task J3.*
+
+The refactor made body catalogues, orbital elements and state vectors available without committing
+catlog to a server-owned body list or a 3D renderer. Those boundaries now live under Deliberately not
+built: otherwise a future reader could mistake prerequisite data for an unfinished feature and undo
+the open-set system design. The same section records why payload/booster mass, HUD delta-v and heat
+cannot honestly support the suggested projections, and points to the complete source survey instead
+of copying its evidence into another list that would drift.
+
+The new KSA reads remain source-verified but not game-verified. Their specific observable outcomes
+therefore belong in the existing first-run checklist: explicit-zero versus absence, event ordering,
+stable and changed system identity, finite orbital values, atomic state absence and measured frame
+cost. Keeping those checks beside the older patch and detector checks makes “works in KSA” one dated
+exercise rather than allowing compile-time evidence to be mistaken for a completed runtime test.
