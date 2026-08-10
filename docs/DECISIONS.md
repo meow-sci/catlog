@@ -2742,6 +2742,28 @@ This edits the final pre-launch `ver: 1` shape in place, with no upcaster, under
 no deployed v1 history to preserve, while recording the nullable fact now lets a later projection
 use it without pretending the immutable log can reconstruct a vehicle's starting configuration.
 
+### MOD-083 — A tumble records the previous locomotion mode and preserves KSA's edges without smoothing
+
+*Accepted · 2026-08-10 · Task D3.*
+
+The previous locomotion mode is the only honest distinction KSA exposes between two visually
+different events: `Airborne → Tumbling` is a failed landing, while `Grounded → Tumbling` is a trip.
+The 2 Hz poll already retains that previous mode for edge detection, so putting its lowercased value
+in the immutable event records the fact at the only time it is recoverable. The value is an open
+set and the mapper is total: a future or unreadable enum becomes `"unknown"` rather than crashing,
+rejecting new game data, or inventing a cause.
+
+Catlog deliberately does not merge nearby edges into one supposed fall. Stock KSA moves a tumbling
+kitten back to `Airborne` after 0.5 seconds without contact, and a later bounce can enter `Tumbling`
+again. One visible cartwheel may therefore emit several tumbles, some from airborne. Preserving the
+game's state machine is reproducible; a timing heuristic would make the answer depend on an
+arbitrary window and conceal real transitions.
+
+The existing `kitten_tumbles` projection remains unchanged and continues to count every event. The
+new fact is recorded now because it cannot be reconstructed later; choosing whether a board should
+filter it is a separate projection decision. This is the final pre-launch `ver: 1` payload under
+DOCS-005, not a fictional migration: no deployed history or client population requires an upcaster.
+
 ## The load harness
 
 `catlog.loadgen`: many randomised players through the real pipeline, and what one laptop actually does.

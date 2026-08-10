@@ -242,6 +242,7 @@ type KittenEvaEnd struct {
 type KittenTumble struct {
 	Kid     string  `json:"kid"`
 	Name    string  `json:"name"`
+	From    string  `json:"from"`
 	SpeedMs float64 `json:"speed_ms"`
 	Body    string  `json:"body"`
 }

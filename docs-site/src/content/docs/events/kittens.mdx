@@ -33,7 +33,22 @@ The game decides. A kitten is tumbling when it is touching the ground and moving
 faster than the tumble speed gate, which is **6.5 m/s** in a stock game.
 
 catlog records the transition **into** tumbling and nothing else. A tumble ends by
-righting itself, and counting that too would double every fall.
+righting itself, and counting that too would double every fall. It also records what
+the kitten was doing immediately beforehand: **airborne** means a landing that did
+not end on its feet, while **grounded** means a trip after it was already running on
+the surface. If that earlier state cannot be named, the record says **unknown**
+rather than guessing.
+
+A tumble record is a game-state transition, not a promise of one record per visible
+cartwheel. If a tumbling kitten spends more than half a second off the ground, the
+game calls it airborne again. A hard bounce can then start another tumble, so one
+rough cartwheel can produce several records, including more than one whose earlier
+state was airborne. A settled kitten instead passes through righting itself before
+returning to grounded.
+
+The current Kitten Tumbles board still counts every tumble record, whether it began
+in the air or on the ground. Recording the distinction does not silently change the
+board's formula.
 
 <Aside type="caution" title="Why changing the tuning flags your flight">
 That 6.5 m/s figure is a single number sitting in a debug window with a drag

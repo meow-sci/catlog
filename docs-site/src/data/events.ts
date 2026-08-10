@@ -698,13 +698,18 @@ export const EVENTS: CatlogEvent[] = [
     summary: "A kitten went over.",
     trigger: "passive",
     cause:
-      "Sampled twice a second. Recorded when a kitten's movement state changes into tumbling. Only transitions *into* tumbling count — a tumble ends by righting itself, and counting that too would double every fall.",
+      "Sampled twice a second. Recorded when a kitten's movement state changes into tumbling, together with the state it came from. Only transitions *into* tumbling count — recovery passes through righting itself, and counting that too would double every fall.",
     source:
       "The game decides a kitten is tumbling when it is touching the ground and moving faster than a tuning value that is 6.5 m/s in a stock game. Changing that value marks the flight — and a tumble belongs to the kitten's own spacewalk flight, so a marked flight's tumbles do not count.",
-    gate: "One event per fall. The speed reported is the kitten's ground speed at the moment it went over. If catlog cannot tell which flight the kitten was on, the tumble is recorded without one and counts as it always did.",
+    gate: "One event per transition into tumbling. A rough cartwheel can contain several: after more than half a second off the ground, the game calls the kitten airborne, and a later bounce can start tumbling again. The speed is ground speed at each transition. If catlog cannot tell which flight the kitten was on, the tumble is recorded without one and counts as it always did.",
     fields: [
       { key: "kid", unit: "", what: "The per-kitten identifier." },
       { key: "name", unit: "", what: "The kitten's name." },
+      {
+        key: "from",
+        unit: "",
+        what: "The movement state immediately before tumbling: airborne for a failed landing, grounded for a trip, or another game state. Unknown is recorded when it cannot be named honestly.",
+      },
       { key: "speed_ms", unit: "m/s", what: "Ground speed when it went over." },
       { key: "body", unit: "", what: "Where it happened." },
     ],

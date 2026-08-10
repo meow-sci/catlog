@@ -196,7 +196,9 @@ internal sealed class EvaActor
         for (int i = 0; i < _tumbleTimes.Count; i++)
         {
             double at = _tumbleTimes[i];
-            emit(at, [new TumbleSignal(at, _clock.Wall(at), _kitten, _tumbleSpeeds[i], _body.Name)]);
+            emit(at, [new TumbleSignal(
+                at, _clock.Wall(at), _kitten, i % 2 == 0 ? "airborne" : "grounded",
+                _tumbleSpeeds[i], _body.Name)]);
         }
 
         emit(_end, [

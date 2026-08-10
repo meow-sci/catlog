@@ -384,7 +384,7 @@ in `Events/GameSignal.cs`.
 | `EngineSignal` (`:299`) | `PolledSignals.PollVehicle` (`:174-190`) | `engine.ignition` / `engine.shutdown` / `engine.flameout` |
 | `EvaStartSignal` (`:312`) | `Patcher.CreateKittenEvaPostfix` (`:650`) | `kitten.eva_start` |
 | `EvaEndSignal` (`:320`) | `Patcher.DisposePrefix`, KittenEva branch (`:530-535`) | `kitten.eva_end` |
-| `TumbleSignal` (`:329`) | `PolledSignals.PollVehicle` (`:168-172`) | `kitten.tumble`, on the tumbling kitten's own EVA flight |
+| `TumbleSignal` (`:388-390`) | `PolledSignals.PollVehicle` (`:176-180`) | `kitten.tumble`, on the tumbling kitten's own EVA flight, carrying the previous mode through `LocomotionModeName.FromGameName` (`Events/LocomotionModeName.cs:14-23`) |
 | `CrewKilledSignal` (`:347`) | `Patcher.KillCrewPrefix` (`:546-576`) | **no event** — it carries the seat read that lets the next `kitten.kia` name a flight |
 | `KiaSignal` (`:358`) | `PolledSignals.PollRoster` roster diff (`:277-281`) | `kitten.kia` |
 | `FlaggedSignal` (`:346`) | `Patcher.Flag` (`:754`), `Patcher.UniverseDestroyPrefix` (`:678-683`), `PolledSignals.CheckTuning` (`:242-248`) | `flight.flagged` (1..n) |
@@ -1738,8 +1738,8 @@ missing one.
 
 ### `kitten.tumble`
 
-**Wire.** `"kitten.tumble"` (`EventTypes.cs:74`), `ver` **2**, kind 1. `flight` = **the tumbling
-kitten's own EVA flight** (`EventPipeline.cs:305-323`). A `KittenEva`'s `Vehicle.Id` *is* the roster
+**Wire.** `"kitten.tumble"` (`EventTypes.cs:83`), `ver` **1**, kind 1. `flight` = **the tumbling
+kitten's own EVA flight** (`EventPipeline.cs:352-370`). A `KittenEva`'s `Vehicle.Id` *is* the roster
 name, so `tumble.KittenName` is already the vehicle id and `Tracker.PeekFlight(tumble.KittenName)`
 resolves it; `PolledSignals.Track` has registered that vehicle into the same `into` list ahead of the
 `TumbleSignal`, so the flight is open by the time the pipeline sees it.
@@ -1751,33 +1751,46 @@ vehicle whose id could not be read. So `flight` is still **null** when the kitte
 A null tumble scores exactly as every tumble did at `ver` 1; an invented flight poisons a join
 permanently.
 
-**Payload** — `KittenTumblePayload`, `Payloads.cs:173-177`
+**Payload** — `KittenTumblePayload`, `Payloads.cs:319-330`
 
 | Key | Type | Units | Source |
 |---|---|---|---|
 | `kid` | string | — | `Ids.KittenId(installId, tumble.KittenName)` |
-| `name` | string | — | `Ids.SanitizeName(...)`. `KittenName` is the EVA vehicle's id, i.e. the roster name (`PolledSignals.cs:167`). |
-| `speed_ms` | number | m/s (tangential ground speed) | `VehicleTelemetry.GroundSpeedMs(vehicle)` (`:168`) |
+| `name` | string | — | `Ids.SanitizeName(...)`. `KittenName` is the EVA vehicle's id, i.e. the roster name (`PolledSignals.cs:178-180`). |
+| `from` | string (open set) | — | The previous cached `KittenEva.LocomotionState.Mode`, mapped by `LocomotionModeName.FromGameName` (`LocomotionModeName.cs:14-23`). Today's six known modes become lowercase; null or an unseen value becomes the honest fallback `"unknown"`. The server must not allow-list them. |
+| `speed_ms` | number | m/s (tangential ground speed) | `VehicleTelemetry.GroundSpeedMs(vehicle)` (`PolledSignals.cs:179`) |
 | `body` | string | — | `VehicleTelemetry.BodyOf(vehicle)` |
 
-**Detector** — `PolledSignals.PollVehicle` (`:162-169`):
+**Detector** — `PolledSignals.PollVehicle` (`:163-181`):
 
 ```
-if (now.Locomotion == LocomotionMode.Tumbling && state.Locomotion != LocomotionMode.Tumbling)
-    emit TumbleSignal
+previous = state.Locomotion
+if (now.Locomotion == LocomotionMode.Tumbling && previous != LocomotionMode.Tumbling)
+    emit TumbleSignal(from = lowercased(previous), or "unknown")
 ```
 
 **Transitions INTO `Tumbling` only** — a tumble ends `Tumbling → Rightening → Grounded`, so counting
-transitions *out* would double-count via `Rightening`.
+transitions *out* would double-count via `Rightening`. `Airborne → Tumbling` means the kitten failed
+to land on its feet; `Grounded → Tumbling` means it tripped while already on the ground. The normal
+recovery path is `Tumbling → Rightening → Grounded`.
+
+**The game may report more than one tumble during one cartwheel.** If a tumbling kitten remains off
+the ground beyond stock `TumbleAirborneExitTime = 0.5 s`, KSA changes it from `Tumbling` to
+`Airborne`. A later bounce can therefore produce another `Airborne → Tumbling` edge. Catlog records
+those state-machine edges as they occur; it does not smooth or merge them, and some events from one
+visually continuous cartwheel can consequently carry `from: "airborne"`.
 
 **Game source.**
 
-- `VehicleTelemetry.LocomotionMode(vehicle)` (`:631-641`) → `KittenEva.LocomotionState.Mode`
+- `VehicleTelemetry.LocomotionMode(vehicle)` (`:963-984`) → `KittenEva.LocomotionState.Mode`
   (`KSA/KittenEva.cs:20`, `KSA/LocomotionState.cs:5`, `KSA/LocomotionMode.cs:3`). `LocomotionState`
   is a get-only property returning a **struct copy**, so no reflection and no aliasing. **Churn risk
   High — the whole locomotion subsystem is new in 5168.** Six values: `Mmu, Grounded, Airborne,
   Tumbling, Rightening, Ladder`.
-- `VehicleTelemetry.GroundSpeedMs` (`:655-665`) → `KittenEva.LocomotionState.GroundSpeed`
+- The `from` value is the previous sample's cached mode in `PolledSignals.VehicleState`, not a second
+  KSA read. The conversion is total and preserves the wire's open-set rule with `"unknown"` as its
+  default rather than throwing on a future enum value.
+- `VehicleTelemetry.GroundSpeedMs` (`:986-1008`) → `KittenEva.LocomotionState.GroundSpeed`
   (`KSA/LocomotionState.cs:13`). The game's own classifier uses `LocomotionFacts.TangentialSpeedPhys`
   (`KSA/KittenLocomotion.cs:30`, computed `KSA/VehicleUpdateTask.cs:1154`), which is *not* exposed on
   the state struct; `GroundSpeed` is the closest published quantity.
@@ -1790,17 +1803,21 @@ mutable public static the game's own debug window live-edits — which is why an
 `flight.flagged: tuning`.
 
 **Classification.** **PASSIVE** (2 Hz poll, enum edge). Gate: transitions into `Tumbling` only;
-baseline seed emits nothing.
+baseline seed emits nothing. This is an edge reporter, not a physical-fall deduplicator: the stock
+0.5 s airborne exit described above can make one rough cartwheel cross the edge repeatedly.
 
 **Server.** `countFold{kitten_tumbles, "kitten.tumble"}` — +1 per event on an unflagged flight. **No
-payload field is read at all**; the event type alone is the signal. That "on an unflagged flight"
+payload field, including `from`, is read by the current fold**; the event type alone is the signal.
+The failed-landing/trip distinction is recorded now because the immutable log cannot recover it
+later, but changing the board formula is a separate projection change. That "on an unflagged flight"
 depends entirely on the envelope's `flight`: `scoreable` passes any event with no flight, so a
 flightless tumble could never inherit the `tuning` flag raised on its flight, and a player who
 lowered the tumble speed gate — the entire definition of a tumble, live-editable in the game's own
 debug window — would score normally.
 Feed: `"{h}'s kitten {name} took a tumble at {speed} m/s on {body}"`.
 
-**Vectors.** `batch-001.ndjson` line 19 — a tumble with a non-null `flight`.
+**Vectors.** `batch-001.ndjson` line 19 — a tumble with a non-null `flight` and
+`from: "airborne"`.
 
 ---
 
@@ -2493,9 +2510,10 @@ becomes the seq at which the counter reached its current value, so the tie-break
 first*.
 
 - `kitten_tumbles`, `dockings`, `stagings`, `evas`, `flameouts`, `engine_ignitions`: `countFold`
-  (`:861-879`) on the event type alone. `engine.shutdown` counts nothing — a shutdown is the
-  unremarkable other half of every burn, and counting it would be counting `engine_ignitions` twice
-  with a lag.
+  (`:861-879`) on the event type alone. In particular, `kitten_tumbles` does not inspect `from`:
+  failed landings, grounded trips and repeated bounce edges all still increment the same counter.
+  `engine.shutdown` counts nothing — a shutdown is the unremarkable other half of every burn, and
+  counting it would be counting `engine_ignitions` twice with a lag.
 - `orbits_achieved` (`:910-925`): `vehicle.orbit` with `phase == "achieved"` only; `escaped` counts
   nothing.
 - `rud_total` / `rud_<cause>` (`:1066-1090`): see [`vehicle.rud`](#vehiclerud).
@@ -2781,7 +2799,7 @@ Three suppression rules, in order (`projector.go:373-383`, `stats/feed.go:21-31`
 | `vehicle.rud` | — | `"{h} lost a vehicle to {causePhrase} on {body} at {speed} m/s"` |
 | `vehicle.orbit` | `phase == "achieved"` | `"{h} made orbit around {body} ({ap} × {pe})"` |
 | `vehicle.soi` | `to_body != ""` | `"{h} entered {body}'s sphere of influence"` |
-| `kitten.tumble` | — | `"{h}'s kitten {name} took a tumble at {speed} m/s on {body}"` |
+| `kitten.tumble` | —; `from` does not alter the current feed sentence | `"{h}'s kitten {name} took a tumble at {speed} m/s on {body}"` |
 | `kitten.kia` | — | `"{h} said goodbye to kitten {name}"` |
 | `flight.ended` | `reason == "recovered"` | `"{h} brought {n} kittens home safely"`, or `"{h} recovered a vehicle"` when `crew_count < 1` |
 
@@ -2948,9 +2966,9 @@ rather than on Go map order, so a rebuild reproduces the incremental `context` b
 
 | File | Pins |
 |---|---|
-| `batches/batch-001.ndjson` | 32 envelopes, one line each; SHA-256 `bef470a859aedc370ed39c7db7a29207280920ad1759490da4e49f4e03441ebf` |
+| `batches/batch-001.ndjson` | 32 envelopes, one line each; SHA-256 `644e3f9a673a12a8aeea77e4eb7e4455f4e0c919a1bf3c061bf51ebd6dd5e967` |
 | `batches/batch-001.br` | the Brotli body as sent |
-| `batches/batch-001.bh.txt` | `ibvCc-TAstwkoPpx9PpVm3OBwSepdnXiMNSgGLjuP2k` — base64url SHA-256 of the compressed body |
+| `batches/batch-001.bh.txt` | `HpfGdWGD3Nm_1zdFWFBXQDlvCn9Lnhq3OYwu6JSxFGs` — base64url SHA-256 of the compressed body |
 | `keys/*`, `license/*`, `proofs/*`, `expected/verify-results.json` | the credential / JWS layer, not events |
 
 **Covered by a vector: 25 of 25.** Every registered type appears at least once, at the `ver` the
@@ -2974,7 +2992,9 @@ Between them the lines pin an array field (`kids`, `roster.snapshot.kittens`), a
 **and** absent for the same field on the same type, a nested object (`agg`), a nested *optional*
 object (`telemetry.window`'s `radar_alt_m`), an in-payload `null`, and all three envelope `flight`
 cases — always non-null, always null, and conditionally null (`kitten.tumble`, `kitten.kia`, both
-naming a flight).
+naming a flight). Line 19 additionally pins `kitten.tumble.from: "airborne"`, including the open-set
+string that distinguishes a failed landing from a grounded trip without changing the current count
+fold.
 
 Vector-level assertions that apply to every line regardless: every `type` is in the registry, every
 `id` parses as a ULID, the `flight` key is always present and is `null` or a ULID, `session` is

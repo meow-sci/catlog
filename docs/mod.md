@@ -255,7 +255,7 @@ The only code that touches KSA, and deliberately thin: everything else is a call
 | `Patcher.cs` | The Harmony patches, each carrying its `ksa-integration.md` table row as a comment |
 | `VehicleTelemetry.cs` | **Every** KSA read, each with a `[KsaAnchor]` |
 | `SystemSurvey.cs` | The one-per-launch celestial forest survey, canonical system hash inputs and immutable cache; every KSA read carries a `[KsaAnchor]` |
-| `PolledSignals.cs` | The 2 Hz poll, vehicle tracking, and the roster read at **two cadences** — an allocation-free KIA scan every tick, the `roster.snapshot` payload only when one is due. It raises the tumble signal on the kitten's own EVA vehicle, which is what gives `kitten.tumble` its flight; the `KillCrew` patch in `Patcher.cs` raises the crew-kill signal that gives `kitten.kia` its own |
+| `PolledSignals.cs` | The 2 Hz poll, vehicle tracking, and the roster read at **two cadences** — an allocation-free KIA scan every tick, the `roster.snapshot` payload only when one is due. It retains each kitten's previous locomotion mode and reports that mode through a total lowercase mapper when the state enters tumbling; an unseen value becomes `"unknown"`. It raises the tumble signal on the kitten's own EVA vehicle, which is what gives `kitten.tumble` its flight; the `KillCrew` patch in `Patcher.cs` raises the crew-kill signal that gives `kitten.kia` its own |
 | `CatlogRuntime.cs`, `ModPaths.cs`, `KsaAnchor.cs` | Wiring, paths, the anchor attribute |
 
 **Every KSA read carries a `[KsaAnchor]`** naming the `file:line` it was verified against and the
@@ -278,6 +278,12 @@ Patch points that were chosen carefully, because the obvious target was wrong:
   counts `EngineController` modules once in `PolledSignals.Track`; read failure is `null` and the key
   is omitted, while an explicit 0 means none were installed. RCS thrusters, decoupler springs and
   docking pushoff are not engines, and a shed piece is a new vehicle with a new flight/count.
+- **A tumble preserves the previous game mode, not a guessed cause.** `Airborne → Tumbling` records
+  `from: "airborne"` (a failed landing), while `Grounded → Tumbling` records `from: "grounded"` (a
+  trip). The value is open-ended and an unreadable or future mode becomes `"unknown"`. Catlog does
+  not coalesce the game's edges: after stock KSA has kept a tumbling kitten airborne for 0.5 s it
+  changes the mode back to `Airborne`, so a later bounce can make the same visible cartwheel emit
+  another tumble.
 - **`flight.ended` has one emitter**, the true removal choke point, with the *reason* decided by
   intent flags the earlier patches set. A silent-removal safety net closes any tracked vehicle that
   vanished without one, so a flight never leaks open.

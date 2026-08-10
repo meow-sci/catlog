@@ -367,7 +367,7 @@ public sealed class EventPipeline
                     tumble.SimT, tumble.WallMs,
                     new KittenTumblePayload(
                         Kid(tumble.KittenName), Ids.SanitizeName(tumble.KittenName),
-                        tumble.SpeedMs, tumble.Body)));
+                        tumble.From, tumble.SpeedMs, tumble.Body)));
                 break;
 
             case CrewKilledSignal killed:

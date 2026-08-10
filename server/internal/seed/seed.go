@@ -220,7 +220,8 @@ func tumbler() PlayerData {
 	b.add("kitten.eva_start", map[string]any{"kid": "tum0000000000001", "name": "Bramble"})
 	for i, speed := range []float64{7.2, 8.9, 6.6, 11.4} {
 		b.add("kitten.tumble", stats.KittenTumble{
-			Kid: "tum0000000000001", Name: "Bramble", SpeedMs: speed, Body: []string{"mun", "mun", "minmus", "minmus"}[i],
+			Kid: "tum0000000000001", Name: "Bramble", SpeedMs: speed,
+			Body: []string{"mun", "mun", "minmus", "minmus"}[i], From: []string{"airborne", "grounded", "airborne", "grounded"}[i],
 		})
 	}
 	b.add("kitten.eva_end", map[string]any{"kid": "tum0000000000001", "name": "Bramble", "duration_s": 640.5})

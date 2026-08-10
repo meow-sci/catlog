@@ -90,13 +90,20 @@ Kitten identity: `kid` = lowercase Crockford base32 of the first 10 bytes of `SH
 | `engine.ignition` / `engine.shutdown` / `engine.flameout` | `{"engine": s(template name), "count": i}` |
 | `kitten.eva_start` | `{"kid": s, "name": s}` |
 | `kitten.eva_end` | `{"kid": s, "name": s, "duration_s": f}` |
-| `kitten.tumble` | `{"kid": s, "name": s, "speed_ms": f, "body": s}` |
+| `kitten.tumble` | `{"kid": s, "name": s, "from": s(open set), "speed_ms": f, "body": s}` |
 | `kitten.kia` | `{"kid": s, "name": s, "context": "rud"\|"manual_destroy"\|"unknown"}` |
 | `roster.snapshot` | `{"kittens": [{"kid": s, "name": s, "travelled_m": f, "fastest_ms": f, "missions": i, "mission_time_s": f, "kia": b}]}` — every 10 min of play, and on session end |
 | `flight.flagged` | `{"flag": "teleport"\|"refuel"\|"resource_edit"\|"console"\|"tuning", "detail": s}` |
 | `telemetry.window` | `{"t0_sim": f, "t1_sim": f, "n": i, "body": s, "alt_m": agg, "surface_speed_ms": agg, "orbital_speed_ms": agg, "accel_ms2": agg, "peak_g": f?, "max_q_pa": f?, "mass_kg_last": f, "radar_alt_m": agg?, "warp_max": f}` — one per vehicle per 30 s sim-time of active flight |
 
 ### Payload rules a decoder has to get right
+
+**A tumble says what movement state it came from.** `kitten.tumble.from` is the kitten's previous
+locomotion mode, lowercased. It is an open set: today's useful distinction is `"airborne"` (a
+failed landing) versus `"grounded"` (a trip), but receivers preserve every value rather than
+validating against today's game enum. If the mod cannot name a previous mode, it sends
+`"unknown"` rather than guessing. The field does not change the current `kitten_tumbles` fold,
+which still counts every `kitten.tumble` event.
 
 **The system catalogue is complete-or-declared-incomplete.** `system.discovered` is emitted before
 `session.started` at every session boundary and binds the career to the system hash. Its `id` is the

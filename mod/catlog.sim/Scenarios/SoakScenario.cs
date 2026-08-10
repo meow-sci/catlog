@@ -94,7 +94,9 @@ public sealed class SoakScenario : IScenario
         for (int i = 0; i < TumbleSpeeds.Length; i++)
         {
             double t = 1_040 + (i * 35);
-            At(t, new TumbleSignal(t, SimClock.Wall(t), EvaKitten, TumbleSpeeds[i], SimBodies.Mun.Name));
+            At(t, new TumbleSignal(
+                t, SimClock.Wall(t), EvaKitten, i % 2 == 0 ? "airborne" : "grounded",
+                TumbleSpeeds[i], SimBodies.Mun.Name));
         }
 
         At(1_200,

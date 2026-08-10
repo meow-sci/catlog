@@ -604,7 +604,9 @@ func batch001() []byte {
 	}, {
 		// A tumble that names the flight it happened on.
 		label: "ev-14", typ: "kitten.tumble", ver: 1, flight: &eva, simT: 218.5,
-		payload: map[string]any{"kid": kidAce, "name": "Ace", "speed_ms": 4.25, "body": "duna"},
+		payload: map[string]any{
+			"kid": kidAce, "name": "Ace", "speed_ms": 4.25, "body": "duna", "from": "airborne",
+		},
 	}, {
 		// `flight` is explicitly null here, asymmetrically with eva_start.
 		label: "ev-15", typ: "kitten.eva_end", ver: 1, flight: nil, simT: 232.75,

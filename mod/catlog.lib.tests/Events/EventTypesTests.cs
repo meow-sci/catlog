@@ -22,6 +22,7 @@ public sealed partial class EventTypesTests
         Assert.All(EventTypes.All, static type => Assert.Equal(1, EventTypes.VersionOf(type)));
         Assert.Equal(1, EventTypes.VersionOf(EventTypes.VehicleRud));
         Assert.Equal(1, EventTypes.VersionOf(EventTypes.FlightStarted));
+        Assert.Equal(1, EventTypes.VersionOf(EventTypes.KittenTumble));
     }
 
     [Fact]

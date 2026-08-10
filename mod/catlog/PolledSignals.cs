@@ -176,7 +176,8 @@ public sealed class PolledSignals
         if (now.Locomotion == LocomotionMode.Tumbling && state.Locomotion != LocomotionMode.Tumbling)
         {
             into.Add(new TumbleSignal(
-                simT, wallMs, id, VehicleTelemetry.GroundSpeedMs(vehicle), VehicleTelemetry.BodyOf(vehicle)));
+                simT, wallMs, id, LocomotionModeName.FromGameName(state.Locomotion?.ToString()),
+                VehicleTelemetry.GroundSpeedMs(vehicle), VehicleTelemetry.BodyOf(vehicle)));
         }
 
         if (now.EngineActive != state.EngineActive)

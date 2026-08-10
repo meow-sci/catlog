@@ -715,7 +715,7 @@ func TestFeedSummaries(t *testing.T) {
 			"whiskers made orbit around kerbin (320 km × 295 km)"},
 		{input{flight: f, typ: "vehicle.soi", payload: stats.VehicleSOI{FromBody: "kerbin", ToBody: "mun"}},
 			"whiskers entered mun's sphere of influence"},
-		{input{flight: f, typ: "kitten.tumble", payload: stats.KittenTumble{Kid: "k1", Name: "Bramble", SpeedMs: 8.9, Body: "mun"}},
+		{input{flight: f, typ: "kitten.tumble", payload: stats.KittenTumble{Kid: "k1", Name: "Bramble", SpeedMs: 8.9, Body: "mun", From: "future-mode"}},
 			"whiskers's kitten Bramble took a tumble at 8.9 m/s on mun"},
 		{input{flight: f, typ: "kitten.kia", payload: stats.KittenKIA{Kid: "k1", Name: "Bramble", Context: "manual_destroy"}},
 			"whiskers said goodbye to kitten Bramble"},

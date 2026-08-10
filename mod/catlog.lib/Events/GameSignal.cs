@@ -382,9 +382,11 @@ public sealed record EvaEndSignal(double SimT, long WallMs, string KittenName, d
 /// <param name="SimT">Universe sim seconds.</param>
 /// <param name="WallMs">Client unix milliseconds.</param>
 /// <param name="KittenName">The kitten's roster name.</param>
+/// <param name="From">Lowercase locomotion mode immediately before tumbling.</param>
 /// <param name="SpeedMs">Tangential speed at the transition, in m/s.</param>
 /// <param name="Body">Lowercase parent body name.</param>
-public sealed record TumbleSignal(double SimT, long WallMs, string KittenName, double SpeedMs, string Body)
+public sealed record TumbleSignal(
+    double SimT, long WallMs, string KittenName, string From, double SpeedMs, string Body)
     : GameSignal(SimT, WallMs);
 
 /// <summary>

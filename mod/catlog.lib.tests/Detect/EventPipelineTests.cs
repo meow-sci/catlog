@@ -199,12 +199,31 @@ public sealed class EventPipelineTests
         EventPipeline pipeline = TestData.Pipeline();
 
         EventEnvelope tumble = Assert.Single(pipeline.ProcessSignal(
-            new TumbleSignal(10, TestData.WallMs, "Whiskers", 7.2, "earth")));
+            new TumbleSignal(10, TestData.WallMs, "Whiskers", "airborne", 7.2, "earth")));
         var payload = Assert.IsType<KittenTumblePayload>(tumble.Payload);
 
         Assert.Equal(Ids.KittenId(TestData.InstallId, "Whiskers"), payload.Kid);
         Assert.Equal("Whiskers", payload.Name);
+        Assert.Equal("airborne", payload.From);
         Assert.Equal(16, payload.Kid.Length);
+
+        using JsonDocument json = JsonDocument.Parse(tumble.ToNdjsonLine());
+        Assert.Equal(
+            ["kid", "name", "from", "speed_ms", "body"],
+            json.RootElement.GetProperty("payload").EnumerateObject().Select(static p => p.Name).ToArray());
+    }
+
+    [Theory]
+    [InlineData("airborne")]
+    [InlineData("grounded")]
+    public void Tumble_PreservesThePreviousLocomotionMode(string from)
+    {
+        EventPipeline pipeline = TestData.Pipeline();
+
+        EventEnvelope tumble = Assert.Single(pipeline.ProcessSignal(
+            new TumbleSignal(10, TestData.WallMs, "Whiskers", from, 7.2, "earth")));
+
+        Assert.Equal(from, Assert.IsType<KittenTumblePayload>(tumble.Payload).From);
     }
 
     /// <summary>
@@ -220,7 +239,7 @@ public sealed class EventPipelineTests
             TestData.Created(vehicleId: "Whiskers", vehicleName: "Whiskers", crewCount: 1)));
 
         EventEnvelope tumble = Assert.Single(pipeline.ProcessSignal(
-            new TumbleSignal(10, TestData.WallMs, "Whiskers", 7.2, "earth")));
+            new TumbleSignal(10, TestData.WallMs, "Whiskers", "airborne", 7.2, "earth")));
 
         Assert.NotNull(tumble.Flight);
         Assert.Equal(started.Flight, tumble.Flight);
@@ -240,7 +259,7 @@ public sealed class EventPipelineTests
         EventEnvelope flagged = Assert.Single(pipeline.ProcessSignal(
             new FlaggedSignal(5, TestData.WallMs, null, FlightFlag.Tuning, "TumbleSpeedGate=0.5")));
         EventEnvelope tumble = Assert.Single(pipeline.ProcessSignal(
-            new TumbleSignal(6, TestData.WallMs, "Whiskers", 0.7, "earth")));
+            new TumbleSignal(6, TestData.WallMs, "Whiskers", "grounded", 0.7, "earth")));
 
         Assert.Equal(EventTypes.FlightFlagged, flagged.Type);
         Assert.Equal(flagged.Flight, tumble.Flight);
@@ -257,7 +276,7 @@ public sealed class EventPipelineTests
         EventPipeline pipeline = TestData.Pipeline();
 
         EventEnvelope tumble = Assert.Single(pipeline.ProcessSignal(
-            new TumbleSignal(10, TestData.WallMs, "Whiskers", 7.2, "earth")));
+            new TumbleSignal(10, TestData.WallMs, "Whiskers", "grounded", 7.2, "earth")));
 
         Assert.Null(tumble.Flight);
         Assert.Empty(pipeline.Tracker.ActiveVehicleIds);
@@ -468,7 +487,8 @@ public sealed class EventPipelineTests
         var produced = new List<EventEnvelope> { pipeline.SessionStarted(0, TestData.WallMs) };
         produced.AddRange(pipeline.ProcessSignal(TestData.Created()));
         produced.AddRange(pipeline.ProcessSignal(TestData.Rud()));
-        produced.AddRange(pipeline.ProcessSignal(new TumbleSignal(1, TestData.WallMs, "Whiskers", 7, "earth")));
+        produced.AddRange(pipeline.ProcessSignal(
+            new TumbleSignal(1, TestData.WallMs, "Whiskers", "airborne", 7, "earth")));
         for (int i = 0; i <= 12; i++)
             produced.AddRange(pipeline.ProcessFrame(TestData.Frame(i + 1, TestData.Snapshot(simT: i))));
 

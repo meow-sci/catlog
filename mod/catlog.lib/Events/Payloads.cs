@@ -319,11 +319,13 @@ public sealed record KittenEvaEndPayload(
 /// <summary><c>kitten.tumble</c>.</summary>
 /// <param name="Kid">Pseudonymous kitten id.</param>
 /// <param name="Name">Sanitized roster display name.</param>
+/// <param name="From">Lowercase locomotion mode immediately before tumbling.</param>
 /// <param name="SpeedMs">Tangential speed at the transition, in m/s.</param>
 /// <param name="Body">Lowercase parent body name.</param>
 public sealed record KittenTumblePayload(
     [property: JsonPropertyName("kid")] string Kid,
     [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("from")] string From,
     [property: JsonPropertyName("speed_ms")] double SpeedMs,
     [property: JsonPropertyName("body")] string Body);
 
