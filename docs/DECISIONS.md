@@ -4092,3 +4092,20 @@ therefore belong in the existing first-run checklist: explicit-zero versus absen
 stable and changed system identity, finite orbital values, atomic state absence and measured frame
 cost. Keeping those checks beside the older patch and detector checks makes “works in KSA” one dated
 exercise rather than allowing compile-time evidence to be mistaken for a completed runtime test.
+
+### DOCS-012 — Final-contract documentation follows registries and durable seams, not plan-era snapshots
+
+*Accepted · 2026-08-10 · Task J4.*
+
+The final documentation audit removed transitional statements that remained after their dependent
+work landed: 23 event types, five locked types, empty future scope tables and future challenge
+results. These facts now follow the implemented 25-type registry, its exact six-entry mandatory set,
+and the live projection/read seams. Keeping the old snapshots would make otherwise-correct endpoint,
+schema and conformance descriptions disagree about which build they document.
+
+The UI contract now names the save and badge DOM hooks added by the ten new route patterns, while no
+longer attaching that contract to a manually counted number of tests. The KSA survey prose likewise
+describes its durable boundary—one capture per loaded system, cached across ordinary session
+boundaries—rather than treating the current once-per-launch call graph as the abstraction. These
+choices keep the references stable when tests are added or KSA gains another legitimate system-load
+path without weakening the exact behavior that implementations and end-to-end tests depend on.

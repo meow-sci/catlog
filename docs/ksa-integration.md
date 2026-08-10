@@ -57,8 +57,8 @@ Only the items that change code you would otherwise write.
 | Engine "controller IsActive" reachability | **CHANGED (3 nullable hops, `IActivate`)** | `public bool IsActive { get; internal set; } = false;` on `public class EngineController : ModuleStateful<…>, IActivate` | `KSA/EngineController.cs:36` (class `:7`) | Path: `nozzle.Rocket` (`public Rocket Rocket = null;` `KSA/RocketNozzle.cs:34`, **nullable**) → `Rocket.Core` (`public required RocketCore Core;` `KSA/Rocket.cs:10`) → `RocketCore.Controller` (**`public IActivate Controller = null;`** `KSA/RocketCore.cs:18`). `Controller` may be a `ThrusterController` (RCS) — type-test. `public void SetIsActive(Vehicle? vehicle, bool activationState)` `KSA/EngineController.cs:67` is **deferred** (enqueues `InputEvents.IActivateInputData`, applied at `KSA/InputEvents.cs:339-340`). |
 | Installed rocket-engine count | **VERIFIED (2026-08-09)** | `vehicle.Parts.Modules.Get<EngineController>().Length` | `KSA/ModuleList.cs:164` | Source of optional `flight.started.engine_count`, read once when the vehicle is first tracked. Counts installed `EngineController` modules whether active or not. Do **not** count `RocketCore` or `RocketNozzle`: a core's controller may be `ThrusterController`, so those collections include RCS. `[KsaAnchor]` churn risk Medium; failure is `null` → key omitted, while present `0` means no engine installed. |
 | Flameout | **GONE (never existed)** | — | — | See **B3**. Use `IsActive && !state.IsPropellantAvailable` (`public required bool IsPropellantAvailable;` `KSA/EngineControllerState.cs:7`; game's own test `KSA/EngineController.cs:60`). Whole-vehicle helpers exist: `Vehicle.IsAnyEngineActive()` / `IsAnyEnginePropellantAvailable()` (used at `KSA/Vehicle.cs:6090-6094`). |
-| `KittenEva.LocomotionState.Mode` | **VERIFIED — but the entire subsystem is NEW in 5168** | `public LocomotionState LocomotionState => _locomotionState;` (public get-only property returning a **struct copy**) | `KSA/KittenEva.cs:20` | `LocomotionState.cs`, `LocomotionMode.cs`, `LocomotionFacts.cs`, `LocomotionCommand.cs`, `KittenLocomotion.cs`, `KittenLocomotionTuning.cs` **did not exist in 5117**. `public struct LocomotionState { public LocomotionMode Mode; public double ModeStartTime; … }` `KSA/LocomotionState.cs:5-32`. Written back from worker results at `KSA/KittenEva.cs:173-177`. |
-| `LocomotionMode` enum values | **VERIFIED — 6 values** | `public enum LocomotionMode : byte { Mmu, Grounded, Airborne, Tumbling, Rightening, Ladder }` | `KSA/LocomotionMode.cs:3-11` | `Rightening` is the post-tumble settle state (Tumbling→Rightening→Grounded). `Ladder` is **declared but unreachable** — changelog r5161: "Imported Core Utility A (ladders). Not yet functional as ladders (SoonTM)." |
+| `KittenEva.LocomotionState.Mode` | **VERIFIED — but the entire subsystem is NEW in 5168** | `public LocomotionState LocomotionState => _locomotionState;` (public get-only property returning a **struct copy**) | `KSA/KittenEva.cs:20` | `[KsaAnchor]` churn risk **High**. `LocomotionState.cs`, `LocomotionMode.cs`, `LocomotionFacts.cs`, `LocomotionCommand.cs`, `KittenLocomotion.cs`, `KittenLocomotionTuning.cs` **did not exist in 5117**. `public struct LocomotionState { public LocomotionMode Mode; public double ModeStartTime; … }` `KSA/LocomotionState.cs:5-32`. Written back from worker results at `KSA/KittenEva.cs:173-177`. |
+| `LocomotionMode` enum values | **VERIFIED — 6 values** | `public enum LocomotionMode : byte { Mmu, Grounded, Airborne, Tumbling, Rightening, Ladder }` | `KSA/LocomotionMode.cs:3-11` | `[KsaAnchor]` churn risk **High**. `Rightening` is the post-tumble settle state (Tumbling→Rightening→Grounded). `Ladder` is **declared but unreachable** — changelog r5161: "Imported Core Utility A (ladders). Not yet functional as ladders (SoonTM)." |
 | Tumble speed gate = 6.5 m/s | **VERIFIED — and it is a mutable static, not a constant** | `public float TumbleSpeedGate;` `KSA/KittenLocomotionTuning.cs:33`; `TumbleSpeedGate = 6.5f` in `public static KittenLocomotionTuning Default =>` `KSA/KittenLocomotionTuning.cs:77`; `public static KittenLocomotionTuning Current = Default;` `KSA/KittenLocomotionTuning.cs:59` | as listed | Changelog r5131 confirms "Increased TumbleSpeedGate to 6.5ms from 5.5ms". **See B9** — `KittenTuningWindow` (`KSA/KittenTuningWindow.cs:9`, instantiated `KSA/Program.cs:3422`) live-edits `KittenLocomotionTuning.Current` fields by `ref`. |
 | Tumble classification rule | **VERIFIED** | `if (facts.TerrainContact && facts.TangentialSpeedPhys >= tuning.TumbleSpeedGate) return LocomotionMode.Tumbling;` | `KSA/KittenLocomotion.cs:30-33` (in `public static LocomotionMode DeriveMode(...)` `:24`) | Fires from **any** mode except `Ladder` (early-return `:26-29`). Feet-first Airborne→Grounded is the `flag` branch at `:44-47`. `TangentialSpeedPhys` is the **body-fixed (CCF) tangential** component, computed at `KSA/VehicleUpdateTask.cs:1154` (`BuildKittenLocomotionFacts`), not raw speed. |
 | Tumble previous mode and airborne re-entry | **VERIFIED** | `Tumbling` without contact remains tumbling until `facts.Time - state.LastContactTrueTime >= tuning.TumbleAirborneExitTime`, then becomes `Airborne`; stock `TumbleAirborneExitTime = 0.5f`. | `KSA/KittenLocomotion.cs:51-60`; `KSA/KittenLocomotionTuning.cs:43,82` | Catlog caches the previous `LocomotionState.Mode` at 2 Hz and emits it, lowercased, when the next sample enters `Tumbling`. Thus `Airborne → Tumbling` is a failed landing and `Grounded → Tumbling` is a trip. Recovery is `Tumbling → Rightening → Grounded`. One physical cartwheel may yield multiple edges: after more than 0.5 s off the ground KSA returns to `Airborne`, and a later bounce can enter `Tumbling` again. The wire value is an open set; the mod's total mapper falls back to `"unknown"` for an unseen enum value. |
@@ -323,10 +323,12 @@ Items the older plan could not have covered.
 
 ## System survey and stable identity
 
-This inventory is the contract behind the one-per-launch system survey. Every symbol was verified
-against KSA build **2026.8.5.5168** and every game access in `SystemSurvey` carries a `[KsaAnchor]`,
-so a future decompile bump turns this into a mechanical re-check. Raw values used for identity stay
-separate from the sanitised/lowercased values later put on the wire.
+This inventory is the contract behind the once-per-loaded-system survey and its session-boundary
+cache replay. Every symbol was verified against KSA build **2026.8.5.5168** and every game access in
+`SystemSurvey` carries a `[KsaAnchor]`, so a future decompile bump turns this into a mechanical
+re-check. The current-system, enumeration, physical-value, orientation, orbit-element and parent
+anchors have churn risk **Low**; the launcher display-name lookup has churn risk **Medium**. Raw
+values used for identity stay separate from the sanitised/lowercased values later put on the wire.
 
 ### Which objects are bodies
 
@@ -470,11 +472,13 @@ assembly guard enforces that boundary.
 ### Survey timing, cache and failure behavior
 
 The survey is captured by a Harmony **postfix** on `Universe.LoadSystem(string)`
-(`KSA/Universe.cs:167-179`). A prefix is wrong: `CurrentSystem` is assigned only at line 174, after
-the constructor returns, so it would see the previous system or null. `LoadSystem` runs once per
-game launch; save loading uses `Universe.DeserializeSave` and does not reload the system. The game
-thread therefore pays for one enumeration per launch, then session boundaries re-emit the cached
-immutable snapshot rather than walking KSA objects again.
+(`KSA/Universe.cs:167-179`), whose `[KsaAnchor]` churn risk is **Low**. A prefix is wrong:
+`CurrentSystem` is assigned only at line 174, after the constructor returns, so it would see the
+previous system or null. The current game flow calls `LoadSystem` once per launch; save loading uses
+`Universe.DeserializeSave` and does not reload the system. The game thread therefore normally pays
+for one enumeration per launch. If a later path calls `LoadSystem` again, the postfix replaces the
+cache with a fresh survey; ordinary session boundaries re-emit the cached immutable snapshot rather
+than walking KSA objects again.
 
 StarMap's `AllModsLoaded` currently precedes KSA's default `LoadSystem`, so the postfix observes the
 initial load. Startup also checks `Universe.CurrentSystem` and surveys it when already non-null, in

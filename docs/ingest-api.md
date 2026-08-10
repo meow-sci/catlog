@@ -10,7 +10,7 @@ Owns **§4.3–§4.5, §4.8–§4.10**. Event payloads are in [events.md](events
 
 - Batch = NDJSON (one envelope per line, `\n` separated, UTF-8, no BOM), compressed with **Brotli**; request header `Content-Encoding: br`, `Content-Type: application/x-ndjson`.
 - Events within a batch are ordered by outbox append order (oldest first). A batch never mixes streams.
-- **A batch may legally omit any event type, and now sometimes does by configuration.** `catlog.toml`'s `[events]` table lets a player switch individual types off in the mod (five are locked on — see [mod.md](mod.md) and MOD-072). Nothing about the wire contract changes: absence has always been legal, only an *unknown* type is rejected, and a server must not infer anything from a type it did not receive.
+- **A batch may legally omit any event type, and now sometimes does by configuration.** `catlog.toml`'s `[events]` table lets a player switch individual types off in the mod (six are locked on — see [mod.md](mod.md) and MOD-072). Nothing about the wire contract changes: absence has always been legal, only an *unknown* type is rejected, and a server must not infer anything from a type it did not receive.
 - The envelope's keys are exactly those in [events.md](events.md) §4.1 and **unknown envelope keys reject the batch**. Every one is required, including `career` — 16 lowercase Crockford base32 characters (`0-9 a-z` minus `i l o u`), stable for the lifetime of one KSA save. A malformed or missing `career` is `400 malformed_batch`, like any other envelope error.
 - Limits (server-enforced; mirror in mod constants):
 
@@ -271,10 +271,10 @@ advertises the five windows available to player scope, while `scopes` always adv
 comparison units.
 
 `body_derived: true` is emitted for a board family whose key comes from a body name, currently
-`fastest_to_<body>`. It is a client hint, not an eligibility rule: player scope may merge results
-from different celestial-system definitions on such a board, while system scope asks the comparable
-question. The server's board metadata is authoritative; clients must not infer the hint again from
-the stat prefix.
+`fastest_to_<body>` and `tumbles_on_<body>`. It is a client hint, not an eligibility rule: player
+scope may merge results from different celestial-system definitions on such a board, while system
+scope asks the comparable question. The server's board metadata is authoritative; clients must not
+infer the hint again from the stat prefix.
 
 The detail endpoint accepts these combinations:
 
@@ -388,6 +388,7 @@ An unknown definition is the standard cached `404 not_found`. Paging uses the co
 clamps (`limit` defaults to 50 and is capped at 200; `offset` is nonnegative). Both routes use the
 public CORS/cache wrapper, including errors. There is no system filter on this first challenge read
 surface: a system-scoped detail lists all system rows and identifies each one in the row.
+These are final pre-launch v1 endpoints, so their addition does not bump an earlier read-API version.
 
 ### Saves — `GET /v1/players/{handle}/saves`, `GET /v1/players/{handle}/saves/{ordinal}`
 

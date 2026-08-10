@@ -259,7 +259,7 @@ The only code that touches KSA, and deliberately thin: everything else is a call
 | `StatusWindow.cs` | Read-only ImGui rows: patches, vehicles, session, install, **event types**, recorded/queued counts, last ship, health. The *Event types* row reads `all reported`, or `N off in catlog.toml: <names>` in the warning colour — a player who switched something off months ago and forgot is otherwise looking at an empty board with no visible cause. It reports; it does not edit ([ROADMAP.md](ROADMAP.md)) |
 | `Patcher.cs` | The Harmony patches, each carrying its `ksa-integration.md` table row as a comment |
 | `VehicleTelemetry.cs` | **Every** KSA read, each with a `[KsaAnchor]`. Its 2 Hz orbit snapshot reads the complete milestone element set once, plus an atomic parent-body-centred inertial position/velocity state. The state is accepted only when all six components are finite and its re-read parent still matches the snapshot body |
-| `SystemSurvey.cs` | The one-per-launch celestial forest survey, canonical system hash inputs and immutable cache; every KSA read carries a `[KsaAnchor]` |
+| `SystemSurvey.cs` | The once-per-loaded-system celestial forest survey, canonical system hash inputs and immutable cache; every KSA read carries a `[KsaAnchor]` |
 | `PolledSignals.cs` | The 2 Hz poll, vehicle tracking, and the roster read at **two cadences** — an allocation-free KIA scan every tick, the `roster.snapshot` payload only when one is due. It retains each kitten's previous locomotion mode and reports that mode through a total lowercase mapper when the state enters tumbling; an unseen value becomes `"unknown"`. It raises the tumble signal on the kitten's own EVA vehicle, which is what gives `kitten.tumble` its flight; the `KillCrew` patch in `Patcher.cs` raises the crew-kill signal that gives `kitten.kia` its own |
 | `CatlogRuntime.cs`, `ModPaths.cs`, `KsaAnchor.cs` | Wiring, paths, the anchor attribute |
 
@@ -327,13 +327,14 @@ as 16 lowercase Crockford characters. It hashes raw authored values and canonica
 values separately from the sanitised/lowercased wire fields. It has no install-id salt: identical
 content must join across players, unlike private career and kitten identities.
 
-The survey is cached for the launch. Save loads do not reload a celestial system, so each later
-session boundary reuses the immutable snapshot and only supplies fresh session/career/sim/wall
+The survey is cached until the next system load. Save loads do not reload a celestial system, so each
+later session boundary reuses the immutable snapshot and only supplies fresh session/career/sim/wall
 context when events are emitted. Startup also surveys an already-present `CurrentSystem` if lifecycle
 ordering changes; null produces nothing. A root that failed inside KSA's exception-swallowing system
 constructor is not reconstructed from templates: the registered forest is reported and hashed as a
-distinct partial system. This keeps the cost to one bounded game-thread enumeration per launch and
-keeps failures honest rather than silent.
+distinct partial system. In the current game flow that is one bounded game-thread enumeration per
+launch; a later `LoadSystem` call replaces the cache with one new enumeration. This keeps failures
+honest rather than silent.
 
 At each real session boundary Runtime resets the pipeline and mints the new session, then appends
 `system.discovered`, any required `system.body` rows, and `session.started` in that exact order.

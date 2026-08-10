@@ -1334,7 +1334,7 @@ rendered has crossed the line this budget exists to hold.
 
 Things a redesign will delete without noticing, and what breaks when it does.
 
-**The DOM contract the e2e suite asserts (all 47 tests depend on it).** `#home-title`;
+**The DOM contract the e2e suite asserts.** `#home-title`;
 `#tile-boards[data-value]`, `#tile-placements[data-value]`;
 `#featured-boards .featured-board[data-stat]`; `tr.board-row[data-rank][data-handle]` with
 `td.value[data-value]` and `td.context`; `#boards-index tr.boards-row[data-stat]
@@ -1342,11 +1342,23 @@ Things a redesign will delete without noticing, and what breaks when it does.
 contain the server's `min_players` number); `#board-title[data-stat]`;
 `#board-direction[data-ascending]`; `#board-periods a[data-period]`;
 `#board-scopes a[data-scope]`; `#board-scope-note`; `td.save`;
+`#saves-title[data-handle]`; `#saves-table tr.save-row[data-save][data-save-id]`;
+`#saves-empty`; `#save-title[data-handle][data-save]`; `#save-summary` with
+`.system-changed` when applicable and `#save-badges[data-value]`; `#save-stats
+tr.profile-row[data-stat][data-rank][data-ascending]`; `#save-stats-empty`;
 `#boards-systems`; `#systems-index tr.system-row[data-system]` (the value is the slug) with numeric
 `td.value[data-value]`; `#system-title[data-system]` (also the slug); `#system-bodies
 tr.system-body[data-body][data-rank]` with numeric `td.value[data-value]` (the `value` class supplies
 tabular numerals);
 `#board-bucket[data-bucket]`; `#board-prev`, `#board-next`, `#board-range`;
+`#badges-title`; `#badges-catalogue[data-min-players]` with
+`.badge-group[data-group]` and `.badge-tile[data-badge]`; `.badge-count[data-value]`;
+`#badges-note` when the publication threshold exceeds one; `#badge-title[data-badge]`;
+`#badge-system-filter` when filtered; `#badge-holders tr.badge-holder[data-rank][data-handle]`;
+`#badge-holders-empty`; `#badge-prev`, `#badge-next`, `#badge-range`;
+`#player-badges-title[data-handle]` with optional `[data-save]`; `#earned-badges
+.badge-earned[data-badge][data-earned]`; `#earned-badges-empty`; `#unearned-badges
+.badge-unearned[data-badge]`; `#profile-badges`;
 `#open-challenge[data-challenge]`; `#challenges-index[data-now]` with
 `.challenge-group[data-state]` and `tr.challenge-row[data-challenge][data-state]`;
 `#challenge-title[data-challenge]`; `#challenge-metadata[data-state]`; `#challenge-closes`;
@@ -1369,7 +1381,7 @@ readiness signal), `#events-types a[data-type]`, `#events-newest`, `#events-olde
 hint, plus its `paused` state), `#events-live` (the pause/resume toggle, hidden until me.js
 wires it), `#events-tail` (the `data-init` element holding the SSE open),
 `#events-heartbeat`, `#events-handle-filter[data-handle]` with `#events-handle-clear` on the
-global page, `#nav-events`; `#nav-challenges`; `#theme-toggle`;
+global page, `#nav-events`; `#nav-badges`; `#nav-challenges`; `#theme-toggle`;
 `#feed-panel` (and `#feed-panel[data-stream]` + `#feed-status`, the connection hint me.js
 maintains); `#feed[data-source]` — there is deliberately no `data-count`, which the SSE
 prepend path could not keep true, and a sometimes-wrong attribute is worse than none;

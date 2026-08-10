@@ -218,7 +218,8 @@ byte-identical across events. Rows written either way stay readable, so the swit
 `system_stat` has primary key `(player_id, system, stat)` and rank index
 `(stat, value, updated_seq)`. Neither table carries a period: a save is already a time scope, and
 crossing careers with rolling buckets would add an unbounded fourth storage dimension. Both tables
-are empty until their board folds land; migration 0006 establishes the final schema first.
+are populated by the shared board folds; migration 0006 established their final schema before those
+folds landed.
 
 `career_body` has primary key `(player_id, career, kind, body)` and an index on
 `(player_id, system, kind, body)` for distinct-member system unions. Its implemented kinds are
@@ -292,7 +293,7 @@ The batch foundation
 loads one scoped `challenge_member` set on demand, merges pending additions, and flushes new members
 in deterministic key order. `challenge_stat` contributions likewise merge in per-kind pending maps
 and flush in sorted composite-key order with the same strict record/best/count SQL guards as boards.
-Together those paths make future challenge results independent of projector batch size and restart.
+Together those paths make challenge results independent of projector batch size and restart.
 Both challenge tables are player-owned structural projections for moderation/rebuild purposes.
 `ProjectionCounts` and the cached public collection census expose their current row counts as
 `challenge_stat`/`challenge_member` and `challenge_stats`/`challenge_members`, respectively.
@@ -715,7 +716,7 @@ is a `Register` line rather than a migration project (PROJ-100).
 
 `currentVer` must equal the mod's `EventTypes.Versions` exactly, or a newer mod's events are skipped
 as a future version until this build catches up and a rebuild runs. `knownTypes` must equal the mod's
-registry name for name and index for index — 23 entries. Until a type is in that list the server
+registry name for name and index for index — 25 entries. Until a type is in that list the server
 answers `400 malformed_batch` for the **whole batch**, so a mod that emits a type its server does not
 know loses everything in the batch, not just the new type: the mod change and the server change have
 to merge together (PROJ-093).
