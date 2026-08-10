@@ -1602,6 +1602,37 @@ request; keeping the existing cheap denominator and exact visible positional ran
 cacheable read surface Constitution §2 requires without letting a hidden account occupy a displayed
 position.
 
+### PROJ-111 — A save page separates activity provenance, simulation playtime and board participation
+
+*Accepted · 2026-08-10 · Task B2.*
+
+A public save is addressed by its player's first-seen ordinal and represented by the existing
+per-player career relabel. catlog never receives the save's local name, and publishing the raw career
+key would reconnect accounts played from one install (PROJ-049), so an ordinal plus an opaque label
+is the most identity the server can honestly and safely expose. The friendly system reference is
+included only after the save reports one. `system_changed` and `rewound` remain true-only provenance
+marks: turning either into an exclusion would make ordinary XML edits or save loads punitive and
+would violate their recorded projection semantics.
+
+Three numbers on the page deliberately come from three different facts. `playtime_ms` is the
+career's highest valid simulation clock; `first` and `last` resolve the first and last event
+sequences against the immutable log; `boards` counts the save's projected score rows. Using board
+updates as a shortcut for activity would erase saves that never scored and would omit clockless,
+flagged or non-scoring events. Duplicating receive timestamps into projections.db would create a
+rebuild invariant for data events.db already owns, so the read path performs one batched sequence
+lookup under PROJ-010 instead.
+
+Save-detail ranks use the career board's exact value-and-earlier-sequence comparator and subtract
+every ahead row owned by hidden accounts. The unit is a save, not a player: one hidden player may
+have several qualifying careers, and `entrants` therefore also counts saves. This preserves exact
+visible positions without making the denominator an expensive visibility scan, matching the scope
+contract in PROJ-110 and the non-oracle rule in PROJ-007. The endpoints reuse the common public
+cache, CORS and recursive redaction boundaries rather than acquiring save-specific variants.
+
+Badge fields are intentionally absent until the badge projection exists. A zero placeholder would
+look authoritative while conveying only implementation order, and would force clients to depend on
+a shape whose meaning had not yet been built.
+
 ## Archive & restore
 
 The filesystem archiver, the manifest, restore verification, and the R2 design that is deliberately not built.

@@ -161,6 +161,8 @@ func (s *Server) Register(mux *http.ServeMux) {
 	s.public(mux, "/v1/leaderboards/{stat}", s.handleBoard)
 	s.public(mux, "/v1/players", s.handleSearch)
 	s.public(mux, "/v1/players/{handle}", s.handlePlayer)
+	s.public(mux, "/v1/players/{handle}/saves", s.handleSaves)
+	s.public(mux, "/v1/players/{handle}/saves/{ordinal}", s.handleSave)
 	s.public(mux, "/v1/players/{handle}/events", s.handlePlayerEvents)
 	s.public(mux, "/v1/compare", s.handleCompare)
 	s.public(mux, "/v1/events", s.handleEvents)

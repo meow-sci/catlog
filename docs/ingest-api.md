@@ -226,6 +226,8 @@ All responses `Cache-Control: public, s-maxage=30, stale-while-revalidate=300` e
 - `GET /v1/leaderboards` → `{"min_players": n, "boards": [{"stat": "biggest_lithobrake_survived", "title": s, "unit": "m/s", "ascending": false, "count": n, "periods": ["alltime", "daily", "weekly", "monthly", "yearly"], "scopes": ["player", "career", "system"], "body_derived"?: true}]}`
 - `GET /v1/leaderboards/{stat}?scope=player&period=alltime&system=<slug-or-hash>&limit=50&offset=0` (limit ≤ 200) → `{"stat": s, "title": s, "unit": s, "ascending": b, "scope": "player" | "career" | "system", "period": s, "bucket"?: s, "limit": n, "offset": n, "rows": [{"rank": 1, "handle": s, "save"?: n, "save_id"?: s, "system"?: {"hash": s, "name": s, "slug": s}, "value": f, "context"?: {…}, "updated": unix_ms, "rewound"?: true}]}`
 - `GET /v1/players/{handle}` → `{"handle": s, "since": unix_ms, "stats": [{"stat": s, "title": s, "unit": s, "value": f, "ascending": b, "rank": n, "players": n, "context": {…}, "updated": unix_ms, "rewound"?: true}]}` (404 if unknown/banned)
+- `GET /v1/players/{handle}/saves` → `{"handle": s, "saves": [{"save": n, "save_id": s, "system"?: {"hash": s, "name": s, "slug": s}, "system_changed"?: true, "playtime_ms": f, "first": unix_ms, "last": unix_ms, "rewound"?: true, "boards": n}]}`
+- `GET /v1/players/{handle}/saves/{ordinal}` → `{"handle": s, "save": n, "save_id": s, "system"?: {"hash": s, "name": s, "slug": s}, "system_changed"?: true, "playtime_ms": f, "rewound"?: true, "stats": [{"stat": s, "title": s, "unit": s, "value": f, "ascending": b, "rank": n, "entrants": n, "context"?: {…}, "updated": unix_ms}]}`
 - `GET /v1/players?q=whis&limit=20` → `{"query": s, "limit": n, "handles": [s], "truncated"?: true}` — handle search
 - `GET /v1/players/{handle}/events?limit=50&before=<cursor>&type=<event type>` → `{"handle": s, "limit": n, "type"?: s, "next"?: <cursor>, "events": [{"seq": n, "id": ulid, "type": s, "ver": n, "session"?: ulid, "flight"?: ulid, "career"?: s, "sim_t"?: f, "recv": unix_ms, "payload": {…}}]}` (404 if unknown/banned)
 - `GET /v1/events?limit=50&before=<cursor>&type=<event type>&handle=<handle>` → the same envelope with every player's events mixed together, newest first; each row additionally carries `"handle": s`. `?handle=` narrows to one player (404 if unknown/banned, the same one answer); the unfiltered envelope omits `handle`.
@@ -307,6 +309,52 @@ banned, purged or handleless row closes the gap and paging offsets apply to the 
 Aggregate counts and entrant denominators remain raw and ban-inclusive, matching the existing board
 and profile contract; filtering them exactly would require reading the whole board on every request.
 This is the final pre-launch v1 shape, so there is no read-API version bump.
+
+### Saves — `GET /v1/players/{handle}/saves`, `GET /v1/players/{handle}/saves/{ordinal}`
+
+The collection endpoint returns every save known for the player in ascending `save` order. `save` is
+the player's stable first-seen ordinal; `save_id` is the stable 16-character Crockford relabel for
+that player and save. The raw §4.1 career key is install-derived and never appears in a response,
+including a nested board context (PROJ-049). catlog does not receive KSA's save name, so it does not
+pretend to offer one: ordinal and relabel are the only public save identities.
+
+When a save has reported its celestial system, `system` is the friendly complete
+`{"hash", "name", "slug"}` reference used by the other scoped endpoints. A save played entirely
+before system reporting shipped, and not opened since, omits `system`; it does not send `null` or an
+empty object. `system_changed` and `rewound` are provenance marks, emitted only when true. Neither
+changes eligibility, rank, board count or any other result.
+
+`playtime_ms` is the career projection's highest observed valid `sim_t`, converted from seconds to
+milliseconds. It is a simulation-clock high-water mark, not wall-clock elapsed time; an event with
+no `sim_t` still records activity without advancing playtime, and loading an earlier state never
+lowers it. `first` and `last` are server receive times resolved from the immutable event log at the
+save's `first_seq` and `last_seq`. They include non-scoring, flagged and clockless activity and are
+therefore deliberately not derived from the earliest or latest board update. The server batches the
+distinct sequence lookups through `Events.RecvTimes`, because events.db and projections.db cannot be
+joined (PROJ-010). `boards` is the number of that save's `career_stat` rows; it is not a registry
+size, player count or future badge count.
+
+The detail endpoint resolves `{ordinal}` within the named player and returns that save's board rows
+in stat-key order. Each `rank` is its visible positional rank on the career-scope board: the server
+counts all saves with a better value, or the same value and an earlier winning sequence, then
+subtracts **every** qualifying save row belonging to hidden accounts before adding one. A hidden
+player may own several saves, so correcting by hidden players rather than hidden career rows would
+leave gaps and contradict the career leaderboard. `entrants` is the raw, ban-inclusive number of
+save rows on that board — saves, not distinct players. `updated` is the receive time of the winning
+event, and an optional `context` is passed through the same recursive career/kid relabelling and
+install removal as every other public response.
+
+An unknown, retired or banned handle receives the same `404 not_found`, so neither endpoint is a ban
+oracle (PROJ-007). A known player with no such ordinal receives `404 not_found` with
+`catlog has no such save for this player`; it is distinct because the handle was resolved first.
+Successful reads are `200`, and unexpected storage failures are `500 internal`. Both routes use the
+shared public-read wrapper, so successes and errors carry the read CORS policy and
+`Cache-Control: public, s-maxage=30, stale-while-revalidate=300` exactly like the rest of §4.8.
+
+Badge counts are absent, not zero-filled or reserved. They enter these responses only with the badge
+projection and read path; publishing a placeholder beforehand would claim data catlog does not yet
+derive. These are final pre-launch v1 endpoints, so their addition does not bump an earlier public
+contract version.
 
 ### Celestial systems — `GET /v1/systems`, `GET /v1/systems/{slug-or-hash}`
 
