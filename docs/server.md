@@ -197,11 +197,21 @@ byte-identical across events. Rows written either way stay readable, so the swit
 | `proj_checkpoint` | One shared cursor for every fold |
 | `proj_build` | The build stamp: which binary's fold set produced this file (migration 0005) |
 | `player_stat` | `(player_id, stat) → value, context, updated_seq` — every board row |
+| `career_stat` | `(player_id, career, stat) → system, value, context, updated_seq` — the same board keys ranked per save; `system` is denormalised so filtering does not require a join (migration 0006) |
+| `system_stat` | `(player_id, system, stat) → value, context, updated_seq` — board rows ranked within a celestial-system identity (migration 0006) |
 | `flight_state` | Per flight: `flags` bitfield, `ended_reason`, crew, body |
+| `career` | Per save: the sim-time high-water and rewind mark, first/last event seq, eventual public ordinal, and eventual celestial-system identity; `last_seq` advances on every attributed event, including non-scoring and flagged activity |
 | `player_body` | Distinct bodies per player and `kind` — `'soi'` (entered) and `'landed'` (touched down) — plus first-arrival times, which only `'soi'` rows carry |
 | `kitten` | Per-kitten totals folded from `roster.snapshot` |
 | `feed` | The activity feed, capped at 500 rows |
 | `event_census` | One row per `(type, period, bucket)` — what makes `GET /v1/stats` affordable |
+
+`career_stat` has primary key `(player_id, career, stat)`, rank index
+`(stat, value, updated_seq)`, and system-filter index `(stat, system, value, updated_seq)`.
+`system_stat` has primary key `(player_id, system, stat)` and rank index
+`(stat, value, updated_seq)`. Neither table carries a period: a save is already a time scope, and
+crossing careers with rolling buckets would add an unbounded fourth storage dimension. Both tables
+are empty until their board folds land; migration 0006 establishes the final schema first.
 
 `flight_state.flags` is bit0 teleport, bit1 refuel, bit2 resource_edit, bit3 console, bit4 tuning,
 bit5 other. **An unrecognised flag value sets bit5** — failing open would make every future flag a

@@ -47,6 +47,9 @@ type CareerState struct {
 	// Rewound reports that an earlier save of this career has been loaded.
 	Rewound  bool
 	FirstSeq int64
+	// LastSeq is the latest event attributed to this save, whether or not it
+	// carried a clock reading, scored, or belonged to a flagged flight.
+	LastSeq int64
 }
 
 // careerFold maintains `career`. It runs alongside [flightFold], before the

@@ -230,13 +230,15 @@ func tw(body string, surface, orbital, peakG float64) stats.TelemetryWindow {
 // compared by content rather than by rowid so an id offset cannot make two
 // identical feeds look different.
 type snapshot struct {
-	Stats   []string
-	Flights []string
-	Bodies  []string
-	Kittens []string
-	Periods []string
-	Feed    []string
-	Cursor  int64
+	Stats       []string
+	CareerStats []string
+	SystemStats []string
+	Flights     []string
+	Bodies      []string
+	Kittens     []string
+	Periods     []string
+	Feed        []string
+	Cursor      int64
 }
 
 func (r *rig) snapshot() snapshot {
@@ -246,6 +248,12 @@ func (r *rig) snapshot() snapshot {
 		ctx := r.t.Context()
 		var err error
 		if s.Stats, err = dump(ctx, p, `SELECT player_id, stat, value, coalesce(context,''), updated_seq FROM player_stat ORDER BY player_id, stat`); err != nil {
+			return err
+		}
+		if s.CareerStats, err = dump(ctx, p, `SELECT player_id, career, system, stat, value, coalesce(context,''), updated_seq FROM career_stat ORDER BY player_id, career, stat`); err != nil {
+			return err
+		}
+		if s.SystemStats, err = dump(ctx, p, `SELECT player_id, system, stat, value, coalesce(context,''), updated_seq FROM system_stat ORDER BY player_id, system, stat`); err != nil {
 			return err
 		}
 		if s.Flights, err = dump(ctx, p, `SELECT hex(flight_id), player_id, flags, coalesce(ended_reason,''), coalesce(crew,-1), coalesce(body,''), started_seq FROM flight_state ORDER BY hex(flight_id)`); err != nil {
@@ -324,6 +332,13 @@ func diff(t *testing.T, label string, got, want []string) {
 }
 
 // --- the tests ---------------------------------------------------------------
+
+func TestNewScopeTablesStartEmpty(t *testing.T) {
+	snap := newRig(t).snapshot()
+	if len(snap.CareerStats) != 0 || len(snap.SystemStats) != 0 {
+		t.Fatalf("new scope tables are not empty: career=%v system=%v", snap.CareerStats, snap.SystemStats)
+	}
+}
 
 func TestFoldsABatchAndAdvancesTheCheckpoint(t *testing.T) {
 	r := newRig(t)

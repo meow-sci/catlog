@@ -1378,6 +1378,29 @@ Three changes. **Detached**: the endpoint answers `202` with a job and `GET /adm
 
 Polling rather than SSE, deliberately: a rebuild is minutes long and its status is five integers. A second of latency on a progress bar does not justify a subscriber registry and its failure modes.
 
+### PROJ-104 — Career and celestial-system scopes are table dimensions, and a save's last event is provenance independent of scoring
+
+*Accepted · 2026-08-09 · career and system scopes.*
+
+`career_stat(player_id, career, stat, …)` and `system_stat(player_id, system, stat, …)` are sibling
+projection tables rather than compound stat keys. A board key must continue to describe one rule by
+itself: `stats.Describe` derives metadata from that key and `stats.Catalog` groups dynamic families
+by its prefix. Encoding a career or system into the key would force both to parse identity data and
+would multiply an unbounded catalog. A scope is therefore a storage dimension, as periods already
+are (PROJ-042). Career rows deliberately have no period dimension: a save is already a time scope,
+and players × boards × buckets × careers is unbounded storage for a question with no useful meaning.
+
+`career_stat.system` is denormalised so filtering by system is a covered predicate, not a join, and
+`system_stat` keeps comparison between replaceable KSA celestial-system definitions explicit. The
+tables arrive before their writers because projections are rebuilt from the immutable log and the
+fresh final schema is the contract; there is no production history to backfill (PROJ-100).
+
+The `career.last_seq` column advances for every event carrying the career, including events without
+a clock reading, events that do not score, and events on flagged flights. Deriving "last active"
+from a board's `updated_seq` would erase precisely that activity and would leave a save with no score
+undatable. `last_seq` records provenance only; it excludes and scores nothing, and because event seq
+is the server's total order it is deterministic across batch sizes and rebuilds.
+
 ## Archive & restore
 
 The filesystem archiver, the manifest, restore verification, and the R2 design that is deliberately not built.

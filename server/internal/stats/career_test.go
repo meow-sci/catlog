@@ -28,14 +28,16 @@ func wantRow(t *testing.T, got map[string]row, key string, expect row) {
 
 // careerRow reads one row of the `career` table.
 type careerRow struct {
-	maxSimT float64
-	rewound bool
+	maxSimT  float64
+	rewound  bool
+	firstSeq int64
+	lastSeq  int64
 }
 
 func readCareers(t *testing.T, proj *store.Projections) map[string]careerRow {
 	t.Helper()
 	rows, err := proj.Reader().QueryContext(t.Context(),
-		`SELECT career, max_sim_t, rewound FROM career WHERE player_id = 1 ORDER BY career`)
+		`SELECT career, max_sim_t, rewound, first_seq, last_seq FROM career WHERE player_id = 1 ORDER BY career`)
 	if err != nil {
 		t.Fatalf("read career: %v", err)
 	}
@@ -48,7 +50,7 @@ func readCareers(t *testing.T, proj *store.Projections) map[string]careerRow {
 			r       careerRow
 			rewound int64
 		)
-		if err := rows.Scan(&career, &r.maxSimT, &rewound); err != nil {
+		if err := rows.Scan(&career, &r.maxSimT, &rewound, &r.firstSeq, &r.lastSeq); err != nil {
 			t.Fatalf("scan career: %v", err)
 		}
 		r.rewound = rewound != 0
@@ -286,6 +288,52 @@ func TestCareerTracksItsHighWaterMark(t *testing.T) {
 	}
 	if got := careers[otherCareer]; got.maxSimT != 9 || got.rewound {
 		t.Errorf("career %s = %+v, want max_sim_t 9 and no mark", otherCareer, got)
+	}
+}
+
+func TestCareerTracksEveryAttributedEventAsActivity(t *testing.T) {
+	proj := testutil.MemProjections(t)
+	apply(t, proj, []input{
+		{typ: "session.started", payload: stats.SessionStarted{ModVer: "0.1.0"}, simT: 100},
+		// Flagged activity does not score, but it is still activity in this save.
+		{flight: flightN(1), typ: "flight.flagged", payload: stats.FlightFlagged{Flag: "teleport"}, noSimT: true},
+	}, 0, false)
+
+	got := readCareers(t, proj)[defaultCareer]
+	if got.firstSeq != 1 || got.lastSeq != 2 {
+		t.Errorf("career seq range = %d..%d, want 1..2", got.firstSeq, got.lastSeq)
+	}
+	if got.maxSimT != 100 {
+		t.Errorf("max_sim_t = %v, want 100 — a clockless event is activity, not a clock reading", got.maxSimT)
+	}
+	if got := readStats(t, proj); len(got) != 0 {
+		t.Errorf("the activity fixture unexpectedly scored: %v", got)
+	}
+}
+
+func TestCareerLastSeqIsStableAcrossBatchBoundaries(t *testing.T) {
+	in := []input{
+		{flight: flightN(1), typ: "vehicle.staging", payload: stats.VehicleStaging{StageIndex: 0}, simT: 500},
+		// A lower clock must still advance last_seq, while max_sim_t stays put.
+		{flight: flightN(1), typ: "telemetry.window", payload: stats.TelemetryWindow{T0Sim: 400, T1Sim: 450, Body: "earth"}, simT: 450},
+		{flight: flightN(1), typ: "flight.flagged", payload: stats.FlightFlagged{Flag: "console"}, noSimT: true},
+	}
+
+	oneBatch := testutil.MemProjections(t)
+	apply(t, oneBatch, in, 0, false)
+
+	separateBatches := testutil.MemProjections(t)
+	for i := range in {
+		apply(t, separateBatches, in[i:i+1], int64(i), false)
+	}
+
+	want := readCareers(t, oneBatch)[defaultCareer]
+	got := readCareers(t, separateBatches)[defaultCareer]
+	if got != want {
+		t.Errorf("career differs across batch boundaries: got %+v, want %+v", got, want)
+	}
+	if got.firstSeq != 1 || got.lastSeq != 3 || got.maxSimT != 500 {
+		t.Errorf("career = %+v, want first_seq 1, last_seq 3, max_sim_t 500", got)
 	}
 }
 

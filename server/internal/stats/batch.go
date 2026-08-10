@@ -343,6 +343,7 @@ type careerEntry struct {
 	maxSimT  float64
 	rewound  bool
 	firstSeq int64
+	lastSeq  int64
 	exists   bool
 	dirty    bool
 }
@@ -354,8 +355,8 @@ func (b *Batch) careerEntry(ctx context.Context, k careerKey) (*careerEntry, err
 	e := &careerEntry{}
 	var rewound int64
 	err := b.tx.QueryRowContext(ctx,
-		`SELECT max_sim_t, rewound, first_seq FROM career WHERE player_id = ? AND career = ?`,
-		k.playerID, k.career).Scan(&e.maxSimT, &rewound, &e.firstSeq)
+		`SELECT max_sim_t, rewound, first_seq, last_seq FROM career WHERE player_id = ? AND career = ?`,
+		k.playerID, k.career).Scan(&e.maxSimT, &rewound, &e.firstSeq, &e.lastSeq)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 	case err != nil:
@@ -374,7 +375,8 @@ func (b *Batch) touchCareer(k careerKey, e *careerEntry) {
 	}
 }
 
-// EnsureCareer creates the career's row if it has none.
+// EnsureCareer creates the career's row if it has none and records this event
+// as its latest activity, even when the event has no clock reading or score.
 func (b *Batch) EnsureCareer(ctx context.Context, playerID int64, career string, seq int64) error {
 	k := careerKey{playerID, career}
 	e, err := b.careerEntry(ctx, k)
@@ -383,8 +385,9 @@ func (b *Batch) EnsureCareer(ctx context.Context, playerID int64, career string,
 	}
 	if !e.exists {
 		e.exists, e.maxSimT, e.rewound, e.firstSeq = true, 0, false, seq
-		b.touchCareer(k, e)
 	}
+	e.lastSeq = seq
+	b.touchCareer(k, e)
 	return nil
 }
 
@@ -405,7 +408,7 @@ func (b *Batch) MarkRewound(ctx context.Context, playerID int64, career string, 
 }
 
 // AdvanceCareer raises the career's high-water mark, creating the row if it has
-// none.
+// none, and always records this event as the career's latest activity.
 func (b *Batch) AdvanceCareer(ctx context.Context, playerID int64, career string, simT float64, seq int64) error {
 	k := careerKey{playerID, career}
 	e, err := b.careerEntry(ctx, k)
@@ -417,9 +420,8 @@ func (b *Batch) AdvanceCareer(ctx context.Context, playerID int64, career string
 		e.exists, e.maxSimT, e.rewound, e.firstSeq = true, simT, false, seq
 	case simT > e.maxSimT:
 		e.maxSimT = simT
-	default:
-		return nil
 	}
+	e.lastSeq = seq
 	b.touchCareer(k, e)
 	return nil
 }
@@ -429,15 +431,15 @@ func (b *Batch) flushCareers(ctx context.Context) error {
 		return nil
 	}
 	slices.SortFunc(b.dirtyCareers, compareCareerKey)
-	err := b.write(ctx, len(b.dirtyCareers), 5,
-		`INSERT INTO career (player_id, career, max_sim_t, rewound, first_seq) VALUES `,
+	err := b.write(ctx, len(b.dirtyCareers), 6,
+		`INSERT INTO career (player_id, career, max_sim_t, rewound, first_seq, last_seq) VALUES `,
 		` ON CONFLICT (player_id, career) DO UPDATE SET
-		   max_sim_t = excluded.max_sim_t, rewound = excluded.rewound`,
+		   max_sim_t = excluded.max_sim_t, rewound = excluded.rewound, last_seq = excluded.last_seq`,
 		func(i int, args []any) []any {
 			k := b.dirtyCareers[i]
 			e := b.careers[k]
 			e.dirty = false
-			return append(args, k.playerID, k.career, e.maxSimT, boolInt(e.rewound), e.firstSeq)
+			return append(args, k.playerID, k.career, e.maxSimT, boolInt(e.rewound), e.firstSeq, e.lastSeq)
 		})
 	if err != nil {
 		return fmt.Errorf("stats: flush career: %w", err)
@@ -454,7 +456,7 @@ func (b *Batch) Career(ctx context.Context, playerID int64, career string) (Care
 	}
 	return CareerState{
 		PlayerID: playerID, Career: career,
-		MaxSimT: e.maxSimT, Rewound: e.rewound, FirstSeq: e.firstSeq,
+		MaxSimT: e.maxSimT, Rewound: e.rewound, FirstSeq: e.firstSeq, LastSeq: e.lastSeq,
 	}, true, nil
 }
 

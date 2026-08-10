@@ -104,18 +104,23 @@ func TestMigrationsCreateTheFullDDL(t *testing.T) {
 	t.Run("projections", func(t *testing.T) {
 		p := testutil.Projections(t)
 		want := []string{
-			"career", "event_census", "feed", "flight_state", "kitten", "player_body",
+			"career", "career_stat", "event_census", "feed", "flight_state", "kitten", "player_body",
 			"player_stat", "player_stat_period", "proj_build", "proj_checkpoint", "schema_version",
+			"system_stat",
 		}
 		if got := tableNames(t, p.DB); !equal(got, want) {
 			t.Errorf("tables = %v, want %v", got, want)
 		}
 		wantIdx := []string{
+			"career_stat_rank", "career_stat_system",
 			"census_busiest", "census_window",
-			"fs_player", "stat_period_age", "stat_period_rank", "stat_rank",
+			"fs_player", "stat_period_age", "stat_period_rank", "stat_rank", "system_stat_rank",
 		}
 		if got := indexNames(t, p.DB); !equal(got, wantIdx) {
 			t.Errorf("indexes = %v, want %v", got, wantIdx)
+		}
+		if p.Version != 6 {
+			t.Errorf("schema version = %d, want 6", p.Version)
 		}
 	})
 }
@@ -193,6 +198,25 @@ func TestMigrationsRunOnMemoryStores(t *testing.T) {
 	}
 	if e.Path() != store.MemoryPath {
 		t.Errorf("path = %q, want %q", e.Path(), store.MemoryPath)
+	}
+}
+
+func TestProjectionCountsIncludeScopeTables(t *testing.T) {
+	p := testutil.MemProjections(t)
+	for _, stmt := range []string{
+		`INSERT INTO career_stat (player_id, career, stat, value, updated_seq) VALUES (1, 'testcareer000001', 'landings', 2, 1)`,
+		`INSERT INTO system_stat (player_id, system, stat, value, updated_seq) VALUES (1, 'testsystem000001', 'landings', 2, 1)`,
+	} {
+		if _, err := p.Writer().ExecContext(t.Context(), stmt); err != nil {
+			t.Fatalf("seed projection scope count: %v", err)
+		}
+	}
+	c, err := p.Counts(t.Context())
+	if err != nil {
+		t.Fatalf("counts: %v", err)
+	}
+	if c.CareerStat != 1 || c.SystemStat != 1 {
+		t.Errorf("scope counts = career %d, system %d; want 1, 1", c.CareerStat, c.SystemStat)
 	}
 }
 

@@ -703,6 +703,8 @@ func scanCensusRows(rows *sql.Rows) ([]CensusRow, error) {
 // ProjectionCounts is the row census `GET /admin/stats` reports (§5.9).
 type ProjectionCounts struct {
 	PlayerStat  int64 `json:"player_stat"`
+	CareerStat  int64 `json:"career_stat"`
+	SystemStat  int64 `json:"system_stat"`
 	FlightState int64 `json:"flight_state"`
 	PlayerBody  int64 `json:"player_body"`
 	Career      int64 `json:"career"`
@@ -733,6 +735,8 @@ func (p *Projections) Counts(ctx context.Context) (ProjectionCounts, error) {
 		dst *int64
 	}{
 		{`SELECT count(*) FROM player_stat`, &c.PlayerStat},
+		{`SELECT count(*) FROM career_stat`, &c.CareerStat},
+		{`SELECT count(*) FROM system_stat`, &c.SystemStat},
 		{`SELECT count(*) FROM flight_state`, &c.FlightState},
 		{`SELECT count(*) FROM player_body`, &c.PlayerBody},
 		{`SELECT count(*) FROM career`, &c.Career},
