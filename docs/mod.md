@@ -91,6 +91,10 @@ changes and phantom orbit-achieved edges, and those score.
 - **Telemetry windows are half-open in sim time** — a window opened at `t0` covers `t0 ≤ t < t0+30`,
   and a flight ending flushes its partial window before `flight.ended`, so the seconds before a RUD
   are not discarded.
+- **RUD facts are captured in the existing `Universe.DestroyVehicleFromEvent` prefix**, while the
+  whole vehicle is still intact. `part_count` is `Vehicle.Parts.Count` at that boundary and falls
+  back to 0 if the read fails. KSA reports the whole-vehicle destruction; it does not supply an
+  individual event for every part that explodes or breaks away.
 - **`peak_g` and `max_q_pa` are omitted, never zeroed**, when the frame carried no reading. The game
   writes that struct only under full physics, so an all-zero reading means "no data this step" — and
   reporting zero would corrupt the board with fake minima. **`lat`, `lon` and `radar_alt_m` follow

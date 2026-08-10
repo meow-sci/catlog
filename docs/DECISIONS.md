@@ -2703,6 +2703,24 @@ The spec named `Vehicle.GetRadarAltitude()` as the source for `radar_alt_m`. **I
 
 **Recorded at three sites on purpose** — here, in [ksa-integration.md](ksa-integration.md) §1, and in a long remark on the method — because the failure mode is somebody "simplifying" it back to the obvious one-line call, which compiles, passes every test, produces identical numbers, and costs a terrain fetch per vehicle per tick. Nothing in the test suite would catch that. If a future build makes `GetRadarAltitude()` cheap, the substitution becomes legitimate and this entry is superseded; until then it is not.
 
+### MOD-081 — A RUD's part count measures the intact vehicle, because KSA exposes no per-part destruction event
+
+*Accepted · 2026-08-10 · Task D1.*
+
+KSA's trustworthy observation is `Universe.DestroyVehicleFromEvent`: one whole-vehicle destruction
+boundary, reached while the vehicle and its part tree are still intact. The game then ends the crew
+missions and disposes the vehicle. It exposes no corresponding event for every individual part that
+explodes or breaks away, so describing `part_count` as “parts destroyed” in that sense would claim
+observations the game never made. The honest measurement is `Vehicle.Parts.Count` in the existing
+prefix: the size of the intact vehicle that was lost. A failed read is the non-optional fallback 0,
+and no current fold consumes it.
+
+This is a final-v1 contract correction before launch, not a deployed wire migration. Keeping
+`vehicle.rud` at `ver: 1` follows DOCS-005: there is no public history or old client population to
+upcast, while minting a fictitious v2 would preserve a shape nobody has consumed. The count is
+recorded now because the immutable log cannot recover it later; giving it a board remains a separate
+fold decision.
+
 ## The load harness
 
 `catlog.loadgen`: many randomised players through the real pipeline, and what one laptop actually does.

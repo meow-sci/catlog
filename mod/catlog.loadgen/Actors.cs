@@ -1034,7 +1034,8 @@ internal sealed class MissionActor
                     AltitudeM: altitude,
                     Body: impactBody.Name,
                     // Per D11 physics destruction never kills crew.
-                    CrewCount: _spec.CrewCount));
+                    CrewCount: _spec.CrewCount,
+                    PartCount: _vehicle.PartCount));
                 _signals.Add(new VehicleRemovedSignal(
                     last, _clock.Wall(last), _vehicle.Id, FlightEndReason.Destroyed, _spec.CrewCount));
                 break;

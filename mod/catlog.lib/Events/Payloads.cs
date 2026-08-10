@@ -193,6 +193,7 @@ public sealed record VehicleSoiPayload(
 /// <param name="AltitudeM">Altitude at destruction, in metres.</param>
 /// <param name="Body">Lowercase parent body name.</param>
 /// <param name="CrewCount">Occupied seats (all of whom survive — D11).</param>
+/// <param name="PartCount">Parts on the intact vehicle at destruction.</param>
 /// <param name="Lat">Latitude in degrees, omitted when unreadable.</param>
 /// <param name="Lon">Longitude in degrees, omitted when unreadable.</param>
 public sealed record VehicleRudPayload(
@@ -203,6 +204,7 @@ public sealed record VehicleRudPayload(
     [property: JsonPropertyName("altitude_m")] double AltitudeM,
     [property: JsonPropertyName("body")] string Body,
     [property: JsonPropertyName("crew_count")] int CrewCount,
+    [property: JsonPropertyName("part_count")] int PartCount,
     [property: JsonPropertyName("lat")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     double? Lat,

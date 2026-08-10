@@ -256,6 +256,7 @@ public sealed record VehicleRecoveredSignal(
 /// Occupied seats. Per D11 these kittens all survive: the physics destruction path never calls
 /// <c>KillCrew</c> (<c>docs/ksa-integration.md</c> §4).
 /// </param>
+/// <param name="PartCount">Parts on the intact vehicle at destruction.</param>
 /// <param name="Lat">Latitude in degrees, or null when it could not be read.</param>
 /// <param name="Lon">Longitude in degrees, or null when it could not be read.</param>
 public sealed record RudSignal(
@@ -269,6 +270,7 @@ public sealed record RudSignal(
     double AltitudeM,
     string Body,
     int CrewCount,
+    int PartCount,
     double? Lat = null,
     double? Lon = null) : GameSignal(SimT, WallMs);
 

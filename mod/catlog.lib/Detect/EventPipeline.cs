@@ -298,6 +298,7 @@ public sealed class EventPipeline
                         AltitudeM: rud.AltitudeM,
                         Body: rud.Body,
                         CrewCount: rud.CrewCount,
+                        PartCount: rud.PartCount,
                         Lat: rud.Lat,
                         Lon: rud.Lon)));
                 break;

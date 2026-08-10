@@ -429,9 +429,9 @@ export const EVENTS: CatlogEvent[] = [
     summary: "A vehicle came apart — a Rapid Unscheduled Disassembly.",
     trigger: "event",
     cause:
-      "The game destroys the vehicle. Catlog is told at the moment of destruction, while the vehicle is still whole, so the speed and altitude it records are the real ones.",
+      "The game destroys the whole vehicle. Catlog is told at that boundary, while the vehicle is still intact, so the speed, altitude and part count it records describe that final moment.",
     source:
-      "The destruction event itself carries the cause, the peak g and the peak dynamic pressure the vehicle saw. Speed, altitude and the crew count are read off the vehicle a fraction before it goes.",
+      "The destruction event itself carries the cause, the peak g and the peak dynamic pressure the vehicle saw. Speed, altitude, crew and part counts are read from the intact vehicle a fraction before it goes.",
     fields: [
       {
         key: "cause",
@@ -447,6 +447,11 @@ export const EVENTS: CatlogEvent[] = [
         key: "crew_count",
         unit: "",
         what: "How many kittens were aboard. They all survive this — the game ends their missions rather than killing them.",
+      },
+      {
+        key: "part_count",
+        unit: "",
+        what: "How many parts the whole vehicle had at the moment it was destroyed. This is not a count of individual parts breaking off.",
       },
       {
         key: "lat",

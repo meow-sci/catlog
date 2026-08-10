@@ -122,6 +122,42 @@ func TestBatch001PinsEverySystemCatalogueShape(t *testing.T) {
 	}
 }
 
+func TestBatch001PinsVehicleRUDPartCountAtVersionOne(t *testing.T) {
+	type envelope struct {
+		Type    string                     `json:"type"`
+		Ver     int                        `json:"ver"`
+		Payload map[string]json.RawMessage `json:"payload"`
+	}
+	var found int
+	for _, line := range bytes.Split(bytes.TrimSpace(batch001()), []byte{'\n'}) {
+		var row envelope
+		if err := json.Unmarshal(line, &row); err != nil {
+			t.Fatal(err)
+		}
+		if row.Type != "vehicle.rud" {
+			continue
+		}
+		found++
+		if row.Ver != 1 {
+			t.Errorf("vehicle.rud ver = %d, want 1", row.Ver)
+		}
+		raw, ok := row.Payload["part_count"]
+		if !ok {
+			t.Fatal("vehicle.rud vector has no required part_count")
+		}
+		var count int
+		if err := json.Unmarshal(raw, &count); err != nil {
+			t.Fatal(err)
+		}
+		if count != 31 {
+			t.Errorf("vehicle.rud part_count = %d, want 31", count)
+		}
+	}
+	if found != 1 {
+		t.Errorf("vehicle.rud vector rows = %d, want 1", found)
+	}
+}
+
 // TestGenerateIsByteIdentical is the §4.10 reproducibility contract: two runs
 // into two directories must produce identical bytes, and a third run over an
 // existing directory must change nothing.

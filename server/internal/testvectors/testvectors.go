@@ -669,6 +669,7 @@ func batch001() []byte {
 		payload: map[string]any{
 			"cause": "ground_impact", "peak_g": 12.5, "peak_q_pa": 74500.25,
 			"speed_ms": 312.75, "altitude_m": 0.5, "body": "earth", "crew_count": 1,
+			"part_count": 31,
 		},
 	}, {
 		// A KIA that names the flight it happened on.

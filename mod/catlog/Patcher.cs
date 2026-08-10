@@ -407,6 +407,10 @@ public static class Patcher
                 return;
 
             Destroying.Add(id);
+            // Read crew and parts in this prefix while the vehicle is intact. After this prefix
+            // returns, DestroyVehicleFromEvent tail-calls Universe.DestroyVehicle;
+            // EndAllCrewMissions clears every occupied seat and Dispose tears the parts down in
+            // the same frame.
             runtime.Signal(new RudSignal(
                 simT,
                 wallMs,
@@ -420,6 +424,7 @@ public static class Patcher
                 // §4/D11: everyone survives. EndAllCrewMissions banks the mission and frees the
                 // kitten; the physics path never reaches KillCrew.
                 CrewCount: VehicleTelemetry.CrewCount(vehicle),
+                PartCount: VehicleTelemetry.PartCount(vehicle),
                 // Prefix: the vehicle is fully intact (Universe.cs:1699), so the position is the
                 // position it died at rather than a torn-down zero.
                 Lat: VehicleTelemetry.Latitude(vehicle),

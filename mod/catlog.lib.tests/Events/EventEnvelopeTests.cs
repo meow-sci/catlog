@@ -16,7 +16,7 @@ public sealed class EventEnvelopeTests
             id: "01J9V5M3E8Z0FAKEULID26CHR",
             simT: 12345.678,
             wallMs: 1_770_000_000_123,
-            payload: new VehicleRudPayload("ground_impact", 41.5, 0, 220, 0, "earth", 2, null, null));
+            payload: new VehicleRudPayload("ground_impact", 41.5, 0, 220, 0, "earth", 2, 34, null, null));
 
         using JsonDocument document = JsonDocument.Parse(envelope.ToNdjsonLine());
         JsonElement root = document.RootElement;
@@ -30,6 +30,21 @@ public sealed class EventEnvelopeTests
         Assert.Equal(1_770_000_000_123, root.GetProperty("wall_t").GetInt64());
         Assert.Equal("ground_impact", root.GetProperty("payload").GetProperty("cause").GetString());
         Assert.Equal(41.5, root.GetProperty("payload").GetProperty("peak_g").GetDouble());
+        Assert.Equal(34, root.GetProperty("payload").GetProperty("part_count").GetInt32());
+    }
+
+    [Theory]
+    [InlineData(34)]
+    [InlineData(0)]
+    public void VehicleRud_PartCountIsRequiredAndOrderedBeforePosition(int partCount)
+    {
+        var payload = new VehicleRudPayload(
+            "ground_impact", 41.5, 0, 220, 0, "earth", 2, partCount, null, null);
+
+        Assert.Equal(
+            $"{{\"cause\":\"ground_impact\",\"peak_g\":41.5,\"peak_q_pa\":0,\"speed_ms\":220,"
+            + $"\"altitude_m\":0,\"body\":\"earth\",\"crew_count\":2,\"part_count\":{partCount}}}",
+            CatlogJson.Serialize(payload));
     }
 
     /// <summary>

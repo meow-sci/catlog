@@ -20,6 +20,7 @@ public sealed partial class EventTypesTests
         // other half is an upcaster on the server for every version in between — so the whole
         // set is pinned rather than left implicit.
         Assert.All(EventTypes.All, static type => Assert.Equal(1, EventTypes.VersionOf(type)));
+        Assert.Equal(1, EventTypes.VersionOf(EventTypes.VehicleRud));
     }
 
     [Fact]

@@ -116,6 +116,20 @@ public sealed class EventPipelineTests
             produced.Single(static e => e.Type == EventTypes.VehicleRud).Payload);
         Assert.Equal("ground_impact", rud.Cause);
         Assert.Equal(2, rud.CrewCount);
+        Assert.Equal(17, rud.PartCount);
+    }
+
+    [Fact]
+    public void Rud_PreservesAZeroPartCountReading()
+    {
+        EventPipeline pipeline = TestData.Pipeline();
+        pipeline.ProcessSignal(TestData.Created());
+
+        EventEnvelope envelope = Assert.Single(pipeline.ProcessSignal(TestData.Rud(partCount: 0)));
+        var payload = Assert.IsType<VehicleRudPayload>(envelope.Payload);
+
+        Assert.Equal(0, payload.PartCount);
+        Assert.Equal(1, envelope.Ver);
     }
 
     [Fact]

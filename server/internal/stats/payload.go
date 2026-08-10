@@ -142,6 +142,7 @@ type VehicleRUD struct {
 	AltitudeM float64  `json:"altitude_m"`
 	Body      string   `json:"body"`
 	CrewCount int      `json:"crew_count"`
+	PartCount int      `json:"part_count"`
 	Lat       *float64 `json:"lat"`
 	Lon       *float64 `json:"lon"`
 }

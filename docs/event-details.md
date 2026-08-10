@@ -375,7 +375,7 @@ in `Events/GameSignal.cs`.
 | `VehicleCreatedSignal` (`:171`) | `PolledSignals.Track` (`:94-103`) | `flight.started` + replayed session-wide `flight.flagged` |
 | `VehicleRemovedSignal` (`:188`) | `Patcher.DisposePrefix` (`:537-538`); `PolledSignals.Prune` (`:228`) | `flight.ended` + drained impacts + flushed window |
 | `VehicleRecoveredSignal` (`:200`) | **nothing in the shipped mod** — sim/tests only | `flight.ended` with `reason: recovered` |
-| `RudSignal` (`:217`) | `Patcher.DestroyVehicleFromEventPrefix` (`:393-405`) | `vehicle.rud` + marks the correlator |
+| `RudSignal` (`:262-274`) | `Patcher.DestroyVehicleFromEventPrefix` (`:393-431`) | `vehicle.rud` + marks the correlator |
 | `ImpactSignal` (`:238`) | `Patcher.GroundImpactApplyPostfix` (`:430-440`) | held by the correlator; later `vehicle.impact` |
 | `SplashSignal` (`:259`) | `Patcher.WaterSplashApplyPostfix` (`:469-471`) | converted to an `ImpactSignal` with `launch_pad=false` (`ImpactCorrelator.cs:52-60`) → `vehicle.impact` |
 | `StagingSignal` (`:273`) | `Patcher.ActivateNextSequencePostfix` (`:578`) | `vehicle.staging` |
@@ -1198,49 +1198,60 @@ stat key still counts towards `soi_bodies` and still records `first_sim_t`.
 
 **Wire.** `"vehicle.rud"` (`EventTypes.cs`), `ver` 1, kind 1.
 
-**Payload** — `VehicleRudPayload`, `Payloads.cs:163-176`
+**Payload** — `VehicleRudPayload`, `Payloads.cs:199-213`
 
 | Key | Type | Units | Source |
 |---|---|---|---|
-| `cause` | string | — | `EventTypes.ToWire(rud.Cause)` ← `VehicleTelemetry.MapCause(destructionEvent.Cause)` (`Patcher.cs:397`) |
-| `peak_g` | number | g | `VehicleDestructionEvent.PeakGLoad`, a **`float` `required`** field (`Patcher.cs:398`) |
-| `peak_q_pa` | number | Pa | `VehicleDestructionEvent.PeakDynamicPressure` (`:399`) |
-| `speed_ms` | number | m/s | `Vehicle.GetSurfaceSpeed()` (`:400`) |
-| `altitude_m` | number | m above mean radius | `GetBarometricAltitude()` (`:401`) |
-| `body` | string | — | `VehicleTelemetry.BodyOf(vehicle)` (`:402`) |
-| `crew_count` | int | count | `VehicleTelemetry.CrewCount(vehicle)` (`:405`). **Per D11 all of them survive** — the physics destruction path calls `EndAllCrewMissions` and never `KillCrew` (`:403-404`). |
+| `cause` | string | — | `EventTypes.ToWire(rud.Cause)` ← `VehicleTelemetry.MapCause(destructionEvent.Cause)` (`Patcher.cs:418`) |
+| `peak_g` | number | g | `VehicleDestructionEvent.PeakGLoad`, a **`float` `required`** field (`Patcher.cs:419`) |
+| `peak_q_pa` | number | Pa | `VehicleDestructionEvent.PeakDynamicPressure` (`:420`) |
+| `speed_ms` | number | m/s | `VehicleTelemetry.SurfaceSpeedMs(vehicle)` → `Vehicle.GetSurfaceSpeed()` (`:421`) |
+| `altitude_m` | number | m above mean radius | `VehicleTelemetry.AltitudeM(vehicle)` → `GetBarometricAltitude()` (`:422`) |
+| `body` | string | — | `VehicleTelemetry.BodyOf(vehicle)` (`:423`) |
+| `crew_count` | int | count | `VehicleTelemetry.CrewCount(vehicle)` (`:426`). **Per D11 all of them survive** — the physics destruction path calls `EndAllCrewMissions` and never `KillCrew` (`:424-425`). |
+| `part_count` | int | count | `VehicleTelemetry.PartCount(vehicle)` (`:427`) → `Vehicle.Parts.Count` (`VehicleTelemetry.cs:703-711`), read in the destruction prefix while the whole vehicle is still intact. Non-optional; `0` when the read fails. |
 | `lat` / `lon` | number | degrees | **OPTIONAL — absent when unreadable.** Read in the same prefix, while the vehicle is still intact. Decoded as `*float64` and read by no fold; they are there so the log can say *where* a vehicle was lost. |
 
 `peak_g` / `peak_q_pa` here are **not** the nullable `StructuralLoad`-derived telemetry values. They
 come off the destruction event itself and land in non-nullable payload fields, so a **0 is emitted
 rather than the key omitted** — the opposite of `telemetry.window`'s rule.
 
-**Detector.** `EventPipeline.Dispatch`, `RudSignal` case (`:207-219`). **Order is load-bearing**:
-`_correlator.Destroyed(rud.VehicleId)` is called *first* (`:210`) so an impact recorded earlier in
+**Detector.** `Patcher.DestroyVehicleFromEventPrefix` (`Patcher.cs:393-431`) reads `PartCount` into
+`RudSignal` beside the other intact-vehicle facts; `EventPipeline.Dispatch`, `RudSignal` case
+(`EventPipeline.cs:288-303`), copies it into `VehicleRudPayload`. **Order is load-bearing**:
+`_correlator.Destroyed(rud.VehicleId)` is called *first* (`:291`) so an impact recorded earlier in
 the same frame resolves to `survived = false`.
 
 **Game source.** A **prefix** on `Universe.DestroyVehicleFromEvent(Vehicle, VehicleDestructionEvent)`
-— `KSA/Universe.cs:1699`, `public static`, installed `Patcher.cs:132-134`, body `:376-411`.
+— `KSA/Universe.cs:1699`, `public static`, installed `Patcher.cs:132-134`, body `:393-431`.
 
-- **Prefix, not postfix**: the vehicle is fully intact at prefix time, so speed/altitude/crew/mass
-  reads are valid (`Patcher.cs:129-130`).
+- **Prefix, not postfix**: the vehicle is fully intact at prefix time, so speed, altitude, crew and
+  `Vehicle.Parts.Count` are valid. The game subsequently ends the crew missions and disposes the
+  vehicle, tearing down the object this count describes.
 - Guard `if (vehicle.IsDisposed) return;` mirrors the game's own early return at
-  `KSA/Universe.cs:1701`, so a second call is a no-op rather than a duplicate RUD (`:383-386`).
+  `KSA/Universe.cs:1701`, so a second call is a no-op rather than a duplicate RUD
+  (`Patcher.cs:400-403`).
 - This is the game-thread **apply-side counterpart** of the worker-thread
   `VehicleUpdateTask.DetectStructuralFailure` (`KSA/VehicleUpdateTask.cs:481`), which must **never**
   be patched (`Patcher.cs:18-27`).
+- KSA exposes the destruction of the **whole vehicle** here. It does not expose a trustworthy event
+  for each individual part that explodes or breaks off, so `part_count` is the size of the intact
+  vehicle at its RUD boundary, not a count of separately observed part losses.
 
 **Classification.** **EVENT-DRIVEN.** No debounce, no threshold.
 
 **Dedup.** The `IsDisposed` guard plus the `Destroying` set (`Patcher.cs:392`), which also drives the
 subsequent `flight.ended` reason.
 
-**Server.** `rudFold` (`stats/boards.go:455-481`): on an unflagged flight, `addCount(rud_total, 1)`,
+**Server.** `rudFold` (`stats/boards.go:1066-1090`): on an unflagged flight, `addCount(rud_total, 1)`,
 then `addCount(rud_<cause>, 1)` when `RUDStat(cause)` yields a legal key. A cause that cannot be a
 stat key (empty, > 40 chars, bad charset, or colliding with a fixed key) contributes to `rud_total`
-**only**. Feed: `"{h} lost a vehicle to {causePhrase} on {body} at {speed} m/s"`.
+**only**. `VehicleRUD.PartCount` is decoded and retained with the event but no current fold reads it;
+that remains deliberately unchanged until the later RUD-board task. Feed:
+`"{h} lost a vehicle to {causePhrase} on {body} at {speed} m/s"`.
 
-**Vectors.** `batch-001.ndjson` line 29 — `lat` / `lon` **absent**, and `peak_g` / `peak_q_pa` written as numbers rather than omitted.
+**Vectors.** `batch-001.ndjson` line 29 — `part_count: 31`, `lat` / `lon` **absent**, and
+`peak_g` / `peak_q_pa` written as numbers rather than omitted.
 
 ---
 
@@ -2468,7 +2479,7 @@ first*.
   with a lag.
 - `orbits_achieved` (`:910-925`): `vehicle.orbit` with `phase == "achieved"` only; `escaped` counts
   nothing.
-- `rud_total` / `rud_<cause>` (`:881-908`): see [`vehicle.rud`](#vehiclerud).
+- `rud_total` / `rud_<cause>` (`:1066-1090`): see [`vehicle.rud`](#vehiclerud).
 - `kittens_recovered` (`:1010-1026`): `flight.ended` with `reason == "recovered" && crew_count >= 1`
   → `addCount(+float64(CrewCount))`. **It adds the crew count, not 1.**
 - `soi_bodies` (`:927-950`) and `landed_bodies` (`:952-982`): `b.AddBody(...)` reports whether the
@@ -2916,7 +2927,7 @@ rather than on Go map order, so a rebuild reproduces the incremental `context` b
 |---|---|
 | `batches/batch-001.ndjson` | 32 envelopes, one line each |
 | `batches/batch-001.br` | the Brotli body as sent |
-| `batches/batch-001.bh.txt` | `rrXHe1-7I0vk1N6YCK9D5oRHlebYVv_5nvgx3Jpas2E` — base64url SHA-256 of the compressed body |
+| `batches/batch-001.bh.txt` | `SHA1MlQrNEQwN71JLQ465EGitCoHvPjzqYQaC_flzRA` — base64url SHA-256 of the compressed body |
 | `keys/*`, `license/*`, `proofs/*`, `expected/verify-results.json` | the credential / JWS layer, not events |
 
 **Covered by a vector: 25 of 25.** Every registered type appears at least once, at the `ver` the
@@ -3038,7 +3049,7 @@ that the code is wrong.**
     `vehicle.situation`. What is left is smaller and deliberate: `vehicle.undocked` and
     `vehicle.docked.other_flight` fold into nothing; `engine.shutdown` decodes and counts nothing;
     `engine.*.engine` / `.count`, `kitten.eva_*.kid`, `vehicle.situation.orbital_speed_ms`,
-    `vehicle.rud.peak_g` / `.peak_q_pa` / `.altitude_m` / `.crew_count`, `roster.snapshot`'s
+    `vehicle.rud.peak_g` / `.peak_q_pa` / `.altitude_m` / `.crew_count` / `.part_count`, `roster.snapshot`'s
     `fastest_ms` (deliberately — ecliptic frame) / `.mission_time_s` / `.kia`, `telemetry.window`'s
     `accel_ms2` / `mass_kg_last` / `n` / `t0_sim` and every aggregate member no board takes, and
     `session.started.*` are all decoded and read by no fold.

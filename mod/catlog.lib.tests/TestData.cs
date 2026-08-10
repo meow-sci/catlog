@@ -141,8 +141,9 @@ internal static class TestData
         double speedMs = 62,
         double altitudeM = 0,
         string body = "earth",
-        int crewCount = 2)
-        => new(simT, WallMs, vehicleId, cause, peakG, peakQPa, speedMs, altitudeM, body, crewCount);
+        int crewCount = 2,
+        int partCount = 17)
+        => new(simT, WallMs, vehicleId, cause, peakG, peakQPa, speedMs, altitudeM, body, crewCount, partCount);
 
     internal static VehicleCreatedSignal Created(
         string vehicleId = "v1",

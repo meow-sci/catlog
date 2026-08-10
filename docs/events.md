@@ -82,7 +82,7 @@ Kitten identity: `kid` = lowercase Crockford base32 of the first 10 bytes of `SH
 | `vehicle.atmosphere` | `{"dir": "entered"\|"exited", "body": s, "speed_ms": f, "dyn_pressure_pa": f}` |
 | `vehicle.orbit` | `{"phase": "achieved"\|"escaped", "body": s, "ap_m": f, "pe_m": f, "ecc": f, "inc_deg": f, "mass_kg": f}` — `mass_kg` is the mass at the instant the milestone fired |
 | `vehicle.soi` | `{"from_body": s, "to_body": s}` |
-| `vehicle.rud` | `{"cause": "ground_impact"\|"ocean_impact"\|"collision"\|"excessive_g_force"\|"aerodynamic_forces"\|"hydrodynamic_forces", "peak_g": f, "peak_q_pa": f, "speed_ms": f, "altitude_m": f, "body": s, "crew_count": i, "lat": f?, "lon": f?}` |
+| `vehicle.rud` | `{"cause": "ground_impact"\|"ocean_impact"\|"collision"\|"excessive_g_force"\|"aerodynamic_forces"\|"hydrodynamic_forces", "peak_g": f, "peak_q_pa": f, "speed_ms": f, "altitude_m": f, "body": s, "crew_count": i, "part_count": i, "lat": f?, "lon": f?}` |
 | `vehicle.impact` | `{"speed_ms": f, "energy_j": f, "survived": b, "launch_pad": b, "body": s, "crew_count": i, "lat": f?, "lon": f?}` — `survived` = no destruction of the same vehicle in that frame **or the next** (mod-computed, §7.2) |
 | `vehicle.landed` | `{"body": s, "vertical_speed_ms": f, "horizontal_speed_ms": f, "crew_count": i, "survived": b, "radar_alt_m": f?, "lat": f?, "lon": f?}` — `vertical_speed_ms` is **positive downwards**; `survived` is the same one-full-frame hold as `vehicle.impact` |
 | `vehicle.staging` | `{"stage_index": i}` |
@@ -135,14 +135,16 @@ absence. `ccf_to_cce_t0` is finite and normalised; because `q` and `-q` are the 
 first non-zero component in `w,x,y,z` order is positive, and every negative zero is written as
 positive zero.
 
-**An unreadable value never scores.** Three keys read as a defined fallback rather than being
-omitted, and every board that reads one gates it, because the fallback is indistinguishable from a
-real reading of the same number:
+**An unreadable value never scores.** The first three keys below are non-optional and read as a
+defined numeric fallback; every current board that reads one gates that fallback because it is
+indistinguishable from a real reading of the same number. The final key is optional and is omitted
+instead. `vehicle.rud.part_count` is not read by any fold yet:
 
 | key | reads as when the mod could not say | what stops it scoring |
 |---|---|---|
 | `vehicle.orbit.mass_kg` | `0` | `heaviest_to_orbit` requires `> 0` |
 | `flight.started.stage_count` | `0` | `biggest_stack` requires `> 0` |
+| `vehicle.rud.part_count` | `0` | no current fold reads it |
 | `telemetry.window.radar_alt_m` | absent | `lowest_pass` refuses the absent aggregate, then requires `min > 0` |
 
 **Optional keys — omit, never zero.** `lat`, `lon` and `radar_alt_m` (on `vehicle.situation`,
