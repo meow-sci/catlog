@@ -199,7 +199,7 @@ byte-identical across events. Rows written either way stay readable, so the swit
 | `player_stat` | `(player_id, stat) → value, context, updated_seq` — every board row |
 | `career_stat` | `(player_id, career, stat) → system, value, context, updated_seq` — the same board keys ranked per save; `system` is denormalised so filtering does not require a join (migration 0006) |
 | `system_stat` | `(player_id, system, stat) → value, context, updated_seq` — board rows ranked within a celestial-system identity (migration 0006) |
-| `flight_state` | Per flight: `flags` bitfield, `ended_reason`, crew, body, nullable flight-start `engine_count` (migration 0009) |
+| `flight_state` | Per flight: exclusion flags, ending/launch facts, first nonempty career, and set-only achievement milestones. Migration 0009 owns nullable `engine_count`; migration 0010 adds `milestones`, `part_count`, `launch_mass_kg` and `career` |
 | `career` | Per save: sim-time high-water and rewind mark, first/last event seq, public ordinal, first celestial-system identity and non-punitive `system_changed` provenance mark; `last_seq` advances on every attributed event, including non-scoring and flagged activity |
 | `player_body` | Distinct bodies per player and `kind` — `'soi'` (entered) and `'landed'` (touched down) — plus first-arrival times, which only `'soi'` rows carry |
 | `career_body` | Distinct bodies per save and `kind`, with the career's system identity denormalised for union-across-saves system counts; its novelty signal is independent of `player_body` (migration 0007) |
@@ -269,6 +269,33 @@ event has not been folded or its KSA read was absent, explicit 0 means the vehic
 with no installed rocket engine, and a positive value is the installed count. No current board fold
 reads the column; retaining the launch fact now is what lets a later challenge remain a projection
 of the immutable log rather than an inference from subsequent motion.
+
+Migration `0010_flight_facts.sql` adds `milestones INTEGER NOT NULL DEFAULT 0`, nullable
+`part_count INTEGER`, nullable `launch_mass_kg REAL`, and `career TEXT NOT NULL DEFAULT ''`.
+`engine_count` is deliberately not repeated there: migration 0009 already owns it. On a decoded
+`flight.started`, `StartFlight` records crew, body, the exact absent/0/positive engine count, part
+count, launch mass and `started_seq`. Until that event is observed the three launch-fact columns are
+SQL `NULL` and `started_seq` is 0. `EnsureFlight` runs for every flight-bearing event and retains the
+first nonempty career; neither a later empty value nor a later event replaces it.
+
+`milestones` records set-only historical facts, separate from exclusion `flags`: bit 0 orbit
+achieved, bit 1 atmosphere exited, bit 2 entered an SOI other than the known launch body, bit 3
+survived a landing, bit 4 docked. `MarkFlightMilestone` only ORs a bit, so neither incremental fold
+order nor a rebuild can clear an observed achievement. `MilestoneOtherSOI` is conservative: the SOI
+event may set it only when a real `flight.started` has already supplied a nonempty launch body at
+`started_seq <= event.seq`, and `to_body` differs. An early SOI is never retroactively upgraded when
+the start arrives. The raw orbit bit is different: any decoded `phase == "achieved"` sets it even if
+the start event is later; start ordering applies only when a consumer needs a start fact.
+
+The batch cache keys each `flightEntry` by flight id and carries the other eleven columns in the
+entry. Its read-through `SELECT`, `FlightState`, sorted dirty-id flush and 12-placeholder
+`INSERT … ON CONFLICT DO UPDATE` use the same order: `player_id, flags, ended_reason, crew, body,
+started_seq, engine_count, milestones, part_count, launch_mass_kg, career` after `flight_id`. This is
+load-bearing: pending events in one
+projector batch must see the same accumulated facts and milestone bits that a subsequent batch reads
+from SQL. `FlightState.HasStartFactAt(candidateSeq, factValid)` is the shared fact-order predicate:
+an actual start exists, its sequence is not later than the candidate, and the nullable fact needed by
+that consumer is present.
 
 ## §5.5 Ingest pipeline
 

@@ -123,8 +123,8 @@ func TestMigrationsCreateTheFullDDL(t *testing.T) {
 		if got := indexNames(t, p.DB); !equal(got, wantIdx) {
 			t.Errorf("indexes = %v, want %v", got, wantIdx)
 		}
-		if p.Version != 9 {
-			t.Errorf("schema version = %d, want 9", p.Version)
+		if p.Version != 10 {
+			t.Errorf("schema version = %d, want 10", p.Version)
 		}
 		rows, err := p.Reader().QueryContext(t.Context(), `PRAGMA table_info(flight_state)`)
 		if err != nil {
@@ -150,6 +150,10 @@ func TestMigrationsCreateTheFullDDL(t *testing.T) {
 			"body TEXT null=true default= pk=0",
 			"started_seq INTEGER null=false default= pk=0",
 			"engine_count INTEGER null=true default= pk=0",
+			"milestones INTEGER null=false default=0 pk=0",
+			"part_count INTEGER null=true default= pk=0",
+			"launch_mass_kg REAL null=true default= pk=0",
+			"career TEXT null=false default='' pk=0",
 		}
 		if !slices.Equal(columns, wantColumns) {
 			t.Errorf("flight_state columns = %v, want %v", columns, wantColumns)

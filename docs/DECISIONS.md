@@ -1670,6 +1670,34 @@ binding to an old event would invent evidence and become especially misleading a
 bounded projection counts make adoption and catalogue scale observable and distinguish surveyed
 bodies from `collection.bodies`, which counts places players actually reached.
 
+### PROJ-114 — Flight join state retains launch facts and set-only milestones without repeating them on the wire
+
+*Accepted · 2026-08-10 · Task D5.*
+
+A flight is already the natural join key between its beginning and everything it later does.
+Repeating engine count on every SOI event or kitten identities on every orbit event would spend the
+player's game-thread and wire budget restating immutable launch facts. `flight_state` already exists
+for exactly this join—boards use its body and flags—so it now retains the remaining launch facts,
+the first nonempty career, and five achievement bits. Migration 0009 remains the sole owner of
+nullable engine count; migration 0010 adds part count, launch mass, career and milestones rather
+than disguising the extension as another payload change.
+
+Milestones are set-only historical facts, deliberately separate from exclusion flags. Orbit
+achieved, atmosphere exited, survived landing and docking each OR one bit and nothing ever clears
+it. That makes incremental accumulation and a replay of the immutable log converge without an
+award table or mutation history. “Other SOI” is stricter because it is a comparison with launch:
+the launch body must already be known from an actual start no later than the SOI event, and the
+destination must differ. An early SOI remains unmarked when the later start arrives; retro-awarding
+would let rebuild use knowledge the incremental path did not have.
+
+The same ordering rule governs every future composite that needs a nullable launch fact:
+`StartedSeq > 0`, `StartedSeq <= candidate.Seq`, and that fact is present. This is intentionally
+conservative for incomplete or out-of-order logs. It can decline a candidate whose facts become
+known later, but it cannot award one only because rebuild pass 1 saw the future. Raw milestones that
+need no launch fact—an early orbit achievement included—still accumulate normally. The asymmetry is
+what keeps rebuild deterministic without pretending event order was better than the stored log.
+The retained facts and bits are inputs only: D5 adds no badge, board or player-visible award.
+
 ## Archive & restore
 
 The filesystem archiver, the manifest, restore verification, and the R2 design that is deliberately not built.

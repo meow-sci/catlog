@@ -288,7 +288,7 @@ func (r *rig) snapshot() snapshot {
 		if s.SystemStats, err = dump(ctx, p, `SELECT player_id, system, stat, value, context, updated_seq FROM system_stat ORDER BY player_id, system, stat`); err != nil {
 			return err
 		}
-		if s.Flights, err = dump(ctx, p, `SELECT hex(flight_id), player_id, flags, ended_reason, crew, body, started_seq, engine_count FROM flight_state ORDER BY hex(flight_id)`); err != nil {
+		if s.Flights, err = dump(ctx, p, `SELECT hex(flight_id), player_id, flags, ended_reason, crew, body, started_seq, engine_count, milestones, part_count, launch_mass_kg, career FROM flight_state ORDER BY hex(flight_id)`); err != nil {
 			return err
 		}
 		if s.Bodies, err = dump(ctx, p, `SELECT player_id, kind, body, first_seq, first_sim_t FROM player_body ORDER BY player_id, kind, body`); err != nil {
@@ -646,10 +646,64 @@ func TestBatchSizeDoesNotChangeTheProjection(t *testing.T) {
 		t.Fatal("the fixture produced no stats, so the comparison proved nothing")
 	}
 
-	for _, batchSize := range []int{2, 3, 17, 1000} {
+	for _, batchSize := range []int{2, 3, 17, projector.DefaultBatchSize, 10_000} {
 		t.Run(fmt.Sprintf("batch=%d", batchSize), func(t *testing.T) {
 			got := fold(t, batchSize)
 			diffSnapshot(t, got, want, false)
+		})
+	}
+}
+
+func TestFlightFactsMatchAcrossBatchBoundariesAndRebuild(t *testing.T) {
+	const career = "flight-facts-career"
+	history := func() []store.Event {
+		f := flight(490)
+		earlyOnly := flight(491)
+		return []store.Event{
+			// The orbit bit is a raw historical fact even before a start. The
+			// early SOI cannot use a launch body and must never be retro-awarded.
+			inCareer(ev(f, "vehicle.orbit", stats.VehicleOrbit{Phase: "achieved"}, 1), career),
+			inCareer(ev(f, "vehicle.soi", stats.VehicleSOI{ToBody: "luna"}, 2), career),
+			inCareer(ev(f, "flight.started", stats.FlightStarted{
+				Body: "earth", MassKg: 1250.5, PartCount: 12, EngineCount: intp(2),
+			}, 3), career),
+			inCareer(ev(f, "vehicle.atmosphere", stats.VehicleAtmosphere{Dir: "exited"}, 4), career),
+			inCareer(ev(f, "vehicle.landed", stats.VehicleLanded{Survived: true}, 5), career),
+			inCareer(ev(f, "vehicle.docked", stats.VehicleDock{}, 6), career),
+			inCareer(ev(f, "vehicle.soi", stats.VehicleSOI{ToBody: "luna"}, 7), career),
+			// This second flight never gets a post-start SOI. Its early SOI must
+			// remain declined after both incremental projection and rebuild.
+			inCareer(ev(earlyOnly, "vehicle.orbit", stats.VehicleOrbit{Phase: "achieved"}, 8), career),
+			inCareer(ev(earlyOnly, "vehicle.soi", stats.VehicleSOI{ToBody: "duna"}, 9), career),
+			inCareer(ev(earlyOnly, "flight.started", stats.FlightStarted{
+				Body: "earth", MassKg: 10, PartCount: 1,
+			}, 10), career),
+		}
+	}
+	fold := func(t *testing.T, batchSize int) snapshot {
+		t.Helper()
+		r := newRig(t, func(o *projector.Options) { o.BatchSize = batchSize })
+		p := r.player("flightfacts")
+		r.ship(p, history()...)
+		r.drain()
+		incremental := r.snapshot()
+		if len(incremental.Flights) != 2 || !strings.Contains(incremental.Flights[0],
+			"milestones=31 part_count=12 launch_mass_kg=1250.5 career="+career) {
+			t.Fatalf("flight facts fixture is not fully populated: %v", incremental.Flights)
+		}
+		if !strings.Contains(incremental.Flights[1],
+			"milestones=1 part_count=1 launch_mass_kg=10 career="+career) {
+			t.Fatalf("early SOI was retro-awarded or early orbit was lost: %v", incremental.Flights)
+		}
+		r.rebuild()
+		diffSnapshot(t, r.snapshot(), incremental, false)
+		return incremental
+	}
+
+	want := fold(t, 1)
+	for _, batchSize := range []int{projector.DefaultBatchSize, 10_000} {
+		t.Run(fmt.Sprintf("batch=%d", batchSize), func(t *testing.T) {
+			diffSnapshot(t, fold(t, batchSize), want, false)
 		})
 	}
 }

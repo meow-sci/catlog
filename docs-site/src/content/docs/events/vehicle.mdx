@@ -185,3 +185,27 @@ event exists so that the piece which split off has a properly-framed flight of i
 own. Its flight-start facts are read again too, including how many rocket engines
 that piece has after the split; shedding an engine therefore starts a new flight
 for the piece that continues rather than changing the count on the old one.
+
+## What a flight achieved
+
+Catlog remembers five yes-or-no facts about each flight once they happen:
+
+- it achieved orbit;
+- it left an atmosphere;
+- it entered a different world's sphere of influence from the world where it
+  began;
+- it landed and survived; or
+- it docked.
+
+Once observed, an achievement stays part of that flight's history. An escape does
+not erase an earlier orbit, and a later crash does not erase a landing the vehicle
+survived before it. “Another world” is deliberately conservative: catlog only
+records it when the flight's starting world was already known at the time of the
+arrival. If the beginning arrives later in an incomplete or out-of-order history,
+the arrival is not rewritten after the fact.
+
+<Aside type="note" title="Building blocks, not badges yet">
+  No current badge or leaderboard reads these five remembered facts. They are retained now so a
+  future achievement can be derived from the flight history instead of asking the game mod to send
+  the same information again.
+</Aside>

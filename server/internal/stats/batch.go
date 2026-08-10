@@ -231,13 +231,17 @@ func (b *Batch) bucketsFor(recvMS int64) []string {
 // --- flight_state -------------------------------------------------------------
 
 type flightEntry struct {
-	playerID    int64
-	flags       int64
-	reason      sql.NullString
-	crew        sql.NullInt64
-	body        sql.NullString
-	startedSeq  int64
-	engineCount sql.NullInt64
+	playerID     int64
+	flags        int64
+	reason       sql.NullString
+	crew         sql.NullInt64
+	body         sql.NullString
+	startedSeq   int64
+	engineCount  sql.NullInt64
+	milestones   int64
+	partCount    sql.NullInt64
+	launchMassKg sql.NullFloat64
+	career       string
 
 	// exists reports that a row exists — in the database, or pending here.
 	exists bool
@@ -249,6 +253,8 @@ func (e *flightEntry) state(id ids.ID) FlightState {
 		FlightID: id, PlayerID: e.playerID, Flags: e.flags,
 		EndedReason: e.reason.String, Crew: e.crew, Body: e.body.String,
 		StartedSeq: e.startedSeq, EngineCount: e.engineCount,
+		Milestones: e.milestones, PartCount: e.partCount,
+		LaunchMassKg: e.launchMassKg, Career: e.career,
 	}
 }
 
@@ -267,8 +273,8 @@ func (b *Batch) flightEntry(ctx context.Context, id ids.ID) (*flightEntry, error
 	}
 	e := &flightEntry{}
 	err := b.tx.QueryRowContext(ctx,
-		`SELECT player_id, flags, ended_reason, crew, body, started_seq, engine_count FROM flight_state WHERE flight_id = ?`,
-		ids.Bytes(id)).Scan(&e.playerID, &e.flags, &e.reason, &e.crew, &e.body, &e.startedSeq, &e.engineCount)
+		`SELECT player_id, flags, ended_reason, crew, body, started_seq, engine_count, milestones, part_count, launch_mass_kg, career FROM flight_state WHERE flight_id = ?`,
+		ids.Bytes(id)).Scan(&e.playerID, &e.flags, &e.reason, &e.crew, &e.body, &e.startedSeq, &e.engineCount, &e.milestones, &e.partCount, &e.launchMassKg, &e.career)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 	case err != nil:
@@ -289,21 +295,25 @@ func (b *Batch) touchFlight(id ids.ID, e *flightEntry) {
 
 // EnsureFlight creates the flight's row if it has none, standing in for the
 // `INSERT OR IGNORE` every flight-bearing event ran.
-func (b *Batch) EnsureFlight(ctx context.Context, id ids.ID, playerID, seq int64) error {
+func (b *Batch) EnsureFlight(ctx context.Context, id ids.ID, playerID int64, career string) error {
 	e, err := b.flightEntry(ctx, id)
 	if err != nil {
 		return err
 	}
 	if !e.exists {
 		e.exists = true
-		e.playerID, e.flags, e.startedSeq = playerID, 0, seq
+		e.playerID, e.flags = playerID, 0
+		b.touchFlight(id, e)
+	}
+	if e.career == "" && career != "" {
+		e.career = career
 		b.touchFlight(id, e)
 	}
 	return nil
 }
 
 // StartFlight records `flight.started`.
-func (b *Batch) StartFlight(ctx context.Context, id ids.ID, crew int, body string, engineCount *int, seq int64) error {
+func (b *Batch) StartFlight(ctx context.Context, id ids.ID, crew int, body string, engineCount *int, partCount int, launchMassKg float64, seq int64) error {
 	e, err := b.flightEntry(ctx, id)
 	if err != nil {
 		return err
@@ -314,7 +324,21 @@ func (b *Batch) StartFlight(ctx context.Context, id ids.ID, crew int, body strin
 	if engineCount != nil {
 		e.engineCount = sql.NullInt64{Int64: int64(*engineCount), Valid: true}
 	}
+	e.partCount = sql.NullInt64{Int64: int64(partCount), Valid: true}
+	e.launchMassKg = sql.NullFloat64{Float64: launchMassKg, Valid: true}
 	e.startedSeq = seq
+	b.touchFlight(id, e)
+	return nil
+}
+
+// MarkFlightMilestone sets a historical milestone bit without clearing any
+// already observed milestone.
+func (b *Batch) MarkFlightMilestone(ctx context.Context, id ids.ID, bit int64) error {
+	e, err := b.flightEntry(ctx, id)
+	if err != nil {
+		return err
+	}
+	e.milestones |= bit
 	b.touchFlight(id, e)
 	return nil
 }
@@ -346,17 +370,19 @@ func (b *Batch) flushFlights(ctx context.Context) error {
 		return nil
 	}
 	slices.SortFunc(b.dirtyFlights, func(x, y ids.ID) int { return strings.Compare(string(x[:]), string(y[:])) })
-	err := b.write(ctx, len(b.dirtyFlights), 8,
-		`INSERT INTO flight_state (flight_id, player_id, flags, ended_reason, crew, body, started_seq, engine_count) VALUES `,
+	err := b.write(ctx, len(b.dirtyFlights), 12,
+		`INSERT INTO flight_state (flight_id, player_id, flags, ended_reason, crew, body, started_seq, engine_count, milestones, part_count, launch_mass_kg, career) VALUES `,
 		` ON CONFLICT (flight_id) DO UPDATE SET
 		   flags = excluded.flags, ended_reason = excluded.ended_reason,
 		   crew = excluded.crew, body = excluded.body, started_seq = excluded.started_seq,
-		   engine_count = excluded.engine_count`,
+		   engine_count = excluded.engine_count, milestones = excluded.milestones,
+		   part_count = excluded.part_count, launch_mass_kg = excluded.launch_mass_kg,
+		   career = excluded.career`,
 		func(i int, args []any) []any {
 			id := b.dirtyFlights[i]
 			e := b.flights[id]
 			e.dirty = false
-			return append(args, ids.Bytes(id), e.playerID, e.flags, e.reason, e.crew, e.body, e.startedSeq, e.engineCount)
+			return append(args, ids.Bytes(id), e.playerID, e.flags, e.reason, e.crew, e.body, e.startedSeq, e.engineCount, e.milestones, e.partCount, e.launchMassKg, e.career)
 		})
 	if err != nil {
 		return fmt.Errorf("stats: flush flight_state: %w", err)

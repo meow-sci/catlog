@@ -424,18 +424,18 @@ and `projector.Upcasters` has nothing registered (PROJ-100).
 | 1 | `session.started` | 1 | 1 | **no — locked** | event | `career` (rewind mark) |
 | 2 | `system.discovered` | 1 | **1** | **no — locked** | event (session boundary) | `system`; one-time career→system binding |
 | 3 | `system.body` | 1 | **1** | yes | event (system-load survey) | immutable `system_body` catalogue |
-| 4 | `flight.started` | 1 | 1 | **no — locked** | polled-discovery | `flight_state` (including nullable `engine_count`), `heaviest_launch`, `most_parts`, `biggest_crew`, `biggest_stack` |
+| 4 | `flight.started` | 1 | 1 | **no — locked** | polled-discovery | `flight_state` launch facts, `heaviest_launch`, `most_parts`, `biggest_crew`, `biggest_stack` |
 | 5 | `flight.ended` | 1 | 1 | **no — locked** | event (+ passive net) | `flight_state`, `kittens_recovered`, `biggest_recovery`, feed |
 | 6 | `flight.flagged` | 1 | 1 | **no — locked** | event (4 of 5) / passive (`tuning`) | `flight_state` → **excludes everything** |
 | 7 | `vehicle.situation` | 1 | 1 | yes | passive | `softest_touchdown`, `landed_bodies`, `splashdowns`, `player_body`, `career_body` |
-| 8 | `vehicle.atmosphere` | 1 | 1 | yes | passive | `fastest_entry` |
-| 9 | `vehicle.orbit` | 1 | 1 | yes | passive | `orbits_achieved`, `highest_apoapsis`, `lowest_orbit`, `roundest_orbit`, `steepest_orbit`, `heaviest_to_orbit`, `fastest_to_orbit`, feed |
-| 10 | `vehicle.soi` | 1 | 1 | yes | passive | `soi_bodies`, `fastest_to_<body>`, `player_body`, `career_body`, feed |
+| 8 | `vehicle.atmosphere` | 1 | 1 | yes | passive | `flight_state` space milestone, `fastest_entry` |
+| 9 | `vehicle.orbit` | 1 | 1 | yes | passive | `flight_state` orbit milestone, `orbits_achieved`, `highest_apoapsis`, `lowest_orbit`, `roundest_orbit`, `steepest_orbit`, `heaviest_to_orbit`, `fastest_to_orbit`, feed |
+| 10 | `vehicle.soi` | 1 | 1 | yes | passive | conditional `flight_state` other-SOI milestone, `soi_bodies`, `fastest_to_<body>`, `player_body`, `career_body`, feed |
 | 11 | `vehicle.rud` | 1 | 1 | yes | event | `rud_total`, `rud_<cause>`, feed |
 | 12 | `vehicle.impact` | 1 | 1 | yes | event (1-frame hold) | `biggest_lithobrake_survived`, `biggest_impact_energy`, feed |
-| 13 | `vehicle.landed` | 1 | 1 | yes | passive (1-frame hold) | `softest_landing`, `landings`, feed |
+| 13 | `vehicle.landed` | 1 | 1 | yes | passive (1-frame hold) | conditional `flight_state` landed milestone, `softest_landing`, `landings`, feed |
 | 14 | `vehicle.staging` | 1 | 1 | yes | event | `stagings`, `most_stages` |
-| 15 | `vehicle.docked` | 1 | 1 | yes | event | `dockings` |
+| 15 | `vehicle.docked` | 1 | 1 | yes | event | `flight_state` docked milestone, `dockings` |
 | 16 | `vehicle.undocked` | 1 | 1 | yes | event | — (decoded, counts nothing) |
 | 17 | `engine.ignition` | 1 | 1 | yes | passive | `engine_ignitions` |
 | 18 | `engine.shutdown` | 1 | 1 | yes | passive | — (decoded, counts nothing) |
@@ -451,6 +451,8 @@ and `projector.Upcasters` has nothing registered (PROJ-100).
 non-spine type — and it is `KindEvent`, the default for everything except `telemetry.window`.
 
 Every event additionally lands in `event_census` (10 rows: own type + total, × 5 periods).
+Every flight-bearing event also ensures `flight_state` exists and may supply that row's first
+nonempty career, whether or not this table lists a more specific flight-state effect.
 
 ### Turning a type off — the `[events]` table
 
@@ -766,8 +768,11 @@ has not seen", evaluated at 2 Hz and also on demand from patch bodies. No deboun
 or a flag is adopted rather than replaced.
 
 **Server.** `FlightStarted.EngineCount` is a Go `*int` (`stats/payload.go:48-58`). `flightFold`
-passes it to `StartFlight` (`stats/flight.go:108-114`), which persists it as nullable SQL in
-`flight_state` (migration `0009_flight_engine_count.sql`), creating
+passes it with `part_count`, `mass_kg` and the event sequence to `StartFlight`
+(`stats/flight.go:131-138`), which persists the exact launch facts in `flight_state`: migration
+`0009_flight_engine_count.sql` owns nullable `engine_count`, and migration
+`0010_flight_facts.sql` owns nullable `part_count` / `launch_mass_kg` plus the milestone and career
+columns. This creates
 the `flight_state` row every board consults. `launchFold` (`stats/boards.go`), registered **four**
 times, then takes the same payload onto `heaviest_launch` (`mass_kg`), `most_parts` (`part_count`),
 `biggest_crew` (`crew_count`) and `biggest_stack` (`stage_count`). Each is gated
@@ -780,7 +785,13 @@ rows of one launch describe the same vehicle rather than four partial views of i
 
 No current fold scores or copies `engine_count` into a board context. It is retained in
 `flight_state` for the later challenge projection. A missing `flight.started` or an absent field
-remains SQL `NULL`; explicit 0 remains 0 (`stats/batch.go:305-319`).
+remains SQL `NULL`; explicit 0 remains 0 (`stats/batch.go:315-330`).
+
+`started_seq` is the sequence of the actual start event, and future composite consumers use
+`FlightState.HasStartFactAt(candidate.seq, fact.Valid)`: the start must exist, must not be later than
+the candidate, and the required nullable fact must be present. This deliberately declines an early
+candidate that incremental folding could not have joined, even though rebuild pass 1 eventually
+knows the completed flight row.
 
 `kids`, `lat` and `lon` are decoded (`[]string`, `*float64`, `*float64`) and read by no fold. The
 first fold that reads `kids` must not treat a nil slice as "uncrewed": nil is a `ver` 1 row, `[]` is
@@ -1075,6 +1086,9 @@ matters is the air the vehicle is hitting, not the body's inertial motion — an
 directly comparable with the lithobrake and RUD speeds. Context
 `{"body", "flight", "dyn_pressure_pa"}`.
 
+Independently of scoring, `flightFold` sets set-only `MilestoneSpace` when `dir == "exited"`. An
+`entered` event does not set it; no later event clears it.
+
 **Vectors.** `batch-001.ndjson` line 12.
 
 ---
@@ -1158,6 +1172,11 @@ only and change none of those rules.
 (`:1160-1180`); the feed renders `"{h} made orbit around {body} ({ap} × {pe})"` (`stats/feed.go:53`).
 `escaped` counts nothing anywhere.
 
+`flightFold` also ORs set-only `MilestoneOrbit` for every decoded `phase == "achieved"`. This raw
+historical fact does **not** require launch facts and remains set even when the orbit event preceded
+`flight.started`; only a future composite predicate that needs a launch fact applies the
+`started_seq <= candidate.seq` rule. `phase == "escaped"` does not set or clear the bit.
+
 **No current server fold reads `sma_m`, `lan_deg`, `argp_deg`, `t_pe` or `period_s`.** They are
 decoded and retained in the immutable event payload for drawing and later derived uses, but they do
 not enter a board context, ranking predicate, score or feed sentence. Adding them therefore changes
@@ -1237,6 +1256,13 @@ Sampled at 2 Hz.
 `soiFold` must precede `toBodyFold` because `LowerBodyTime` is a no-op if the row does not exist
 (`batch.go:538-540`). Body names are **never** validated against a list: a `to_body` that cannot be a
 stat key still counts towards `soi_bodies` and still records `first_sim_t`.
+
+Before those board folds, `flightFold` may OR set-only `MilestoneOtherSOI`, but only when all three
+facts are known at the SOI event: nonempty `to_body`, an actual `flight.started` with
+`started_seq <= event.seq` and nonempty launch `body`, and `to_body != launch body`
+(`stats/flight.go:160-170`). If the SOI arrives before the start, the bit stays clear and the later
+start does **not** retro-award it. This is a conservative incomplete/out-of-order-log rule, not a
+body allow-list.
 
 **Vectors.** `batch-001.ndjson` line 16.
 
@@ -1491,6 +1517,9 @@ crash, and the `vehicle.rud` emitted beside it already announces it.
 
 `radar_alt_m`, `lat` and `lon` are decoded (`*float64`) and read by no fold.
 
+Independently of those boards, `flightFold` ORs set-only `MilestoneLanded` only when the decoded
+payload has `survived: true`. An unsurvived landing does not set it, and nothing clears a prior bit.
+
 **Vectors.** `batch-001.ndjson` line 25 — `lat` / `lon` present, `radar_alt_m` **absent**.
 
 ---
@@ -1552,7 +1581,9 @@ installed `Patcher.cs:200-202`, body `:586-608`.
 
 **Classification.** **EVENT-DRIVEN.**
 
-**Server.** `countFold{dockings, "vehicle.docked"}` — +1 on an unflagged flight.
+**Server.** `countFold{dockings, "vehicle.docked"}` — +1 on an unflagged flight. Independently,
+`flightFold` ORs set-only `MilestoneDocked` for every successfully decoded `vehicle.docked`; no
+payload value further qualifies it and nothing clears it.
 
 **Vectors.** `batch-001.ndjson` line 17 — `"other_flight":null`, the taxonomy's one in-payload null.
 
@@ -2754,16 +2785,43 @@ List/detail readers hide such orphan rows until `system.discovered` creates the 
 `0001_init.sql:34-39` creates `flight_state(flight_id BLOB PK, player_id, flags INTEGER DEFAULT 0,
 ended_reason, crew, body, started_seq)`. Migration `0009_flight_engine_count.sql` adds nullable
 `engine_count INTEGER`: SQL `NULL` means `flight.started` was not folded or its game read failed;
-present 0 means no rocket engine was installed when the flight began.
+present 0 means no rocket engine was installed when the flight began. Migration
+`0010_flight_facts.sql` then adds `milestones INTEGER NOT NULL DEFAULT 0`, nullable
+`part_count INTEGER`, nullable `launch_mass_kg REAL`, and `career TEXT NOT NULL DEFAULT ''`.
+Migration 0010 does not re-add `engine_count`; 0009 remains its sole owner.
 
 Flag bits (`stats/flight.go:12-30`): 0 `teleport`, 1 `refuel`, 2 `resource_edit`, 3 `console`,
 4 `tuning`, **5 `other`** for an unrecognised value (PROJ-002).
 
-`flightFold` (`stats/flight.go:91-128`) runs first in every list. **Every** flight-bearing event
+`flightFold` (`stats/flight.go:114-182`) runs between `systemFold` and `careerFold` in
+`StateFolds`. **Every** flight-bearing event
 creates the row (`EnsureFlight`), not only `flight.started` — a batch may fold `flight.flagged` before the
-`flight.started` it belongs to. On `flight.started`, `StartFlight` overwrites the nullable column
-with the payload's exact absent/0/positive state. No current consumer reads it; it is persisted so a
-later challenge need not reconstruct a launch fact from subsequent events.
+`flight.started` it belongs to. The row retains the first nonempty event career and never replaces it
+with empty. On `flight.started`, `StartFlight` writes crew, body, `started_seq`, nullable
+`engine_count`, nullable persisted `part_count`, and nullable persisted `launch_mass_kg`; in the
+current v1 payload the latter two are present even when their numeric failed-read fallback is 0.
+
+Milestone bits are achievements, not exclusions: 0 orbit achieved (`vehicle.orbit phase=achieved`),
+1 space (`vehicle.atmosphere dir=exited`), 2 other SOI, 3 survived landing, 4 docked. Every write is
+`milestones |= bit`; no path clears one. Other SOI alone requires a known launch body from an actual
+start no later than the SOI event and a distinct nonempty destination. If the SOI was early, the bit
+is deliberately never retro-awarded. Orbit remains a raw set-only milestone even when its event was
+early; ordering matters only to a composite consumer that joins a nullable start fact.
+No current board or badge reads the five milestone bits; they are retained inputs for a later
+projection, not awards created by D5.
+
+`FlightState.HasStartFactAt(candidateSeq, factValid)` is that normative join predicate:
+`StartedSeq > 0 && StartedSeq <= candidateSeq && factValid`. A rebuild's first pass may know a later
+start, but a composite candidate is refused when the incremental projector could not have known its
+required fact at that sequence. The set-only folds and this conservative comparison make replay
+deterministic without fabricating historical knowledge.
+
+The in-memory flight-id map is a read-through/write-back cache for all twelve columns; the key is
+the flight id and `flightEntry` carries the other eleven. Its SQL `SELECT`, `FlightState` conversion
+and sorted multi-row flush preserve the exact order through
+`engine_count, milestones, part_count, launch_mass_kg, career`; the flush uses 12 placeholders and
+updates every mutable column on conflict. Pending reads therefore see facts and ORed milestones from
+earlier events in the same batch before anything reaches SQL.
 
 Consumers: `scoreable` (`stats/fold.go:226-241`) — events with **no flight** are scoreable, a missing
 row is treated as unflagged, otherwise `st.Flags == 0`; `Recovered()` for the rebuild refinement on
