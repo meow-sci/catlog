@@ -3,6 +3,7 @@ package readapi_test
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -110,6 +111,107 @@ func TestNothingPublicCarriesAnInstallDerivedIdentifier(t *testing.T) {
 			}
 		}
 	}
+}
+
+// TestNoPublicResponseCarriesARawCareer marshals every public response shape
+// built from a fixture whose career is a known sentinel, and fails if that
+// sentinel appears anywhere in the bytes. It is deliberately a blunt instrument:
+// PROJ-049 was a live leak that survived review because the field was three
+// levels down in a context blob, and a rule keyed on field names cannot see a
+// field somebody adds tomorrow.
+func TestNoPublicResponseCarriesARawCareer(t *testing.T) {
+	const sentinel = "raw-career-sentinel-NEVER-PUBLISH"
+	f := newFixture(t)
+	player := f.player("sentinel_pilot")
+	first, last := f.event(player, 1), f.event(player, 2)
+	seedDetailedCareer(t, f, player, sentinel, "", 1, false, false, 90, first, last)
+	seedCareerBoardRow(t, f, player, sentinel, "", stats.StatStagings, 7, 3)
+	// The established profile and player-board shapes also carry contexts. They
+	// sit beside the new career shapes so future response additions can extend
+	// one table instead of inventing another privacy boundary.
+	f.statContext(player, stats.StatStagings, 7,
+		fmt.Sprintf(`{"career":%q,"nested":{"career":%q}}`, sentinel, sentinel))
+
+	tests := []struct {
+		name      string
+		path      string
+		nonVacant func(map[string]any) bool
+	}{
+		{
+			name: "player profile context", path: "/v1/players/sentinel_pilot",
+			nonVacant: func(body map[string]any) bool { return jsonArrayHasRows(body, "stats") },
+		},
+		{
+			name: "player-scoped board context", path: "/v1/leaderboards/stagings",
+			nonVacant: func(body map[string]any) bool { return jsonArrayHasRows(body, "rows") },
+		},
+		{
+			name: "career-scoped board", path: "/v1/leaderboards/stagings?scope=career",
+			nonVacant: func(body map[string]any) bool { return jsonArrayHasRows(body, "rows") },
+		},
+		{
+			name: "saves list", path: "/v1/players/sentinel_pilot/saves",
+			nonVacant: func(body map[string]any) bool { return jsonArrayHasRows(body, "saves") },
+		},
+		{
+			name: "save detail", path: "/v1/players/sentinel_pilot/saves/1",
+			nonVacant: func(body map[string]any) bool { return jsonArrayHasRows(body, "stats") },
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := f.get(tc.path)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("GET %s = %d: %s", tc.path, rec.Code, rec.Body)
+			}
+			if strings.Contains(rec.Body.String(), sentinel) {
+				t.Fatalf("GET %s published the raw career in its response bytes: %s", tc.path, rec.Body)
+			}
+			var decoded map[string]any
+			if err := json.Unmarshal(rec.Body.Bytes(), &decoded); err != nil {
+				t.Fatalf("GET %s returned invalid JSON: %v", tc.path, err)
+			}
+			if !tc.nonVacant(decoded) {
+				t.Fatalf("GET %s did not exercise its career-bearing shape: %s", tc.path, rec.Body)
+			}
+			if jsonCarriesString(decoded, sentinel) {
+				t.Fatalf("GET %s published the raw career as a JSON string: %s", tc.path, rec.Body)
+			}
+			marshaled, err := json.Marshal(decoded)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(marshaled), sentinel) {
+				t.Fatalf("GET %s published the raw career somewhere in its JSON: %s", tc.path, marshaled)
+			}
+		})
+	}
+}
+
+func jsonArrayHasRows(body map[string]any, key string) bool {
+	rows, ok := body[key].([]any)
+	return ok && len(rows) > 0
+}
+
+func jsonCarriesString(value any, sentinel string) bool {
+	switch value := value.(type) {
+	case string:
+		return value == sentinel
+	case []any:
+		for _, item := range value {
+			if jsonCarriesString(item, sentinel) {
+				return true
+			}
+		}
+	case map[string]any:
+		for _, item := range value {
+			if jsonCarriesString(item, sentinel) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // The point of relabelling rather than dropping: the labels still group a
