@@ -364,6 +364,126 @@ func scanStatRows(rows *sql.Rows) ([]StatRow, error) {
 	return out, rows.Err()
 }
 
+// --- challenges --------------------------------------------------------------
+
+// ChallengeRow is one raw challenge_stat row. Career and System retain the
+// table's scope sentinels; the read API, not store, owns any public relabelling
+// or save-ordinal join.
+type ChallengeRow struct {
+	PlayerID   int64
+	Career     string
+	System     string
+	Challenge  string
+	Value      float64
+	Context    json.RawMessage
+	UpdatedSeq int64
+}
+
+const challengeColumns = `player_id, career, system, challenge, value, context, updated_seq`
+
+// ChallengeLeaderboard reads raw challenge entrants in canonical rank order.
+// An empty system means no filter; a nonempty system is an exact match. The
+// row itself determines whether an entrant is a player, save or player-system
+// pair through the registry's fixed scope and the career/system sentinels.
+func (p *Projections) ChallengeLeaderboard(
+	ctx context.Context, challenge, system string, asc bool, limit, offset int,
+) ([]ChallengeRow, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	order := "DESC"
+	if asc {
+		order = "ASC"
+	}
+	query := `SELECT ` + challengeColumns + ` FROM challenge_stat WHERE challenge = ?`
+	args := []any{challenge}
+	if system != "" {
+		query += ` AND system = ?`
+		args = append(args, system)
+	}
+	query += ` ORDER BY value ` + order + `, updated_seq ASC, player_id ASC, career ASC, system ASC
+	           LIMIT ? OFFSET ?`
+	args = append(args, limit, max(offset, 0))
+	rows, err := p.Reader().QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("store: read challenge leaderboard %q in system %q: %w", challenge, system, err)
+	}
+	return scanChallengeRows(rows)
+}
+
+// ChallengeAhead counts rows whose value/sequence pair outranks the supplied
+// pair. updated_seq is a global event sequence, so it uniquely settles a
+// genuine projection tie; player/career/system are final deterministic display
+// keys for structurally forged duplicate-sequence rows and do not alter rank.
+func (p *Projections) ChallengeAhead(
+	ctx context.Context, challenge, system string, value float64, seq int64, asc bool,
+) (int64, error) {
+	cmp := ">"
+	if asc {
+		cmp = "<"
+	}
+	query := `SELECT count(*) FROM challenge_stat
+	          WHERE challenge = ? AND (value ` + cmp + ` ? OR (value = ? AND updated_seq < ?))`
+	args := []any{challenge, value, value, seq}
+	if system != "" {
+		query += ` AND system = ?`
+		args = append(args, system)
+	}
+	var n int64
+	if err := p.Reader().QueryRowContext(ctx, query, args...).Scan(&n); err != nil {
+		return 0, fmt.Errorf("store: rank challenge %q in system %q: %w", challenge, system, err)
+	}
+	return n, nil
+}
+
+// ChallengeEntrants counts raw scoped rows, not distinct players. The
+// challenge definition fixes what one row means: a player, a save, or a
+// (player, system) pair.
+func (p *Projections) ChallengeEntrants(ctx context.Context, challenge, system string) (int64, error) {
+	query := `SELECT count(*) FROM challenge_stat WHERE challenge = ?`
+	args := []any{challenge}
+	if system != "" {
+		query += ` AND system = ?`
+		args = append(args, system)
+	}
+	var n int64
+	if err := p.Reader().QueryRowContext(ctx, query, args...).Scan(&n); err != nil {
+		return 0, fmt.Errorf("store: count entrants in challenge %q system %q: %w", challenge, system, err)
+	}
+	return n, nil
+}
+
+// ChallengesForPlayer reads every raw scoped result for one player. Phase I
+// resolves Career to a public save ordinal before anything crosses HTTP.
+func (p *Projections) ChallengesForPlayer(ctx context.Context, playerID int64) ([]ChallengeRow, error) {
+	rows, err := p.Reader().QueryContext(ctx,
+		`SELECT `+challengeColumns+` FROM challenge_stat
+		 WHERE player_id = ? ORDER BY challenge ASC, career ASC, system ASC`, playerID)
+	if err != nil {
+		return nil, fmt.Errorf("store: read challenges for player %d: %w", playerID, err)
+	}
+	return scanChallengeRows(rows)
+}
+
+func scanChallengeRows(rows *sql.Rows) ([]ChallengeRow, error) {
+	defer rows.Close()
+	var out []ChallengeRow
+	for rows.Next() {
+		var r ChallengeRow
+		var cx sql.NullString
+		if err := rows.Scan(
+			&r.PlayerID, &r.Career, &r.System, &r.Challenge, &r.Value, &cx, &r.UpdatedSeq,
+		); err != nil {
+			return nil, fmt.Errorf("store: scan challenge_stat: %w", err)
+		}
+		if cx.Valid {
+			r.Context = json.RawMessage(cx.String)
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // --- merit badges ------------------------------------------------------------
 
 // BadgeRow is one current-projection merit-badge award. Career is the award

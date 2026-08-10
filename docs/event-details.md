@@ -2503,6 +2503,34 @@ These contexts are projector-authored minimal provenance and never carry the raw
 still no challenge result read API or visitor result page at this boundary; the player-facing docs
 archive describes the compile-time definitions only.
 
+#### Store read seam
+
+Challenge results now have a store-only read model with the projection's exact raw shape:
+
+```go
+type ChallengeRow struct {
+    PlayerID int64
+    Career, System, Challenge string
+    Value float64
+    Context json.RawMessage
+    UpdatedSeq int64
+}
+```
+
+`ChallengeLeaderboard(ctx, challenge, system, asc, limit, offset)` returns values in requested
+value direction, then `updated_seq`, `player_id`, `career` and `system` ascending. The empty
+`system` argument means no filter; a nonempty argument is an exact system filter. The companion
+`ChallengeAhead` uses that same population and counts a row only when its value is strictly better,
+or its value is equal and its `updated_seq` is earlier. `ChallengeEntrants` counts rows in that
+population rather than distinct players, so separately ranked saves are separately counted.
+`ChallengesForPlayer` returns all of one player's rows ordered by `challenge`, `career`, `system`.
+
+This is deliberately not a public response type. Empty career/system sentinels still encode
+player/save/system scope exactly as stored and are not relabelled here. Nullable SQL context stays a
+nil `json.RawMessage`; it is not normalised to `{}` or JSON `null`. Phase I must resolve handles,
+save ordinals and system references, apply ban visibility and redact context before publication.
+There is no challenge endpoint or visitor result page yet.
+
 ### Badge accumulator and dual-scope writer
 
 `stats.Batch` keys pending awards by `(player_id, career, badge)` and retains the complete candidate:

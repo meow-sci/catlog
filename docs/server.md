@@ -285,7 +285,9 @@ live in the server's compile-time `stats.Challenge` registry so an incremental f
 rebuild cannot silently apply different mutable rules. Six Week 33 definitions and executable rules
 ship in catalogue order; catlogd validates their one-to-one construction, keys, windows, scopes,
 board collisions and fold identities before creating runtime state. Generic challenge folds occupy
-the second-pass slot after badges and before the event census. No challenge result read exists yet.
+the second-pass slot after badges and before the event census. Challenge results have a store-only
+read seam; no challenge endpoint or visitor result page exists yet.
+
 The batch foundation
 loads one scoped `challenge_member` set on demand, merges pending additions, and flushes new members
 in deterministic key order. `challenge_stat` contributions likewise merge in per-kind pending maps
@@ -308,6 +310,33 @@ Coasting Class is the set-valued rule. It accepts a nonempty SOI destination onl
 member is created only after all gates, so powered and out-of-window visits do not poison novelty;
 including the system in both scope and member keeps identical body keys in different systems
 distinct. Zero engines is not “no propulsion”, and a missing engine count never becomes zero.
+
+The store owns this raw challenge row rather than reusing the presentation-enriched career row:
+
+```go
+type ChallengeRow struct {
+    PlayerID int64
+    Career, System, Challenge string
+    Value float64
+    Context json.RawMessage
+    UpdatedSeq int64
+}
+```
+
+`ChallengeLeaderboard(challenge, system, asc, limit, offset)` reads one ranked page. An empty
+`system` means no system predicate; a nonempty value is an exact `challenge_stat.system` filter.
+Rows use value in the requested direction, then `updated_seq`, `player_id`, `career` and `system`
+ascending for canonical deterministic order. `ChallengeAhead` applies the identical optional
+system filter and counts rows with a strictly better value, or the same value and an earlier
+`updated_seq`. `ChallengeEntrants` counts matching rows, not distinct players: save scope therefore
+counts independently ranked saves, while player and system scope already have one row per player in
+their respective scope. `ChallengesForPlayer` returns every raw row for one player in canonical
+`challenge`, `career`, `system` order.
+
+The empty career/system scope sentinels remain private store values; this layer neither relabels a
+career nor resolves a system for publication. A SQL `NULL` context scans as a nil
+`json.RawMessage`, not the bytes `null` or an empty object. Phase I owns directory visibility,
+public save/system labels and context redaction before any row can leave the process.
 
 Awards are insert-once inside one projection build: the first qualifying event keeps its
 `earned_seq`, matching server-side `recv_time` in `earned_at`, nullable event career clock in

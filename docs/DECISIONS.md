@@ -2177,6 +2177,31 @@ an earlier powered or out-of-window visit suppress a valid later one. No physics
 forgery detector is added: signatures cannot make an attacker-controlled client truthful, and
 Constitution §8 says the complexity budget belongs elsewhere.
 
+### PROJ-133 — Challenge reads expose raw scope rows only inside the store boundary
+
+*Accepted · 2026-08-10 · Task H5.*
+
+The challenge read seam returns a store-owned `ChallengeRow` with raw career and system fields. It
+does not reuse `CareerStatRow`: challenge rows can be player-, save- or system-scoped, and attaching
+a save ordinal to the common type would falsely imply that every scope has a save. The empty-string
+sentinels remain the projection's compact internal scope encoding, not public identities. Phase I
+owns the directory lookup, career relabelling, system reference, ban visibility and context
+redaction because those operations need dependencies the projection store deliberately does not
+have. Keeping that boundary now makes it mechanically harder for a later endpoint to publish the
+mod's raw save identity by accident (Constitution §1).
+
+One optional system parameter serves both the ordinary challenge population and a within-system
+comparison. Empty means **omit the predicate**, not `system=''`; nonempty means exact equality. That
+distinction is necessary because player/save/system scopes share one table and an empty argument is
+a caller's request for all applicable rows, while an empty stored value is a real player-scope
+sentinel. Leaderboard order and `ChallengeAhead` use the board comparator—requested value direction,
+then earlier `updated_seq`—with stable row-key fallbacks for deterministic pages. Entrants count
+matching ranked rows rather than distinct players, so a save-scoped contest honestly counts saves.
+
+Nullable projector context is preserved as nil `json.RawMessage` rather than rewritten into a
+different JSON value. H5 adds no endpoint or UI: publishing requires the Phase I privacy and
+visibility work, and a storage method should not guess that presentation contract early.
+
 ## Archive & restore
 
 The filesystem archiver, the manifest, restore verification, and the R2 design that is deliberately not built.
