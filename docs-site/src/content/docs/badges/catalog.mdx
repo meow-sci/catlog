@@ -11,9 +11,7 @@ import { Aside } from "@astrojs/starlight/components";
 import BadgeDetail from "../../../components/BadgeDetail.astro";
 import { BADGES, BADGE_FAMILIES } from "../../../data/badges";
 
-Thirty-three fixed badges and all three place-name families can be awarded now. **Every World** and
-**Nothing Left** are already part of the fixed catalogue, but their system-wide comparison is not
-active yet.
+All thirty-five fixed badges and all three place-name families can be awarded now.
 
 <Aside type="note" title="A tier does not replace anything">
   The exploration and survival tiers are separate badges. Reaching a higher threshold keeps every
@@ -37,6 +35,10 @@ active yet.
 The numbered tiers count distinct worlds and need no fixed idea of how large a celestial system
 ought to be. The three families use the names reported by the game, so new and modified systems can
 supply their own places without being added to catlog first.
+
+Every World and Nothing Left use the complete catalogue reported by that save's game. Every World
+selects its nonempty set of planets; Nothing Left includes every catalogue entry, including stars
+and other bodies at the root of the system. An incomplete or interrupted catalogue awards neither.
 
 {BADGES.filter((badge) => badge.group === "exploration").map((badge) => <BadgeDetail badge={badge.badge} />)}
 

@@ -2005,6 +2005,37 @@ bounded collection census: `badges` counts distinct keys with lifetime holders, 
 projection `WriteGen` plus the 10-second TTL keeps the extra group-by off repeated origin requests
 and ensures a committed projection write invalidates the answer immediately.
 
+### PROJ-126 — Everywhere badges compare save-local visits with the game-reported complete catalogue
+
+*Accepted · 2026-08-10 · Task F7.*
+
+Every World and Nothing Left are subset questions, not thresholds over the exploration total. Their
+denominator is the immutable catalogue reported for that save's bound system: normalized
+`kind == "planet"` rows for Every World, and every row—including parentless roots and unknown
+concrete classes—for Nothing Left. The server neither maps concrete classes nor holds body names.
+This keeps game updates and modified systems honest inputs to the same rule instead of making the
+default system an accidental protocol allow-list.
+
+A reported-complete bit alone can arrive before thousands of catalogue rows, and cardinality alone
+would turn an intentionally absent catalogue into an empty success. Both badges therefore require
+the established effective-completeness conjunction, plus a nonempty selected subset to refuse
+vacuous truth. The fold runs after the SOI set fold and its catalogue and save-membership reads merge
+pending batch writes. Awarding on the final missing arrival is then independent of projector batch
+and flush boundaries. Catalogue completion itself is not an award trigger; a later qualifying SOI
+rechecks the subset. Final-state flight eligibility remains authoritative on rebuild, so a late flag
+can remove the current-projection award without adding revocation state.
+
+The two fixed fold names occupy their reserved catalogue slots, so adding them changes `BuildID` and
+forces immutable history through the new predicates. No stored or wire shape changed and no existing
+fold changed meaning, so neither the projection schema nor `stats.BuildVersion` advances.
+
+A modified client can report a complete one-planet system and an invented visit to mint both
+badges. That is explicitly accepted under Constitution §8: signatures identify the sender, not the
+truth of their celestial catalogue, and an invented SOI event can already mint the tier ladder just
+as cheaply. Detecting plausibility would require a server body list or accumulated suspicion
+machinery, both more complex and less honest than this hobby project's proportionate integrity
+boundary.
+
 ## Archive & restore
 
 The filesystem archiver, the manifest, restore verification, and the R2 design that is deliberately not built.

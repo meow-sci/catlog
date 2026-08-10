@@ -2481,8 +2481,8 @@ a higher tier never removes a lower one (`stats/badges.go:57-138,196-230`).
 | 25 | `voyager` | Voyager | You reached five worlds. | `exploration` | 2 | `soi_bodies >= 5` |
 | 26 | `grand_tour` | Grand Tour | You reached eight worlds. | `exploration` | 3 | `soi_bodies >= 8` |
 | 27 | `groundskeeper` | Groundskeeper | You landed on three worlds. | `exploration` | — | `landed_bodies >= 3` |
-| 28 | `been_to_every_planet` | Every World | You visited every planet in this system. | `exploration` | — | **inactive until F7**; entered every `kind == "planet"` body in the save's effectively complete system catalogue |
-| 29 | `been_to_everything` | Nothing Left | You visited everything in this system. | `exploration` | — | **inactive until F7**; entered every body in the save's effectively complete system catalogue |
+| 28 | `been_to_every_planet` | Every World | You visited every planet in this system. | `exploration` | — | on qualifying `vehicle.soi`, entered every `kind == "planet"` body in the save's effectively complete system catalogue; selected subset nonempty |
+| 29 | `been_to_everything` | Nothing Left | You visited everything in this system. | `exploration` | — | on qualifying `vehicle.soi`, entered every body in the save's nonempty effectively complete system catalogue, including parentless roots |
 | 30 | `not_on_their_feet` | Not On Their Feet | A kitten failed to land on their feet. | `kittens` | — | first `kitten.tumble` with `from == "airborne"` |
 | 31 | `persistently_upside_down` | Persistently Upside Down | Your kittens have tumbled fifty times. | `kittens` | — | `kitten_tumbles >= 50` |
 | 32 | `crowded_capsule` | Crowded Capsule | You brought four kittens home at once. | `kittens` | — | `biggest_recovery >= 4` |
@@ -2511,9 +2511,8 @@ holder for direct lookup; the stricter catalogue gate is separate
 (`stats/badges.go:161-230`).
 
 F5 activates every predicate expressible with F4's four shapes: **33 fixed badges plus all three
-dynamic family folds**. The two fixed subset badges `been_to_every_planet` and
-`been_to_everything` remain registered metadata but deliberately have no fold until F7 implements
-the effectively-complete-catalogue comparison; they cannot currently produce awards.
+dynamic family folds**. F7 activates the remaining fixed subset badges `been_to_every_planet` and
+`been_to_everything`, so all 35 fixed entries and all three families can produce awards.
 `SecondPassFolds` is ordered
 `BoardFolds → BadgeFolds → LogFolds`, so threshold shapes read the post-write player and career board
 values through `Batch`. Event, composite and family shapes offer their first qualifying event to the
@@ -2529,13 +2528,29 @@ predicates derive keys through `statSuffix`; an unkeyable body skips only its fa
 counts toward fixed set and threshold badges. Every flight-bearing shape uses the existing
 final-state `scoreable` rule.
 
-The active folds are in the exact catalogue/group order shown above, with the three family folds in
-their declared order at the exploration slot where F7's two subset folds will later sit before them.
+The active folds are in the exact catalogue/group order shown above, with both subset folds after
+`groundskeeper` and before the three family folds in their declared order.
 All fixed awards use SQL NULL context: their badge key, earning sequence and documented predicate
 already identify the achievement, so copying arbitrary payload or a transient board winner into
 context would add data without meaning. A family award has exactly one context key,
 `{"body": <opaque game name>}`, because the derived key is normalised and the original reported name
 is the only additional fact its future detail surface needs.
+
+Both subset folds run only on `vehicle.soi`, after `soiFold` has offered that arrival to the save's
+`career_body(kind='soi')` set. They apply final-state `scoreable` before reading the subset. The
+save's career binding selects one system; a missing binding or header, `reported_complete == false`,
+an actual catalogue row count different from the declared `body_count`, or an empty selected subset
+cannot award. `been_to_every_planet` selects the emitted normalized `kind == "planet"` rows.
+`been_to_everything` selects every row regardless of kind, class or parent, including every
+parentless root. Concrete `class` remains opaque and no body name is compiled into Go.
+
+`Batch.BodiesNotVisited` loads the selected system's body→kind set and merges pending
+`system_body` entries; its career-body read-through map likewise includes the `soiFold` write still
+pending for the candidate event. The last missing body therefore awards at that event in either a
+large batch or one-event batches. Completing a catalogue alone does not retro-award: a later
+qualifying SOI is the only trigger. Both fixed awards use NULL context and the shared lifetime/save
+writer, so both rows carry the bound system. A later flight flag removes them on refined rebuild;
+there is no revocation state.
 
 ---
 

@@ -12,15 +12,22 @@ not scores or levels, and earning one does not make a leaderboard value larger. 
 catalogue](/catlog/badges/catalog/) gives the event and eligibility rule behind every badge.
 
 <Aside type="note" title="Awards are active; award pages are not">
-  Thirty-three fixed badges and all three place-name families can now be awarded. Every World and
-  Nothing Left remain inactive until catlog can perform their complete system comparison. The API
-  and player pages do not expose individual awards yet. The collection statistics can report only
+  All thirty-five fixed badges and all three place-name families can now be awarded. The API and
+  player pages do not expose individual awards yet. The collection statistics can report only
   aggregate counts of badge keys held and award rows.
 </Aside>
 
 Thirty-five badges have fixed names. Three more are families whose place name comes from the game,
 with no built-in list of worlds. The groups only organise the catalogue. A tier is a ladder label,
 not a level that replaces anything below it.
+
+## How “every world” knows what every means
+
+Your save reports the complete celestial catalogue its game loaded. Every World compares that
+save's visits with the nonempty set labelled as planets; Nothing Left compares them with every
+catalogue entry, including stars and other root bodies. catlog compiles no list of body names, so a
+game update or a modified system supplies its own denominator. A missing, incomplete, or interrupted
+catalogue awards nothing.
 
 ## Two views of the same achievement
 

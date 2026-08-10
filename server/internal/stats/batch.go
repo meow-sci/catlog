@@ -74,6 +74,10 @@ type Batch struct {
 	careers      map[careerKey]*careerEntry
 	systems      map[string]*systemEntry
 	systemBodies map[systemBodyKey]*systemBodyEntry
+	// systemCatalogues loads one system's whole body→kind set on demand. It is
+	// merged with pending systemBodies so completeness/subset reads see the
+	// same catalogue before and after a flush.
+	systemCatalogues map[string]map[string]string
 	// careerOrdinals is the next-save sequence high-water per player. It is
 	// loaded once per player per batch and advanced as new careers are first
 	// seen, so several saves created in one batch receive distinct ordinals.
@@ -167,6 +171,7 @@ func NewBatch(tx *sql.Tx, opts BatchOptions) *Batch {
 		careers:           map[careerKey]*careerEntry{},
 		systems:           map[string]*systemEntry{},
 		systemBodies:      map[systemBodyKey]*systemBodyEntry{},
+		systemCatalogues:  map[string]map[string]string{},
 		careerOrdinals:    map[int64]int64{},
 		bodies:            map[int64]map[bodyKey]*bodyEntry{},
 		careerBodies:      map[int64]map[careerBodyKey]*careerBodyEntry{},
@@ -884,6 +889,50 @@ func (b *Batch) CareerBodyCount(ctx context.Context, playerID int64, career, kin
 		}
 	}
 	return n, nil
+}
+
+// BodiesNotVisited compares one save's SOI membership with its bound system's
+// effectively complete catalogue. kind selects a normalized catalogue kind;
+// empty means every body, including parentless roots and unknown classes.
+// ready is false for a missing/incomplete header, a short catalogue, an
+// unknown career/system, or an empty selected subset.
+func (b *Batch) BodiesNotVisited(ctx context.Context, ev Event, kind string) (missing int64, ready bool, err error) {
+	if ev.Career == "" {
+		return 0, false, nil
+	}
+	system, err := b.CareerSystem(ctx, ev.PlayerID, ev.Career)
+	if err != nil || system == "" {
+		return 0, false, err
+	}
+	header, err := b.systemEntry(ctx, system)
+	if err != nil || !header.exists || !header.reportedComplete {
+		return 0, false, err
+	}
+	catalogue, err := b.systemCatalogue(ctx, system)
+	if err != nil || int64(len(catalogue)) != header.bodyCount {
+		return 0, false, err
+	}
+	var target int64
+	for _, bodyKind := range catalogue {
+		if kind == "" || bodyKind == kind {
+			target++
+		}
+	}
+	if target == 0 {
+		return 0, false, nil
+	}
+	visited, err := b.playerCareerBodies(ctx, ev.PlayerID)
+	if err != nil {
+		return 0, false, err
+	}
+	for k, entry := range visited {
+		if k.career == ev.Career && k.kind == "soi" && entry.system == system {
+			if bodyKind, exists := catalogue[k.body]; exists && (kind == "" || bodyKind == kind) {
+				target--
+			}
+		}
+	}
+	return target, true, nil
 }
 
 // CareerBodyCountBefore counts one save's distinct members whose first clock

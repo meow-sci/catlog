@@ -418,8 +418,17 @@ writes neither scope. It resolves the career's system once; the lifetime row ret
 whereas the save row already carries it in its key. The helper does not decide eligibility; each
 registered concrete fold supplies its compile-time or validated family key and owns the established
 flight/board eligibility rule (`stats/fold.go:296-313`). F5 registers 33 fixed folds and three
-dynamic family folds. The two effectively-complete-system subset badges remain metadata-only until
-F7.
+dynamic family folds. F7 adds the two fixed effectively-complete-system subset folds, making all 35
+fixed badges active.
+
+`Batch.BodiesNotVisited` resolves the save's bound system, requires a reported-complete header whose
+declared `body_count` exactly equals the effective catalogue row count, and refuses an empty selected
+subset. Its per-system body→kind cache merges unflushed `system_body` inserts, while the existing
+per-player career-body cache already includes unflushed SOI membership. The final missing arrival
+therefore satisfies the subset in the same large batch just as it does after a flush. Kind
+`"planet"` selects the game-emitted normalized planet rows; empty kind selects every body, including
+parentless roots and opaque future classes. No server body list or concrete-class mapping exists
+(`stats/batch.go`, `stats/system.go`, `stats/badgefolds.go`).
 
 State folds run `systemFold → flightFold → careerFold` before every board. `systemFold` is first
 because `system.discovered` precedes `session.started` in the same client boundary and board folds

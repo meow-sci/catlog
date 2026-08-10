@@ -5,10 +5,7 @@ import (
 	"fmt"
 )
 
-// BadgeFolds returns the active starter catalogue in display order. The two
-// everywhere subset badges remain metadata-only until F7 supplies their
-// complete-system predicate; everything expressible with F4's four shapes is
-// active here.
+// BadgeFolds returns the active starter catalogue in display order.
 func BadgeFolds() []Fold {
 	return []Fold{
 		// First steps.
@@ -40,12 +37,13 @@ func BadgeFolds() []Fold {
 		thresholdBadge{badge: BadgeCanyonRun, stat: StatLowestPass, n: 100, below: true},
 		thresholdBadge{badge: BadgeOldHand, stat: StatLandings, n: 25},
 
-		// Exploration. The two everywhere metadata entries sit after
-		// groundskeeper; F7 will insert their subset folds before the families.
+		// Exploration.
 		thresholdBadge{badge: BadgeWanderer, stat: StatSOIBodies, n: 3},
 		thresholdBadge{badge: BadgeVoyager, stat: StatSOIBodies, n: 5},
 		thresholdBadge{badge: BadgeGrandTour, stat: StatSOIBodies, n: 8},
 		thresholdBadge{badge: BadgeGroundskeeper, stat: StatLandedBodies, n: 3},
+		everywhereBadge{badge: BadgeBeenToEveryPlanet, kind: "planet"},
+		everywhereBadge{badge: BadgeBeenToEverything},
 		reachedBodyBadge{},
 		orbitedBodyBadge{},
 		landedOnBodyBadge{},
@@ -203,6 +201,39 @@ func coasterCandidate(ev Event, state FlightState) bool {
 type reachedBodyBadge struct{}
 type orbitedBodyBadge struct{}
 type landedOnBodyBadge struct{}
+
+// everywhereBadge is a fixed subset predicate over the game-reported system
+// catalogue. kind is the emitted normalized kind; empty selects every body.
+type everywhereBadge struct {
+	badge string
+	kind  string
+}
+
+func (f everywhereBadge) Name() string { return "badge:" + f.badge }
+
+func (f everywhereBadge) Apply(ctx context.Context, b *Batch, ev Event) error {
+	p, ok := payloadOf[VehicleSOI](ev)
+	if !ok || p.ToBody == "" {
+		return nil
+	}
+	ok, err := scoreable(ctx, ev, b)
+	if err != nil || !ok {
+		return err
+	}
+	lifetime, err := b.HasBadge(ctx, ev.PlayerID, "", f.badge)
+	if err != nil {
+		return err
+	}
+	save, err := b.HasBadge(ctx, ev.PlayerID, ev.Career, f.badge)
+	if err != nil || (lifetime && save) {
+		return err
+	}
+	missing, ready, err := b.BodiesNotVisited(ctx, ev, f.kind)
+	if err != nil || !ready || missing != 0 {
+		return err
+	}
+	return award(ctx, b, ev, f.badge, nil)
+}
 
 func (reachedBodyBadge) Name() string  { return "badge-family:reached" }
 func (orbitedBodyBadge) Name() string  { return "badge-family:orbited" }

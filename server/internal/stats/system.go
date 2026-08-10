@@ -233,7 +233,42 @@ func (b *Batch) InsertSystemBody(ctx context.Context, p SystemBody, seq int64) e
 	}
 	e.p, e.firstSeq, e.exists, e.dirty = p, seq, true, true
 	b.dirtySystemBodies = append(b.dirtySystemBodies, k)
+	if catalogue, loaded := b.systemCatalogues[p.System]; loaded {
+		catalogue[p.Body] = p.Kind
+	}
 	return nil
+}
+
+// systemCatalogue loads one immutable system's body→normalized-kind set and
+// merges any bodies not yet flushed by this Batch.
+func (b *Batch) systemCatalogue(ctx context.Context, hash string) (map[string]string, error) {
+	if catalogue, ok := b.systemCatalogues[hash]; ok {
+		return catalogue, nil
+	}
+	rows, err := b.tx.QueryContext(ctx,
+		`SELECT body, kind FROM system_body WHERE hash = ?`, hash)
+	if err != nil {
+		return nil, fmt.Errorf("stats: read system catalogue %q: %w", hash, err)
+	}
+	defer rows.Close()
+	catalogue := map[string]string{}
+	for rows.Next() {
+		var body, kind string
+		if err := rows.Scan(&body, &kind); err != nil {
+			return nil, fmt.Errorf("stats: scan system catalogue %q: %w", hash, err)
+		}
+		catalogue[body] = kind
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("stats: read system catalogue %q: %w", hash, err)
+	}
+	for key, entry := range b.systemBodies {
+		if key.hash == hash && entry.exists && entry.p.Body != "" {
+			catalogue[key.body] = entry.p.Kind
+		}
+	}
+	b.systemCatalogues[hash] = catalogue
+	return catalogue, nil
 }
 
 func (b *Batch) flushSystemBodies(ctx context.Context) error {

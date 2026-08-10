@@ -3,6 +3,7 @@ package stats
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"slices"
 	"testing"
 
@@ -470,8 +471,8 @@ func TestUnkeyableFamilyBodySkipsOnlyBadge(t *testing.T) {
 
 func TestSecondPassOrderNamesAndBuildIdentity(t *testing.T) {
 	badges := BadgeFolds()
-	if len(badges) != 36 {
-		t.Fatalf("BadgeFolds() has %d entries, want 33 fixed and 3 families", len(badges))
+	if len(badges) != 38 {
+		t.Fatalf("BadgeFolds() has %d entries, want 35 fixed and 3 families", len(badges))
 	}
 	second := SecondPassFolds()
 	boards := BoardFolds()
@@ -554,6 +555,8 @@ func TestActiveBadgeCatalogueCoverageOrderAndShapes(t *testing.T) {
 		{BadgeVoyager, "threshold", StatSOIBodies, 5, false},
 		{BadgeGrandTour, "threshold", StatSOIBodies, 8, false},
 		{BadgeGroundskeeper, "threshold", StatLandedBodies, 3, false},
+		{BadgeBeenToEveryPlanet, "everywhere", "planet", 0, false},
+		{BadgeBeenToEverything, "everywhere", "", 0, false},
 		{"reached_", "family", "vehicle.soi", 0, false},
 		{"orbited_", "family", "vehicle.orbit", 0, false},
 		{"landed_on_", "family", "vehicle.landed", 0, false},
@@ -588,6 +591,11 @@ func TestActiveBadgeCatalogueCoverageOrderAndShapes(t *testing.T) {
 				t.Errorf("fold %d = threshold %q/%q/%g/%v, want %+v", i, f.badge, f.stat, f.n, f.below, got)
 			}
 			activeFixed[f.badge] = true
+		case everywhereBadge:
+			if got.shape != "everywhere" || f.badge != got.key || f.kind != got.source {
+				t.Errorf("fold %d = everywhere %q/%q, want %+v", i, f.badge, f.kind, got)
+			}
+			activeFixed[f.badge] = true
 		case reachedBodyBadge:
 			if got.key != "reached_" || got.source != "vehicle.soi" {
 				t.Errorf("fold %d = reached family, want %+v", i, got)
@@ -605,9 +613,8 @@ func TestActiveBadgeCatalogueCoverageOrderAndShapes(t *testing.T) {
 		}
 	}
 	for _, badge := range FixedBadges() {
-		wantActive := badge.Key != BadgeBeenToEveryPlanet && badge.Key != BadgeBeenToEverything
-		if activeFixed[badge.Key] != wantActive {
-			t.Errorf("fixed badge %q active=%v, want %v", badge.Key, activeFixed[badge.Key], wantActive)
+		if !activeFixed[badge.Key] {
+			t.Errorf("fixed badge %q is not active", badge.Key)
 		}
 	}
 	withoutBadges := append(foldNames(StateFolds()), foldNames(BoardFolds())...)
@@ -711,6 +718,191 @@ func TestFamilyBadgeContextContainsOnlyBody(t *testing.T) {
 		if !row.context.Valid || row.context.String != `{"body":"luna"}` {
 			t.Errorf("family context = %+v, want only body", row.context)
 		}
+	}
+}
+
+const everywhereTestSystem = "everywhere-system"
+
+func everywhereSystemBody(body, kind, class string, parent *string) SystemBody {
+	return SystemBody{
+		System: everywhereTestSystem, Body: body, Name: body, Kind: kind, Class: class,
+		Parent: parent, RadiusM: 1, MassKg: 1, Axis: Vec3{Z: 1}, CcfToCceT0: Quat{W: 1},
+	}
+}
+
+func prepareEverywhereSystem(ctx context.Context, b *Batch, complete bool, declared int, bodies ...SystemBody) error {
+	if err := b.UpsertSystem(ctx, SystemDiscovered{
+		System: everywhereTestSystem, ID: "test", Name: "Test", Home: "root",
+		Bodies: declared, Complete: complete,
+	}, 1); err != nil {
+		return err
+	}
+	if err := b.BindCareerSystem(ctx, 1, "save", everywhereTestSystem, 1); err != nil {
+		return err
+	}
+	for i, body := range bodies {
+		if err := b.InsertSystemBody(ctx, body, int64(i+2)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func applyEverywhereSOI(ctx context.Context, b *Batch, seq int64, body string) error {
+	ev := Event{
+		Seq: seq, PlayerID: 1, Career: "save", Type: "vehicle.soi",
+		Payload: VehicleSOI{ToBody: body}, RecvTime: 1_700_000_000_000 + seq,
+	}
+	if err := (soiFold{}).Apply(ctx, b, ev); err != nil {
+		return err
+	}
+	for _, fold := range []Fold{
+		everywhereBadge{badge: BadgeBeenToEveryPlanet, kind: "planet"},
+		everywhereBadge{badge: BadgeBeenToEverything},
+	} {
+		if err := fold.Apply(ctx, b, ev); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func TestEverywhereAwardsOnLastMissingBodyAcrossBatchBoundaries(t *testing.T) {
+	root := "root"
+	bodies := []SystemBody{
+		everywhereSystemBody(root, "star", "RootClass", nil),
+		everywhereSystemBody("alpha", "planet", "PlanetClass", &root),
+		everywhereSystemBody("beta", "planet", "FutureUnknownPlanetClass", &root),
+	}
+	for _, split := range []bool{false, true} {
+		name := map[bool]string{false: "large-pending-batch", true: "one-event-batches"}[split]
+		t.Run(name, func(t *testing.T) {
+			p := testutil.MemProjections(t)
+			setup := func(b *Batch) error {
+				return prepareEverywhereSystem(t.Context(), b, true, len(bodies), bodies...)
+			}
+			visits := []string{root, "alpha", "beta"}
+			if split {
+				runBadgeBatch(t, p, 1, setup)
+				for i, body := range visits[:2] {
+					seq := int64(10 + i)
+					runBadgeBatch(t, p, 1, func(b *Batch) error { return applyEverywhereSOI(t.Context(), b, seq, body) })
+				}
+				if got := len(badgeRows(t, p)); got != 0 {
+					t.Fatalf("awards before final body = %d", got)
+				}
+				runBadgeBatch(t, p, 1, func(b *Batch) error { return applyEverywhereSOI(t.Context(), b, 12, "beta") })
+			} else {
+				runBadgeBatch(t, p, 0, func(b *Batch) error {
+					if err := setup(b); err != nil {
+						return err
+					}
+					for i, body := range visits[:2] {
+						if err := applyEverywhereSOI(t.Context(), b, int64(10+i), body); err != nil {
+							return err
+						}
+					}
+					for _, badge := range []string{BadgeBeenToEveryPlanet, BadgeBeenToEverything} {
+						earned, err := b.HasBadge(t.Context(), 1, "", badge)
+						if err != nil || earned {
+							return fmt.Errorf("%s before final body = %v, %v", badge, earned, err)
+						}
+					}
+					return applyEverywhereSOI(t.Context(), b, 12, "beta")
+				})
+			}
+
+			rows := badgeRows(t, p)
+			if len(rows) != 4 {
+				t.Fatalf("final everywhere rows = %+v", rows)
+			}
+			for _, row := range rows {
+				if row.system != everywhereTestSystem || row.earnedSeq != 12 || row.context.Valid {
+					t.Errorf("everywhere row = %+v", row)
+				}
+				if row.career == "" && row.firstCareer != "save" {
+					t.Errorf("lifetime provenance = %+v", row)
+				}
+				if row.career == "save" && row.firstCareer != "" {
+					t.Errorf("save provenance = %+v", row)
+				}
+			}
+		})
+	}
+}
+
+func TestEverywhereRefusesIncompleteAndVacuousCatalogues(t *testing.T) {
+	root := everywhereSystemBody("root", "star", "RootClass", nil)
+	planet := everywhereSystemBody("planet", "planet", "UnknownFutureClass", nil)
+	tests := []struct {
+		name     string
+		header   bool
+		complete bool
+		declared int
+		bodies   []SystemBody
+		fold     everywhereBadge
+		visit    string
+	}{
+		{"missing-header", false, false, 0, nil, everywhereBadge{badge: BadgeBeenToEverything}, "root"},
+		{"reported-incomplete", true, false, 1, []SystemBody{root}, everywhereBadge{badge: BadgeBeenToEverything}, "root"},
+		{"short-catalogue", true, true, 2, []SystemBody{root}, everywhereBadge{badge: BadgeBeenToEverything}, "root"},
+		{"empty-planet-subset", true, true, 1, []SystemBody{root}, everywhereBadge{badge: BadgeBeenToEveryPlanet, kind: "planet"}, "root"},
+		{"empty-all-subset", true, true, 0, nil, everywhereBadge{badge: BadgeBeenToEverything}, "invented"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			p := testutil.MemProjections(t)
+			runBadgeBatch(t, p, 0, func(b *Batch) error {
+				if test.header {
+					if err := prepareEverywhereSystem(t.Context(), b, test.complete, test.declared, test.bodies...); err != nil {
+						return err
+					}
+				} else if err := b.BindCareerSystem(t.Context(), 1, "save", everywhereTestSystem, 1); err != nil {
+					return err
+				}
+				ev := Event{Seq: 10, PlayerID: 1, Career: "save", Type: "vehicle.soi", Payload: VehicleSOI{ToBody: test.visit}}
+				if err := (soiFold{}).Apply(t.Context(), b, ev); err != nil {
+					return err
+				}
+				return test.fold.Apply(t.Context(), b, ev)
+			})
+			if rows := badgeRows(t, p); len(rows) != 0 {
+				t.Errorf("ineligible catalogue awarded: %+v", rows)
+			}
+		})
+	}
+
+	// An unknown concrete class is irrelevant: the emitted normalized kind is
+	// the subset contract, so this one-body planet catalogue awards both keys.
+	p := testutil.MemProjections(t)
+	runBadgeBatch(t, p, 0, func(b *Batch) error {
+		if err := prepareEverywhereSystem(t.Context(), b, true, 1, planet); err != nil {
+			return err
+		}
+		return applyEverywhereSOI(t.Context(), b, 10, "planet")
+	})
+	if rows := badgeRows(t, p); len(rows) != 4 {
+		t.Fatalf("explicit planet kind with unknown class rows = %+v", rows)
+	}
+}
+
+func TestEverywhereDoesNotRetroAwardWhenCatalogueCompletes(t *testing.T) {
+	p := testutil.MemProjections(t)
+	root := everywhereSystemBody("root", "star", "RootClass", nil)
+	planet := everywhereSystemBody("planet", "planet", "PlanetClass", nil)
+	runBadgeBatch(t, p, 0, func(b *Batch) error {
+		if err := prepareEverywhereSystem(t.Context(), b, true, 2, root); err != nil {
+			return err
+		}
+		return applyEverywhereSOI(t.Context(), b, 10, "root")
+	})
+	runBadgeBatch(t, p, 0, func(b *Batch) error { return b.InsertSystemBody(t.Context(), planet, 11) })
+	if rows := badgeRows(t, p); len(rows) != 0 {
+		t.Fatalf("catalogue completion retro-awarded without an SOI: %+v", rows)
+	}
+	runBadgeBatch(t, p, 0, func(b *Batch) error { return applyEverywhereSOI(t.Context(), b, 12, "planet") })
+	if rows := badgeRows(t, p); len(rows) != 4 {
+		t.Fatalf("qualifying SOI after catalogue completion rows = %+v", rows)
 	}
 }
 
