@@ -1,7 +1,7 @@
 ---
 title: Every board
 description: >-
-  All 42 fixed leaderboards and the two board families, with the events behind
+  All 43 fixed leaderboards and the three board families, with the events behind
   each one and every rule that disqualifies a value.
 sidebar:
   order: 2
@@ -10,8 +10,9 @@ sidebar:
 import { Aside } from "@astrojs/starlight/components";
 import BoardDetail from "../../../components/BoardDetail.astro";
 
-Forty-two fixed boards, in the order they are published, then the two families whose
-members appear as people reach new worlds and find new ways to lose a vehicle.
+Forty-three fixed boards, in the order they are published, then the three families whose
+members appear as people tumble on new worlds, reach new worlds and find new ways to lose a vehicle.
+The newest fixed counter appears after the original 42 so their published positions do not move.
 
 ## Records — how much you survived
 
@@ -166,20 +167,6 @@ best individual cat is. The row names her.
 <BoardDetail stat="top_kitten_distance" />
 <BoardDetail stat="top_kitten_missions" />
 
-## The save itself
-
-These boards describe the saves you play rather than a particular flight. **Longest
-Save** follows the career clock attached to events: on the player board it picks
-your longest-running save, while a career row shows how long that one save has
-been played. A flight flag does not disqualify that time, because the duration of
-a save is not a flying feat.
-
-**Play Sessions** counts the first session as well as every later load. It is the
-number of times play began, not merely the number of times a save was resumed.
-
-<BoardDetail stat="career_playtime" />
-<BoardDetail stat="play_sessions" />
-
 ## Career times
 
 Career-time boards answer a different question from the rest: not _how well_, but
@@ -200,7 +187,37 @@ can see the clock behind the number did not run forwards.
 
 <BoardDetail stat="fastest_to_orbit" />
 
-## The two families
+## The save itself
+
+These boards describe the saves you play rather than a particular flight. **Longest
+Save** follows the career clock attached to events: on the player board it picks
+your longest-running save, while a career row shows how long that one save has
+been played. A flight flag does not disqualify that time, because the duration of
+a save is not a flying feat.
+
+**Play Sessions** counts the first session as well as every later load. It is the
+number of times play began, not merely the number of times a save was resumed.
+
+<BoardDetail stat="career_playtime" />
+<BoardDetail stat="play_sessions" />
+
+## The appended counter
+
+<BoardDetail stat="botched_landings" />
+
+Kitten Tumbles preserves the original total: every recorded tumble counts, including a grounded
+trip or a rough cartwheel with several bounce edges. Did Not Land On Their Feet is the narrower
+view. It counts only a tumble that began from airborne, which is how the game's movement states
+identify a landing that did not finish upright. An unknown or future movement state remains in the
+total and does not become a botched landing by guesswork.
+
+## The three families
+
+<BoardDetail stat="tumbles_on_<body>" />
+
+Each world's board counts all tumbles there, not only botched landings. A world name that cannot
+form a safe board address still contributes to Kitten Tumbles; only its dedicated family member is
+missing.
 
 <BoardDetail stat="rud_<cause>" />
 

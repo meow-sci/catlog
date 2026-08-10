@@ -16,6 +16,7 @@ const (
 	StatFastestSurfaceSpeed       = "fastest_surface_speed"
 	StatFastestOrbitalSpeed       = "fastest_orbital_speed"
 	StatKittenTumbles             = "kitten_tumbles"
+	StatBotchedLandings           = "botched_landings"
 	StatRUDTotal                  = "rud_total"
 	StatOrbitsAchieved            = "orbits_achieved"
 	StatSOIBodies                 = "soi_bodies"
@@ -84,9 +85,9 @@ type Board struct {
 // pad, then the counters and roster totals, then the career-time and
 // save-native boards.
 //
-// Every entry here is a board because a fold with that name exists, so the list
-// is a property of the build. The two *families* below are not: their keys come
-// out of the data.
+// Every entry here is a board because a registered fold writes that stat, so
+// the list is a property of the build. The *families* below are not: their keys
+// come out of the data.
 //
 // Four boards have an **empty unit** — `roundest_orbit` (an eccentricity),
 // `most_parts`, `most_stages` and `biggest_stack` (bare counts of a thing whose
@@ -143,6 +144,7 @@ var fixedBoards = func() []Board {
 		{Stat: StatFastestToOrbit, Title: "Fastest to Orbit", Unit: "ms", Ascending: true, Career: true},
 		{Stat: StatCareerPlaytime, Title: "Longest Save", Unit: "ms", Career: true},
 		rec(StatPlaySessions, "Play Sessions", "sessions"),
+		rec(StatBotchedLandings, "Did Not Land On Their Feet", "tumbles"),
 	}
 }()
 
@@ -160,9 +162,9 @@ func FixedBoards() []Board { return slices.Clone(fixedBoards) }
 
 // --- the dynamic board families ------------------------------------------------
 //
-// Two board keys are not constants. `fastest_to_<body>` and `rud_<cause>` take
-// their second half from the event stream — a celestial body, a destruction
-// cause — and catlog holds no list of either.
+// Family board keys are not constants. `fastest_to_<body>`, `tumbles_on_<body>`
+// and `rud_<cause>` take their second half from the event stream — a celestial
+// body or a destruction cause — and catlog holds no list of either.
 //
 // It held one, and that was wrong. KSA's celestial systems are hand-authored
 // content that ships as data and that mods extend or replace, and docs/events.md
@@ -224,6 +226,13 @@ var families = []family{{
 	board: func(stat, body string) Board {
 		return Board{Stat: stat, Title: "Fastest to " + titleize(body), Unit: "ms", Ascending: true, Career: true}
 	},
+}, {
+	prefix:      "tumbles_on_",
+	after:       StatKittenTumbles,
+	bodyDerived: true,
+	board: func(stat, body string) Board {
+		return Board{Stat: stat, Title: "Tumbles on " + titleize(body), Unit: "tumbles"}
+	},
 }}
 
 // FastestToStat is the career-time board key for a body, reporting false when
@@ -233,6 +242,10 @@ func FastestToStat(body string) (string, bool) { return familyStat("fastest_to_"
 // RUDStat is the per-cause board key for a §4.2 cause, reporting false when the
 // cause cannot be half of a stat key.
 func RUDStat(cause string) (string, bool) { return familyStat("rud_", cause) }
+
+// TumblesOnStat is the per-body tumble board key, reporting false when the
+// body's name cannot be half of a stat key.
+func TumblesOnStat(body string) (string, bool) { return familyStat("tumbles_on_", body) }
 
 // familyStat builds a family stat key out of a value the wire carried.
 func familyStat(prefix, value string) (string, bool) {
@@ -1044,7 +1057,7 @@ func (landingsFold) Apply(ctx context.Context, b *Batch, ev Event) error {
 // --- counter folds -----------------------------------------------------------
 
 // countFold implements the boards that are simply "how many of this event":
-// `kitten_tumbles`, `dockings`, `stagings`, `play_sessions`.
+// `dockings`, `stagings`, `play_sessions`.
 type countFold struct {
 	stat      string
 	eventType string
@@ -1061,6 +1074,45 @@ func (f countFold) Apply(ctx context.Context, b *Batch, ev Event) error {
 		return err
 	}
 	return addCount(ctx, b, ev, f.stat, 1)
+}
+
+// tumbleFold counts every kitten.tumble in the unchanged lifetime total and,
+// when the body can form a safe stat key, in the per-body family.
+//
+// `from` is the kitten's locomotion mode immediately before the tumble. The
+// game's own state machine distinguishes a botched landing (airborne ->
+// tumbling) from a trip (grounded -> tumbling), so botched_landings tests only
+// for the one value it owns. From is an open set: every other value, including
+// "unknown" and future modes, still contributes to the total and body family.
+type tumbleFold struct{}
+
+// The fold name is deliberately not the unchanged total's stat key. Replacing
+// the old countFold must change BuildID so existing projections rebuild and
+// backfill the split and per-body history without a BuildVersion bump.
+func (tumbleFold) Name() string { return "tumble_split" }
+
+func (tumbleFold) Apply(ctx context.Context, b *Batch, ev Event) error {
+	p, ok := payloadOf[KittenTumble](ev)
+	if !ok {
+		return nil
+	}
+	ok, err := scoreable(ctx, ev, b)
+	if err != nil || !ok {
+		return err
+	}
+	if err := addCount(ctx, b, ev, StatKittenTumbles, 1); err != nil {
+		return err
+	}
+	if p.From == "airborne" {
+		if err := addCount(ctx, b, ev, StatBotchedLandings, 1); err != nil {
+			return err
+		}
+	}
+	stat, ok := TumblesOnStat(p.Body)
+	if !ok {
+		return nil
+	}
+	return addCount(ctx, b, ev, stat, 1)
 }
 
 // rudFold implements `rud_total` and the `rud_<cause>` family (§5.6).

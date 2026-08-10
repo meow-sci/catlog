@@ -121,7 +121,7 @@ func BoardFolds() []Fold {
 		recoveryFold{},
 		stagesFold{},
 		evaDurationFold{},
-		countFold{stat: StatKittenTumbles, eventType: "kitten.tumble"},
+		tumbleFold{},
 		rudFold{},
 		orbitsFold{},
 		soiFold{},

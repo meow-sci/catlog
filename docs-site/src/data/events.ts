@@ -730,7 +730,7 @@ export const EVENTS: CatlogEvent[] = [
       { key: "speed_ms", unit: "m/s", what: "Ground speed when it went over." },
       { key: "body", unit: "", what: "Where it happened." },
     ],
-    feeds: ["kitten_tumbles"],
+    feeds: ["kitten_tumbles", "botched_landings", "tumbles_on_<body>"],
     page: "kittens",
   },
   {

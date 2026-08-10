@@ -38,7 +38,7 @@ export interface Board {
 
 const UNIVERSAL_SCOPES: Board["scopes"] = ["player", "career", "system"];
 
-/** The 42 fixed boards, in the order the site publishes them. */
+/** The 43 fixed boards, in the order the site publishes them. */
 const BOARD_DEFINITIONS: Omit<Board, "scopes">[] = [
   {
     stat: "biggest_lithobrake_survived",
@@ -596,9 +596,23 @@ const BOARD_DEFINITIONS: Omit<Board, "scopes">[] = [
     how: "One for the initial session and one for every later load in the selected player, save or celestial-system scope. This counts play sessions, not just resumes.",
     excluded: ["Nothing."],
   },
+  {
+    stat: "botched_landings",
+    title: "Did Not Land On Their Feet",
+    unit: "tumbles",
+    ascending: false,
+    career: false,
+    from: ["kitten.tumble"],
+    what: "How many tumbles began as a landing that did not end on the kitten's feet.",
+    how: "One for each tumble whose immediately previous movement state was airborne. Grounded trips and every other previous state still count on Kitten Tumbles, but not here.",
+    excluded: [
+      "The tumble began from grounded, unknown, or any state other than airborne.",
+      "The flight was flagged, which includes any flight where the tumble tuning was changed.",
+    ],
+  },
 ];
 
-// Scope is deliberately attached here rather than repeated on 42 entries. A
+// Scope is deliberately attached here rather than repeated on 43 entries. A
 // board added to the catalog receives every scope automatically; there is no
 // opt-out registry to forget to update.
 export const BOARDS: Board[] = BOARD_DEFINITIONS.map((board) => ({
@@ -608,6 +622,24 @@ export const BOARDS: Board[] = BOARD_DEFINITIONS.map((board) => ({
 
 /** Boards whose keys are built from the data rather than fixed in advance. */
 const BOARD_FAMILY_DEFINITIONS: Omit<Board, "scopes">[] = [
+  {
+    stat: "tumbles_on_<body>",
+    title: "Tumbles on <Body>",
+    unit: "tumbles",
+    ascending: false,
+    career: false,
+    from: ["kitten.tumble"],
+    what: "How many times your kittens have gone over on one particular world.",
+    how: "One per tumble on that world, in addition to the all-world Kitten Tumbles total.",
+    excluded: [
+      "The flight was flagged.",
+      "The world's name could not safely form a board key. The tumble still counts towards Kitten Tumbles.",
+    ],
+    family: {
+      pattern: "tumbles_on_<body>",
+      from: "The name of the world where the tumble happened. Catlog has no list of allowed worlds; a family member appears because somebody tumbled there.",
+    },
+  },
   {
     stat: "rud_<cause>",
     title: "RUDs — <Cause>",

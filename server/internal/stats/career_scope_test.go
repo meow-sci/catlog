@@ -447,6 +447,52 @@ func TestDynamicBoardsGetTheirCareerScopeForFree(t *testing.T) {
 	}
 }
 
+func TestTumbleSplitWritesEveryScopeWithoutChangingTheTotal(t *testing.T) {
+	p := scopeProjections(t)
+	career, system := "testcareer000001", "testsystem000001"
+	seedCareer(t, p, 1, career, system)
+	clean, flagged := scopeFlight(20), scopeFlight(21)
+	foldScopeEvents(t, p,
+		Event{Seq: 2, PlayerID: 1, FlightID: clean, Career: career,
+			Type: "kitten.tumble", Payload: KittenTumble{From: "grounded", Body: "earth"}},
+		Event{Seq: 3, PlayerID: 1, FlightID: clean, Career: career,
+			Type: "kitten.tumble", Payload: KittenTumble{From: "airborne", Body: "earth"}},
+		Event{Seq: 4, PlayerID: 1, FlightID: clean, Career: career,
+			Type: "kitten.tumble", Payload: KittenTumble{From: "future-mode", Body: "mars"}},
+		Event{Seq: 5, PlayerID: 1, FlightID: clean, Career: career,
+			Type: "kitten.tumble", Payload: KittenTumble{From: "unknown", Body: "mars"}},
+		// An unkeyable body retains both consequences that do not depend on a
+		// family key: the all-tumble total and the airborne split.
+		Event{Seq: 6, PlayerID: 1, FlightID: clean, Career: career,
+			Type: "kitten.tumble", Payload: KittenTumble{From: "airborne", Body: "bad/body"}},
+		Event{Seq: 7, PlayerID: 1, FlightID: flagged, Career: career,
+			Type: "flight.flagged", Payload: FlightFlagged{Flag: "tuning"}},
+		Event{Seq: 8, PlayerID: 1, FlightID: flagged, Career: career,
+			Type: "kitten.tumble", Payload: KittenTumble{From: "airborne", Body: "luna"}},
+	)
+
+	want := map[string]float64{
+		StatKittenTumbles:   5,
+		StatBotchedLandings: 2,
+		"tumbles_on_earth":  2,
+		"tumbles_on_mars":   2,
+	}
+	assertValues := func(label string, rows map[string]scopedRow, prefix string) {
+		t.Helper()
+		if len(rows) != len(want) {
+			t.Errorf("%s rows = %v, want exactly %v", label, rows, want)
+		}
+		for stat, value := range want {
+			if got := rows[prefix+stat].value; got != value {
+				t.Errorf("%s %s = %v, want %v", label, stat, got, value)
+			}
+		}
+	}
+	assertValues("player", readPlayerScopeStats(t, p), "1/")
+	assertValues("career", readCareerStats(t, p), "1/"+career+"/")
+	assertValues("system", readSystemStats(t, p), "1/"+system+"/")
+}
+
 func TestFlaggedFlightScoresNothingInEitherScope(t *testing.T) {
 	p := scopeProjections(t)
 	career, system := "testcareer000001", "testsystem000001"

@@ -1718,6 +1718,31 @@ need no launch fact—an early orbit achievement included—still accumulate nor
 what keeps rebuild deterministic without pretending event order was better than the stored log.
 The retained facts and bits are inputs only: D5 adds no badge, board or player-visible award.
 
+### PROJ-115 — The tumble split preserves the total and treats game state and body names as open data
+
+*Accepted · 2026-08-10 · Task E1.*
+
+`kitten_tumbles` remains the count of every decoded tumble so an existing number never changes
+meaning. **Did Not Land On Their Feet** is a second counter, not a replacement: it tests only exact
+`from == "airborne"`, because the game's own movement-state transition distinguishes a failed
+landing from a grounded trip without a speed heuristic. `from` remains an open set. `"grounded"`,
+`"unknown"` and modes introduced by later game builds still increment the total and are simply not
+guessed into the narrower board.
+
+The `tumbles_on_<body>` family likewise adds a view without subtracting from the total. It uses the
+shared `familyStat` rules, so there is no body allow-list and a body that cannot form a safe key
+still increments `kitten_tumbles` (and `botched_landings` when airborne) while receiving no family
+row. All three writes go through `addCount` after one flag check, which gives player, career and
+system scope automatically and keeps a tuning-flagged flight off every view. The fixed board is
+appended after the existing 42 to preserve their published positions; family members remain grouped
+under `kitten_tumbles`.
+
+Replacing the generic count fold changes its stable identity from `kitten_tumbles` to
+`tumble_split`. That change is intentional: `BuildID` notices the projection graph changed and
+queues a historical rebuild, backfilling the new fixed and per-body rows from the immutable log.
+`BuildVersion` remains 1 because no event or stored schema changed; hiding the new outputs behind
+the old identity would leave existing deployments permanently missing history.
+
 ## Archive & restore
 
 The filesystem archiver, the manifest, restore verification, and the R2 design that is deliberately not built.

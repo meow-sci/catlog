@@ -89,10 +89,10 @@ func (s *Server) BoardList(ctx context.Context) (BoardsResponse, error) {
 	// The board list is assembled from the data, not from a table in the source.
 	// Every board with a compile-time key is listed whether or not anyone is on
 	// it — an empty board is still a board, and a UI that discovers boards here
-	// must not lose one because nobody has scored yet. The two families whose
-	// keys come out of the event stream (`fastest_to_<body>`, `rud_<cause>`) are
-	// listed once [Deps.MinBoardPlayers] distinct players are on them; see
-	// stats.Catalog for why that is the whole of the mitigation.
+	// must not lose one because nobody has scored yet. Families whose keys come
+	// out of the event stream are listed once [Deps.MinBoardPlayers] distinct
+	// players are on them; see stats.Catalog for why that is the whole of the
+	// mitigation.
 	all := stats.Catalog(counts, s.minBoardPlayers)
 	out := BoardsResponse{
 		Boards:     make([]BoardSummary, 0, len(all)),

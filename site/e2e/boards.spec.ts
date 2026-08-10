@@ -16,18 +16,18 @@ const TOP_HANDLE = "demo_crasher";
 const TOP_VALUE = 214;
 
 /**
- * The boards whose keys are compile-time constants — one per fold in
- * `server/internal/stats`. These, and only these, exist regardless of what
+ * The boards whose keys are compile-time constants in `server/internal/stats`.
+ * These, and only these, exist regardless of what
  * anybody has flown, so their disappearance is a regression and can be asserted
  * by name.
  *
- * The rest of the index cannot be: `fastest_to_<body>` and `rud_<cause>` take
- * their keys from the event stream, because KSA's celestial systems are content
- * that mods extend and the server treats a body name as opaque. A board appears
- * the day two players reach somewhere new. That is why the assertion below is a
- * required *set* plus an agreement check against the JSON, rather than the exact
- * row count it used to be — a count every new body invalidates is a count that
- * gets bumped without being read.
+ * The rest of the index cannot be: `fastest_to_<body>`, `tumbles_on_<body>` and
+ * `rud_<cause>` take their keys from the event stream, because KSA's celestial
+ * systems are content that mods extend and the server treats a body name as
+ * opaque. A board appears the day two players reach somewhere new. That is why
+ * the assertion below is a required *set* plus an agreement check against the
+ * JSON, rather than the exact row count it used to be — a count every new body
+ * invalidates is a count that gets bumped without being read.
  */
 const FIXED_BOARDS = [
   "biggest_lithobrake_survived",
@@ -72,9 +72,10 @@ const FIXED_BOARDS = [
   "fastest_to_orbit",
   "career_playtime",
   "play_sessions",
+  "botched_landings",
 ];
 
-const DYNAMIC_BOARD_FAMILIES = ["fastest_to_", "rud_"] as const;
+const DYNAMIC_BOARD_FAMILIES = ["fastest_to_", "rud_", "tumbles_on_"] as const;
 
 test.describe("boards", () => {
   test("the home page shows featured boards and the feed panel", async ({ page }) => {

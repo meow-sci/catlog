@@ -824,7 +824,7 @@ func TestBoardMetadataCoversEveryStatAFoldWrites(t *testing.T) {
 	fixed := []string{
 		stats.StatBiggestLithobrakeSurvived, stats.StatPeakGSurvived,
 		stats.StatFastestSurfaceSpeed, stats.StatFastestOrbitalSpeed,
-		stats.StatKittenTumbles, stats.StatRUDTotal, stats.StatOrbitsAchieved,
+		stats.StatKittenTumbles, stats.StatBotchedLandings, stats.StatRUDTotal, stats.StatOrbitsAchieved,
 		stats.StatSOIBodies, stats.StatDockings, stats.StatStagings,
 		stats.StatKittensRecovered, stats.StatDistanceTravelled,
 		stats.StatFastestToOrbit,
@@ -852,7 +852,7 @@ func TestBoardMetadataCoversEveryStatAFoldWrites(t *testing.T) {
 		t.Errorf("%d fixed boards declared, %d expected", len(declared), len(fixed))
 	}
 
-	// The two families: whatever key the fold builds, Describe must name it.
+	// Every family: whatever key the fold builds, Describe must name it.
 	for _, body := range []string{"luna", "zephyria", "kerbin-ii", "mod.newworld"} {
 		stat, ok := stats.FastestToStat(body)
 		if !ok {
@@ -860,6 +860,13 @@ func TestBoardMetadataCoversEveryStatAFoldWrites(t *testing.T) {
 		}
 		if b, known := stats.Describe(stat); !known || b.Unit != "ms" {
 			t.Errorf("fold writes %q but Describe says %+v (known=%v)", stat, b, known)
+		}
+		tumbleStat, ok := stats.TumblesOnStat(body)
+		if !ok {
+			t.Fatalf("TumblesOnStat(%q) refused a well-formed name", body)
+		}
+		if b, known := stats.Describe(tumbleStat); !known || b.Unit != "tumbles" || !b.BodyDerived {
+			t.Errorf("fold writes %q but Describe says %+v (known=%v)", tumbleStat, b, known)
 		}
 	}
 	for _, cause := range []string{"ground_impact", "kraken", "orbital_decay"} {
@@ -877,6 +884,28 @@ func TestBoardMetadataCoversEveryStatAFoldWrites(t *testing.T) {
 	if _, ok := stats.Known("not_a_board", 99); ok {
 		t.Error("Known accepted an unknown stat")
 	}
+
+	botched, ok := stats.Describe(stats.StatBotchedLandings)
+	if !ok || botched.Title != "Did Not Land On Their Feet" || botched.Unit != "tumbles" ||
+		botched.Ascending || botched.BodyDerived {
+		t.Errorf("botched_landings metadata = %+v, known=%v", botched, ok)
+	}
+	stat, ok := stats.TumblesOnStat("landings")
+	if !ok || stat != "tumbles_on_landings" {
+		t.Errorf("TumblesOnStat(landings) = %q, %v; want valid non-colliding key", stat, ok)
+	}
+	board, ok := stats.Describe(stat)
+	if !ok || board.Title != "Tumbles on Landings" || board.Unit != "tumbles" ||
+		board.Ascending || board.Career || !board.BodyDerived {
+		t.Errorf("tumbles_on_landings metadata = %+v, known=%v", board, ok)
+	}
+	if _, ok := stats.TumblesOnStat("bad/body"); ok {
+		t.Error("TumblesOnStat accepted an unkeyable body")
+	}
+	fixedBoards := stats.FixedBoards()
+	if got := fixedBoards[len(fixedBoards)-1].Stat; got != stats.StatBotchedLandings {
+		t.Errorf("last fixed board = %q, want appended %q", got, stats.StatBotchedLandings)
+	}
 }
 
 // The board index is assembled from the data: a fixed board always, a family
@@ -886,6 +915,8 @@ func TestBoardMetadataCoversEveryStatAFoldWrites(t *testing.T) {
 func TestCatalogPublishesFamilyBoardsOnceEnoughPlayersAreOnThem(t *testing.T) {
 	counts := map[string]int64{
 		stats.StatKittenTumbles: 4,
+		"tumbles_on_duna":       2,
+		"tumbles_on_luna":       1,
 		"rud_ground_impact":     3,
 		"rud_kraken":            1,
 		"fastest_to_luna":       2,
@@ -899,20 +930,23 @@ func TestCatalogPublishesFamilyBoardsOnceEnoughPlayersAreOnThem(t *testing.T) {
 	}
 	has := func(stat string) bool { return slices.Contains(got, stat) }
 
-	for _, stat := range []string{"rud_ground_impact", "fastest_to_luna"} {
+	for _, stat := range []string{"tumbles_on_duna", "rud_ground_impact", "fastest_to_luna"} {
 		if !has(stat) {
 			t.Errorf("%q has two players and was not listed: %v", stat, got)
 		}
 	}
-	for _, stat := range []string{"rud_kraken", "fastest_to_zephyria", "not_a_board_at_all"} {
+	for _, stat := range []string{"tumbles_on_luna", "rud_kraken", "fastest_to_zephyria", "not_a_board_at_all"} {
 		if has(stat) {
 			t.Errorf("%q was listed: %v", stat, got)
 		}
 	}
-	if len(stats.FixedBoards()) != len(got)-2 {
+	if len(stats.FixedBoards()) != len(got)-3 {
 		t.Errorf("catalog = %v; every fixed board is listed whether or not anyone is on it", got)
 	}
 	// Family members sit under the fixed board they belong with.
+	if i, j := slices.Index(got, stats.StatKittenTumbles), slices.Index(got, "tumbles_on_duna"); j != i+1 {
+		t.Errorf("tumbles_on_duna is at %d, want right after kitten_tumbles at %d: %v", j, i, got)
+	}
 	if i, j := slices.Index(got, stats.StatRUDTotal), slices.Index(got, "rud_ground_impact"); j != i+1 {
 		t.Errorf("rud_ground_impact is at %d, want right after rud_total at %d: %v", j, i, got)
 	}
@@ -940,10 +974,11 @@ func TestCatalogPublishesFamilyBoardsOnceEnoughPlayersAreOnThem(t *testing.T) {
 	}
 }
 
-func TestCareerNativeBoardsAreLastWithoutDisplacingDynamicFamilies(t *testing.T) {
+func TestAppendedBoardDoesNotDisplaceTheCareerTailOrDynamicFamilies(t *testing.T) {
 	fixed := stats.FixedBoards()
-	if len(fixed) < 2 || fixed[len(fixed)-2].Stat != stats.StatCareerPlaytime || fixed[len(fixed)-1].Stat != stats.StatPlaySessions {
-		t.Fatalf("last fixed boards = %v, want career_playtime then play_sessions", fixed[max(0, len(fixed)-2):])
+	if len(fixed) < 3 || fixed[len(fixed)-3].Stat != stats.StatCareerPlaytime ||
+		fixed[len(fixed)-2].Stat != stats.StatPlaySessions || fixed[len(fixed)-1].Stat != stats.StatBotchedLandings {
+		t.Fatalf("last fixed boards = %v, want career_playtime, play_sessions, then appended botched_landings", fixed[max(0, len(fixed)-3):])
 	}
 
 	var got []string
@@ -951,12 +986,12 @@ func TestCareerNativeBoardsAreLastWithoutDisplacingDynamicFamilies(t *testing.T)
 		got = append(got, b.Stat)
 	}
 	orbit := slices.Index(got, stats.StatFastestToOrbit)
-	if orbit < 0 || orbit+3 >= len(got) {
+	if orbit < 0 || orbit+4 >= len(got) {
 		t.Fatalf("catalog is missing the career tail: %v", got)
 	}
-	want := []string{stats.StatFastestToOrbit, "fastest_to_luna", stats.StatCareerPlaytime, stats.StatPlaySessions}
-	if !slices.Equal(got[orbit:orbit+4], want) {
-		t.Errorf("catalog career tail = %v, want %v", got[orbit:orbit+4], want)
+	want := []string{stats.StatFastestToOrbit, "fastest_to_luna", stats.StatCareerPlaytime, stats.StatPlaySessions, stats.StatBotchedLandings}
+	if !slices.Equal(got[orbit:orbit+5], want) {
+		t.Errorf("catalog career tail = %v, want %v", got[orbit:orbit+5], want)
 	}
 }
 
@@ -999,6 +1034,33 @@ func TestFoldOrderPutsStateFoldsFirst(t *testing.T) {
 	}
 	if state[0].Name() != "system" || state[1].Name() != stats.FlightFold().Name() {
 		t.Errorf("state fold prefix = %q, %q; want system, flight", state[0].Name(), state[1].Name())
+	}
+}
+
+func TestTumbleSplitChangesTheFoldRegistryIdentityInPlace(t *testing.T) {
+	if stats.BuildVersion != 1 {
+		t.Fatalf("BuildVersion = %d, want unchanged 1; the fold rename carries this rebuild", stats.BuildVersion)
+	}
+	names := stats.FoldNames()
+	var splitNames int
+	for _, name := range names {
+		if name == "tumble_split" {
+			splitNames++
+		}
+	}
+	if splitNames != 1 {
+		t.Fatalf("tumble_split fold names = %d, want one: %v", splitNames, names)
+	}
+	if slices.Contains(names, stats.StatKittenTumbles) {
+		t.Errorf("pre-E1 fold identity %q survived replacement: %v", stats.StatKittenTumbles, names)
+	}
+	boardNames := make([]string, 0, len(stats.BoardFolds()))
+	for _, fold := range stats.BoardFolds() {
+		boardNames = append(boardNames, fold.Name())
+	}
+	i := slices.Index(boardNames, "tumble_split")
+	if i <= 0 || i+1 >= len(boardNames) || boardNames[i-1] != stats.StatLongestEVA || boardNames[i+1] != stats.StatRUDTotal {
+		t.Errorf("tumble_split fold order = %v, want longest_eva, tumble_split, rud_total", boardNames)
 	}
 }
 

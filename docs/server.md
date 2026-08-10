@@ -347,7 +347,7 @@ an inference about why it changed.
 
 ### The boards
 
-Forty fixed keys, in publish order — which is the order `FixedBoards()` returns and therefore
+Forty-three fixed keys, in publish order — which is the order `FixedBoards()` returns and therefore
 the order `GET /v1/leaderboards` lists them, grouped by kind rather than by source event:
 
 - **records** — `biggest_lithobrake_survived`, `peak_g_survived`, `max_q_survived`,
@@ -357,10 +357,10 @@ the order `GET /v1/leaderboards` lists them, grouped by kind rather than by sour
   `most_parts`, `biggest_stack`, `biggest_crew`, `biggest_recovery`, `most_stages`, `longest_eva`;
 - **counters** — `kitten_tumbles`, `rud_total`, `orbits_achieved`, `soi_bodies`, `landed_bodies`,
   `landings`, `dockings`, `stagings`, `splashdowns`, `evas`, `flameouts`, `engine_ignitions`,
-  `kittens_recovered`;
+  `kittens_recovered`, then append-only `botched_landings`;
 - **derived totals and per-kitten records** — `distance_travelled`, `top_kitten_distance`,
   `top_kitten_missions`;
-- **career time** — `fastest_to_orbit`.
+- **career time and save-native boards** — `fastest_to_orbit`, `career_playtime`, `play_sessions`.
 
 `docs/event-details.md` carries the canonical table: title, unit, direction, source event and fold
 kind for every one of them, plus the eligibility rule board by board. Four of them

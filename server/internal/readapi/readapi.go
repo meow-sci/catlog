@@ -67,8 +67,8 @@ type Deps struct {
 	// or less means [DefaultMaxStreamClients]. Over the cap a stream open is
 	// answered 429 rate_limited + Retry-After rather than held.
 	MaxStreamClients int
-	// MinBoardPlayers is how many distinct players a board whose key came out of
-	// the event stream (`fastest_to_<body>`, `rud_<cause>`) needs before
+	// MinBoardPlayers is how many distinct players a dynamic family key from the
+	// event stream needs before
 	// `GET /v1/leaderboards` lists it. Zero or less means [stats.DefaultMinPlayers].
 	//
 	// It is the whole of the answer to "a modified client could invent ten
@@ -191,8 +191,7 @@ func (s *Server) public(mux *http.ServeMux, pattern string, h http.HandlerFunc) 
 type BoardsResponse struct {
 	Boards []BoardSummary `json:"boards"`
 	// MinPlayers is how many distinct players a board whose key came out of the
-	// event stream (`fastest_to_<body>`, `rud_<cause>`) needs before it appears
-	// in Boards.
+	// event stream needs before it appears in Boards.
 	//
 	// Published because otherwise the list is inexplicable: a player who has
 	// been somewhere new and sees no board for it deserves to be told that it

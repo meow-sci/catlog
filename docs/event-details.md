@@ -442,7 +442,7 @@ and `projector.Upcasters` has nothing registered (PROJ-100).
 | 19 | `engine.flameout` | 1 | 1 | yes | passive | `flameouts` |
 | 20 | `kitten.eva_start` | 1 | 1 | yes | event | `evas` |
 | 21 | `kitten.eva_end` | 1 | 1 | yes | event | `longest_eva` |
-| 22 | `kitten.tumble` | 1 | 1 | yes | passive | `kitten_tumbles`, feed |
+| 22 | `kitten.tumble` | 1 | 1 | yes | passive | `kitten_tumbles`, `botched_landings`, `tumbles_on_<body>`, feed |
 | 23 | `kitten.kia` | 1 | 1 | **no — locked** | passive | the impact-board KIA window (rebuild), feed |
 | 24 | `roster.snapshot` | 1 | **1** | yes | passive (+1 event) | `distance_travelled`, `top_kitten_distance`, `top_kitten_missions`, `kitten`, `career_kitten` |
 | 25 | `telemetry.window` | 1 | **0** | yes | passive | `peak_g_survived`, `max_q_survived`, `fastest_surface_speed`, `fastest_orbital_speed`, `highest_altitude`, `lowest_pass` |
@@ -491,7 +491,7 @@ What a player gives up per type, the nineteen that can be switched off:
 | `engine.flameout` | `flameouts` | — |
 | `kitten.eva_start` | `evas` | — |
 | `kitten.eva_end` | `longest_eva` | — |
-| `kitten.tumble` | `kitten_tumbles` | feed rows |
+| `kitten.tumble` | `kitten_tumbles`, `botched_landings`, every `tumbles_on_<body>` board | feed rows |
 | `roster.snapshot` | `distance_travelled`, `top_kitten_distance`, `top_kitten_missions` | the `kitten` and `career_kitten` tables stop existing for that player. This is why it is `KindEvent` and never pruned |
 | `telemetry.window` | `peak_g_survived`, `max_q_survived`, `highest_altitude`, `lowest_pass`, `fastest_surface_speed`, `fastest_orbital_speed` | The **only** `KindPassive` type, so it is the only thing `OutboxDb.Prune` may drop: switching it off leaves a full outbox nothing droppable. Also the highest-volume type, and therefore the most attractive knob. There is no fallback source — `boards.go` explicitly refuses to substitute `roster.snapshot.fastest_ms` |
 
@@ -1866,10 +1866,16 @@ mutable public static the game's own debug window live-edits — which is why an
 baseline seed emits nothing. This is an edge reporter, not a physical-fall deduplicator: the stock
 0.5 s airborne exit described above can make one rough cartwheel cross the edge repeatedly.
 
-**Server.** `countFold{kitten_tumbles, "kitten.tumble"}` — +1 per event on an unflagged flight. **No
-payload field, including `from`, is read by the current fold**; the event type alone is the signal.
-The failed-landing/trip distinction is recorded now because the immutable log cannot recover it
-later, but changing the board formula is a separate projection change. That "on an unflagged flight"
+**Server.** One `tumbleFold` (`stats/boards.go:1079-1115`) handles the three related counters after
+the shared flag check. Its stable fold name is `tumble_split`, replacing the former generic
+`kitten_tumbles` fold identity so `BuildID` queues a rebuild that backfills the two new projections.
+Every decoded tumble adds 1 to the unchanged `kitten_tumbles` total. Exact
+`from == "airborne"` also adds
+1 to `botched_landings`; `"grounded"`, `"unknown"` and every future value in this open set simply do
+not match. When `TumblesOnStat(body)` can form a safe dynamic key, every tumble origin also adds 1
+to `tumbles_on_<body>`. An unkeyable body loses only that family write: the all-body total and the
+airborne-only counter still move. All three writes use `addCount`, so they fan out to player, career
+and system scope and carry no row context. That "on an unflagged flight"
 depends entirely on the envelope's `flight`: `scoreable` passes any event with no flight, so a
 flightless tumble could never inherit the `tuning` flag raised on its flight, and a player who
 lowered the tumble speed gate — the entire definition of a tumble, live-editable in the game's own
@@ -2243,7 +2249,8 @@ system → flight_state → career
 → fastest_surface_speed → fastest_orbital_speed → fastest_entry → highest_altitude
 → highest_apoapsis → lowest_orbit → roundest_orbit → steepest_orbit → softest_touchdown
 → heaviest_launch → most_parts → biggest_crew → biggest_recovery → most_stages → longest_eva
-→ kitten_tumbles → rud_total(+rud_<cause>) → orbits_achieved → soi_bodies → landed_bodies
+→ kitten_tumbles(+botched_landings, +tumbles_on_<body>) → rud_total(+rud_<cause>)
+→ orbits_achieved → soi_bodies → landed_bodies
 → dockings → stagings → splashdowns → evas → flameouts → engine_ignitions → kittens_recovered
 → distance_travelled(+top_kitten_distance, +top_kitten_missions) → fastest_to_orbit
 → fastest_to_body → census
@@ -2289,7 +2296,7 @@ celestial system. Both carry the same strict record/best tie rules and additive 
 
 `putRecord`, `putBest` and `addCount` write the player row, then fan the same contribution into the
 career and known-system rows through one shared helper. This is intentionally universal: all fixed
-boards, both dynamic families and any future ordinary board get the scopes without a registry.
+boards, all three dynamic families and any future ordinary board get the scopes without a registry.
 An event with no career still moves only the player row. A career whose system is not yet known gets
 its career row and no system row.
 
@@ -2331,17 +2338,18 @@ row context carries `career`.
 
 **Every board has player, career and system scope.** Scope is a ranking dimension, not a second board
 key: player scope ranks players, career scope ranks `(player, save)` pairs, and system scope ranks
-`(player, celestial system)` pairs. This applies to all 42 fixed rows below and both dynamic
+`(player, celestial system)` pairs. This applies to all 43 fixed rows below and all three dynamic
 families, with no opt-out list. `Career` in the table is unrelated: it says the board's *value* is a
 time measured from the start of a career.
 
-### The 42 fixed boards, in display order
+### The 43 fixed boards, in display order
 
-`stats/boards.go:85-129`. Display order **is** publish order — it is the order `FixedBoards()`
+`stats/boards.go`. Display order **is** publish order — it is the order `FixedBoards()`
 returns and therefore the order `GET /v1/leaderboards` lists — and it is grouped by kind rather than
 by source: the "how did you survive that" records first, then the speed and shape records, then what
 was on the pad, then the counters and roster totals, then the career-time and save-native boards.
-The two dynamic families slot in under `rud_total` and `fastest_to_orbit`.
+`botched_landings` is appended after the original 42 so existing positions remain stable. The three
+dynamic families slot under `kitten_tumbles`, `rud_total` and `fastest_to_orbit`.
 
 | # | key | Title | Unit | Asc | Career | Source event | Fold kind |
 |---|---|---|---|---|---|---|---|
@@ -2387,6 +2395,7 @@ The two dynamic families slot in under `rud_total` and `fastest_to_orbit`.
 | 40 | `fastest_to_orbit` | Fastest to Orbit | `ms` | **yes** | **yes** | `vehicle.orbit` | best (min) |
 | 41 | `career_playtime` | Longest Save | `ms` | no | **yes** | any event carrying `career` + `sim_t` | record (max) |
 | 42 | `play_sessions` | Play Sessions | `sessions` | no | no | `session.started` | count |
+| 43 | `botched_landings` | Did Not Land On Their Feet | `tumbles` | no | no | `kitten.tumble` | count (`from == "airborne"`) |
 
 **Four boards carry an empty `Unit` on purpose** — `roundest_orbit` (an eccentricity is
 dimensionless) and `most_parts` / `most_stages` / `biggest_stack` (bare counts of a thing the title
@@ -2409,23 +2418,25 @@ inside it does not erase the time for which the save was played.
 | `career_playtime` | **none** — a duration is not a feat; it records the positive career clock directly |
 | `evas` | **only when the EVA signal carried a vehicle id** (`kitten.eva_start`) |
 
-### The two dynamic families
+### The three dynamic families
 
-`stats/boards.go:192-204`. **There is no allow-list.** A key exists because a name appeared in the
-data. Both families have the same player, career and system scopes as every fixed board; a dynamic
+`stats/boards.go`. **There is no allow-list.** A key exists because a name appeared in the
+data. All three families have the same player, career and system scopes as every fixed board; a dynamic
 key receives all three on the event that creates it, with no registration step.
 
 | prefix | listed under | Title | Unit | Asc | Career |
 |---|---|---|---|---|---|
+| `tumbles_on_` | `kitten_tumbles` | `"Tumbles on " + titleize(body)` | `tumbles` | no | no |
 | `rud_` | `rud_total` | `"RUDs — " + titleize(cause)` | `RUDs` | no | no |
 | `fastest_to_` | `fastest_to_orbit` | `"Fastest to " + titleize(body)` | `ms` | **yes** | **yes** |
 
-Key construction: `FastestToStat(body)` / `RUDStat(cause)` → `familyStat(prefix, value)` (`:215-228`).
+Key construction: `TumblesOnStat(body)` (`stats/boards.go:246-248`) / `FastestToStat(body)` /
+`RUDStat(cause)` → `familyStat(prefix, value)`.
 `statSuffix` (`:241-256`) lowercases, then requires `[a-z0-9]` first and `[a-z0-9._-]` thereafter,
 length ≤ `MaxStatSuffixLen = 40`. A key that would collide with a **fixed** key is refused
-(`:221-227`) — a body literally named `orbit` cannot land on `fastest_to_orbit`. **A rejected name
-keeps every other consequence**: it still counts towards `soi_bodies` / `rud_total` and still records
-`player_body.first_sim_t`.
+— a body literally named `orbit` cannot land on `fastest_to_orbit`. **A rejected name keeps every
+other consequence**: it still counts towards `kitten_tumbles`, `soi_bodies` or `rud_total`, as
+applicable, and an SOI arrival still records `player_body.first_sim_t`.
 
 `titleize` (`:263-276`) splits on `_ - .` and capitalises each word — derived, never a lookup table
 (PROJ-036). `Describe(stat)` (`:284-302`) is a **pure function of the key**. `Known(stat, players)`
@@ -2588,9 +2599,10 @@ the wire from an EVA that ended in the frame it began. The event is `flight: nul
 nothing for the flag exclusion to check and nothing to name: context is `{"kitten"}`, plus a `flight`
 key only if a future build starts attributing the event.
 
-**The counter boards** — `kitten_tumbles`, `dockings`, `stagings`, `evas`, `flameouts`,
-`engine_ignitions`, `orbits_achieved`, `rud_total`, `rud_<cause>`, `kittens_recovered`, `soi_bodies`,
-`landed_bodies`, `landings`, `splashdowns` — all use `addCount`, whose `context` argument is `nil`, so
+**The counter boards** — `kitten_tumbles`, `botched_landings`, `tumbles_on_<body>`, `dockings`,
+`stagings`, `evas`, `flameouts`, `engine_ignitions`, `orbits_achieved`, `rud_total`, `rud_<cause>`,
+`kittens_recovered`, `soi_bodies`, `landed_bodies`, `landings`, `splashdowns` — all use `addCount`,
+whose `context` argument is `nil`, so
 `player_stat.context` is SQL NULL and `BoardRow.Context` is omitted from JSON. Their `updated_seq`
 becomes the seq at which the counter reached its current value, so the tie-break is *whoever got to N
 first*.
@@ -2600,9 +2612,13 @@ read by `orbitRecordFold`, `orbitMassFold`, `orbitsFold` or `toOrbitFold`, and a
 their contexts. They are recorded facts only; every orbit board above keeps the same field,
 eligibility and tie rule.
 
-- `kitten_tumbles`, `dockings`, `stagings`, `evas`, `flameouts`, `engine_ignitions`: `countFold`
-  (`:861-879`) on the event type alone. In particular, `kitten_tumbles` does not inspect `from`:
-  failed landings, grounded trips and repeated bounce edges all still increment the same counter.
+- `kitten_tumbles`, `botched_landings`, `tumbles_on_<body>`: `tumbleFold` (`:1079-1115`, stable name
+  `tumble_split`) decodes the payload once. The total does not inspect `from`: failed landings,
+  grounded trips and repeated bounce edges
+  all still increment it. Only exact `"airborne"` increments `botched_landings`; the open set is
+  otherwise opaque. Every valid body key increments its family board regardless of `from`, while an
+  unkeyable body still increments the total and, when airborne, `botched_landings`.
+- `dockings`, `stagings`, `evas`, `flameouts`, `engine_ignitions`: `countFold` on the event type.
   `engine.shutdown` counts nothing — a shutdown is the unremarkable other half of every burn, and
   counting it would be counting `engine_ignitions` twice with a lag.
 - `orbits_achieved` (`:910-925`): `vehicle.orbit` with `phase == "achieved"` only; `escaped` counts
@@ -2963,7 +2979,9 @@ fold writes. Surfaced as `collection.projected` / `collection.lag` and `projecto
 | A flagged flight scores nothing — every board, including counters | `scoreable` → `flight_state.flags == 0` | `stats/fold.go:205-220`; PROJ-001 |
 | The `roster.snapshot` and flightless-`kitten.*` boards are exempt — `distance_travelled`, `top_kitten_distance`, `top_kitten_missions`, `longest_eva`, and `evas` whenever the EVA signal carried no vehicle id | `!ev.HasFlight()` → true | `stats/fold.go:226-228` |
 | An **unknown** flag value still excludes | `FlagOther`, bit 5 | `stats/flight.go:29,34-48`; PROJ-002 |
-| A `tuning`-flagged flight's tumbles do not count — the exclusion the flag exists for, which works only because `kitten.tumble` names a flight | `scoreable` on a flight-bearing tumble | `stats/fold.go:120,205-228`; MOD-073 |
+| A `tuning`-flagged flight's tumbles do not count on the total, botched-landing counter or per-body family — the exclusion the flag exists for, which works only because `kitten.tumble` names a flight | `scoreable` once before all three `tumbleFold` writes | `stats/boards.go`; MOD-073 |
+| A tumble is a botched landing only when the open-set discriminator is exactly `"airborne"`; `"grounded"`, `"unknown"` and future values remain ordinary tumbles | exact `From == "airborne"` | `tumbleFold` |
+| A body that cannot form a safe dynamic stat still moves `kitten_tumbles` and, when airborne, `botched_landings`; only `tumbles_on_<body>` is absent | `TumblesOnStat` / `familyStat` refuses the family key after the fixed writes | `stats/boards.go` |
 | Launch-pad impacts never score — on **both** impact boards | `!LaunchPad` | `stats/boards.go:390` |
 | Crewless impacts never score — on **both** impact boards | `CrewCount >= 1` | `stats/boards.go:390` |
 | An impact within 5 s of a teleport is not recorded at all | `Vehicle.IsImpactFxSuppressed()` | `Patcher.cs:423-424,455-456` |
