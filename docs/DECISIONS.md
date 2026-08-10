@@ -1793,6 +1793,32 @@ Those three totals are recomputed and written independently; an unknown system s
 system row. The new fold's stable identity `kittens_to_orbit_and_back` changes `BuildID` and
 backfills immutable history without an event-version, wire, schema or `BuildVersion` change.
 
+### PROJ-118 — Lost-vehicle crew boards publish occupancy, not an inferred fate
+
+*Accepted · 2026-08-10 · Task E4.*
+
+Build 5168 exposes two different paths. A physics structural failure destroys the whole vehicle and
+ends its crew missions without calling `KillCrew`; the player destroy path separately calls
+`KillCrew`, which can set the roster's KIA bit. `vehicle.rud.crew_count` is read at the former
+whole-vehicle boundary. The only honest claim available to a projection is therefore how many
+kittens were aboard, not that they died, that bodies were destroyed, or even that the loss was a
+crash or explosion. **Most Kittens Aboard A Lost Vehicle** keeps the largest positive crew reading;
+**Kittens Aboard Lost Vehicles** adds those readings.
+
+The two crew writes join the existing combined RUD fold after its single `scoreable` decision, but
+remain independent of the part and cause branches. An unreadable part count cannot erase a valid
+crew count, and a cause that cannot form a family key cannot erase either. The additive row has NULL
+context; the record retains exact `body`, `cause` and `flight` provenance. Appending both fixed rows
+preserves every prior published position, while changing the stable fold identity from `rud_parts`
+to `rud_parts_crew` changes `BuildID` so immutable history backfills without an event-version,
+wire, schema or `BuildVersion` change.
+
+A `kittens_scuttled` board is deliberately refused. `kitten.kia` identifies a player-initiated
+scuttle with crew aboard, and ranking that choice would create a durable public consequence attached
+to a person for using a game action. That fails Constitution §8's consequence test. Keeping the
+occupancy boards narrowly tied to physics RUDs avoids implying that refusal through a different
+title or formula.
+
 ## Archive & restore
 
 The filesystem archiver, the manifest, restore verification, and the R2 design that is deliberately not built.

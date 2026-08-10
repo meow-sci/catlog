@@ -469,7 +469,7 @@ export const EVENTS: CatlogEvent[] = [
       {
         key: "crew_count",
         unit: "",
-        what: "How many kittens were aboard. They all survive this — the game ends their missions rather than killing them.",
+        what: "How many kittens were aboard the whole vehicle at the physics RUD. This says nothing about deaths; the normal RUD path ends their missions without killing them.",
       },
       {
         key: "part_count",
@@ -484,7 +484,14 @@ export const EVENTS: CatlogEvent[] = [
       },
       { key: "lon", unit: "°", optional: true, what: "The east-west half of the same position." },
     ],
-    feeds: ["rud_total", "rud_<cause>", "parts_lost", "biggest_parts_lost"],
+    feeds: [
+      "rud_total",
+      "rud_<cause>",
+      "parts_lost",
+      "biggest_parts_lost",
+      "biggest_crew_wreck",
+      "kittens_wrecked",
+    ],
     page: "vehicle",
   },
   {

@@ -30,6 +30,9 @@ func moderationHistory(career string, f int) []store.Event {
 		inCareer(ev(flightID, "vehicle.impact", stats.VehicleImpact{
 			SpeedMs: 25, EnergyJ: 1000, Survived: true, Body: "luna", CrewCount: 1,
 		}, 25), career),
+		inCareer(ev(flightID, "vehicle.rud", stats.VehicleRUD{
+			Cause: "collision", Body: "luna", PartCount: 3, CrewCount: 2,
+		}, 27), career),
 		inCareer(ev(flightID, "flight.ended", stats.FlightEnded{Reason: "recovered", CrewCount: 1, Kids: []string{"kid-" + career}}, 30), career),
 		inCareer(ev(ids.Zero, "roster.snapshot", stats.RosterSnapshot{Kittens: []stats.RosterKitten{{
 			Kid: "kid-" + career, Name: "Comet", TravelledM: 50, FastestMs: 5,

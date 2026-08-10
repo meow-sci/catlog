@@ -450,6 +450,41 @@ func TestPartsLostSumAndBiggestRecord(t *testing.T) {
 	})
 }
 
+func TestCrewWreckSumAndBiggestRecord(t *testing.T) {
+	f1, f2, f3, f4, f5 := flightN(1), flightN(2), flightN(3), flightN(4), flightN(5)
+	proj := testutil.MemProjections(t)
+	apply(t, proj, []input{
+		{flight: f1, typ: "vehicle.rud", payload: stats.VehicleRUD{Cause: "collision", Body: "earth", CrewCount: 4}},
+		{flight: f2, typ: "vehicle.rud", payload: stats.VehicleRUD{Cause: "kraken", Body: "duna", CrewCount: 2}},
+		// Invalid cause and zero parts do not suppress the independent crew facts.
+		{flight: f3, typ: "vehicle.rud", payload: stats.VehicleRUD{Cause: "who knows", Body: "eve", CrewCount: 4}},
+		{flight: f4, typ: "vehicle.rud", payload: stats.VehicleRUD{Cause: "ground_impact", CrewCount: 0}},
+	}, 0, false)
+
+	got := readStats(t, proj)
+	wantRow(t, got, "1/"+stats.StatKittensWrecked, row{Value: 10, Seq: 3})
+	wantRow(t, got, "1/"+stats.StatBiggestCrewWreck, row{
+		Value: 4,
+		Seq:   1,
+		Context: fmt.Sprintf(`{"body":"earth","cause":"collision","flight":"%s"}`,
+			ids.String(f1)),
+	})
+
+	// Flush/reload replaces a strict max and its provenance, while the tied
+	// invalid-cause claim above retained the earlier seq-1 record.
+	apply(t, proj, []input{
+		{flight: f5, typ: "vehicle.rud", payload: stats.VehicleRUD{Cause: "aerodynamic_forces", Body: "mars", CrewCount: 6}},
+	}, 4, false)
+	got = readStats(t, proj)
+	wantRow(t, got, "1/"+stats.StatKittensWrecked, row{Value: 16, Seq: 5})
+	wantRow(t, got, "1/"+stats.StatBiggestCrewWreck, row{
+		Value: 6,
+		Seq:   5,
+		Context: fmt.Sprintf(`{"body":"mars","cause":"aerodynamic_forces","flight":"%s"}`,
+			ids.String(f5)),
+	})
+}
+
 func TestCounterTieBreakIsWhoReachedTheNumberFirst(t *testing.T) {
 	f1, f2 := flightN(1), flightN(2)
 	got := fold(t, []input{
@@ -860,6 +895,7 @@ func TestBoardMetadataCoversEveryStatAFoldWrites(t *testing.T) {
 		stats.StatFastestSurfaceSpeed, stats.StatFastestOrbitalSpeed,
 		stats.StatKittenTumbles, stats.StatBotchedLandings, stats.StatPartsLost,
 		stats.StatBiggestPartsLost, stats.StatKittensToOrbitAndBack,
+		stats.StatBiggestCrewWreck, stats.StatKittensWrecked,
 		stats.StatRUDTotal, stats.StatOrbitsAchieved,
 		stats.StatSOIBodies, stats.StatDockings, stats.StatStagings,
 		stats.StatKittensRecovered, stats.StatDistanceTravelled,
@@ -941,6 +977,16 @@ func TestBoardMetadataCoversEveryStatAFoldWrites(t *testing.T) {
 		orbitKittens.Ascending || orbitKittens.Career || orbitKittens.BodyDerived {
 		t.Errorf("kittens_to_orbit_and_back metadata = %+v, known=%v", orbitKittens, ok)
 	}
+	biggestCrewWreck, ok := stats.Describe(stats.StatBiggestCrewWreck)
+	if !ok || biggestCrewWreck.Title != "Most Kittens Aboard A Lost Vehicle" || biggestCrewWreck.Unit != "kittens" ||
+		biggestCrewWreck.Ascending || biggestCrewWreck.Career || biggestCrewWreck.BodyDerived {
+		t.Errorf("biggest_crew_wreck metadata = %+v, known=%v", biggestCrewWreck, ok)
+	}
+	kittensWrecked, ok := stats.Describe(stats.StatKittensWrecked)
+	if !ok || kittensWrecked.Title != "Kittens Aboard Lost Vehicles" || kittensWrecked.Unit != "kittens" ||
+		kittensWrecked.Ascending || kittensWrecked.Career || kittensWrecked.BodyDerived {
+		t.Errorf("kittens_wrecked metadata = %+v, known=%v", kittensWrecked, ok)
+	}
 	stat, ok := stats.TumblesOnStat("landings")
 	if !ok || stat != "tumbles_on_landings" {
 		t.Errorf("TumblesOnStat(landings) = %q, %v; want valid non-colliding key", stat, ok)
@@ -954,8 +1000,8 @@ func TestBoardMetadataCoversEveryStatAFoldWrites(t *testing.T) {
 		t.Error("TumblesOnStat accepted an unkeyable body")
 	}
 	fixedBoards := stats.FixedBoards()
-	if got := fixedBoards[len(fixedBoards)-1].Stat; got != stats.StatKittensToOrbitAndBack {
-		t.Errorf("last fixed board = %q, want appended %q", got, stats.StatKittensToOrbitAndBack)
+	if got := fixedBoards[len(fixedBoards)-1].Stat; got != stats.StatKittensWrecked {
+		t.Errorf("last fixed board = %q, want appended %q", got, stats.StatKittensWrecked)
 	}
 }
 
@@ -1028,7 +1074,8 @@ func TestCatalogPublishesFamilyBoardsOnceEnoughPlayersAreOnThem(t *testing.T) {
 func TestAppendedBoardDoesNotDisplaceTheCareerTailOrDynamicFamilies(t *testing.T) {
 	fixed := stats.FixedBoards()
 	wantTail := []string{stats.StatCareerPlaytime, stats.StatPlaySessions, stats.StatBotchedLandings,
-		stats.StatPartsLost, stats.StatBiggestPartsLost, stats.StatKittensToOrbitAndBack}
+		stats.StatPartsLost, stats.StatBiggestPartsLost, stats.StatKittensToOrbitAndBack,
+		stats.StatBiggestCrewWreck, stats.StatKittensWrecked}
 	gotTail := make([]string, 0, len(wantTail))
 	for _, board := range fixed[max(0, len(fixed)-len(wantTail)):] {
 		gotTail = append(gotTail, board.Stat)
@@ -1042,13 +1089,14 @@ func TestAppendedBoardDoesNotDisplaceTheCareerTailOrDynamicFamilies(t *testing.T
 		got = append(got, b.Stat)
 	}
 	orbit := slices.Index(got, stats.StatFastestToOrbit)
-	if orbit < 0 || orbit+7 >= len(got) {
+	if orbit < 0 || orbit+9 >= len(got) {
 		t.Fatalf("catalog is missing the career tail: %v", got)
 	}
 	want := []string{stats.StatFastestToOrbit, "fastest_to_luna", stats.StatCareerPlaytime, stats.StatPlaySessions,
-		stats.StatBotchedLandings, stats.StatPartsLost, stats.StatBiggestPartsLost, stats.StatKittensToOrbitAndBack}
-	if !slices.Equal(got[orbit:orbit+8], want) {
-		t.Errorf("catalog career tail = %v, want %v", got[orbit:orbit+8], want)
+		stats.StatBotchedLandings, stats.StatPartsLost, stats.StatBiggestPartsLost, stats.StatKittensToOrbitAndBack,
+		stats.StatBiggestCrewWreck, stats.StatKittensWrecked}
+	if !slices.Equal(got[orbit:orbit+10], want) {
+		t.Errorf("catalog career tail = %v, want %v", got[orbit:orbit+10], want)
 	}
 }
 
@@ -1114,14 +1162,17 @@ func TestSplitFoldsChangeTheRegistryIdentityInPlace(t *testing.T) {
 	if slices.Contains(names, stats.StatRUDTotal) {
 		t.Errorf("pre-E2 fold identity %q survived replacement: %v", stats.StatRUDTotal, names)
 	}
-	var rudPartsNames int
+	var rudPartsCrewNames int
 	for _, name := range names {
-		if name == "rud_parts" {
-			rudPartsNames++
+		if name == "rud_parts_crew" {
+			rudPartsCrewNames++
 		}
 	}
-	if rudPartsNames != 1 {
-		t.Fatalf("rud_parts fold names = %d, want one: %v", rudPartsNames, names)
+	if rudPartsCrewNames != 1 {
+		t.Fatalf("rud_parts_crew fold names = %d, want one: %v", rudPartsCrewNames, names)
+	}
+	if slices.Contains(names, "rud_parts") {
+		t.Errorf("pre-E4 fold identity rud_parts survived replacement: %v", names)
 	}
 	boardNames := make([]string, 0, len(stats.BoardFolds()))
 	for _, fold := range stats.BoardFolds() {
@@ -1129,8 +1180,8 @@ func TestSplitFoldsChangeTheRegistryIdentityInPlace(t *testing.T) {
 	}
 	i := slices.Index(boardNames, "tumble_split")
 	if i <= 0 || i+2 >= len(boardNames) || boardNames[i-1] != stats.StatLongestEVA ||
-		boardNames[i+1] != "rud_parts" || boardNames[i+2] != stats.StatOrbitsAchieved {
-		t.Errorf("split fold order = %v, want longest_eva, tumble_split, rud_parts, orbits_achieved", boardNames)
+		boardNames[i+1] != "rud_parts_crew" || boardNames[i+2] != stats.StatOrbitsAchieved {
+		t.Errorf("split fold order = %v, want longest_eva, tumble_split, rud_parts_crew, orbits_achieved", boardNames)
 	}
 	if got := boardNames[len(boardNames)-1]; got != stats.StatKittensToOrbitAndBack {
 		t.Errorf("last board fold = %q, want appended stable identity %q", got, stats.StatKittensToOrbitAndBack)

@@ -231,7 +231,7 @@ func cleanHistory(f0 int) []store.Event {
 		ev(fa, "flight.ended", stats.FlightEnded{Reason: "recovered", CrewCount: 2}, 70),
 		ev(fb, "flight.started", stats.FlightStarted{VehicleName: "B", Body: "duna", CrewCount: 1, EngineCount: intp(0)}, 80),
 		ev(fb, "telemetry.window", tw("duna", 780, 3100, 9.6), 90),
-		ev(fb, "vehicle.rud", stats.VehicleRUD{Cause: "ground_impact", SpeedMs: 320, Body: "duna", PartCount: 14}, 95),
+		ev(fb, "vehicle.rud", stats.VehicleRUD{Cause: "ground_impact", SpeedMs: 320, Body: "duna", PartCount: 14, CrewCount: 3}, 95),
 		ev(fb, "kitten.tumble", stats.KittenTumble{Kid: "k1", Name: "Comet", SpeedMs: 8.2, Body: "duna"}, 96),
 		ev(fb, "flight.ended", stats.FlightEnded{Reason: "recovered", CrewCount: 1}, 99),
 		ev(ids.Zero, "roster.snapshot", stats.RosterSnapshot{Kittens: []stats.RosterKitten{
@@ -661,6 +661,10 @@ func TestBatchSizeDoesNotChangeTheProjection(t *testing.T) {
 	}
 	if values["1/"+stats.StatKittensToOrbitAndBack] != 1 {
 		t.Fatalf("orbit-kitten batch fixture = %v, want 1", values["1/"+stats.StatKittensToOrbitAndBack])
+	}
+	if values["1/"+stats.StatKittensWrecked] != 6 || values["1/"+stats.StatBiggestCrewWreck] != 3 {
+		t.Fatalf("crew-wreck batch fixture = sum %v, biggest %v; want 6 and 3",
+			values["1/"+stats.StatKittensWrecked], values["1/"+stats.StatBiggestCrewWreck])
 	}
 
 	for _, batchSize := range []int{2, 3, 17, projector.DefaultBatchSize, 10_000} {

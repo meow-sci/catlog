@@ -500,21 +500,21 @@ func TestRUDPartsWritesEveryScopeAndPreservesLegacyCounters(t *testing.T) {
 	clean, flagged := scopeFlight(30), scopeFlight(31)
 	foldScopeEvents(t, p,
 		Event{Seq: 2, PlayerID: 1, FlightID: clean, Career: career,
-			Type: "vehicle.rud", Payload: VehicleRUD{Cause: "ground_impact", Body: "earth", PartCount: 5}},
+			Type: "vehicle.rud", Payload: VehicleRUD{Cause: "ground_impact", Body: "earth", PartCount: 5, CrewCount: 2}},
 		Event{Seq: 3, PlayerID: 1, FlightID: clean, Career: career,
-			Type: "vehicle.rud", Payload: VehicleRUD{Cause: "ground_impact", Body: "duna", PartCount: 3}},
+			Type: "vehicle.rud", Payload: VehicleRUD{Cause: "ground_impact", Body: "duna", PartCount: 3, CrewCount: 4}},
 		// Nonpositive part counts remain ordinary RUDs.
 		Event{Seq: 4, PlayerID: 1, FlightID: clean, Career: career,
-			Type: "vehicle.rud", Payload: VehicleRUD{Cause: "ground_impact", PartCount: 0}},
+			Type: "vehicle.rud", Payload: VehicleRUD{Cause: "ground_impact", PartCount: 0, CrewCount: 1}},
 		Event{Seq: 5, PlayerID: 1, FlightID: clean, Career: career,
 			Type: "vehicle.rud", Payload: VehicleRUD{Cause: "kraken", PartCount: -2}},
 		// An unkeyable cause has no family row, but still records real lost parts.
 		Event{Seq: 6, PlayerID: 1, FlightID: clean, Career: career,
-			Type: "vehicle.rud", Payload: VehicleRUD{Cause: "who knows", Body: "eve", PartCount: 7}},
+			Type: "vehicle.rud", Payload: VehicleRUD{Cause: "who knows", Body: "eve", PartCount: 7, CrewCount: 4}},
 		Event{Seq: 7, PlayerID: 1, FlightID: flagged, Career: career,
 			Type: "flight.flagged", Payload: FlightFlagged{Flag: "tuning"}},
 		Event{Seq: 8, PlayerID: 1, FlightID: flagged, Career: career,
-			Type: "vehicle.rud", Payload: VehicleRUD{Cause: "ground_impact", PartCount: 100}},
+			Type: "vehicle.rud", Payload: VehicleRUD{Cause: "ground_impact", PartCount: 100, CrewCount: 100}},
 	)
 
 	want := map[string]float64{
@@ -523,6 +523,8 @@ func TestRUDPartsWritesEveryScopeAndPreservesLegacyCounters(t *testing.T) {
 		"rud_kraken":         1,
 		StatPartsLost:        15,
 		StatBiggestPartsLost: 7,
+		StatKittensWrecked:   11,
+		StatBiggestCrewWreck: 4,
 	}
 	assertValues := func(label string, rows map[string]scopedRow, prefix string) {
 		t.Helper()
@@ -559,6 +561,35 @@ func TestRUDPartsWritesEveryScopeAndPreservesLegacyCounters(t *testing.T) {
 	}
 	if got := readSystemStats(t, p)["1/"+system+"/"+StatBiggestPartsLost]; got != wantRecord {
 		t.Errorf("system biggest parts row = %+v, want %+v", got, wantRecord)
+	}
+
+	wantCrewRecord := scopedRow{
+		system: system,
+		value:  4,
+		context: fmt.Sprintf(`{"body":"duna","cause":"ground_impact","flight":"%s"}`,
+			ids.String(clean)),
+		seq: 3,
+	}
+	wantPlayerCrewRecord := wantCrewRecord
+	wantPlayerCrewRecord.system = ""
+	if got := readPlayerScopeStats(t, p)["1/"+StatBiggestCrewWreck]; got != wantPlayerCrewRecord {
+		t.Errorf("player biggest crew row = %+v, want %+v", got, wantPlayerCrewRecord)
+	}
+	if got := readCareerStats(t, p)["1/"+career+"/"+StatBiggestCrewWreck]; got != wantCrewRecord {
+		t.Errorf("career biggest crew row = %+v, want %+v", got, wantCrewRecord)
+	}
+	if got := readSystemStats(t, p)["1/"+system+"/"+StatBiggestCrewWreck]; got != wantCrewRecord {
+		t.Errorf("system biggest crew row = %+v, want %+v", got, wantCrewRecord)
+	}
+	for _, table := range []string{"player_stat", "career_stat", "system_stat"} {
+		var nonNull int
+		query := fmt.Sprintf(`SELECT count(*) FROM %s WHERE stat = ? AND context IS NOT NULL`, table)
+		if err := p.Reader().QueryRowContext(t.Context(), query, StatKittensWrecked).Scan(&nonNull); err != nil {
+			t.Fatalf("read %s kittens_wrecked contexts: %v", table, err)
+		}
+		if nonNull != 0 {
+			t.Errorf("%s has %d non-NULL kittens_wrecked contexts, want zero", table, nonNull)
+		}
 	}
 }
 

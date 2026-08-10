@@ -97,9 +97,10 @@ take today, a seat catlog could not read, a save loaded in between — the loss 
 recorded without a flight on purpose. Guessing would strike a record off a flight
 that had nothing to do with it, and that is worse than missing one.
 
-Note also that a vehicle coming apart does **not** kill its crew — the game ends
-their missions instead. That is why a RUD records the crew who were aboard and
-they all live.
+The crew recorded at a physics RUD now feeds two occupancy boards. It is not a death count: the
+normal physics path ends those missions without killing the kittens. Choosing to scuttle a vehicle
+is a separate game path that can mark its crew lost, and catlog deliberately does not turn that
+choice into a public kittens-scuttled leaderboard.
 
 <EventDetail type="roster.snapshot" />
 

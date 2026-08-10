@@ -431,7 +431,7 @@ and `projector.Upcasters` has nothing registered (PROJ-100).
 | 8 | `vehicle.atmosphere` | 1 | 1 | yes | passive | `flight_state` space milestone, `fastest_entry` |
 | 9 | `vehicle.orbit` | 1 | 1 | yes | passive | `flight_state` orbit milestone, `orbits_achieved`, `highest_apoapsis`, `lowest_orbit`, `roundest_orbit`, `steepest_orbit`, `heaviest_to_orbit`, `fastest_to_orbit`, feed |
 | 10 | `vehicle.soi` | 1 | 1 | yes | passive | conditional `flight_state` other-SOI milestone, `soi_bodies`, `fastest_to_<body>`, `player_body`, `career_body`, feed |
-| 11 | `vehicle.rud` | 1 | 1 | yes | event | `rud_total`, `rud_<cause>`, `parts_lost`, `biggest_parts_lost`, feed |
+| 11 | `vehicle.rud` | 1 | 1 | yes | event | `rud_total`, `rud_<cause>`, `parts_lost`, `biggest_parts_lost`, `biggest_crew_wreck`, `kittens_wrecked`, feed |
 | 12 | `vehicle.impact` | 1 | 1 | yes | event (1-frame hold) | `biggest_lithobrake_survived`, `biggest_impact_energy`, feed |
 | 13 | `vehicle.landed` | 1 | 1 | yes | passive (1-frame hold) | conditional `flight_state` landed milestone, `softest_landing`, `landings`, feed |
 | 14 | `vehicle.staging` | 1 | 1 | yes | event | `stagings`, `most_stages` |
@@ -480,7 +480,7 @@ What a player gives up per type, the nineteen that can be switched off:
 | `vehicle.atmosphere` | `fastest_entry` | — |
 | `vehicle.orbit` | `orbits_achieved`, `fastest_to_orbit`, `highest_apoapsis`, `lowest_orbit`, `roundest_orbit`, `steepest_orbit`, `heaviest_to_orbit` | feed rows |
 | `vehicle.soi` | `soi_bodies`, and the whole `fastest_to_<body>` family | `player_body`, `career_body`, feed rows |
-| `vehicle.rud` | `rud_total`, every `rud_<cause>` board, `parts_lost`, `biggest_parts_lost` | RUD and lost-vehicle-size projections stop moving. `vehicle.impact.survived` is unaffected — the correlator computes it before `Add` |
+| `vehicle.rud` | `rud_total`, every `rud_<cause>` board, `parts_lost`, `biggest_parts_lost`, `biggest_crew_wreck`, `kittens_wrecked` | RUD, lost-vehicle-size and aboard-lost-vehicle projections stop moving. `vehicle.impact.survived` is unaffected — the correlator computes it before `Add` |
 | `vehicle.impact` | `biggest_lithobrake_survived`, `biggest_impact_energy` | feed rows |
 | `vehicle.landed` | `softest_landing`, `landings` | feed rows. **`landed_bodies` is unaffected** — it reads `vehicle.situation`, which is where the same edge is also reported |
 | `vehicle.staging` | `stagings`, `most_stages` | — |
@@ -1284,7 +1284,7 @@ body allow-list.
 | `speed_ms` | number | m/s | `VehicleTelemetry.SurfaceSpeedMs(vehicle)` → `Vehicle.GetSurfaceSpeed()` (`:421`) |
 | `altitude_m` | number | m above mean radius | `VehicleTelemetry.AltitudeM(vehicle)` → `GetBarometricAltitude()` (`:422`) |
 | `body` | string | — | `VehicleTelemetry.BodyOf(vehicle)` (`:423`) |
-| `crew_count` | int | count | `VehicleTelemetry.CrewCount(vehicle)` (`:426`). **Per D11 all of them survive** — the physics destruction path calls `EndAllCrewMissions` and never `KillCrew` (`:424-425`). |
+| `crew_count` | int | count | `VehicleTelemetry.CrewCount(vehicle)` (`:426`), read from the intact whole vehicle. It is an occupancy fact, not a death count. |
 | `part_count` | int | count | `VehicleTelemetry.PartCount(vehicle)` (`:427`) → `Vehicle.Parts.Count` (`VehicleTelemetry.cs:703-711`), read in the destruction prefix while the whole vehicle is still intact. Non-optional; `0` when the read fails. |
 | `lat` / `lon` | number | degrees | **OPTIONAL — absent when unreadable.** Read in the same prefix, while the vehicle is still intact. Decoded as `*float64` and read by no fold; they are there so the log can say *where* a vehicle was lost. |
 
@@ -1313,23 +1313,34 @@ the same frame resolves to `survived = false`.
 - KSA exposes the destruction of the **whole vehicle** here. It does not expose a trustworthy event
   for each individual part that explodes or breaks off, so `part_count` is the size of the intact
   vehicle at its RUD boundary, not a count of separately observed part losses.
+- Build 5168 confirms the crew interpretation at source. Physics structural failure creates a
+  `VehicleDestructionEvent` (`KSA/VehicleUpdateTask.cs:481-509`), whose apply path calls
+  `Universe.DestroyVehicleFromEvent` (`KSA/VehicleDestructionEvent.cs:11-14`; `Universe.cs:1699-1733`).
+  That reaches `DestroyVehicle`, which calls `Vehicle.EndAllCrewMissions`
+  (`Universe.cs:1736-1743`; `Vehicle.cs:806-829`) and never `KillCrew`. The separate player destroy
+  path calls `Vehicle.KillCrew` when it was not recovery (`KSA/InputEvents.cs:487-528`), and
+  `KittenRosterEntryData.Kill` is what sets `Kia = true` (`KSA/Vehicle.cs:2796-2811`;
+  `KittenRosterEntryData.cs:96-109`). Therefore these boards can state only who was aboard a
+  physics RUD; they cannot state deaths, casualties, crashes or explosions.
 
 **Classification.** **EVENT-DRIVEN.** No debounce, no threshold.
 
 **Dedup.** The `IsDisposed` guard plus the `Destroying` set (`Patcher.cs:392`), which also drives the
 subsequent `flight.ended` reason.
 
-**Server.** `rudPartsFold` (`stats/boards.go:1122-1165`, stable name `rud_parts`) replaces the former
-`rud_total` fold identity and makes one eligibility decision for all four outputs. On an unflagged
-flight it writes `rud_total` and a legal `rud_<cause>` as before, then reads the same decoded
+**Server.** `rudPartsFold` (`stats/boards.go:1128-1183`, stable name `rud_parts_crew` at
+`:1131-1134`) replaces the E2 `rud_parts` identity and makes one eligibility decision for all six
+outputs. On an unflagged flight it writes `rud_total` and a legal `rud_<cause>` as before, then reads the same decoded
 `VehicleRUD.PartCount` once. Only a value `> 0` adds that many parts to `parts_lost` and offers the
 same value to max-record `biggest_parts_lost`. Both use the shared scoped helpers, so player, career
 and system values move together. The additive total has SQL NULL context; the largest-single-loss
 record carries exactly `{"body", "cause", "flight"}`. Zero is the read-failure fallback and is a
-no-op on both part boards. A cause that cannot be a stat key still contributes to `rud_total` and
-both positive-part boards; the cause-family failure is unrelated to the vehicle-size reading. The
-new stable fold name changes `BuildID`, queuing a historical rebuild that backfills both appended
-boards without a `BuildVersion` bump. Feed:
+no-op on both part boards. Independently, `crew_count >= 1` adds the full count to `kittens_wrecked`
+with SQL NULL context and offers it to max-record `biggest_crew_wreck`, whose exact context is
+`{"body", "cause", "flight"}`. A cause that cannot be a stat key still contributes to `rud_total`
+and every qualifying part or crew board; cause-key validity, part readability and crew occupancy
+are independent branches. The new stable fold name changes `BuildID`, queuing a historical rebuild
+that backfills both appended crew boards without a `BuildVersion` bump. Feed:
 `"{h} lost a vehicle to {causePhrase} on {body} at {speed} m/s"`.
 
 **Vectors.** `batch-001.ndjson` line 30 — `part_count: 31`, `lat` / `lon` **absent**, and
@@ -2348,11 +2359,11 @@ row context carries `career`.
 
 **Every board has player, career and system scope.** Scope is a ranking dimension, not a second board
 key: player scope ranks players, career scope ranks `(player, save)` pairs, and system scope ranks
-`(player, celestial system)` pairs. This applies to all 46 fixed rows below and all three dynamic
+`(player, celestial system)` pairs. This applies to all 48 fixed rows below and all three dynamic
 families, with no opt-out list. `Career` in the table is unrelated: it says the board's *value* is a
 time measured from the start of a career.
 
-### The 46 fixed boards, in display order
+### The 48 fixed boards, in display order
 
 `stats/boards.go`. Display order **is** publish order — it is the order `FixedBoards()`
 returns and therefore the order `GET /v1/leaderboards` lists — and it is grouped by kind rather than
@@ -2409,9 +2420,11 @@ dynamic families slot under `kitten_tumbles`, `rud_total` and `fastest_to_orbit`
 | 44 | `parts_lost` | Parts In Lost Vehicles | `parts` | no | no | `vehicle.rud` | count (+`part_count`) |
 | 45 | `biggest_parts_lost` | Biggest Vehicle Lost | `parts` | no | no | `vehicle.rud` | record (max) |
 | 46 | `kittens_to_orbit_and_back` | Kittens To Orbit And Home | `kittens` | no | no | `flight.ended` | count (set-backed) |
+| 47 | `biggest_crew_wreck` | Most Kittens Aboard A Lost Vehicle | `kittens` | no | no | `vehicle.rud` | record (max) |
+| 48 | `kittens_wrecked` | Kittens Aboard Lost Vehicles | `kittens` | no | no | `vehicle.rud` | count (+`crew_count`) |
 
-The appended row is `StatKittensToOrbitAndBack` (`stats/boards.go:22`), with its fixed metadata at
-`stats/boards.go:153`.
+The final three appended constants are at `stats/boards.go:22-24`; their fixed metadata is at
+`stats/boards.go:155-157`.
 
 **Four boards carry an empty `Unit` on purpose** — `roundest_orbit` (an eccentricity is
 dimensionless) and `most_parts` / `most_stages` / `biggest_stack` (bare counts of a thing the title
@@ -2633,17 +2646,26 @@ the wire from an EVA that ended in the frame it began. The event is `flight: nul
 nothing for the flag exclusion to check and nothing to name: context is `{"kitten"}`, plus a `flight`
 key only if a future build starts attributing the event.
 
-**The two lost-vehicle-size boards** — `parts_lost` and `biggest_parts_lost` share
-`rudPartsFold` (`:1122-1165`) and its one `scoreable` result. `part_count <= 0` moves neither: zero is
-the intact-vehicle read-failure fallback. A positive value is added in full to `parts_lost`, whose
+**The lost-vehicle size and occupancy boards** — `parts_lost`, `biggest_parts_lost`,
+`biggest_crew_wreck` and `kittens_wrecked` share `rudPartsFold` (`boards.go:1128-1183`) and its one
+`scoreable` result. `part_count <= 0` moves neither part board: zero is the intact-vehicle
+read-failure fallback. A positive value is added in full to `parts_lost`, whose
 context is SQL NULL, and offered unchanged to max-record `biggest_parts_lost`, whose byte-stable
 context is `{"body", "cause", "flight"}`. `addCount` and `putRecord` fan the same contribution into
 player, career and known-system scopes. The counter tie is whoever reached the total first; the
 record changes only on a strictly larger vehicle and an equal size keeps the earlier claimant.
 
+Independently, `crew_count < 1` moves neither crew board. A positive count is added in full to
+`kittens_wrecked`, whose context is SQL NULL, and offered unchanged to max-record
+`biggest_crew_wreck`, whose context is the same exact `{"body", "cause", "flight"}` object as the
+largest-vehicle record. This counts kittens aboard a whole vehicle at its physics RUD. It does not
+claim they died, count individual bodies, or classify the loss as a crash or explosion. The normal
+physics path ends their missions; a player scuttle is the separate `KillCrew` / `kitten.kia` path.
+
 **The counter boards** — `kitten_tumbles`, `botched_landings`, `tumbles_on_<body>`, `parts_lost`,
-`dockings`, `stagings`, `evas`, `flameouts`, `engine_ignitions`, `orbits_achieved`, `rud_total`,
-`rud_<cause>`, `kittens_recovered`, `soi_bodies`, `landed_bodies`, `landings`, `splashdowns` — all use
+`kittens_wrecked`, `dockings`, `stagings`, `evas`, `flameouts`, `engine_ignitions`,
+`orbits_achieved`, `rud_total`, `rud_<cause>`, `kittens_recovered`, `soi_bodies`, `landed_bodies`,
+`landings`, `splashdowns` — all use
 `addCount`, whose `context` argument is `nil`, so
 `player_stat.context` is SQL NULL and `BoardRow.Context` is omitted from JSON. Their `updated_seq`
 becomes the seq at which the counter reached its current value, so the tie-break is *whoever got to N
@@ -2665,8 +2687,9 @@ eligibility and tie rule.
   counting it would be counting `engine_ignitions` twice with a lag.
 - `orbits_achieved` (`:910-925`): `vehicle.orbit` with `phase == "achieved"` only; `escaped` counts
   nothing.
-- `rud_total`, `rud_<cause>`, `parts_lost`, `biggest_parts_lost`: `rudPartsFold` (`:1122-1165`,
-  stable name `rud_parts`) applies `scoreable` once; see the lost-vehicle-size detail above.
+- `rud_total`, `rud_<cause>`, `parts_lost`, `biggest_parts_lost`, `biggest_crew_wreck`,
+  `kittens_wrecked`: `rudPartsFold` (stable name `rud_parts_crew`) applies `scoreable` once; see the
+  lost-vehicle detail above.
 - `kittens_recovered` (`:1010-1026`): `flight.ended` with `reason == "recovered" && crew_count >= 1`
   → `addCount(+float64(CrewCount))`. **It adds the crew count, not 1.**
 - `soi_bodies` (`:927-950`) and `landed_bodies` (`:952-982`): `b.AddBody(...)` reports whether the
@@ -3036,6 +3059,8 @@ fold writes. Surfaced as `collection.projected` / `collection.lag` and `projecto
 | A tumble is a botched landing only when the open-set discriminator is exactly `"airborne"`; `"grounded"`, `"unknown"` and future values remain ordinary tumbles | exact `From == "airborne"` | `tumbleFold` |
 | A body that cannot form a safe dynamic stat still moves `kitten_tumbles` and, when airborne, `botched_landings`; only `tumbles_on_<body>` is absent | `TumblesOnStat` / `familyStat` refuses the family key after the fixed writes | `stats/boards.go` |
 | An unreadable whole-vehicle part count moves the RUD total and cause family but neither part board | `PartCount <= 0` returns after the existing RUD writes | `rudPartsFold`; PROJ-088 |
+| A crewless RUD moves the RUD and any positive-part boards but neither aboard-lost-vehicle board | `CrewCount < 1` skips only the two crew writes | `rudPartsFold` |
+| A cause that cannot form a family key still moves every independently qualifying part and crew board | `RUDStat` failure skips only the cause-family write | `rudPartsFold` |
 | `kittens_to_orbit_and_back` requires a recovered ending, at least one recovery-time kitten, an orbit milestone on that flight and an unflagged flight | payload predicates → `scoreable` → `flight_state.milestones & MilestoneOrbit` | `kittensToOrbitFold` |
 | An unknown career system still moves the player and save `kittens_to_orbit_and_back` sets but produces no system-scoped row | `SystemCareerSetCount` returns `known=false`; the first two independent counts were already written | `stats/batch.go` |
 | Launch-pad impacts never score — on **both** impact boards | `!LaunchPad` | `stats/boards.go:390` |

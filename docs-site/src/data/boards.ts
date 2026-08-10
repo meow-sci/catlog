@@ -38,7 +38,7 @@ export interface Board {
 
 const UNIVERSAL_SCOPES: Board["scopes"] = ["player", "career", "system"];
 
-/** The 46 fixed boards, in the order the site publishes them. */
+/** The 48 fixed boards, in the order the site publishes them. */
 const BOARD_DEFINITIONS: Omit<Board, "scopes">[] = [
   {
     stat: "biggest_lithobrake_survived",
@@ -655,9 +655,31 @@ const BOARD_DEFINITIONS: Omit<Board, "scopes">[] = [
       "Only the celestial-system view skips a save whose system is unknown; its player and save counts still move.",
     ],
   },
+  {
+    stat: "biggest_crew_wreck",
+    title: "Most Kittens Aboard A Lost Vehicle",
+    unit: "kittens",
+    ascending: false,
+    career: false,
+    from: ["vehicle.rud"],
+    what: "The most kittens aboard one whole vehicle when it was lost to a physics RUD.",
+    how: "Keeps the largest positive crew count seen at a whole-vehicle RUD. It records who was aboard, not what happened to them; an unusable cause label does not stop this board moving.",
+    excluded: ["Nobody was aboard.", "The flight was flagged."],
+  },
+  {
+    stat: "kittens_wrecked",
+    title: "Kittens Aboard Lost Vehicles",
+    unit: "kittens",
+    ascending: false,
+    career: false,
+    from: ["vehicle.rud"],
+    what: "How many kitten seats were occupied across whole vehicles lost to physics RUDs.",
+    how: "Adds the positive crew count from each qualifying whole-vehicle RUD. It is an occupancy total, not a count of deaths or destroyed bodies; an unusable cause label does not stop this board moving.",
+    excluded: ["Nobody was aboard.", "The flight was flagged."],
+  },
 ];
 
-// Scope is deliberately attached here rather than repeated on 46 entries. A
+// Scope is deliberately attached here rather than repeated on 48 entries. A
 // board added to the catalog receives every scope automatically; there is no
 // opt-out registry to forget to update.
 export const BOARDS: Board[] = BOARD_DEFINITIONS.map((board) => ({

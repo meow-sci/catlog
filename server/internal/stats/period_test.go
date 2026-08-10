@@ -174,15 +174,19 @@ func TestPeriodCountersAccumulateWithinAWindow(t *testing.T) {
 func TestPartsLostPeriodsSumAndKeepTheBiggestLoss(t *testing.T) {
 	f := flightN(1)
 	got := foldPeriods(t, []input{
-		{flight: f, typ: "vehicle.rud", payload: stats.VehicleRUD{Cause: "collision", PartCount: 7}, recvMS: ms(t, "2026-08-07T09:00:00Z")},
-		{flight: f, typ: "vehicle.rud", payload: stats.VehicleRUD{Cause: "collision", PartCount: 4}, recvMS: ms(t, "2026-08-07T10:00:00Z")},
-		{flight: f, typ: "vehicle.rud", payload: stats.VehicleRUD{Cause: "collision", PartCount: 12}, recvMS: ms(t, "2026-09-02T09:00:00Z")},
+		{flight: f, typ: "vehicle.rud", payload: stats.VehicleRUD{Cause: "collision", PartCount: 7, CrewCount: 3}, recvMS: ms(t, "2026-08-07T09:00:00Z")},
+		{flight: f, typ: "vehicle.rud", payload: stats.VehicleRUD{Cause: "collision", PartCount: 4, CrewCount: 1}, recvMS: ms(t, "2026-08-07T10:00:00Z")},
+		{flight: f, typ: "vehicle.rud", payload: stats.VehicleRUD{Cause: "collision", PartCount: 12, CrewCount: 5}, recvMS: ms(t, "2026-09-02T09:00:00Z")},
 	})
 	for key, want := range map[string]float64{
 		"1/parts_lost/daily/2026-08-07":         11,
 		"1/biggest_parts_lost/daily/2026-08-07": 7,
 		"1/parts_lost/yearly/2026":              23,
 		"1/biggest_parts_lost/yearly/2026":      12,
+		"1/kittens_wrecked/daily/2026-08-07":    4,
+		"1/biggest_crew_wreck/daily/2026-08-07": 3,
+		"1/kittens_wrecked/yearly/2026":         9,
+		"1/biggest_crew_wreck/yearly/2026":      5,
 	} {
 		if got[key] != want {
 			t.Errorf("%s = %v, want %v", key, got[key], want)

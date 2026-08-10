@@ -20,6 +20,8 @@ const (
 	StatPartsLost                 = "parts_lost"
 	StatBiggestPartsLost          = "biggest_parts_lost"
 	StatKittensToOrbitAndBack     = "kittens_to_orbit_and_back"
+	StatBiggestCrewWreck          = "biggest_crew_wreck"
+	StatKittensWrecked            = "kittens_wrecked"
 	StatRUDTotal                  = "rud_total"
 	StatOrbitsAchieved            = "orbits_achieved"
 	StatSOIBodies                 = "soi_bodies"
@@ -151,6 +153,8 @@ var fixedBoards = func() []Board {
 		rec(StatPartsLost, "Parts In Lost Vehicles", "parts"),
 		rec(StatBiggestPartsLost, "Biggest Vehicle Lost", "parts"),
 		rec(StatKittensToOrbitAndBack, "Kittens To Orbit And Home", "kittens"),
+		rec(StatBiggestCrewWreck, "Most Kittens Aboard A Lost Vehicle", "kittens"),
+		rec(StatKittensWrecked, "Kittens Aboard Lost Vehicles", "kittens"),
 	}
 }()
 
@@ -1121,13 +1125,13 @@ func (tumbleFold) Apply(ctx context.Context, b *Batch, ev Event) error {
 	return addCount(ctx, b, ev, stat, 1)
 }
 
-// rudPartsFold implements `rud_total`, the `rud_<cause>` family, `parts_lost`
-// and `biggest_parts_lost` from one vehicle.rud eligibility decision.
+// rudPartsFold implements the RUD total/family plus the lost-parts and
+// aboard-lost-vehicle boards from one vehicle.rud eligibility decision.
 type rudPartsFold struct{}
 
-// The stable name differs from the old rud_total fold identity so BuildID
-// forces a historical rebuild that populates the two appended part boards.
-func (rudPartsFold) Name() string { return "rud_parts" }
+// The stable name differs from the E2 rud_parts identity so BuildID forces a
+// historical rebuild that populates the two appended crew boards.
+func (rudPartsFold) Name() string { return "rud_parts_crew" }
 
 func (rudPartsFold) Apply(ctx context.Context, b *Batch, ev Event) error {
 	p, ok := payloadOf[VehicleRUD](ev)
@@ -1145,21 +1149,33 @@ func (rudPartsFold) Apply(ctx context.Context, b *Batch, ev Event) error {
 	// list of the causes this build happens to know: a cause a newer game or mod
 	// introduces gets its own board rather than disappearing into the total.
 	// A cause that cannot be half of a stat key receives no per-cause row; it
-	// can still contribute to the part boards below.
+	// can still contribute to the independent part and crew boards below.
 	if stat, valid := RUDStat(p.Cause); valid {
 		if err := addCount(ctx, b, ev, stat, 1); err != nil {
 			return err
 		}
 	}
-	// A zero reading means the prefix could not read the intact vehicle. It is
-	// still a RUD, but contributes no invented parts to either new board.
-	if p.PartCount <= 0 {
+	// A zero part reading means the prefix could not read the intact vehicle. It
+	// is still a RUD and may still carry an independently valid crew count.
+	if p.PartCount > 0 {
+		if err := addCount(ctx, b, ev, StatPartsLost, float64(p.PartCount)); err != nil {
+			return err
+		}
+		if err := putRecord(ctx, b, ev, StatBiggestPartsLost, float64(p.PartCount), map[string]any{
+			"body":   p.Body,
+			"cause":  p.Cause,
+			"flight": ids.String(ev.FlightID),
+		}); err != nil {
+			return err
+		}
+	}
+	if p.CrewCount < 1 {
 		return nil
 	}
-	if err := addCount(ctx, b, ev, StatPartsLost, float64(p.PartCount)); err != nil {
+	if err := addCount(ctx, b, ev, StatKittensWrecked, float64(p.CrewCount)); err != nil {
 		return err
 	}
-	return putRecord(ctx, b, ev, StatBiggestPartsLost, float64(p.PartCount), map[string]any{
+	return putRecord(ctx, b, ev, StatBiggestCrewWreck, float64(p.CrewCount), map[string]any{
 		"body":   p.Body,
 		"cause":  p.Cause,
 		"flight": ids.String(ev.FlightID),

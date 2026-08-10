@@ -1,7 +1,7 @@
 ---
 title: Every board
 description: >-
-  All 46 fixed leaderboards and the three board families, with the events behind
+  All 48 fixed leaderboards and the three board families, with the events behind
   each one and every rule that disqualifies a value.
 sidebar:
   order: 2
@@ -10,7 +10,7 @@ sidebar:
 import { Aside } from "@astrojs/starlight/components";
 import BoardDetail from "../../../components/BoardDetail.astro";
 
-Forty-six fixed boards, in the order they are published, then the three families whose
+Forty-eight fixed boards, in the order they are published, then the three families whose
 members appear as people tumble on new worlds, reach new worlds and find new ways to lose a vehicle.
 The newest fixed boards appear after the original 42 so their published positions do not move.
 
@@ -226,6 +226,17 @@ the system's home world, while at rest and in contact, so landing somewhere else
 crew there is not coming home. The crew list at recovery is the authority: a kitten who boarded
 after orbit and rode home counts, while one who reached orbit but transferred away before recovery
 does not.
+
+<BoardDetail stat="biggest_crew_wreck" />
+<BoardDetail stat="kittens_wrecked" />
+
+Both boards use the kittens aboard a whole vehicle when a physics RUD takes that vehicle out.
+**This is not a body count. It is how many kittens were aboard when a vehicle was lost. Physics
+accidents normally send them home; a player-initiated scuttle is a different game path, so catlog
+does not claim what happened to them here.** Most Kittens Aboard A Lost Vehicle keeps the largest
+single crew; Kittens Aboard Lost Vehicles adds the crews across qualifying RUDs. Neither counts
+individual bodies, parts, crashes or explosions, and catlog does not publish a kittens-scuttled
+board.
 
 ## The three families
 

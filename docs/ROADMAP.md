@@ -172,6 +172,14 @@ filter ever sees the envelope, so it stays honest either way. Vanity-hiding is a
 Constitution §8's proportionality is the reason the score/integrity list stops where it does. See
 MOD-072 and PROJ-108.
 
+### A `kittens_scuttled` leaderboard
+
+Refused. `kitten.kia` identifies the deliberate player-destroy path with crew aboard, so turning it
+into a durable public ranking would attach a public consequence to a person for using an action the
+game offers. That fails Constitution §8's consequence test. The shipped lost-vehicle crew boards
+instead describe only the kittens aboard at a physics RUD and make no claim about deaths; they do
+not provide a softer route to the same scuttle ranking. See PROJ-118.
+
 ### Propellant, Δv and any efficiency board that judges a claim
 
 Refused for now, and the reason is Constitution §8 rather than cost. `Vehicle.PropellantMass` sits
