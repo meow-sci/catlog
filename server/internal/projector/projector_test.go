@@ -231,7 +231,7 @@ func cleanHistory(f0 int) []store.Event {
 		ev(fa, "flight.ended", stats.FlightEnded{Reason: "recovered", CrewCount: 2}, 70),
 		ev(fb, "flight.started", stats.FlightStarted{VehicleName: "B", Body: "duna", CrewCount: 1, EngineCount: intp(0)}, 80),
 		ev(fb, "telemetry.window", tw("duna", 780, 3100, 9.6), 90),
-		ev(fb, "vehicle.rud", stats.VehicleRUD{Cause: "ground_impact", SpeedMs: 320, Body: "duna"}, 95),
+		ev(fb, "vehicle.rud", stats.VehicleRUD{Cause: "ground_impact", SpeedMs: 320, Body: "duna", PartCount: 14}, 95),
 		ev(fb, "kitten.tumble", stats.KittenTumble{Kid: "k1", Name: "Comet", SpeedMs: 8.2, Body: "duna"}, 96),
 		ev(fb, "flight.ended", stats.FlightEnded{Reason: "recovered", CrewCount: 1}, 99),
 		ev(ids.Zero, "roster.snapshot", stats.RosterSnapshot{Kittens: []stats.RosterKitten{
@@ -644,6 +644,11 @@ func TestBatchSizeDoesNotChangeTheProjection(t *testing.T) {
 	want := fold(t, 1)
 	if len(want.Stats) == 0 {
 		t.Fatal("the fixture produced no stats, so the comparison proved nothing")
+	}
+	values := statMap(t, want)
+	if values["1/"+stats.StatPartsLost] != 28 || values["1/"+stats.StatBiggestPartsLost] != 14 {
+		t.Fatalf("part-board fixture = sum %v, biggest %v; want 28 and 14",
+			values["1/"+stats.StatPartsLost], values["1/"+stats.StatBiggestPartsLost])
 	}
 
 	for _, batchSize := range []int{2, 3, 17, projector.DefaultBatchSize, 10_000} {

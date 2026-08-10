@@ -484,7 +484,7 @@ export const EVENTS: CatlogEvent[] = [
       },
       { key: "lon", unit: "°", optional: true, what: "The east-west half of the same position." },
     ],
-    feeds: ["rud_total", "rud_<cause>"],
+    feeds: ["rud_total", "rud_<cause>", "parts_lost", "biggest_parts_lost"],
     page: "vehicle",
   },
   {

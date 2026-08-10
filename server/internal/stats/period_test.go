@@ -171,6 +171,25 @@ func TestPeriodCountersAccumulateWithinAWindow(t *testing.T) {
 	}
 }
 
+func TestPartsLostPeriodsSumAndKeepTheBiggestLoss(t *testing.T) {
+	f := flightN(1)
+	got := foldPeriods(t, []input{
+		{flight: f, typ: "vehicle.rud", payload: stats.VehicleRUD{Cause: "collision", PartCount: 7}, recvMS: ms(t, "2026-08-07T09:00:00Z")},
+		{flight: f, typ: "vehicle.rud", payload: stats.VehicleRUD{Cause: "collision", PartCount: 4}, recvMS: ms(t, "2026-08-07T10:00:00Z")},
+		{flight: f, typ: "vehicle.rud", payload: stats.VehicleRUD{Cause: "collision", PartCount: 12}, recvMS: ms(t, "2026-09-02T09:00:00Z")},
+	})
+	for key, want := range map[string]float64{
+		"1/parts_lost/daily/2026-08-07":         11,
+		"1/biggest_parts_lost/daily/2026-08-07": 7,
+		"1/parts_lost/yearly/2026":              23,
+		"1/biggest_parts_lost/yearly/2026":      12,
+	} {
+		if got[key] != want {
+			t.Errorf("%s = %v, want %v", key, got[key], want)
+		}
+	}
+}
+
 // TestPeriodRecordsKeepTheBestInEachWindow: a record board's window value is the
 // best achieved *inside* that window, so a later worse attempt does not lower it
 // and a later better one does raise it.

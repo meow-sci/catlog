@@ -1,7 +1,7 @@
 ---
 title: Every board
 description: >-
-  All 43 fixed leaderboards and the three board families, with the events behind
+  All 45 fixed leaderboards and the three board families, with the events behind
   each one and every rule that disqualifies a value.
 sidebar:
   order: 2
@@ -10,9 +10,9 @@ sidebar:
 import { Aside } from "@astrojs/starlight/components";
 import BoardDetail from "../../../components/BoardDetail.astro";
 
-Forty-three fixed boards, in the order they are published, then the three families whose
+Forty-five fixed boards, in the order they are published, then the three families whose
 members appear as people tumble on new worlds, reach new worlds and find new ways to lose a vehicle.
-The newest fixed counter appears after the original 42 so their published positions do not move.
+The newest fixed boards appear after the original 42 so their published positions do not move.
 
 ## Records — how much you survived
 
@@ -201,7 +201,7 @@ number of times play began, not merely the number of times a save was resumed.
 <BoardDetail stat="career_playtime" />
 <BoardDetail stat="play_sessions" />
 
-## The appended counter
+## The appended boards
 
 <BoardDetail stat="botched_landings" />
 
@@ -210,6 +210,14 @@ trip or a rough cartwheel with several bounce edges. Did Not Land On Their Feet 
 view. It counts only a tumble that began from airborne, which is how the game's movement states
 identify a landing that did not finish upright. An unknown or future movement state remains in the
 total and does not become a botched landing by guesswork.
+
+<BoardDetail stat="parts_lost" />
+<BoardDetail stat="biggest_parts_lost" />
+
+Both read the same final intact-vehicle part count. Parts In Lost Vehicles adds those sizes across
+your RUDs; Biggest Vehicle Lost keeps the largest single one. **KSA does not blow parts off one at a
+time — a vehicle either survives or it does not. This is how big the thing was when it stopped
+existing.** A zero means the size could not be read and moves neither board.
 
 ## The three families
 

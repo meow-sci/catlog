@@ -156,13 +156,14 @@ defined numeric fallback; every current board that reads one gates that fallback
 indistinguishable from a real reading of the same number. The new orbit-element group is likewise
 non-optional and uses zero for a non-finite reading, but no current fold reads it. `period_s` is also
 zero deliberately for a hyperbolic or parabolic trajectory: an open path has no period. The final
-key is optional and is omitted instead. `vehicle.rud.part_count` is not read by any fold yet:
+key is optional and is omitted instead. `vehicle.rud.part_count` now feeds two boards, both of which
+reject its zero fallback:
 
 | key | reads as when the mod could not say | what stops it scoring |
 |---|---|---|
 | `vehicle.orbit.mass_kg` | `0` | `heaviest_to_orbit` requires `> 0` |
 | `flight.started.stage_count` | `0` | `biggest_stack` requires `> 0` |
-| `vehicle.rud.part_count` | `0` | no current fold reads it |
+| `vehicle.rud.part_count` | `0` | `parts_lost` and `biggest_parts_lost` require `> 0` |
 | `vehicle.orbit.sma_m` / `lan_deg` / `argp_deg` / `t_pe` / `period_s` | `0` | no current fold reads them; `period_s == 0` also means an unbound trajectory |
 | `telemetry.window.radar_alt_m` | absent | `lowest_pass` refuses the absent aggregate, then requires `min > 0` |
 

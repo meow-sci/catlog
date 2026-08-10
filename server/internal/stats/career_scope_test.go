@@ -493,6 +493,75 @@ func TestTumbleSplitWritesEveryScopeWithoutChangingTheTotal(t *testing.T) {
 	assertValues("system", readSystemStats(t, p), "1/"+system+"/")
 }
 
+func TestRUDPartsWritesEveryScopeAndPreservesLegacyCounters(t *testing.T) {
+	p := scopeProjections(t)
+	career, system := "testcareer000001", "testsystem000001"
+	seedCareer(t, p, 1, career, system)
+	clean, flagged := scopeFlight(30), scopeFlight(31)
+	foldScopeEvents(t, p,
+		Event{Seq: 2, PlayerID: 1, FlightID: clean, Career: career,
+			Type: "vehicle.rud", Payload: VehicleRUD{Cause: "ground_impact", Body: "earth", PartCount: 5}},
+		Event{Seq: 3, PlayerID: 1, FlightID: clean, Career: career,
+			Type: "vehicle.rud", Payload: VehicleRUD{Cause: "ground_impact", Body: "duna", PartCount: 3}},
+		// Nonpositive part counts remain ordinary RUDs.
+		Event{Seq: 4, PlayerID: 1, FlightID: clean, Career: career,
+			Type: "vehicle.rud", Payload: VehicleRUD{Cause: "ground_impact", PartCount: 0}},
+		Event{Seq: 5, PlayerID: 1, FlightID: clean, Career: career,
+			Type: "vehicle.rud", Payload: VehicleRUD{Cause: "kraken", PartCount: -2}},
+		// An unkeyable cause has no family row, but still records real lost parts.
+		Event{Seq: 6, PlayerID: 1, FlightID: clean, Career: career,
+			Type: "vehicle.rud", Payload: VehicleRUD{Cause: "who knows", Body: "eve", PartCount: 7}},
+		Event{Seq: 7, PlayerID: 1, FlightID: flagged, Career: career,
+			Type: "flight.flagged", Payload: FlightFlagged{Flag: "tuning"}},
+		Event{Seq: 8, PlayerID: 1, FlightID: flagged, Career: career,
+			Type: "vehicle.rud", Payload: VehicleRUD{Cause: "ground_impact", PartCount: 100}},
+	)
+
+	want := map[string]float64{
+		StatRUDTotal:         5,
+		"rud_ground_impact":  3,
+		"rud_kraken":         1,
+		StatPartsLost:        15,
+		StatBiggestPartsLost: 7,
+	}
+	assertValues := func(label string, rows map[string]scopedRow, prefix string) {
+		t.Helper()
+		if len(rows) != len(want) {
+			t.Errorf("%s rows = %v, want exactly %v", label, rows, want)
+		}
+		for stat, value := range want {
+			if got := rows[prefix+stat].value; got != value {
+				t.Errorf("%s %s = %v, want %v", label, stat, got, value)
+			}
+		}
+	}
+	assertValues("player", readPlayerScopeStats(t, p), "1/")
+	assertValues("career", readCareerStats(t, p), "1/"+career+"/")
+	assertValues("system", readSystemStats(t, p), "1/"+system+"/")
+
+	wantRecord := scopedRow{
+		system: system,
+		value:  7,
+		context: fmt.Sprintf(`{"body":"eve","cause":"who knows","flight":"%s"}`,
+			ids.String(clean)),
+		seq: 6,
+	}
+	playerRecord := readPlayerScopeStats(t, p)["1/"+StatBiggestPartsLost]
+	// Player rows have no system column, while the winning provenance and seq
+	// must otherwise be byte-identical across all three scopes.
+	wantPlayerRecord := wantRecord
+	wantPlayerRecord.system = ""
+	if playerRecord != wantPlayerRecord {
+		t.Errorf("player biggest parts row = %+v, want %+v", playerRecord, wantPlayerRecord)
+	}
+	if got := readCareerStats(t, p)["1/"+career+"/"+StatBiggestPartsLost]; got != wantRecord {
+		t.Errorf("career biggest parts row = %+v, want %+v", got, wantRecord)
+	}
+	if got := readSystemStats(t, p)["1/"+system+"/"+StatBiggestPartsLost]; got != wantRecord {
+		t.Errorf("system biggest parts row = %+v, want %+v", got, wantRecord)
+	}
+}
+
 func TestFlaggedFlightScoresNothingInEitherScope(t *testing.T) {
 	p := scopeProjections(t)
 	career, system := "testcareer000001", "testsystem000001"

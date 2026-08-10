@@ -38,7 +38,7 @@ export interface Board {
 
 const UNIVERSAL_SCOPES: Board["scopes"] = ["player", "career", "system"];
 
-/** The 43 fixed boards, in the order the site publishes them. */
+/** The 45 fixed boards, in the order the site publishes them. */
 const BOARD_DEFINITIONS: Omit<Board, "scopes">[] = [
   {
     stat: "biggest_lithobrake_survived",
@@ -610,9 +610,37 @@ const BOARD_DEFINITIONS: Omit<Board, "scopes">[] = [
       "The flight was flagged, which includes any flight where the tumble tuning was changed.",
     ],
   },
+  {
+    stat: "parts_lost",
+    title: "Parts In Lost Vehicles",
+    unit: "parts",
+    ascending: false,
+    career: false,
+    from: ["vehicle.rud"],
+    what: "How many parts were in the whole vehicles you lost, added together.",
+    how: "Adds the intact vehicle's part count at every RUD. This measures the size of lost vehicles, not individual parts exploding or breaking away.",
+    excluded: [
+      "The part count was zero, which means catlog could not read it.",
+      "The flight was flagged.",
+    ],
+  },
+  {
+    stat: "biggest_parts_lost",
+    title: "Biggest Vehicle Lost",
+    unit: "parts",
+    ascending: false,
+    career: false,
+    from: ["vehicle.rud"],
+    what: "The largest whole vehicle you have lost in one go, measured by its part count.",
+    how: "Keeps the largest positive part count read from an intact vehicle at its RUD boundary. This is one vehicle's size, not a count of separate break-offs.",
+    excluded: [
+      "The part count was zero, which means catlog could not read it.",
+      "The flight was flagged.",
+    ],
+  },
 ];
 
-// Scope is deliberately attached here rather than repeated on 43 entries. A
+// Scope is deliberately attached here rather than repeated on 45 entries. A
 // board added to the catalog receives every scope automatically; there is no
 // opt-out registry to forget to update.
 export const BOARDS: Board[] = BOARD_DEFINITIONS.map((board) => ({

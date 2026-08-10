@@ -73,6 +73,8 @@ const FIXED_BOARDS = [
   "career_playtime",
   "play_sessions",
   "botched_landings",
+  "parts_lost",
+  "biggest_parts_lost",
 ];
 
 const DYNAMIC_BOARD_FAMILIES = ["fastest_to_", "rud_", "tumbles_on_"] as const;

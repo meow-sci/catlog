@@ -17,6 +17,8 @@ const (
 	StatFastestOrbitalSpeed       = "fastest_orbital_speed"
 	StatKittenTumbles             = "kitten_tumbles"
 	StatBotchedLandings           = "botched_landings"
+	StatPartsLost                 = "parts_lost"
+	StatBiggestPartsLost          = "biggest_parts_lost"
 	StatRUDTotal                  = "rud_total"
 	StatOrbitsAchieved            = "orbits_achieved"
 	StatSOIBodies                 = "soi_bodies"
@@ -145,6 +147,8 @@ var fixedBoards = func() []Board {
 		{Stat: StatCareerPlaytime, Title: "Longest Save", Unit: "ms", Career: true},
 		rec(StatPlaySessions, "Play Sessions", "sessions"),
 		rec(StatBotchedLandings, "Did Not Land On Their Feet", "tumbles"),
+		rec(StatPartsLost, "Parts In Lost Vehicles", "parts"),
+		rec(StatBiggestPartsLost, "Biggest Vehicle Lost", "parts"),
 	}
 }()
 
@@ -1115,12 +1119,15 @@ func (tumbleFold) Apply(ctx context.Context, b *Batch, ev Event) error {
 	return addCount(ctx, b, ev, stat, 1)
 }
 
-// rudFold implements `rud_total` and the `rud_<cause>` family (§5.6).
-type rudFold struct{}
+// rudPartsFold implements `rud_total`, the `rud_<cause>` family, `parts_lost`
+// and `biggest_parts_lost` from one vehicle.rud eligibility decision.
+type rudPartsFold struct{}
 
-func (rudFold) Name() string { return StatRUDTotal }
+// The stable name differs from the old rud_total fold identity so BuildID
+// forces a historical rebuild that populates the two appended part boards.
+func (rudPartsFold) Name() string { return "rud_parts" }
 
-func (rudFold) Apply(ctx context.Context, b *Batch, ev Event) error {
+func (rudPartsFold) Apply(ctx context.Context, b *Batch, ev Event) error {
 	p, ok := payloadOf[VehicleRUD](ev)
 	if !ok {
 		return nil
@@ -1135,13 +1142,26 @@ func (rudFold) Apply(ctx context.Context, b *Batch, ev Event) error {
 	// The per-cause board comes from the cause the event carried, not from a
 	// list of the causes this build happens to know: a cause a newer game or mod
 	// introduces gets its own board rather than disappearing into the total.
-	// Only a cause that cannot be half of a stat key counts towards `rud_total`
-	// alone.
-	stat, ok := RUDStat(p.Cause)
-	if !ok {
+	// A cause that cannot be half of a stat key receives no per-cause row; it
+	// can still contribute to the part boards below.
+	if stat, valid := RUDStat(p.Cause); valid {
+		if err := addCount(ctx, b, ev, stat, 1); err != nil {
+			return err
+		}
+	}
+	// A zero reading means the prefix could not read the intact vehicle. It is
+	// still a RUD, but contributes no invented parts to either new board.
+	if p.PartCount <= 0 {
 		return nil
 	}
-	return addCount(ctx, b, ev, stat, 1)
+	if err := addCount(ctx, b, ev, StatPartsLost, float64(p.PartCount)); err != nil {
+		return err
+	}
+	return putRecord(ctx, b, ev, StatBiggestPartsLost, float64(p.PartCount), map[string]any{
+		"body":   p.Body,
+		"cause":  p.Cause,
+		"flight": ids.String(ev.FlightID),
+	})
 }
 
 // orbitsFold implements `orbits_achieved` (§5.6).

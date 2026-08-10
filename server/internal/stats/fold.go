@@ -122,7 +122,7 @@ func BoardFolds() []Fold {
 		stagesFold{},
 		evaDurationFold{},
 		tumbleFold{},
-		rudFold{},
+		rudPartsFold{},
 		orbitsFold{},
 		soiFold{},
 		landedBodiesFold{},

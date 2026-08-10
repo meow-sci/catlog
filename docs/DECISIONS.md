@@ -896,7 +896,7 @@ Removing the allow-list naively lets a modified client invent ten thousand place
 
 *Accepted · 2026-08-07 · WP-DYNBOARDS.*
 
-Two consequences, both deliberate. (1) `toBodyFold` and `rudFold` write the per-player value for **every** body and every cause regardless of publication, so the threshold is a display rule that can be turned down to publish history already in the projection, never a decision to stop collecting. A body sitting at one player is published the moment a second player arrives — no rebuild, no migration. (2) A board with one entrant is still *served* at `/v1/leaderboards/{stat}` and still shows on that player's profile. Gating the page as well would give every such profile row a link to a 404 and would hide a player's own achievement from them until somebody else repeated it, while buying nothing: reaching it requires already knowing the exact key, which is not a way to fill anything. "Published" means "in the index", and the index is the surface the mitigation is for.
+Two consequences, both deliberate. (1) `toBodyFold` and `rudPartsFold` (formerly `rudFold`; PROJ-116) write the per-player value for **every** body and every cause regardless of publication, so the threshold is a display rule that can be turned down to publish history already in the projection, never a decision to stop collecting. A body sitting at one player is published the moment a second player arrives — no rebuild, no migration. (2) A board with one entrant is still *served* at `/v1/leaderboards/{stat}` and still shows on that player's profile. Gating the page as well would give every such profile row a link to a 404 and would hide a player's own achievement from them until somebody else repeated it, while buying nothing: reaching it requires already knowing the exact key, which is not a way to fill anything. "Published" means "in the index", and the index is the surface the mitigation is for.
 
 ### PROJ-036 — Board metadata is derived from the key, so a board for a place nobody has ever typed here arrives fully described
 
@@ -1742,6 +1742,30 @@ Replacing the generic count fold changes its stable identity from `kitten_tumble
 queues a historical rebuild, backfilling the new fixed and per-body rows from the immutable log.
 `BuildVersion` remains 1 because no event or stored schema changed; hiding the new outputs behind
 the old identity would leave existing deployments permanently missing history.
+
+### PROJ-116 — Lost-parts boards measure whole vehicles, share one positive reading, and rebuild history
+
+*Accepted · 2026-08-10 · Task E2.*
+
+KSA exposes one trustworthy boundary here: destruction of the whole vehicle while its intact parts
+collection can still be read. It does not expose a reliable event for each part exploding or
+breaking away. The honest projections therefore describe vehicle sizes. **Parts In Lost Vehicles**
+adds the intact `part_count` from each RUD; **Biggest Vehicle Lost** keeps the largest one from a
+single RUD. Neither title nor explanation claims separately observed break-offs.
+
+Both boards require `part_count > 0`. Zero is the wire fallback for a failed intact-vehicle read:
+adding it would be a meaningless no-op, while accepting it as a record would publish a measurement
+the game never supplied. One `rudPartsFold` applies the existing flight-flag gate once, preserves
+`rud_total` and `rud_<cause>`, then fans the positive reading through `addCount` and `putRecord` to
+player, career and system scope. The additive board needs no context; the largest-single-loss row
+retains `body`, `cause` and `flight` so readers can identify what the record describes.
+
+The fold's stable identity changes from `rud_total` to `rud_parts`. That deliberately changes
+`BuildID` so existing immutable history backfills both appended boards; retaining the old identity
+would leave upgraded installations starting at zero. `BuildVersion`, event `ver` and storage schema
+remain unchanged because this is a new projection over an already-final payload, not a wire or
+schema revision. Both fixed rows append after the earlier 43, preserving every existing published
+position.
 
 ## Archive & restore
 

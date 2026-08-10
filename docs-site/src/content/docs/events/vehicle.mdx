@@ -88,10 +88,11 @@ catlog** — a board exists because somebody went there.
 <EventDetail type="vehicle.rud" />
 
 <Aside type="note" title="One whole vehicle, not a trail of break-offs">
-  KSA reports a RUD when the whole vehicle is destroyed. It does not report each part exploding or
-  breaking away. The part count is therefore how many parts the intact vehicle had at that final
-  boundary: “parts destroyed” or “parts lost” describes the size of the vehicle lost, not a sequence
-  of individually observed break-offs.
+  **KSA does not blow parts off one at a time — a vehicle either survives or it does not. This is
+  how big the thing was when it stopped existing.** The part count is therefore how many parts the
+  intact vehicle had at that final boundary. **Parts In Lost Vehicles** adds those whole-vehicle
+  sizes; **Biggest Vehicle Lost** keeps the largest single one. If that size could not be read,
+  neither board treats it as zero parts.
 </Aside>
 
 <EventDetail type="vehicle.impact" />
