@@ -30,6 +30,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/meow-sci/catlog/server/internal/config"
 	"github.com/meow-sci/catlog/server/internal/identity"
@@ -72,6 +73,8 @@ type Read interface {
 	BoardList(ctx context.Context) (readapi.BoardsResponse, error)
 	BadgeList(ctx context.Context) (readapi.BadgesResponse, error)
 	Badge(ctx context.Context, badge string, system *readapi.SystemRef, limit, offset int) (readapi.BadgeResponse, bool, error)
+	ChallengeList(ctx context.Context) (readapi.ChallengesResponse, error)
+	Challenge(ctx context.Context, challenge string, limit, offset int) (readapi.ChallengeResponse, bool, error)
 	// Board takes the window as well as the page. `/boards/{stat}` now offers a
 	// period selector, so this site passes through whatever `?period=` named
 	// rather than always asking for `alltime`.
@@ -157,6 +160,10 @@ type Deps struct {
 	Accounts Accounts
 	// Log receives one line per failed render.
 	Log *slog.Logger
+	// Now supplies the server clock for fixed relative deadline prose. The
+	// challenge index's own Now remains authoritative for selecting the home
+	// page's currently-open definition.
+	Now func() time.Time
 }
 
 // Server serves the §5.7 HTML routes and the SSE feed.
@@ -186,6 +193,9 @@ func New(deps Deps) (*Server, error) {
 	if deps.Log == nil {
 		deps.Log = slog.Default()
 	}
+	if deps.Now == nil {
+		deps.Now = time.Now
+	}
 	tpl, err := parseTemplates()
 	if err != nil {
 		return nil, err
@@ -205,6 +215,8 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /boards/{stat}", s.handleBoard)
 	mux.HandleFunc("GET /badges", s.handleBadges)
 	mux.HandleFunc("GET /badges/{badge}", s.handleBadge)
+	mux.HandleFunc("GET /challenges", s.handleChallenges)
+	mux.HandleFunc("GET /challenges/{challenge}", s.handleChallenge)
 	mux.HandleFunc("GET /systems", s.handleSystems)
 	mux.HandleFunc("GET /systems/{slug}", s.handleSystem)
 	mux.HandleFunc("GET /p/{handle}", s.handleProfile)

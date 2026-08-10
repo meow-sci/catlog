@@ -46,17 +46,25 @@ Closed challenge results are designed to remain available rather than expiring l
 daily or weekly leaderboard. That makes an archive of past challenges possible without treating
 last week's result as disposable.
 
-## Public JSON results
+## Where to see challenge results
+
+The [visitor challenge catalogue](https://catlog.science.fail/challenges) groups the shipped rules
+as **Open now**, **Coming up** and **Finished**, using the server's clock. While a challenge is open,
+the catlog home page also shows its compact standings. Each catalogue entry links to a result page
+with the rule, fixed UTC window and ranked rows.
+
+An open challenge page repeats the deadline plainly: your flights have to reach catlog before it
+closes. If you play offline, get back online in time. After closing, the same page and rows remain
+available under Finished; the result becomes part of the archive rather than disappearing.
 
 The [public challenge index](https://catlog.science.fail/v1/challenges) lists every definition with
 an `upcoming`, `open` or `closed` state and its entrant count. That state comes from the catlog
 server's clock, not from your browser. A shared cache can briefly retain the previous state at the
 opening or closing instant, for up to 30 seconds.
 
-Each challenge has a detail response at `GET /v1/challenges/{challenge}`; for example, [Heavy Lift
-Week's JSON results](https://catlog.science.fail/v1/challenges/heavy_lift_week). A closed challenge
-is served exactly like an open one, with its final rows intact. Closing moves it into the archive; it
-does not make the result disappear.
+Each challenge also has a detail response at `GET /v1/challenges/{challenge}`; for example, [Heavy
+Lift Week's JSON results](https://catlog.science.fail/v1/challenges/heavy_lift_week). A closed
+challenge is served exactly like an open one, with its final rows intact.
 
 Visible rows leave hidden accounts out and close the resulting rank gaps. The published `entrants`
 number still counts the raw matching rows, including hidden accounts, just as it does on a
@@ -92,8 +100,7 @@ propellant. catlog cannot separate cargo from rocket and does not pretend it can
 means no engine was installed at launch, not no propulsion: RCS thrusters, decoupler springs and a
 docking port's push can still move the vehicle.
 
-<Aside type="note" title="JSON is live; visitor result pages come later">
-  The challenge index and result rows are public through the JSON API. The visitor-facing challenge
-  catalogue and result pages are not built until I2. There is no admin screen or runtime setting for
-  creating or changing a challenge.
+<Aside type="note" title="The rules are deployed, not edited live">
+  The visitor pages and JSON results are both public. There is still no admin screen or runtime
+  setting for creating or changing a challenge; its rule and dates belong to the deployed server.
 </Aside>

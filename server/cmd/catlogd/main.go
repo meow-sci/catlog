@@ -374,6 +374,7 @@ func runWithChallengeValidation(ctx context.Context, cfg config.Config, log *slo
 		Sessions: ident.Sessions(),
 		Accounts: ident,
 		Log:      log,
+		Now:      srvClock.Now,
 	})
 	if err != nil {
 		return fmt.Errorf("build web ui: %w", err)

@@ -33,6 +33,8 @@ type fakeRead struct {
 	board         map[string]readapi.BoardResponse
 	badges        readapi.BadgesResponse
 	badge         map[string]readapi.BadgeResponse
+	challenges    readapi.ChallengesResponse
+	challenge     map[string]readapi.ChallengeResponse
 	playerBadges  map[string]readapi.PlayerBadgesResponse
 	saveBadges    map[string]readapi.PlayerBadgesResponse
 	badgeCounts   map[string]map[int64]int64
@@ -58,6 +60,9 @@ type fakeRead struct {
 	lastSystemKey                                 string
 	lastBadgeSystem                               *readapi.SystemRef
 	lastBadgeLimit, lastBadgeOffset               int
+	challengeListCalls, challengeCalls            int
+	lastChallengeKey                              string
+	lastChallengeLimit, lastChallengeOffset       int
 }
 
 func (f *fakeRead) BoardList(context.Context) (readapi.BoardsResponse, error) {
@@ -66,6 +71,33 @@ func (f *fakeRead) BoardList(context.Context) (readapi.BoardsResponse, error) {
 
 func (f *fakeRead) BadgeList(context.Context) (readapi.BadgesResponse, error) {
 	return f.badges, f.err
+}
+
+func (f *fakeRead) ChallengeList(context.Context) (readapi.ChallengesResponse, error) {
+	f.challengeListCalls++
+	return f.challenges, f.err
+}
+
+func (f *fakeRead) Challenge(_ context.Context, challenge string, limit, offset int) (readapi.ChallengeResponse, bool, error) {
+	f.challengeCalls++
+	f.lastChallengeKey, f.lastChallengeLimit, f.lastChallengeOffset = challenge, limit, offset
+	if f.err != nil {
+		return readapi.ChallengeResponse{}, true, f.err
+	}
+	out, ok := f.challenge[challenge]
+	if !ok {
+		return readapi.ChallengeResponse{}, false, nil
+	}
+	out.Limit, out.Offset = limit, offset
+	if offset >= len(out.Rows) {
+		out.Rows = nil
+	} else {
+		out.Rows = out.Rows[offset:]
+		if len(out.Rows) > limit {
+			out.Rows = out.Rows[:limit]
+		}
+	}
+	return out, true, nil
 }
 
 func (f *fakeRead) Badge(_ context.Context, badge string, system *readapi.SystemRef, limit, offset int) (readapi.BadgeResponse, bool, error) {
@@ -385,6 +417,7 @@ func newFixture(t *testing.T) *fixture {
 			{Badge: "orbited_luna", Title: "Orbited Luna", Blurb: "You made orbit around Luna.", Group: "exploration", Holders: 2},
 		}},
 		badge:        map[string]readapi.BadgeResponse{},
+		challenge:    map[string]readapi.ChallengeResponse{},
 		playerBadges: map[string]readapi.PlayerBadgesResponse{},
 		saveBadges:   map[string]readapi.PlayerBadgesResponse{},
 		badgeCounts:  map[string]map[int64]int64{},
@@ -464,6 +497,16 @@ func newFixture(t *testing.T) *fixture {
 		},
 		players: map[int64]string{1: "demo_crasher", 2: "demo_ace"},
 	}
+	const challengeNow = int64(1_786_665_600_000) // 2026-08-14T00:00:00Z
+	read.challenges = readapi.ChallengesResponse{
+		Now: challengeNow,
+		Challenges: []readapi.ChallengeSummary{
+			{Challenge: "heavy_lift_week", Title: "Heavy Lift Week", Blurb: "Get the heaviest payload into orbit.", Unit: "kg", Scope: stats.ScopeSystem, Opens: 1_786_320_000_000, Closes: 1_786_924_800_000, State: "open", Entrants: 2},
+			{Challenge: "speedrun_orbit", Title: "From Scratch To Orbit", Blurb: "Start a save and get to orbit.", Unit: "ms", Ascending: true, Scope: stats.ScopeCareer, Opens: 1_786_320_000_000, Closes: 1_786_924_800_000, State: "open", Entrants: 1},
+			{Challenge: "next_week", Title: "Next Week", Blurb: "Something ill-advised later.", Unit: "tumbles", Scope: stats.ScopePlayer, Opens: 1_787_529_600_000, Closes: 1_788_134_400_000, State: "upcoming"},
+			{Challenge: "old_week", Title: "Last Week's Mistake", Blurb: "An archived bad idea.", Unit: "tumbles", Scope: stats.ScopePlayer, Opens: 1_785_715_200_000, Closes: 1_786_320_000_000, State: "closed", Entrants: 1},
+		},
+	}
 	sun := "sun"
 	earth := "earth"
 	solarDetail := readapi.SystemDetail{
@@ -494,6 +537,32 @@ func newFixture(t *testing.T) *fixture {
 		},
 	}
 	sol := read.system["solar-system"]
+	read.challenge["heavy_lift_week"] = readapi.ChallengeResponse{
+		ChallengeSummary: readapi.ChallengeSummary{
+			Challenge: "heavy_lift_week", Title: "Heavy Lift Week", Blurb: "Get the heaviest payload into orbit.",
+			Unit: "kg", Scope: stats.ScopeSystem, Opens: 1_786_320_000_000, Closes: 1_786_924_800_000,
+			State: "open", Entrants: 2,
+		},
+		Rows: []readapi.ChallengeRow{
+			{Rank: 1, Handle: "demo_crasher", System: &sol, Value: 42_000, Context: json.RawMessage(`{"mass_kg":42000,"body":"earth"}`), Updated: 1_786_665_000_000},
+			{Rank: 2, Handle: "demo_ace", System: &sol, Value: 35_000, Updated: 1_786_664_000_000},
+		},
+	}
+	read.challenge["speedrun_orbit"] = readapi.ChallengeResponse{
+		ChallengeSummary: readapi.ChallengeSummary{
+			Challenge: "speedrun_orbit", Title: "From Scratch To Orbit", Blurb: "Start a save and get to orbit.",
+			Unit: "ms", Ascending: true, Scope: stats.ScopeCareer, Opens: 1_786_320_000_000,
+			Closes: 1_786_924_800_000, State: "open", Entrants: 1,
+		},
+		Rows: []readapi.ChallengeRow{{Rank: 1, Handle: "demo_crasher", Save: 1, SaveID: "save-label-one", Value: 313_000, Updated: 1_786_663_000_000, Rewound: true}},
+	}
+	read.challenge["old_week"] = readapi.ChallengeResponse{
+		ChallengeSummary: readapi.ChallengeSummary{
+			Challenge: "old_week", Title: "Last Week's Mistake", Blurb: "An archived bad idea.", Unit: "tumbles",
+			Scope: stats.ScopePlayer, Opens: 1_785_715_200_000, Closes: 1_786_320_000_000, State: "closed", Entrants: 1,
+		},
+		Rows: []readapi.ChallengeRow{{Rank: 1, Handle: "demo_ace", Value: 8, Updated: 1_786_319_000_000}},
+	}
 	read.saves["demo_crasher"] = readapi.SavesResponse{
 		Handle: "demo_crasher",
 		Saves: []readapi.SaveSummary{
@@ -568,6 +637,7 @@ func newFixture(t *testing.T) *fixture {
 		Sessions:    sessions,
 		Accounts:    accounts,
 		Log:         testutil.DiscardLogger(),
+		Now:         func() time.Time { return time.UnixMilli(challengeNow) },
 	})
 	if err != nil {
 		t.Fatalf("web.New: %v", err)
@@ -650,6 +720,10 @@ func TestEveryPageRenders(t *testing.T) {
 		{"/badges", 200, []string{`id="badges-catalogue"`, `data-badge="first_flight"`, `data-badge="orbited_luna"`}},
 		{"/badges/first_flight", 200, []string{`id="badge-title"`, `id="badge-holders"`, `data-handle="demo_crasher"`}},
 		{"/badges/no_such_badge", 404, []string{`id="not-found"`}},
+		{"/challenges", 200, []string{`id="challenges-index"`, `data-challenge="heavy_lift_week"`, `data-challenge="old_week"`}},
+		{"/challenges/heavy_lift_week", 200, []string{`id="challenge-title"`, `id="challenge-standings"`, `data-handle="demo_crasher"`}},
+		{"/challenges/old_week", 200, []string{`id="challenge-title"`, `data-state="closed"`, `data-handle="demo_ace"`}},
+		{"/challenges/no_such_challenge", 404, []string{`id="not-found"`}},
 		{"/p/demo_crasher/badges", 200, []string{`id="player-badges-title"`, `id="earned-badges"`, `id="unearned-badges"`}},
 		{"/p/demo_crasher/saves/1/badges", 200, []string{`id="player-badges-title"`, `data-save="1"`, `data-badge="reached_duna"`}},
 		{"/p/nobody", 404, []string{`id="not-found"`}},
@@ -1123,13 +1197,166 @@ func TestSaveRoutesCacheSuccessAndReturnHonest404sAnd500s(t *testing.T) {
 	}
 }
 
-func TestProfileLinksToSavesAndBadgesWithOnlyBadgesInTopNavigation(t *testing.T) {
+func TestProfileLinksToSavesAndBadgesWithCollectionFeaturesInTopNavigation(t *testing.T) {
 	f := newFixture(t)
 	body := f.get(t, "/p/demo_crasher").Body.String()
 	mustContain(t, body, `<a class="button secondary" id="profile-saves" href="/p/demo_crasher/saves">Saves</a>`, "profile saves button")
 	mustContain(t, body, `<a class="button secondary" id="profile-badges" href="/p/demo_crasher/badges">Badges</a>`, "profile badges button")
 	mustNotContain(t, body, `id="nav-saves"`, "top navigation")
 	mustContain(t, body, `id="nav-badges"`, "top navigation")
+	mustContain(t, body, `id="nav-challenges"`, "top navigation")
+}
+
+func TestChallengeIndexGroupsInAPIOrderAndUsesExactEmptyCopy(t *testing.T) {
+	f := newFixture(t)
+	body := f.get(t, "/challenges").Body.String()
+	for _, want := range []string{
+		`id="nav-challenges" aria-current="page"`,
+		`id="challenges-index" data-now="1786665600000"`,
+		`id="challenges-open" data-state="open"`, `>Open now</h2>`,
+		`id="challenges-upcoming" data-state="upcoming"`, `>Coming up</h2>`,
+		`id="challenges-closed" data-state="closed"`, `>Finished</h2>`,
+		`href="/challenges/heavy_lift_week">Heavy Lift Week</a>`,
+		`href="/challenges/next_week">Next Week</a>`,
+		`href="/challenges/old_week">Last Week&#39;s Mistake</a>`,
+		`data-value="2"`, `2026-08-10 00:00 UTC`, `2026-08-17 00:00 UTC`,
+	} {
+		mustContain(t, body, want, "challenge index")
+	}
+	if first, second := strings.Index(body, `data-challenge="heavy_lift_week"`), strings.Index(body, `data-challenge="speedrun_orbit"`); first < 0 || second < first {
+		t.Fatal("open challenge group did not preserve API order")
+	}
+	navStart, navEnd := strings.Index(body, `<nav id="site-nav"`), strings.Index(body, `</nav>`)
+	if navStart < 0 || navEnd < navStart {
+		t.Fatal("challenge index has no main navigation")
+	}
+	nav := body[navStart:navEnd]
+	last := -1
+	for _, id := range []string{"nav-boards", "nav-badges", "nav-challenges", "nav-compare", "nav-events", "nav-stats", "nav-docs"} {
+		at := strings.Index(nav, `id="`+id+`"`)
+		if at <= last {
+			t.Fatalf("navigation order broke at %s: %s", id, nav)
+		}
+		last = at
+	}
+
+	f.read.challenges.Challenges = nil
+	empty := f.get(t, "/challenges").Body.String()
+	for _, want := range []string{"Nothing running just now.", "Nothing scheduled yet.", "Nothing has finished yet."} {
+		mustContain(t, empty, want, "challenge empty groups")
+	}
+}
+
+func TestChallengeDetailRendersMetadataScopeProvenanceValuesAndPager(t *testing.T) {
+	f := newFixture(t)
+	body := f.get(t, "/challenges/heavy_lift_week?limit=1").Body.String()
+	if f.read.lastChallengeKey != "heavy_lift_week" || f.read.lastChallengeLimit != 1 || f.read.lastChallengeOffset != 0 {
+		t.Fatalf("challenge read args = %q limit %d offset %d", f.read.lastChallengeKey, f.read.lastChallengeLimit, f.read.lastChallengeOffset)
+	}
+	for _, want := range []string{
+		`id="challenge-title" data-challenge="heavy_lift_week">Heavy Lift Week</h1>`,
+		`id="challenge-metadata" data-state="open"`,
+		`<dt>Ranking</dt><dd>Highest value wins</dd>`,
+		`datetime="2026-08-17T00:00:00Z">2026-08-17 00:00 UTC</time>`,
+		`id="challenge-close-hint" class="muted">(closes in 3 days)</span>`,
+		`Your flights have to reach catlog before it closes. If you play offline, get back online in time.`,
+		`data-rank="1" data-handle="demo_crasher"`,
+		`href="/systems/solar-system">Solar System</a>`,
+		`class="value" data-value="42000" title="42000 kg"`,
+		`<span class="ctx-key">body</span> <span class="ctx-value">Earth</span>`,
+		`data-value="1786665000000"><time datetime="2026-08-13T23:50:00Z">2026-08-13 23:50 UTC</time>`,
+		`href="/challenges/heavy_lift_week?limit=1&amp;offset=1" id="challenge-next"`,
+	} {
+		mustContain(t, body, want, "open system challenge")
+	}
+	for _, forbidden := range []string{"hash-sol", "save-label-one", `class="card`} {
+		mustNotContain(t, body, forbidden, "open system challenge")
+	}
+
+	second := f.get(t, "/challenges/heavy_lift_week?limit=1&offset=1").Body.String()
+	if f.read.lastChallengeOffset != 1 {
+		t.Fatalf("challenge offset = %d", f.read.lastChallengeOffset)
+	}
+	for _, want := range []string{`data-rank="2" data-handle="demo_ace"`, `id="challenge-range">Ranks 2&#8211;2`, `href="/challenges/heavy_lift_week?limit=1" id="challenge-prev"`} {
+		mustContain(t, second, want, "second challenge page")
+	}
+
+	career := f.get(t, "/challenges/speedrun_orbit").Body.String()
+	for _, want := range []string{
+		`<th scope="col" class="save">Save</th>`,
+		`data-value="1" href="/p/demo_crasher/saves/1">Save 1</a>`,
+		`data-value="313000" title="313000 ms"`,
+		`class="rewound"`,
+	} {
+		mustContain(t, career, want, "career challenge")
+	}
+	mustNotContain(t, career, `class="system"`, "career challenge")
+	mustNotContain(t, career, "save-label-one", "career challenge")
+}
+
+func TestClosedChallengeIsAnArchiveWithoutOpenDeadline(t *testing.T) {
+	f := newFixture(t)
+	body := f.get(t, "/challenges/old_week").Body.String()
+	for _, want := range []string{`data-state="closed"`, `(closed 4 days ago)`, `data-handle="demo_ace"`, `data-value="8"`} {
+		mustContain(t, body, want, "closed challenge")
+	}
+	mustNotContain(t, body, `id="challenge-deadline"`, "closed challenge")
+}
+
+func TestHomeUsesOneChallengeListClockAndFirstOpenChallenge(t *testing.T) {
+	f := newFixture(t)
+	body := f.get(t, "/").Body.String()
+	if f.read.challengeListCalls != 1 || f.read.challengeCalls != 1 || f.read.lastChallengeKey != "heavy_lift_week" ||
+		f.read.lastChallengeLimit != web.FeaturedRows || f.read.lastChallengeOffset != 0 {
+		t.Fatalf("home challenge reads = list %d detail %d key %q limit %d offset %d",
+			f.read.challengeListCalls, f.read.challengeCalls, f.read.lastChallengeKey, f.read.lastChallengeLimit, f.read.lastChallengeOffset)
+	}
+	for _, want := range []string{`id="open-challenge" class="panel" data-challenge="heavy_lift_week"`, `Open now: Heavy Lift Week`, `class="catlog-board" data-stat="heavy_lift_week"`} {
+		mustContain(t, body, want, "home open challenge")
+	}
+
+	f = newFixture(t)
+	for i := range f.read.challenges.Challenges {
+		if f.read.challenges.Challenges[i].State == "open" {
+			f.read.challenges.Challenges[i].State = "closed"
+		}
+	}
+	body = f.get(t, "/").Body.String()
+	if f.read.challengeListCalls != 1 || f.read.challengeCalls != 0 {
+		t.Fatalf("no-open home reads = list %d detail %d", f.read.challengeListCalls, f.read.challengeCalls)
+	}
+	mustNotContain(t, body, `id="open-challenge"`, "home without open challenge")
+}
+
+func TestChallengeRoutesCacheValidateAndFailHonestly(t *testing.T) {
+	f := newFixture(t)
+	for _, path := range []string{"/challenges", "/challenges/heavy_lift_week", "/challenges/old_week"} {
+		rec := f.get(t, path)
+		if rec.Code != http.StatusOK || rec.Header().Get("Cache-Control") != readapi.CacheControl {
+			t.Errorf("GET %s = %d cache %q", path, rec.Code, rec.Header().Get("Cache-Control"))
+		}
+	}
+	for _, path := range []string{"/challenges/missing", "/challenges/heavy_lift_week?limit=no", "/challenges/heavy_lift_week?offset=no"} {
+		rec := f.get(t, path)
+		want := http.StatusNotFound
+		if strings.Contains(path, "=no") {
+			want = http.StatusBadRequest
+		}
+		if rec.Code != want || rec.Header().Get("Cache-Control") != "no-store" {
+			t.Errorf("GET %s = %d cache %q, want %d no-store", path, rec.Code, rec.Header().Get("Cache-Control"), want)
+		}
+	}
+	f.get(t, "/challenges/heavy_lift_week?limit=999&offset=-4")
+	if f.read.lastChallengeLimit != readapi.MaxLimit || f.read.lastChallengeOffset != 0 {
+		t.Errorf("clamped args = %d/%d", f.read.lastChallengeLimit, f.read.lastChallengeOffset)
+	}
+	f.read.err = errors.New("projections are unreadable")
+	for _, path := range []string{"/challenges", "/challenges/heavy_lift_week", "/"} {
+		rec := f.get(t, path)
+		if rec.Code != http.StatusInternalServerError || rec.Header().Get("Cache-Control") != "no-store" {
+			t.Errorf("GET %s error = %d cache %q", path, rec.Code, rec.Header().Get("Cache-Control"))
+		}
+	}
 }
 
 func TestBadgeCatalogueGroupsTilesAndExactHolderCounts(t *testing.T) {
@@ -1247,10 +1474,10 @@ func TestBadgeRoutesValidationCachingErrorsAndNavigation(t *testing.T) {
 			continue
 		}
 		nav := body[start : start+end]
-		if got := strings.Count(nav, `<a href=`); got != 6 {
-			t.Errorf("GET %s navigation links = %d, want 6", path, got)
+		if got := strings.Count(nav, `<a href=`); got != 7 {
+			t.Errorf("GET %s navigation links = %d, want 7", path, got)
 		}
-		for _, id := range []string{"nav-boards", "nav-badges", "nav-compare", "nav-events", "nav-stats", "nav-docs"} {
+		for _, id := range []string{"nav-boards", "nav-badges", "nav-challenges", "nav-compare", "nav-events", "nav-stats", "nav-docs"} {
 			if strings.Count(nav, `id="`+id+`"`) != 1 {
 				t.Errorf("GET %s navigation does not contain %s exactly once", path, id)
 			}

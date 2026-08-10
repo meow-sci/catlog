@@ -1,0 +1,62 @@
+{{define "content" -}}
+{{- $c := .Data -}}
+<nav aria-label="Breadcrumb" class="muted text-sm"><a href="/challenges">Challenges</a> / {{$c.Title}}</nav>
+
+<div class="page-head">
+  <h1 id="challenge-title" data-challenge="{{$c.Challenge}}">{{$c.Title}}</h1>
+  <p>{{$c.Blurb}}</p>
+</div>
+
+<section class="panel" id="challenge-metadata" data-state="{{$c.State}}">
+  <header><h2 class="panel-title">The challenge</h2></header>
+  <dl class="kv">
+    <dt>Status</dt><dd>{{$c.State}}</dd>
+    <dt>Scope</dt><dd>{{scopeLabel $c.Scope}}</dd>
+    <dt>Measured in</dt><dd>{{measured $c.Unit}}</dd>
+    <dt>Ranking</dt><dd>{{if $c.Ascending}}Lowest value wins{{else}}Highest value wins{{end}}</dd>
+    <dt>Opens</dt><dd><time datetime="{{iso $c.Opens}}">{{datetime $c.Opens}}</time></dd>
+    <dt>Closes</dt><dd><time id="challenge-closes" datetime="{{iso $c.Closes}}">{{datetime $c.Closes}}</time> <span id="challenge-close-hint" class="muted">({{$c.CloseHint}})</span></dd>
+    <dt>Entrants</dt><dd class="tnum" data-value="{{$c.Entrants}}">{{num $c.Entrants}}</dd>
+  </dl>
+  {{- if eq $c.State "open"}}
+  <footer id="challenge-deadline">Your flights have to reach catlog before it closes. If you play offline, get back online in time.</footer>
+  {{- end}}
+</section>
+
+<div class="table-wrap" role="region" tabindex="0" aria-label="{{$c.Title}} standings">
+<table id="challenge-standings" data-challenge="{{$c.Challenge}}">
+  <thead>
+    <tr>
+      <th scope="col" class="rank">#</th>
+      <th scope="col">Handle</th>
+      {{- if eq $c.Scope "career"}}<th scope="col" class="save">Save</th>{{end}}
+      {{- if eq $c.Scope "system"}}<th scope="col" class="system">System</th>{{end}}
+      <th scope="col" class="value">{{unitLabel $c.Unit}}</th>
+      <th scope="col">Detail</th>
+      <th scope="col">When</th>
+    </tr>
+  </thead>
+  <tbody>
+    {{- range $c.Rows}}
+    <tr class="challenge-holder" data-rank="{{.Rank}}" data-handle="{{.Handle}}">
+      <td class="rank tnum" data-value="{{.Rank}}">#{{.Rank}}</td>
+      <td class="handle"><a href="{{playerPath .Handle}}">{{.Handle}}</a></td>
+      {{- if eq $c.Scope "career"}}<td class="save"><a data-value="{{.Save}}" href="{{playerPath .Handle}}/saves/{{.Save}}">Save {{.Save}}</a></td>{{end}}
+      {{- if eq $c.Scope "system"}}<td class="system">{{with .System}}<a href="/systems/{{.Slug}}">{{.Name}}</a>{{else}}&#8212;{{end}}</td>{{end}}
+      {{template "value-cell" (dict "Value" .Value "Unit" $c.Unit "Rewound" .Rewound)}}
+      {{template "context-cell" .}}
+      <td class="when" data-value="{{.Updated}}"><time datetime="{{iso .Updated}}">{{datetime .Updated}}</time></td>
+    </tr>
+    {{- else}}
+    <tr id="challenge-standings-empty"><td colspan="{{if or (eq $c.Scope "career") (eq $c.Scope "system")}}7{{else}}6{{end}}">Nobody has scored here yet.</td></tr>
+    {{- end}}
+  </tbody>
+</table>
+</div>
+
+<nav class="pager" aria-label="Pagination">
+  {{- if gt $c.Offset 0}}<a href="{{$c.PrevURL}}" id="challenge-prev">Previous</a>{{else}}<span id="challenge-prev" aria-disabled="true">Previous</span>{{end}}
+  {{- if $c.Rows}}<span class="count" id="challenge-range">Ranks {{$c.FirstRank}}&#8211;{{$c.LastRank}}</span>{{else}}<span class="count" id="challenge-range">No ranks on this page</span>{{end}}
+  {{- if $c.HasMore}}<a href="{{$c.NextURL}}" id="challenge-next">Next</a>{{else}}<span id="challenge-next" aria-disabled="true">Next</span>{{end}}
+</nav>
+{{- end}}

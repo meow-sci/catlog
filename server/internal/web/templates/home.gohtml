@@ -41,6 +41,15 @@
     {{- end}}
   </section>
 
+  {{- with .Data.Challenge}}
+  <section id="open-challenge" class="panel" data-challenge="{{.Challenge}}">
+    <header><h2 class="panel-title"><a href="/challenges/{{.Challenge}}">Open now: {{.Title}}</a></h2></header>
+    <p>{{.Blurb}}</p>
+    {{template "board-table" (dict "Board" . "Compact" true)}}
+    <footer><a href="/challenges/{{.Challenge}}" class="more">Full challenge</a></footer>
+  </section>
+  {{- end}}
+
   <section id="featured-boards">
     <div class="grid">
       {{- range .Data.Featured}}

@@ -2438,7 +2438,7 @@ duplicate or noncanonical stat-suffix keys, non-positive or reversed windows, un
 definition/rule/fold-count disagreement, missing or invalid rules, duplicate or empty
 `challenge:<key>` fold identities,
 and any key that `stats.Describe` recognises as a fixed or dynamic board. Definitions are never
-runtime configuration: there is no definition table, admin mutation or challenge result API.
+runtime configuration: there is no definition table or admin mutation.
 The generic machinery is registered between badge and log folds in the shared second pass; its exact
 order is boards, badges, challenges, event census. The collection census includes both row counts,
 and moderation treats
@@ -2500,8 +2500,7 @@ suppress a later qualifying visit, the same body in two systems is distinct, and
 roots are ordinary members.
 
 These contexts are projector-authored minimal provenance and never carry the raw career. The public
-challenge read API now exposes the catalogue and retained result pages; a visitor-rendered result
-page remains a later web-layer concern.
+challenge read API and server-rendered site now expose the catalogue and retained result pages.
 
 #### Store read seam
 
@@ -3176,7 +3175,9 @@ Every public read response carries `Cache-Control: public, s-maxage=30, stale-wh
 — including 400s and 404s.
 
 The server-rendered site (`server/internal/web/pages.go`) calls `readapi`'s exported query methods
-directly, precisely so there is no second place a banned player can reach a public surface.
+directly, precisely so there is no second place a banned player can reach a public surface. This
+includes the challenge catalogue, challenge detail/archive and the home page's compact first-open
+challenge panel.
 
 ---
 

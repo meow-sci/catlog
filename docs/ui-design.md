@@ -612,11 +612,13 @@ surface and the pages that document it; `/login` and `/dashboard` need a session
 
 | Route | Data | What a human wants here |
 |---|:--:|---|
-| `/` | ● | **Where am I and what is happening?** Global tiles, three featured boards, the live feed, a search box, and — if a "me" handle is set — a personal card above the fold |
+| `/` | ● | **Where am I and what is happening?** Global tiles, the current open challenge, three featured boards, the live feed, a search box, and — if a "me" handle is set — a personal card above the fold |
 | `/boards` | ● | The index. Which boards exist, how populated, which way each reads |
 | `/boards/{stat}` | ● | One board ranked by players, saves or systems, paged, with applicable period controls and my row highlighted |
 | `/badges` | ● | Every published merit badge, grouped in catalogue order with its holder count |
 | `/badges/{badge}` | ● | One badge's first-earned holder ranking, optionally filtered to one celestial system |
+| `/challenges` | ● | Every challenge grouped as Open now, Coming up or Finished, preserving the API order inside each group |
+| `/challenges/{challenge}` | ● | One challenge's rule, UTC window, scope and retained ranked results |
 | `/systems` | ● | The systems catlog has recorded, with catalogue size and participation counts |
 | `/systems/{slug}` | ● | One system as a reference catalogue: its home world and the physical/orbital facts for every body |
 | `/p/{handle}` | ● | One player: every placement, every rank *and its denominator*, and a way to start comparing |
@@ -651,6 +653,11 @@ The profile button row places **Saves** and **Badges** beside **Compare** and **
 remain subordinate to a player's public profile. Badges are also a collection-wide catalogue, so
 they add the sixth top-level link between Leaderboards and Compare (`#nav-badges`) and use
 `aria-current="page"` on all four badge pages.
+
+Challenges add the seventh top-level link (`#nav-challenges`) after Badges. **Seven links is the
+header's maximum budget.** A later collection feature must enter through an existing destination or
+justify a different navigation structure; it must not silently add an eighth link and rely on
+wrapping. Both challenge pages use `aria-current="page"` on that link.
 
 `/p/{handle}/saves` is one `.panel` containing a table headed **Save · System · Played · First
 seen · Last seen · Boards · Badges**. Each Save link is the player's first-seen ordinal and opens its detail
@@ -695,7 +702,24 @@ tile shows linked `Save N · System name`; an unknown save or system is an em da
 chip. The empty earned state is exactly *"No badges yet. Fly something."* Numbers and timestamps
 carry `data-value`; earned times render `YYYY-MM-DD HH:MM UTC`.
 
-**B — "see global stats for all."** `/` opens with global tiles, then the featured boards,
+`/challenges` contains three `.panel` tables in the fixed order **Open now**, **Coming up**,
+**Finished**. Rows remain in the order returned by `ChallengeList`; templates do not re-sort a
+server-clock decision. Their empty copies are exactly *"Nothing running just now."*, *"Nothing
+scheduled yet."* and *"Nothing has finished yet."* The home page uses that same single catalogue
+read, selects its first open entry, and renders its top three through the existing `board-table`
+partial with `Compact: true`. With no open entry it renders no challenge shell.
+
+`/challenges/{challenge}` is a standard panel plus table, never a new card shape. Opens and closes
+are fixed UTC instants. The parenthesised close hint is plain server-rendered prose from the injected
+server clock—no browser clock and no `Intl` date formatter. Every open page says exactly *"Your
+flights have to reach catlog before it closes. If you play offline, get back online in time."*
+Finished pages omit that reminder but retain the same ranked archive and pagination. Save scope
+adds only a friendly `Save N` link; system scope adds only the friendly system link. Raw save labels,
+career keys and system hashes never render. Values and receive times carry exact `data-value`, and
+the value/context partials remain shared with ordinary rankings.
+
+**B — "see global stats for all."** `/` opens with global tiles, the current open challenge when
+there is one, then the featured boards,
 then the feed. The **period selector** on `/boards/{stat}` —
 `alltime | daily | weekly | monthly | yearly`, fully supported by the API since the rolling
 periods landed and **unused when this was written** — turns a static ranking into "what
@@ -1323,6 +1347,12 @@ contain the server's `min_players` number); `#board-title[data-stat]`;
 tr.system-body[data-body][data-rank]` with numeric `td.value[data-value]` (the `value` class supplies
 tabular numerals);
 `#board-bucket[data-bucket]`; `#board-prev`, `#board-next`, `#board-range`;
+`#open-challenge[data-challenge]`; `#challenges-index[data-now]` with
+`.challenge-group[data-state]` and `tr.challenge-row[data-challenge][data-state]`;
+`#challenge-title[data-challenge]`; `#challenge-metadata[data-state]`; `#challenge-closes`;
+`#challenge-close-hint`; `#challenge-deadline` on open pages only;
+`#challenge-standings tr.challenge-holder[data-rank][data-handle]` with
+`td.value[data-value]`; `#challenge-prev`, `#challenge-next`, `#challenge-range`;
 `thead th.value` (the unit header, §4.4); `#profile-handle[data-handle]`;
 `#profile-stats tr[data-stat][data-rank]` with `td.rank[data-players]`;
 `#profile-me-toggle`, `#profile-me-note`, `#profile-compare`, `#profile-saves`, `#profile-events`;
@@ -1339,7 +1369,7 @@ readiness signal), `#events-types a[data-type]`, `#events-newest`, `#events-olde
 hint, plus its `paused` state), `#events-live` (the pause/resume toggle, hidden until me.js
 wires it), `#events-tail` (the `data-init` element holding the SSE open),
 `#events-heartbeat`, `#events-handle-filter[data-handle]` with `#events-handle-clear` on the
-global page, `#nav-events`; `#theme-toggle`;
+global page, `#nav-events`; `#nav-challenges`; `#theme-toggle`;
 `#feed-panel` (and `#feed-panel[data-stream]` + `#feed-status`, the connection hint me.js
 maintains); `#feed[data-source]` — there is deliberately no `data-count`, which the SSE
 prepend path could not keep true, and a sometimes-wrong attribute is worse than none;

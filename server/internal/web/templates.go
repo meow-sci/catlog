@@ -32,6 +32,8 @@ var pageTemplates = []string{
 	"board",
 	"badges",
 	"badge",
+	"challenges",
+	"challenge",
 	"player_badges",
 	"systems",
 	"system",

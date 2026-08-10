@@ -27,6 +27,9 @@ const (
 // homeData is the front page: where am I, what is happening, and how am I doing.
 type homeData struct {
 	Featured []readapi.BoardResponse
+	// Challenge is the first open definition in the read API's already-ordered
+	// catalogue, rendered through the same compact table as featured boards.
+	Challenge *challengeBoardData
 	// Feed is the panel's server-rendered starting state. The SSE handler
 	// replaces the whole list on connect and then prepends live lines, so this
 	// is not merely a nicety: it is what the front page shows to a reader whose
@@ -75,6 +78,27 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, r, err, "read the board list")
 		return
 	}
+	challenges, err := s.deps.Read.ChallengeList(r.Context())
+	if err != nil {
+		s.serverError(w, r, err, "read the challenge list")
+		return
+	}
+	for _, summary := range challenges.Challenges {
+		if summary.State != "open" {
+			continue
+		}
+		challenge, known, err := s.deps.Read.Challenge(r.Context(), summary.Challenge, FeaturedRows, 0)
+		if err != nil {
+			s.serverError(w, r, err, "read the open challenge")
+			return
+		}
+		if !known {
+			s.deps.Log.Warn("open challenge does not exist", "challenge", summary.Challenge)
+			break
+		}
+		data.Challenge = newChallengeBoardData(challenge)
+		break
+	}
 	data.Tiles.Boards = len(list.Boards)
 	for _, b := range list.Boards {
 		data.Tiles.Placements += b.Count
@@ -101,6 +125,165 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 		Nav:   "home",
 		Data:  data,
 	})
+}
+
+// --- challenges -------------------------------------------------------------
+
+const ChallengeRows = readapi.DefaultLimit
+
+type challengeGroup struct {
+	Key, Title, Empty string
+	Challenges        []readapi.ChallengeSummary
+}
+
+type challengesData struct {
+	Now    int64
+	Groups []challengeGroup
+}
+
+func (s *Server) handleChallenges(w http.ResponseWriter, r *http.Request) {
+	out, err := s.deps.Read.ChallengeList(r.Context())
+	if err != nil {
+		s.serverError(w, r, err, "read the challenge list")
+		return
+	}
+	data := challengesData{Now: out.Now, Groups: []challengeGroup{
+		{Key: "open", Title: "Open now", Empty: "Nothing running just now."},
+		{Key: "upcoming", Title: "Coming up", Empty: "Nothing scheduled yet."},
+		{Key: "closed", Title: "Finished", Empty: "Nothing has finished yet."},
+	}}
+	for _, challenge := range out.Challenges {
+		for i := range data.Groups {
+			if data.Groups[i].Key == challenge.State {
+				data.Groups[i].Challenges = append(data.Groups[i].Challenges, challenge)
+				break
+			}
+		}
+	}
+	s.render(w, r, http.StatusOK, "challenges", publicCache, page{
+		Title: "Challenges — catlog", Nav: "challenges", Data: data,
+	})
+}
+
+// challengeBoardData gives the shared board-table partial the one board field
+// a challenge names differently. All row/value/scope fields remain the exact
+// read API response rather than a second presentation model.
+type challengeBoardData struct {
+	readapi.ChallengeResponse
+	Stat string
+}
+
+func newChallengeBoardData(challenge readapi.ChallengeResponse) *challengeBoardData {
+	return &challengeBoardData{ChallengeResponse: challenge, Stat: challenge.Challenge}
+}
+
+type challengeData struct {
+	readapi.ChallengeResponse
+	CloseHint        string
+	HasMore          bool
+	PrevURL, NextURL string
+	FirstRank        int
+	LastRank         int
+}
+
+func challengeURL(key string, values url.Values) string {
+	path := "/challenges/" + key
+	if encoded := values.Encode(); encoded != "" {
+		return path + "?" + encoded
+	}
+	return path
+}
+
+func (s *Server) handleChallenge(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query()
+	limit, ok := webIntParam(query, "limit", ChallengeRows)
+	if !ok {
+		s.badRequest(w, r, "Limit must be an integer.")
+		return
+	}
+	offset, ok := webIntParam(query, "offset", 0)
+	if !ok {
+		s.badRequest(w, r, "Offset must be an integer.")
+		return
+	}
+	limit, offset = readapi.ClampPaging(limit, offset)
+	challenge, known, err := s.deps.Read.Challenge(r.Context(), r.PathValue("challenge"), limit, offset)
+	switch {
+	case err != nil:
+		s.serverError(w, r, err, "read the challenge")
+		return
+	case !known:
+		s.notFound(w, r, "No such challenge.")
+		return
+	}
+
+	base := cloneValues(query)
+	if _, present := query["limit"]; present {
+		base.Set("limit", strconv.Itoa(limit))
+	}
+	if offset == 0 {
+		base.Del("offset")
+	} else {
+		base.Set("offset", strconv.Itoa(offset))
+	}
+	prev := cloneValues(base)
+	if n := max(offset-limit, 0); n == 0 {
+		prev.Del("offset")
+	} else {
+		prev.Set("offset", strconv.Itoa(n))
+	}
+	next := cloneValues(base)
+	next.Set("offset", strconv.Itoa(offset+limit))
+	data := challengeData{
+		ChallengeResponse: challenge,
+		CloseHint:         challengeCloseHint(challenge.Closes, s.deps.Now().UnixMilli()),
+		HasMore:           len(challenge.Rows) >= challenge.Limit,
+		PrevURL:           challengeURL(challenge.Challenge, prev),
+		NextURL:           challengeURL(challenge.Challenge, next),
+		FirstRank:         challenge.Offset + 1,
+		LastRank:          challenge.Offset + len(challenge.Rows),
+	}
+	s.render(w, r, http.StatusOK, "challenge", publicCache, page{
+		Title: challenge.Title + " — catlog", Nav: "challenges", Data: data,
+	})
+}
+
+func challengeCloseHint(closes, now int64) string {
+	delta := closes - now
+	if delta == 0 {
+		return "closed just now"
+	}
+	future := delta > 0
+	if delta < 0 {
+		delta = -delta
+	}
+	const (
+		minute = int64(60_000)
+		hour   = 60 * minute
+		day    = 24 * hour
+	)
+	var n int64
+	var unit string
+	switch {
+	case delta >= day:
+		n, unit = delta/day, "day"
+	case delta >= hour:
+		n, unit = delta/hour, "hour"
+	case delta >= minute:
+		n, unit = delta/minute, "minute"
+	default:
+		if future {
+			return "closes in less than a minute"
+		}
+		return "closed less than a minute ago"
+	}
+	if n != 1 {
+		unit += "s"
+	}
+	if future {
+		return "closes in " + strconv.FormatInt(n, 10) + " " + unit
+	}
+	return "closed " + strconv.FormatInt(n, 10) + " " + unit + " ago"
 }
 
 // --- GET /boards ---------------------------------------------------------------

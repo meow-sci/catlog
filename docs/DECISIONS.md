@@ -2697,6 +2697,28 @@ readapi resolves it to public ordinals before web sees it. This adds a narrow re
 letting presentation code touch projections, keeping request cost bounded and the raw career
 identity below the same privacy boundary as every other page.
 
+### UI-062 — Challenges spend the final header slot and reuse ranked-page grammar
+
+*Accepted · 2026-08-10 · Task I2.*
+
+Challenges are a collection-wide destination, so their catalogue takes the seventh header link
+after Badges. Seven is now an explicit maximum rather than an accidental current count: adding an
+eighth would make narrow-header wrapping the information architecture. A later feature must enter
+through an existing destination or deliberately redesign navigation instead of silently extending
+the row.
+
+The pages add no visual model. Each state group is a standard panel table, detail values and context
+use the existing ranking partials, and the home page adapts the first open challenge to the existing
+compact board table. That keeps exact values, friendly save/system provenance, accessibility and
+future formatting fixes shared with boards. Web calls only readapi's non-HTTP methods, preserving
+the moderation and raw-career boundary rather than reconstructing it from store rows.
+
+The home page trusts the one `ChallengeList` response's server-time state and never evaluates the
+window in a browser. Detail pages render fixed UTC plus a short relative hint from the injected
+server clock; this is bounded cached presentation, not a projection gate. The explicit offline
+deadline sentence is preferable to machinery that pretends a client can report after close, and
+finished pages remain readable because a closed challenge is an archive state, not deletion.
+
 ---
 
 ## The mod and its KSA-free core

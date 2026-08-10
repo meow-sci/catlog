@@ -286,7 +286,7 @@ rebuild cannot silently apply different mutable rules. Six Week 33 definitions a
 ship in catalogue order; catlogd validates their one-to-one construction, keys, windows, scopes,
 board collisions and fold identities before creating runtime state. Generic challenge folds occupy
 the second-pass slot after badges and before the event census. The store-only result seam feeds the
-public read API described below; visitor-rendered result pages remain a later web-layer concern.
+public read API described below and the web layer's server-rendered challenge pages.
 
 The batch foundation
 loads one scoped `challenge_member` set on demand, merges pending additions, and flushes new members
@@ -345,8 +345,9 @@ owners are over-fetched and dropped so visible offsets and ranks close, while th
 remains the denominator. It resolves career rows to per-player save ordinals/labels and rewind
 marks, system rows to public system references, receive sequences to timestamps, and recursively
 redacts context. The response types contain no raw career field. The two HTTP adapters are public
-cached/CORS routes; the non-HTTP methods are the seam a later web page will call without touching
-the store.
+cached/CORS routes. The web layer calls the same non-HTTP methods for `/challenges`,
+`/challenges/{challenge}` and the home page's first currently-open compact ranking; it never
+accesses projections directly.
 
 Awards are insert-once inside one projection build: the first qualifying event keeps its
 `earned_seq`, matching server-side `recv_time` in `earned_at`, nullable event career clock in

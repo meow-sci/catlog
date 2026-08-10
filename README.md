@@ -32,6 +32,10 @@ exploration and kittens. Each appears both across a player's current history and
 earned it, with the celestial system shown so an achievement in one system is not confused with
 the same title in another.
 
+**Challenges.** Dated leaderboards with one peculiar rule and a hard receive-time deadline. Open
+challenges appear on the home page, upcoming ones are listed in advance, and finished results stay
+readable as an archive.
+
 **The raw log.** Every event catlog recorded, browsable. This is the part that makes "your record is
 214 m/s" checkable rather than asserted — you can read the flight it came from.
 
