@@ -231,12 +231,13 @@ func (b *Batch) bucketsFor(recvMS int64) []string {
 // --- flight_state -------------------------------------------------------------
 
 type flightEntry struct {
-	playerID   int64
-	flags      int64
-	reason     sql.NullString
-	crew       sql.NullInt64
-	body       sql.NullString
-	startedSeq int64
+	playerID    int64
+	flags       int64
+	reason      sql.NullString
+	crew        sql.NullInt64
+	body        sql.NullString
+	startedSeq  int64
+	engineCount sql.NullInt64
 
 	// exists reports that a row exists — in the database, or pending here.
 	exists bool
@@ -247,7 +248,7 @@ func (e *flightEntry) state(id ids.ID) FlightState {
 	return FlightState{
 		FlightID: id, PlayerID: e.playerID, Flags: e.flags,
 		EndedReason: e.reason.String, Crew: e.crew, Body: e.body.String,
-		StartedSeq: e.startedSeq,
+		StartedSeq: e.startedSeq, EngineCount: e.engineCount,
 	}
 }
 
@@ -266,8 +267,8 @@ func (b *Batch) flightEntry(ctx context.Context, id ids.ID) (*flightEntry, error
 	}
 	e := &flightEntry{}
 	err := b.tx.QueryRowContext(ctx,
-		`SELECT player_id, flags, ended_reason, crew, body, started_seq FROM flight_state WHERE flight_id = ?`,
-		ids.Bytes(id)).Scan(&e.playerID, &e.flags, &e.reason, &e.crew, &e.body, &e.startedSeq)
+		`SELECT player_id, flags, ended_reason, crew, body, started_seq, engine_count FROM flight_state WHERE flight_id = ?`,
+		ids.Bytes(id)).Scan(&e.playerID, &e.flags, &e.reason, &e.crew, &e.body, &e.startedSeq, &e.engineCount)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 	case err != nil:
@@ -302,13 +303,17 @@ func (b *Batch) EnsureFlight(ctx context.Context, id ids.ID, playerID, seq int64
 }
 
 // StartFlight records `flight.started`.
-func (b *Batch) StartFlight(ctx context.Context, id ids.ID, crew int, body string, seq int64) error {
+func (b *Batch) StartFlight(ctx context.Context, id ids.ID, crew int, body string, engineCount *int, seq int64) error {
 	e, err := b.flightEntry(ctx, id)
 	if err != nil {
 		return err
 	}
 	e.crew = sql.NullInt64{Int64: int64(crew), Valid: true}
 	e.body = sql.NullString{String: body, Valid: true}
+	e.engineCount = sql.NullInt64{}
+	if engineCount != nil {
+		e.engineCount = sql.NullInt64{Int64: int64(*engineCount), Valid: true}
+	}
 	e.startedSeq = seq
 	b.touchFlight(id, e)
 	return nil
@@ -341,16 +346,17 @@ func (b *Batch) flushFlights(ctx context.Context) error {
 		return nil
 	}
 	slices.SortFunc(b.dirtyFlights, func(x, y ids.ID) int { return strings.Compare(string(x[:]), string(y[:])) })
-	err := b.write(ctx, len(b.dirtyFlights), 7,
-		`INSERT INTO flight_state (flight_id, player_id, flags, ended_reason, crew, body, started_seq) VALUES `,
+	err := b.write(ctx, len(b.dirtyFlights), 8,
+		`INSERT INTO flight_state (flight_id, player_id, flags, ended_reason, crew, body, started_seq, engine_count) VALUES `,
 		` ON CONFLICT (flight_id) DO UPDATE SET
 		   flags = excluded.flags, ended_reason = excluded.ended_reason,
-		   crew = excluded.crew, body = excluded.body, started_seq = excluded.started_seq`,
+		   crew = excluded.crew, body = excluded.body, started_seq = excluded.started_seq,
+		   engine_count = excluded.engine_count`,
 		func(i int, args []any) []any {
 			id := b.dirtyFlights[i]
 			e := b.flights[id]
 			e.dirty = false
-			return append(args, ids.Bytes(id), e.playerID, e.flags, e.reason, e.crew, e.body, e.startedSeq)
+			return append(args, ids.Bytes(id), e.playerID, e.flags, e.reason, e.crew, e.body, e.startedSeq, e.engineCount)
 		})
 	if err != nil {
 		return fmt.Errorf("stats: flush flight_state: %w", err)

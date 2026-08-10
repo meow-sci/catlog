@@ -2721,6 +2721,27 @@ upcast, while minting a fictitious v2 would preserve a shape nobody has consumed
 recorded now because the immutable log cannot recover it later; giving it a board remains a separate
 fold decision.
 
+### MOD-082 — “No engines” is an optional flight-start fact, not an inferred history of propulsion
+
+*Accepted · 2026-08-10 · Task D2.*
+
+The only cheap, stable fact KSA exposes is how many installed `EngineController` modules a vehicle
+has when catlog first sees it. That is the right boundary because `flight.started` already captures
+the vehicle's other construction facts there, and because a split piece is a new vehicle with a new
+flight. Counting rocket cores or nozzles instead was rejected: their controller may be an RCS
+thruster, so a probe with attitude control would be recorded as carrying a rocket engine it does
+not have.
+
+The field is optional. Present 0 is the useful “no engines were installed” fact; a failed KSA read
+must be absent so it cannot become a false zero in the immutable log. The count deliberately makes
+no stronger claim: RCS, decoupler springs and docking pushoff can impart velocity, and a craft may
+shed engines later. Inferring whether it “really coasted” from event shape would be the
+cross-history plausibility machinery Constitution §8 refuses.
+
+This edits the final pre-launch `ver: 1` shape in place, with no upcaster, under DOCS-005. There is
+no deployed v1 history to preserve, while recording the nullable fact now lets a later projection
+use it without pretending the immutable log can reconstruct a vehicle's starting configuration.
+
 ## The load harness
 
 `catlog.loadgen`: many randomised players through the real pipeline, and what one laptop actually does.

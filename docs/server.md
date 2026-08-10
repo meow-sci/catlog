@@ -199,7 +199,7 @@ byte-identical across events. Rows written either way stay readable, so the swit
 | `player_stat` | `(player_id, stat) → value, context, updated_seq` — every board row |
 | `career_stat` | `(player_id, career, stat) → system, value, context, updated_seq` — the same board keys ranked per save; `system` is denormalised so filtering does not require a join (migration 0006) |
 | `system_stat` | `(player_id, system, stat) → value, context, updated_seq` — board rows ranked within a celestial-system identity (migration 0006) |
-| `flight_state` | Per flight: `flags` bitfield, `ended_reason`, crew, body |
+| `flight_state` | Per flight: `flags` bitfield, `ended_reason`, crew, body, nullable flight-start `engine_count` (migration 0009) |
 | `career` | Per save: sim-time high-water and rewind mark, first/last event seq, public ordinal, first celestial-system identity and non-punitive `system_changed` provenance mark; `last_seq` advances on every attributed event, including non-scoring and flagged activity |
 | `player_body` | Distinct bodies per player and `kind` — `'soi'` (entered) and `'landed'` (touched down) — plus first-arrival times, which only `'soi'` rows carry |
 | `career_body` | Distinct bodies per save and `kind`, with the career's system identity denormalised for union-across-saves system counts; its novelty signal is independent of `player_body` (migration 0007) |
@@ -262,6 +262,13 @@ previously received completely.
 `flight_state.flags` is bit0 teleport, bit1 refuel, bit2 resource_edit, bit3 console, bit4 tuning,
 bit5 other. **An unrecognised flag value sets bit5** — failing open would make every future flag a
 scoring loophole for as long as the server lagged the mod.
+
+Migration `0009_flight_engine_count.sql` adds nullable `flight_state.engine_count`. The
+`flight.started` fold writes the decoded `*int` without collapsing it: SQL `NULL` means the start
+event has not been folded or its KSA read was absent, explicit 0 means the vehicle began that flight
+with no installed rocket engine, and a positive value is the installed count. No current board fold
+reads the column; retaining the launch fact now is what lets a later challenge remain a projection
+of the immutable log rather than an inference from subsequent motion.
 
 ## §5.5 Ingest pipeline
 
@@ -353,8 +360,8 @@ exists because it answers a question its neighbour cannot:
 `> 0` matches every other gate in `boards.go` so no reader has to know that one board consults the
 envelope.
 
-**Newly decoded in `stats/payload.go`.** `FlightStarted` gained `kids []string`, `stage_count int`
-and `lat`/`lon *float64`; `FlightEnded` gained `kids`, `body string` and `lat`/`lon`;
+**Newly decoded in `stats/payload.go`.** `FlightStarted` carries `kids []string`, `stage_count int`,
+nullable `engine_count *int` and `lat`/`lon *float64`; `FlightEnded` gained `kids`, `body string` and `lat`/`lon`;
 `VehicleSituation` gained `radar_alt_m *float64`; `VehicleOrbit` gained `mass_kg float64`;
 `VehicleRUD` and `VehicleImpact` gained `lat`/`lon`; `TelemetryWindow` gained `radar_alt_m *Agg` and
 `warp_max float64`; and `VehicleLanded` is a new struct. **Every optional key is a pointer**,

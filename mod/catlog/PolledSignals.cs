@@ -107,10 +107,11 @@ public sealed class PolledSignals
             // CrewNames walks the same seats CrewCount counts, so "aboard" has one definition.
             // It runs once per vehicle, on first sight — not per tick — which is what makes the
             // list it allocates affordable on the game thread.
-            VehicleTelemetry.CrewNames(vehicle),
-            VehicleTelemetry.StageCount(vehicle),
-            VehicleTelemetry.Latitude(vehicle),
-            VehicleTelemetry.Longitude(vehicle)));
+            KittenNames: VehicleTelemetry.CrewNames(vehicle),
+            StageCount: VehicleTelemetry.StageCount(vehicle),
+            EngineCount: VehicleTelemetry.EngineCount(vehicle),
+            Lat: VehicleTelemetry.Latitude(vehicle),
+            Lon: VehicleTelemetry.Longitude(vehicle)));
         return id;
     }
 

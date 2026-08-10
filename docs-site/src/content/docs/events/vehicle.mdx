@@ -172,4 +172,6 @@ reaches each of them by exactly one route.
 
 Undocking is recorded but scores nothing. There is no undockings board, and the
 event exists so that the piece which split off has a properly-framed flight of its
-own.
+own. Its flight-start facts are read again too, including how many rocket engines
+that piece has after the split; shedding an engine therefore starts a new flight
+for the piece that continues rather than changing the count on the old one.

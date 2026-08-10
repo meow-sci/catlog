@@ -50,6 +50,17 @@ all. That is a different number from the highest stage you actually reach, and
 there is a board for each: a five-stage rocket that comes apart on stage two
 scores five on **Most Stages Built** and two on **Most Stages**.
 
+**Whether it began without engines.** The count is the rocket engines installed
+when that flight began, whether they were lit or not. Zero really means none;
+when catlog could not read the count, it leaves the answer out instead.
+
+<Aside type="note" title="No engines does not mean no way to move">
+  RCS thrusters, decoupler springs and docking-port pushoff can all impart velocity, and none is a
+  rocket engine for this count. A vehicle can also shed its engines in transit; the piece that
+  continues is a new flight with its own count. Catlog records those boundaries instead of trying to
+  infer whether a flight “really coasted.”
+</Aside>
+
 **Where it happened.** Both ends record the world and, when the game can say, the
 latitude and longitude. The ending carries a world in its own right now; before
 that, the place a flight came down could not be pinned to a map at all, because

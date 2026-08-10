@@ -712,6 +712,27 @@ public static class VehicleTelemetry
         }
     }
 
+    /// <summary>
+    /// How many rocket engines are installed on the vehicle, active or not.
+    /// </summary>
+    /// <remarks>
+    /// Counts <c>EngineController</c> modules, not <c>RocketCores</c> or
+    /// <c>RocketNozzles</c>: a <c>RocketCore</c>'s controller may be a
+    /// <c>ThrusterController</c> instead, so those two lists include RCS
+    /// thrusters and would report a probe with attitude control as having
+    /// engines.
+    /// </remarks>
+    [KsaAnchor(
+        "Vehicle.Parts.Modules.Get<EngineController>()",
+        SourceFile = "KSA/ModuleList.cs:164",
+        Verified = "2026-08-09", GameVersion = "2026.8.5.5168", Risk = ChurnRisk.Medium,
+        Notes = "Modules.HasAny<EngineController>() is the cheaper predicate; we want the count.")]
+    public static int? EngineCount(Vehicle vehicle)
+    {
+        try { return vehicle.Parts.Modules.Get<EngineController>().Length; }
+        catch (Exception ex) { Faults.Note(ex); return null; }
+    }
+
     /// <summary>Total mass in kilograms.</summary>
     /// <param name="vehicle">The vehicle.</param>
     /// <returns>The mass, 0 when unreadable.</returns>

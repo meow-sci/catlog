@@ -220,7 +220,7 @@ export const EVENTS: CatlogEvent[] = [
     cause:
       "Catlog looks over the vehicles in the world twice a second. The first time it sees one, that vehicle's flight begins. A vehicle that splits off another — a decoupled stage, a kitten stepping outside — gets its own flight the same way.",
     source:
-      "The vehicle's name, the body it is at, its total mass, how many parts it has, how many stages it was built with, how many seats actually have a kitten in them, who those kittens are, and where on the world it is standing.",
+      "The vehicle's name, the body it is at, its total mass, how many parts and installed rocket engines it has, how many stages it was built with, how many seats actually have a kitten in them, who those kittens are, and where on the world it is standing.",
     gate: "Once per vehicle. A save reload resumes the same flight rather than starting a second one.",
     fields: [
       { key: "vehicle_name", unit: "", what: "The vehicle's name, trimmed to 64 characters." },
@@ -241,6 +241,12 @@ export const EVENTS: CatlogEvent[] = [
         key: "stage_count",
         unit: "",
         what: "How many stages the vehicle was built with — what the staging list shows in the editor, whether or not you ever fire them all. Zero when it could not be read.",
+      },
+      {
+        key: "engine_count",
+        unit: "",
+        optional: true,
+        what: "How many rocket engines were installed when this flight began, whether lit or not. Zero means none; left out means catlog could not read the count.",
       },
       {
         key: "lat",

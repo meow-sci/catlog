@@ -530,9 +530,10 @@ func TestDistanceTravelledSumsPerKittenMaxima(t *testing.T) {
 
 func TestFlightStateIsBuiltForEveryFlightBearingEvent(t *testing.T) {
 	f := flightN(7)
+	engines := 4
 	proj := testutil.MemProjections(t)
 	apply(t, proj, []input{
-		{flight: f, typ: "flight.started", payload: stats.FlightStarted{Body: "duna", CrewCount: 2}},
+		{flight: f, typ: "flight.started", payload: stats.FlightStarted{Body: "duna", CrewCount: 2, EngineCount: &engines}},
 		{flight: f, typ: "flight.flagged", payload: stats.FlightFlagged{Flag: "refuel"}},
 		{flight: f, typ: "flight.flagged", payload: stats.FlightFlagged{Flag: "console"}},
 		{flight: f, typ: "flight.ended", payload: stats.FlightEnded{Reason: "recovered", CrewCount: 2}},
@@ -543,17 +544,84 @@ func TestFlightStateIsBuiltForEveryFlightBearingEvent(t *testing.T) {
 		reason string
 		crew   int64
 		body   string
+		engine int64
 	)
 	if err := proj.Reader().QueryRowContext(t.Context(),
-		`SELECT flags, ended_reason, crew, body FROM flight_state WHERE flight_id = ?`,
-		ids.Bytes(f)).Scan(&flags, &reason, &crew, &body); err != nil {
+		`SELECT flags, ended_reason, crew, body, engine_count FROM flight_state WHERE flight_id = ?`,
+		ids.Bytes(f)).Scan(&flags, &reason, &crew, &body, &engine); err != nil {
 		t.Fatalf("read flight_state: %v", err)
 	}
 	if wantFlags := stats.FlagRefuel | stats.FlagConsole; flags != wantFlags {
 		t.Errorf("flags = %d (%v), want %d", flags, stats.FlagNames(flags), wantFlags)
 	}
-	if reason != "recovered" || crew != 2 || body != "duna" {
-		t.Errorf("flight_state = {%q, crew %d, body %q}", reason, crew, body)
+	if reason != "recovered" || crew != 2 || body != "duna" || engine != 4 {
+		t.Errorf("flight_state = {%q, crew %d, body %q, engines %d}", reason, crew, body, engine)
+	}
+}
+
+func TestFlightEngineCountSurvivesSameBatchAndFlushReload(t *testing.T) {
+	zero := 0
+	positive := 4
+	cases := []struct {
+		flight ids.ID
+		name   string
+		value  *int
+	}{
+		{flight: flightN(8), name: "absent"},
+		{flight: flightN(9), name: "zero", value: &zero},
+		{flight: flightN(10), name: "positive", value: &positive},
+	}
+	proj := testutil.MemProjections(t)
+
+	if err := proj.WithWriteTx(t.Context(), func(tx *sql.Tx) error {
+		batch := stats.NewBatch(tx, stats.BatchOptions{})
+		for i, tc := range cases {
+			ev := decode(t, input{flight: tc.flight, typ: "flight.started", payload: stats.FlightStarted{
+				Body: "earth", EngineCount: tc.value,
+			}}, int64(i+1))
+			if err := stats.FlightFold().Apply(t.Context(), batch, ev); err != nil {
+				return err
+			}
+			assertEngineCount(t, batch, tc.flight, tc.name, tc.value, "same-batch")
+		}
+		return batch.Flush(t.Context())
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := proj.WithWriteTx(t.Context(), func(tx *sql.Tx) error {
+		batch := stats.NewBatch(tx, stats.BatchOptions{})
+		for _, tc := range cases {
+			assertEngineCount(t, batch, tc.flight, tc.name, tc.value, "reloaded")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	counts, err := proj.Counts(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counts.FlightState != int64(len(cases)) {
+		t.Errorf("flight_state census = %d, want %d", counts.FlightState, len(cases))
+	}
+}
+
+func assertEngineCount(t *testing.T, batch *stats.Batch, flight ids.ID, name string, want *int, phase string) {
+	t.Helper()
+	state, ok, err := batch.Flight(t.Context(), flight)
+	if err != nil || !ok {
+		t.Fatalf("%s %s Flight = ok %v, err %v", phase, name, ok, err)
+	}
+	if want == nil {
+		if state.EngineCount.Valid {
+			t.Errorf("%s %s engine_count = %+v, want absent", phase, name, state.EngineCount)
+		}
+		return
+	}
+	if !state.EngineCount.Valid || state.EngineCount.Int64 != int64(*want) {
+		t.Errorf("%s %s engine_count = %+v, want %d", phase, name, state.EngineCount, *want)
 	}
 }
 

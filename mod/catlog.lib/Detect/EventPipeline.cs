@@ -475,6 +475,7 @@ public sealed class EventPipeline
                 CrewCount: created.CrewCount,
                 Kids: Kids(created.KittenNames),
                 StageCount: created.StageCount,
+                EngineCount: created.EngineCount,
                 Lat: created.Lat,
                 Lon: created.Lon)));
 

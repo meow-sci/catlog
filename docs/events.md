@@ -76,7 +76,7 @@ Kitten identity: `kid` = lowercase Crockford base32 of the first 10 bytes of `SH
 | `session.started` | `{"mod_ver": "0.1.0", "game_build": "2026.8.5.5168", "install": "<ulid>"}` |
 | `system.discovered` | `{"system": s(hash), "id": s, "name": s(≤64 ascii), "home": s, "bodies": i, "complete": b}` |
 | `system.body` | `{"system": s(hash), "body": s, "name": s, "class": s(open set), "kind": "star"\|"planet"\|"moon"\|"minor"\|"other", "rank": i, "parent": s?, "radius_m": f, "mass_kg": f, "soi_m": f, "atmo_m": f, "ocean_m": f, "angvel": f, "axis": vec3, "ccf_to_cce_t0": quat, "sma_m": f?, "ecc": f?, "inc_deg": f?, "lan_deg": f?, "argp_deg": f?, "t_pe": f?, "period_s": f?}` |
-| `flight.started` | `{"vehicle_name": s(≤64 ascii), "body": s, "mass_kg": f, "part_count": i, "crew_count": i, "kids": [s], "stage_count": i, "lat": f?, "lon": f?}` |
+| `flight.started` | `{"vehicle_name": s(≤64 ascii), "body": s, "mass_kg": f, "part_count": i, "crew_count": i, "kids": [s], "stage_count": i, "engine_count": i?, "lat": f?, "lon": f?}` |
 | `flight.ended` | `{"reason": "recovered"\|"destroyed"\|"despawned", "crew_count": i, "kids": [s], "body": s, "lat": f?, "lon": f?}` — `body` may be the literal `"unknown"` |
 | `vehicle.situation` | `{"from": s, "to": s, "body": s, "altitude_m": f, "surface_speed_ms": f, "orbital_speed_ms": f, "radar_alt_m": f?}` |
 | `vehicle.atmosphere` | `{"dir": "entered"\|"exited", "body": s, "speed_ms": f, "dyn_pressure_pa": f}` |
@@ -155,6 +155,12 @@ ground. Writing 0 for "could not read" produces a *wrong* record rather than a m
 key is left out of the object and a decoder must read these into an optional, never a plain float.
 `vehicle.rud`'s `peak_g` / `peak_q_pa` remain the exception: they come off the destruction event
 itself, are non-nullable, and are emitted as 0.
+
+`flight.started.engine_count` is optional for the same semantic distinction in integer form:
+**absent means the game read failed and catlog does not know; present `0` means no engine was
+installed when that flight began.** It counts installed rocket engines whether active or not. RCS
+thrusters, decoupler springs and docking-port pushoff are not engines. A piece shed in flight is a
+new vehicle with a new `flight.started` and its own count.
 
 **`kids` is always present and always an array**, possibly empty — an uncrewed flight sends `[]`, not
 a missing key, so a reader never has to tell "nobody aboard" from "the mod did not say". It carries

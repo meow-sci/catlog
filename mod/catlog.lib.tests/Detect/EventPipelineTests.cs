@@ -749,15 +749,46 @@ public sealed class EventPipelineTests
         EventPipeline pipeline = TestData.Pipeline();
 
         EventEnvelope started = Assert.Single(pipeline.ProcessSignal(TestData.Created(
-            crewCount: 2, kittenNames: ["Whiskers", "Mittens"], stageCount: 3, lat: 28.6, lon: -80.6)));
+            crewCount: 2, kittenNames: ["Whiskers", "Mittens"], stageCount: 3,
+            engineCount: 4, lat: 28.6, lon: -80.6)));
 
         var payload = Assert.IsType<FlightStartedPayload>(started.Payload);
         Assert.Equal(
             [Ids.KittenId(TestData.InstallId, "Whiskers"), Ids.KittenId(TestData.InstallId, "Mittens")],
             payload.Kids);
         Assert.Equal(3, payload.StageCount);
+        Assert.Equal(4, payload.EngineCount);
         Assert.Equal(28.6, payload.Lat);
         Assert.Equal(-80.6, payload.Lon);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(4)]
+    public void FlightStarted_PreservesEngineCountAndOrdersItBeforePosition(int engineCount)
+    {
+        EventPipeline pipeline = TestData.Pipeline();
+
+        EventEnvelope started = Assert.Single(pipeline.ProcessSignal(TestData.Created(
+            stageCount: 3, engineCount: engineCount, lat: 28.6, lon: -80.6)));
+        var payload = Assert.IsType<FlightStartedPayload>(started.Payload);
+        string line = started.ToNdjsonLine();
+
+        Assert.Equal(engineCount, payload.EngineCount);
+        Assert.Equal(1, started.Ver);
+        Assert.Contains($"\"stage_count\":3,\"engine_count\":{engineCount},\"lat\":28.6", line);
+    }
+
+    [Fact]
+    public void FlightStarted_OmitsEngineCountWhenTheReadFailed()
+    {
+        EventPipeline pipeline = TestData.Pipeline();
+
+        EventEnvelope started = Assert.Single(pipeline.ProcessSignal(TestData.Created(engineCount: null)));
+        var payload = Assert.IsType<FlightStartedPayload>(started.Payload);
+
+        Assert.Null(payload.EngineCount);
+        Assert.DoesNotContain("\"engine_count\"", started.ToNdjsonLine());
     }
 
     /// <summary>An uncrewed flight says so with an empty array, never a null and never a missing key.</summary>

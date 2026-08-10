@@ -78,6 +78,7 @@ type FlightState struct {
 	Crew        sql.NullInt64
 	Body        string
 	StartedSeq  int64
+	EngineCount sql.NullInt64
 }
 
 // Flagged reports whether any flag bit is set.
@@ -110,7 +111,7 @@ func (flightFold) Apply(ctx context.Context, b *Batch, ev Event) error {
 		if !ok {
 			return nil
 		}
-		return b.StartFlight(ctx, ev.FlightID, p.CrewCount, p.Body, ev.Seq)
+		return b.StartFlight(ctx, ev.FlightID, p.CrewCount, p.Body, p.EngineCount, ev.Seq)
 	case "flight.ended":
 		p, ok := payloadOf[FlightEnded](ev)
 		if !ok {

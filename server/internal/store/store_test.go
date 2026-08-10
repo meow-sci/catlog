@@ -123,8 +123,36 @@ func TestMigrationsCreateTheFullDDL(t *testing.T) {
 		if got := indexNames(t, p.DB); !equal(got, wantIdx) {
 			t.Errorf("indexes = %v, want %v", got, wantIdx)
 		}
-		if p.Version != 8 {
-			t.Errorf("schema version = %d, want 8", p.Version)
+		if p.Version != 9 {
+			t.Errorf("schema version = %d, want 9", p.Version)
+		}
+		rows, err := p.Reader().QueryContext(t.Context(), `PRAGMA table_info(flight_state)`)
+		if err != nil {
+			t.Fatalf("flight_state columns: %v", err)
+		}
+		defer rows.Close()
+		var columns []string
+		for rows.Next() {
+			var cid, notNull, pk int
+			var name, typ string
+			var defaultValue sql.NullString
+			if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
+				t.Fatal(err)
+			}
+			columns = append(columns, fmt.Sprintf("%s %s null=%t default=%s pk=%d", name, typ, notNull == 0, defaultValue.String, pk))
+		}
+		wantColumns := []string{
+			"flight_id BLOB null=true default= pk=1",
+			"player_id INTEGER null=false default= pk=0",
+			"flags INTEGER null=false default=0 pk=0",
+			"ended_reason TEXT null=true default= pk=0",
+			"crew INTEGER null=true default= pk=0",
+			"body TEXT null=true default= pk=0",
+			"started_seq INTEGER null=false default= pk=0",
+			"engine_count INTEGER null=true default= pk=0",
+		}
+		if !slices.Equal(columns, wantColumns) {
+			t.Errorf("flight_state columns = %v, want %v", columns, wantColumns)
 		}
 	})
 }

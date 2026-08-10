@@ -75,6 +75,10 @@ public sealed record SystemBodyPayload(
 /// How many stages the vehicle has. <c>0</c> when the read failed, which is a real value here
 /// rather than a lie: a vehicle genuinely can have no sequences, and the count is descriptive only.
 /// </param>
+/// <param name="EngineCount">
+/// Installed rocket engines, including inactive engines. Omitted when the game read failed; a
+/// present <c>0</c> means the vehicle genuinely launched without an engine.
+/// </param>
 /// <param name="Lat">Latitude in degrees, <b>omitted</b> when unreadable. See <see cref="Telemetry.TelemetrySnapshot.Lat"/>.</param>
 /// <param name="Lon">Longitude in degrees, omitted under the same rule.</param>
 public sealed record FlightStartedPayload(
@@ -85,6 +89,9 @@ public sealed record FlightStartedPayload(
     [property: JsonPropertyName("crew_count")] int CrewCount,
     [property: JsonPropertyName("kids")] IReadOnlyList<string> Kids,
     [property: JsonPropertyName("stage_count")] int StageCount,
+    [property: JsonPropertyName("engine_count")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    int? EngineCount,
     [property: JsonPropertyName("lat")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     double? Lat,

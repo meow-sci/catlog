@@ -21,6 +21,7 @@ public sealed partial class EventTypesTests
         // set is pinned rather than left implicit.
         Assert.All(EventTypes.All, static type => Assert.Equal(1, EventTypes.VersionOf(type)));
         Assert.Equal(1, EventTypes.VersionOf(EventTypes.VehicleRud));
+        Assert.Equal(1, EventTypes.VersionOf(EventTypes.FlightStarted));
     }
 
     [Fact]

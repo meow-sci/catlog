@@ -211,6 +211,8 @@ func flight(n int) ids.ID {
 	return id
 }
 
+func intp(v int) *int { return &v }
+
 // cleanHistory is a history with no flags, no scuttled kittens and every flight
 // recovered — the conditions under which §5.6's incremental rules and its
 // rebuild refinements are supposed to agree exactly.
@@ -218,7 +220,7 @@ func cleanHistory(f0 int) []store.Event {
 	fa, fb := flight(f0), flight(f0+1)
 	return []store.Event{
 		ev(ids.Zero, "session.started", map[string]any{"mod_ver": "0.1.0", "game_build": "2026.8.5.5168", "install": "x"}, 0),
-		ev(fa, "flight.started", stats.FlightStarted{VehicleName: "A", Body: "kerbin", CrewCount: 2}, 10),
+		ev(fa, "flight.started", stats.FlightStarted{VehicleName: "A", Body: "kerbin", CrewCount: 2, EngineCount: intp(4)}, 10),
 		ev(fa, "vehicle.staging", stats.VehicleStaging{StageIndex: 0}, 12),
 		ev(fa, "vehicle.staging", stats.VehicleStaging{StageIndex: 1}, 14),
 		ev(fa, "telemetry.window", tw("kerbin", 2400, 7800, 4.5), 30),
@@ -227,7 +229,7 @@ func cleanHistory(f0 int) []store.Event {
 		ev(fa, "vehicle.docked", stats.VehicleDock{OtherFlight: ids.String(flight(99))}, 55),
 		ev(fa, "vehicle.impact", stats.VehicleImpact{SpeedMs: 180, EnergyJ: 3.1e7, Survived: true, Body: "mun", CrewCount: 2}, 60),
 		ev(fa, "flight.ended", stats.FlightEnded{Reason: "recovered", CrewCount: 2}, 70),
-		ev(fb, "flight.started", stats.FlightStarted{VehicleName: "B", Body: "duna", CrewCount: 1}, 80),
+		ev(fb, "flight.started", stats.FlightStarted{VehicleName: "B", Body: "duna", CrewCount: 1, EngineCount: intp(0)}, 80),
 		ev(fb, "telemetry.window", tw("duna", 780, 3100, 9.6), 90),
 		ev(fb, "vehicle.rud", stats.VehicleRUD{Cause: "ground_impact", SpeedMs: 320, Body: "duna"}, 95),
 		ev(fb, "kitten.tumble", stats.KittenTumble{Kid: "k1", Name: "Comet", SpeedMs: 8.2, Body: "duna"}, 96),
@@ -286,7 +288,7 @@ func (r *rig) snapshot() snapshot {
 		if s.SystemStats, err = dump(ctx, p, `SELECT player_id, system, stat, value, context, updated_seq FROM system_stat ORDER BY player_id, system, stat`); err != nil {
 			return err
 		}
-		if s.Flights, err = dump(ctx, p, `SELECT hex(flight_id), player_id, flags, ended_reason, crew, body, started_seq FROM flight_state ORDER BY hex(flight_id)`); err != nil {
+		if s.Flights, err = dump(ctx, p, `SELECT hex(flight_id), player_id, flags, ended_reason, crew, body, started_seq, engine_count FROM flight_state ORDER BY hex(flight_id)`); err != nil {
 			return err
 		}
 		if s.Bodies, err = dump(ctx, p, `SELECT player_id, kind, body, first_seq, first_sim_t FROM player_body ORDER BY player_id, kind, body`); err != nil {

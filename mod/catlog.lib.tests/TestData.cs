@@ -156,11 +156,12 @@ internal static class TestData
         double launchGameTime = 0,
         IReadOnlyList<string>? kittenNames = null,
         int stageCount = 0,
+        int? engineCount = null,
         double? lat = null,
         double? lon = null)
         => new(
             simT, WallMs, vehicleId, vehicleName, body, massKg, partCount, crewCount, launchGameTime,
-            kittenNames, stageCount, lat, lon);
+            kittenNames, stageCount, engineCount, lat, lon);
 
     /// <summary>Deterministic install id so <c>kid</c> values are stable across runs.</summary>
     internal const string InstallId = "01J9V5M3E8Z0FAKEINSTALL01";

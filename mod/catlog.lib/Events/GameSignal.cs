@@ -180,6 +180,7 @@ public sealed record SessionLoadedSignal(
 /// means uncrewed, and the two are the same thing: an empty array on the wire.
 /// </param>
 /// <param name="StageCount">How many stages the vehicle has; 0 when the read failed.</param>
+/// <param name="EngineCount">Installed rocket engines, or null when the read failed.</param>
 /// <param name="Lat">Latitude in degrees, or null when it could not be read.</param>
 /// <param name="Lon">Longitude in degrees, or null when it could not be read.</param>
 public sealed record VehicleCreatedSignal(
@@ -194,6 +195,7 @@ public sealed record VehicleCreatedSignal(
     double LaunchGameTime,
     IReadOnlyList<string>? KittenNames = null,
     int StageCount = 0,
+    int? EngineCount = null,
     double? Lat = null,
     double? Lon = null) : GameSignal(SimT, WallMs);
 

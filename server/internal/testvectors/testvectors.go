@@ -616,7 +616,7 @@ func batch001() []byte {
 		payload: map[string]any{
 			"vehicle_name": "Kitten I Probe", "body": "duna",
 			"mass_kg": 850.75, "part_count": 6, "crew_count": 0,
-			"kids": []string{}, "stage_count": 0,
+			"kids": []string{}, "stage_count": 0, "engine_count": 0,
 		},
 	}, {
 		label: "ev-17", typ: "vehicle.undocked", ver: 1, flight: &mission, simT: 240.5,

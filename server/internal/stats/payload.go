@@ -53,6 +53,7 @@ type FlightStarted struct {
 	CrewCount   int      `json:"crew_count"`
 	Kids        []string `json:"kids"`
 	StageCount  int      `json:"stage_count"`
+	EngineCount *int     `json:"engine_count"`
 	Lat         *float64 `json:"lat"`
 	Lon         *float64 `json:"lon"`
 }

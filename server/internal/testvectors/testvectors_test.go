@@ -158,6 +158,43 @@ func TestBatch001PinsVehicleRUDPartCountAtVersionOne(t *testing.T) {
 	}
 }
 
+func TestBatch001PinsFlightStartedEngineCountPresentZeroAndAbsent(t *testing.T) {
+	type envelope struct {
+		Type    string                     `json:"type"`
+		Ver     int                        `json:"ver"`
+		Payload map[string]json.RawMessage `json:"payload"`
+	}
+	var present, absent int
+	for _, line := range bytes.Split(bytes.TrimSpace(batch001()), []byte{'\n'}) {
+		var row envelope
+		if err := json.Unmarshal(line, &row); err != nil {
+			t.Fatal(err)
+		}
+		if row.Type != "flight.started" {
+			continue
+		}
+		if row.Ver != 1 {
+			t.Errorf("flight.started ver = %d, want 1", row.Ver)
+		}
+		raw, ok := row.Payload["engine_count"]
+		if !ok {
+			absent++
+			continue
+		}
+		present++
+		var count int
+		if err := json.Unmarshal(raw, &count); err != nil {
+			t.Fatal(err)
+		}
+		if count != 0 {
+			t.Errorf("present engine_count = %d, want explicit zero", count)
+		}
+	}
+	if present != 1 || absent != 1 {
+		t.Errorf("flight.started engine_count shapes = present %d, absent %d; want one each", present, absent)
+	}
+}
+
 // TestGenerateIsByteIdentical is the §4.10 reproducibility contract: two runs
 // into two directories must produce identical bytes, and a third run over an
 // existing directory must change nothing.

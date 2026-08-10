@@ -274,6 +274,10 @@ Patch points that were chosen carefully, because the obvious target was wrong:
   half-built and every read throws. A vehicle is registered the first time catlog *sees* it, which
   also closes the hole where a vehicle created and destroyed inside one sample interval would emit
   events against a flight the server can never join.
+- **The flight-start engine count is installed rocket engines at first sight**, active or not. It
+  counts `EngineController` modules once in `PolledSignals.Track`; read failure is `null` and the key
+  is omitted, while an explicit 0 means none were installed. RCS thrusters, decoupler springs and
+  docking pushoff are not engines, and a shed piece is a new vehicle with a new flight/count.
 - **`flight.ended` has one emitter**, the true removal choke point, with the *reason* decided by
   intent flags the earlier patches set. A silent-removal safety net closes any tracked vehicle that
   vanished without one, so a flight never leaks open.

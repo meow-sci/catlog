@@ -372,7 +372,7 @@ in `Events/GameSignal.cs`.
 |---|---|---|
 | `FrameBoundarySignal` (`:138`) | `GameBridge.EndFrame` ← `CatlogRuntime.Tick` (`:366`) | drains `ImpactCorrelator.EndFrame()` → 0..n `vehicle.impact` (`EventPipeline.cs:203-206`) |
 | `SessionLoadedSignal` (`:151`) | `CatlogRuntime.OnSessionBoundary` (`:298-300`) ← `Patcher.SessionBoundaryPostfix` (`:691-701`) | `session.started` + full pipeline reset |
-| `VehicleCreatedSignal` (`:171`) | `PolledSignals.Track` (`:94-103`) | `flight.started` + replayed session-wide `flight.flagged` |
+| `VehicleCreatedSignal` (`:186-200`) | `PolledSignals.Track` (`:90-114`) | `flight.started` + replayed session-wide `flight.flagged` |
 | `VehicleRemovedSignal` (`:188`) | `Patcher.DisposePrefix` (`:537-538`); `PolledSignals.Prune` (`:228`) | `flight.ended` + drained impacts + flushed window |
 | `VehicleRecoveredSignal` (`:200`) | **nothing in the shipped mod** — sim/tests only | `flight.ended` with `reason: recovered` |
 | `RudSignal` (`:262-274`) | `Patcher.DestroyVehicleFromEventPrefix` (`:393-431`) | `vehicle.rud` + marks the correlator |
@@ -424,7 +424,7 @@ and `projector.Upcasters` has nothing registered (PROJ-100).
 | 1 | `session.started` | 1 | 1 | **no — locked** | event | `career` (rewind mark) |
 | 2 | `system.discovered` | 1 | **1** | **no — locked** | event (session boundary) | `system`; one-time career→system binding |
 | 3 | `system.body` | 1 | **1** | yes | event (system-load survey) | immutable `system_body` catalogue |
-| 4 | `flight.started` | 1 | 1 | **no — locked** | polled-discovery | `flight_state`, `heaviest_launch`, `most_parts`, `biggest_crew`, `biggest_stack` |
+| 4 | `flight.started` | 1 | 1 | **no — locked** | polled-discovery | `flight_state` (including nullable `engine_count`), `heaviest_launch`, `most_parts`, `biggest_crew`, `biggest_stack` |
 | 5 | `flight.ended` | 1 | 1 | **no — locked** | event (+ passive net) | `flight_state`, `kittens_recovered`, `biggest_recovery`, feed |
 | 6 | `flight.flagged` | 1 | 1 | **no — locked** | event (4 of 5) / passive (`tuning`) | `flight_state` → **excludes everything** |
 | 7 | `vehicle.situation` | 1 | 1 | yes | passive | `softest_touchdown`, `landed_bodies`, `splashdowns`, `player_body`, `career_body` |
@@ -705,47 +705,57 @@ high-water mark, and only when the career already exists and `max_sim_t > sim_t`
 **Wire.** `"flight.started"` (`EventTypes.cs`), `ver` 1, kind 1. `flight` = the newly minted (or
 re-resolved) flight ULID.
 
-**Payload** — `FlightStartedPayload`, `Payloads.cs:45-59`
+**Payload** — `FlightStartedPayload`, `Payloads.cs:63-100`
 
 | Key | Type | Units | Source |
 |---|---|---|---|
-| `vehicle_name` | string | — | `Ids.SanitizeVehicleName(created.VehicleName)` (`EventPipeline.cs:343`). The signal's `VehicleName` **is the vehicle id** — KSA has no separate display name (`PolledSignals.cs:98`). |
-| `body` | string | — | `VehicleTelemetry.BodyOf(vehicle)` (`PolledSignals.cs:99`) → lowercase `IParentBody.Id`, or `"unknown"`. |
-| `mass_kg` | number | kg | `VehicleTelemetry.MassKg` ← `Vehicle.TotalMass` (a **float**, `KSA/Vehicle.cs:551`), `Sanitize.Finite`d. 0 when unreadable. |
-| `part_count` | int | count | `Vehicle.Parts.Count` (`KSA/PartTree.cs:89`). 0 when unreadable. |
-| `crew_count` | int | count | **Occupied** seats, not seat count: iterates `Vehicle.Crew` (`ReadOnlySpan<IVASeat>`, `KSA/Vehicle.cs:373`) counting `seat.AssignedKittenHash != KeyHash.Zero` (`VehicleTelemetry.cs:637`). **A `KittenEva` always returns 1**. |
-| `kids` | array of string | — | `VehicleTelemetry.CrewNames` — the same seat walk as `crew_count`, resolved through `Universe.KittenRoster.Find(KeyHash)`, then hashed to a 16-char `kid` per §4.7. In seat order. **Always present**; `[]` when uncrewed, so a reader never has to tell "nobody aboard" from "the mod did not say". Read **once per vehicle on first sight**, in `PolledSignals.Track`, not per tick. |
-| `stage_count` | int | count | `Vehicle.Parts.SequenceList.Count` (`KSA/PartTree.cs:29`, `KSA/SequenceList.cs:99`). `0` when unreadable, which is a real value here rather than a lie — a vehicle genuinely can have no sequences. **Churn risk High**: `SequenceList` was very nearly rewritten in 5168. |
-| `lat` | number | degrees | **OPTIONAL — the key is absent when unreadable.** `Celestial.GetLatitudeFromCce(Vehicle.GetPositionCce())` (`KSA/Celestial.cs:698`, `KSA/Vehicle.cs:2414`), already in degrees. Requires `Orbit.Parent is Celestial` — the method is declared on `Celestial`, not on `IParentBody`, so the type test is mandatory rather than defensive. |
-| `lon` | number | degrees | **OPTIONAL.** `Celestial.GetLongitudeFromCce` (`KSA/Celestial.cs:733`), same rule. |
+| `vehicle_name` | string | — | `Ids.SanitizeVehicleName(created.VehicleName)` (`EventPipeline.cs:471`). The signal's `VehicleName` **is the vehicle id** — KSA has no separate display name (`PolledSignals.cs:101`). |
+| `body` | string | — | `VehicleTelemetry.BodyOf(vehicle)` (`PolledSignals.cs:102`) → lowercase `IParentBody.Id`, or `"unknown"`. |
+| `mass_kg` | number | kg | `VehicleTelemetry.MassKg` (`PolledSignals.cs:103`, helper `VehicleTelemetry.cs:742-750`) ← `Vehicle.TotalMass` (a **float**, `KSA/Vehicle.cs:551`), `Sanitize.Finite`d. 0 when unreadable. |
+| `part_count` | int | count | `VehicleTelemetry.PartCount` (`PolledSignals.cs:104`) → `Vehicle.Parts.Count` (`KSA/PartTree.cs:89`). 0 when unreadable. |
+| `crew_count` | int | count | **Occupied** seats, not seat count: `VehicleTelemetry.CrewCount` (`PolledSignals.cs:105`, helper `VehicleTelemetry.cs:642-661`) iterates `Vehicle.Crew` (`ReadOnlySpan<IVASeat>`, `KSA/Vehicle.cs:373`) counting `seat.AssignedKittenHash != KeyHash.Zero`. **A `KittenEva` always returns 1**. |
+| `kids` | array of string | — | `VehicleTelemetry.CrewNames` (`PolledSignals.cs:110`, helper `VehicleTelemetry.cs:672-694`) — the same seat walk as `crew_count`, resolved through `Universe.KittenRoster.Find(KeyHash)`, then hashed to a 16-char `kid` per §4.7. In seat order. **Always present**; `[]` when uncrewed, so a reader never has to tell "nobody aboard" from "the mod did not say". Read **once per vehicle on first sight**, in `PolledSignals.Track`, not per tick. |
+| `stage_count` | int | count | `VehicleTelemetry.StageCount` (`PolledSignals.cs:111`, helper `VehicleTelemetry.cs:492-500`) → `Vehicle.Parts.SequenceList.Count` (`KSA/PartTree.cs:29`, `KSA/SequenceList.cs:99`). `0` when unreadable, which is a real value here rather than a lie — a vehicle genuinely can have no sequences. **Churn risk High**: `SequenceList` was very nearly rewritten in 5168. |
+| `engine_count` | int | count | **OPTIONAL — absent when unreadable.** `VehicleTelemetry.EngineCount` (`PolledSignals.cs:112`, helper `VehicleTelemetry.cs:715-734`) → `Vehicle.Parts.Modules.Get<EngineController>().Length`: installed rocket-engine controllers, active or not. Present `0` is the meaningful fact that none were installed when this flight began. `[KsaAnchor]` churn risk Medium (`KSA/ModuleList.cs:164`). |
+| `lat` | number | degrees | **OPTIONAL — the key is absent when unreadable.** `VehicleTelemetry.Latitude` (`PolledSignals.cs:113`) → `Celestial.GetLatitudeFromCce(Vehicle.GetPositionCce())` (`KSA/Celestial.cs:698`, `KSA/Vehicle.cs:2414`), already in degrees. Requires `Orbit.Parent is Celestial` — the method is declared on `Celestial`, not on `IParentBody`, so the type test is mandatory rather than defensive. |
+| `lon` | number | degrees | **OPTIONAL.** `VehicleTelemetry.Longitude` (`PolledSignals.cs:114`) → `Celestial.GetLongitudeFromCce` (`KSA/Celestial.cs:733`), same rule. |
 
-`LaunchGameTime` rides on the signal (`GameSignal.cs:180`) but is **not** on the payload — it is half
+`LaunchGameTime` rides on the signal (`GameSignal.cs:195`) but is **not** on the payload — it is half
 of the flight identity only.
 
-**Why `lat` / `lon` are omitted and `stage_count` is not.** A zeroed latitude is a *real place* — the
-equator — so 0 would be a wrong record rather than a missing one, and the key is left out entirely.
-A zeroed stage count is not a place: it is a count that reads as "no stages", which is both a legal
-vehicle and the same door a `ver` 1 row falls through, and `biggest_stack` gates `> 0` on exactly
-that. MOD-078.
+**Why `engine_count` is optional while `stage_count` is not.** A present engine count of 0 is the
+fact this field exists to preserve: no engine was installed at flight start. Turning a failed read
+into 0 would make “unknown” indistinguishable from that fact, so failure omits the key. A zero stage
+count is already both a legal vehicle and the fallback the existing `biggest_stack` gate refuses.
+Latitude and longitude are omitted for the analogous reason that 0 is a real place — the equator or
+prime meridian — rather than a missing answer. MOD-078 and MOD-082.
 
-**Detector.** `EventPipeline.OnVehicleCreated` (`:317-341`). Resolves the flight with
-`Tracker.FlightFor(created.VehicleId, created.LaunchGameTime)` (`:319`), emits `flight.started`, then
+**Detector.** `EventPipeline.OnVehicleCreated` (`:464-493`). Resolves the flight with
+`Tracker.FlightFor(created.VehicleId, created.LaunchGameTime)` (`:466`), emits `flight.started`, then
 **replays every session-wide flag onto the new flight** as `flight.flagged` with detail
-`"session-wide flag"` (`:332-339`).
+`"session-wide flag"` (`:482-490`). `EngineCount` passes through unchanged at `:478`, preserving
+null separately from 0.
 
-**Game source — polled, not patched (deliberate).** `PolledSignals.Track` (`mod/catlog/PolledSignals.cs:87-105`)
+**Game source — polled, not patched (deliberate).** `PolledSignals.Track` (`mod/catlog/PolledSignals.cs:90-114`)
 raises `VehicleCreatedSignal` the first time catlog *sees* a vehicle id. Two call sites:
 
-1. the 2 Hz sample pass — `PolledSignals.Poll` → `Track` (`:129`), over
+1. the 2 Hz sample pass — `PolledSignals.Poll` → `Track` (`:140`), over
    `VehicleTelemetry.CollectVehicles`, which walks `Universe.CurrentSystem.All.UnsafeAsList()`
-   type-testing for `Vehicle` (`VehicleTelemetry.cs:575-593`; `KittenEva : Vehicle`, so EVA kittens
+   type-testing for `Vehicle` (`VehicleTelemetry.cs:918-930`; `KittenEva : Vehicle`, so EVA kittens
    are included);
-2. **ahead of any vehicle-scoped Harmony signal**, via `Patcher.Track` (`Patcher.cs:764-775`), which
+2. **ahead of any vehicle-scoped Harmony signal**, via `Patcher.Track` (`Patcher.cs:826-838`), which
    drains the resulting signals into the bridge *before* the signal it was called for.
 
 Why not patch the registration hook: `CelestialSystem.Register` sees a half-built vehicle where every
 read throws (B6), and a vehicle created and destroyed inside one 0.5 s sample interval would
-otherwise emit a RUD against a flight with no `flight.started` (`docs/mod.md:189-192`).
+otherwise emit a RUD against a flight with no `flight.started` (`docs/mod.md:273-276`).
+
+`engine_count` is read in that same once-per-vehicle tracking step. It counts
+`EngineController` modules, not rocket cores or nozzles: their controller interface can instead be
+an RCS thruster controller, so counting either list would falsely call attitude thrusters engines.
+The count says what was installed at this boundary, not what later produced velocity. RCS,
+decoupler springs and docking pushoff can accelerate an engine-less vehicle; if a vehicle sheds its
+engines, the continuing piece is a new vehicle and therefore a new flight with its own count.
 
 **Classification.** **PASSIVE-DISCOVERED, event-shaped.** The trigger is "catlog saw a vehicle id it
 has not seen", evaluated at 2 Hz and also on demand from patch bodies. No debounce; the
@@ -755,22 +765,31 @@ has not seen", evaluated at 2 Hz and also on demand from patch bodies. No deboun
 `LaunchGameTime` in place (`FlightTracker.cs:102-103`), a flight ULID minted earlier by an EVA start
 or a flag is adopted rather than replaced.
 
-**Server.** `flightFold` → `StartFlight(crew_count, body, seq)` (`stats/flight.go:113`), creating
+**Server.** `FlightStarted.EngineCount` is a Go `*int` (`stats/payload.go:48-58`). `flightFold`
+passes it to `StartFlight` (`stats/flight.go:108-114`), which persists it as nullable SQL in
+`flight_state` (migration `0009_flight_engine_count.sql`), creating
 the `flight_state` row every board consults. `launchFold` (`stats/boards.go`), registered **four**
 times, then takes the same payload onto `heaviest_launch` (`mass_kg`), `most_parts` (`part_count`),
 `biggest_crew` (`crew_count`) and `biggest_stack` (`stage_count`). Each is gated
 `> 0`, and for the three integer fields that gate **is** §4.2's `>= 1`: all four values are written
 as 0 rather than omitted when the read failed, so a zero is an unreadable vehicle and not an empty
 one. The gate matters most on `stage_count`, the highest-risk read of the four, which is why the board reads
-a value rather than the envelope (PROJ-094). One shared context, now six keys —
+a value rather than the envelope (PROJ-094). One shared context, seven keys —
 `{"body", "flight", "vehicle", "mass_kg", "part_count", "crew_count", "stage_count"}` — so the four
 rows of one launch describe the same vehicle rather than four partial views of it.
+
+No current fold scores or copies `engine_count` into a board context. It is retained in
+`flight_state` for the later challenge projection. A missing `flight.started` or an absent field
+remains SQL `NULL`; explicit 0 remains 0 (`stats/batch.go:305-319`).
 
 `kids`, `lat` and `lon` are decoded (`[]string`, `*float64`, `*float64`) and read by no fold. The
 first fold that reads `kids` must not treat a nil slice as "uncrewed": nil is a `ver` 1 row, `[]` is
 an uncrewed one.
 
-**Vectors.** `batch-001.ndjson` lines 7 (crewed: `kids` populated, `stage_count` 3, `lat` / `lon` present) and 21 (uncrewed probe: `kids` `[]`, `stage_count` 0, `lat` / `lon` absent).
+**Vectors.** `batch-001.ndjson` line 7 is crewed with `kids` populated, `stage_count` 3 and
+`lat` / `lon` present, while optional `engine_count` is absent. Line 21 is an uncrewed probe with
+`kids: []`, `stage_count: 0`, explicit `engine_count: 0` and absent `lat` / `lon`. The pair pins
+unknown separately from a real “no engines” zero.
 
 ---
 
@@ -2656,15 +2675,19 @@ List/detail readers hide such orphan rows until `system.discovered` creates the 
 
 ### `flight_state`
 
-`0001_init.sql:34-39`: `flight_state(flight_id BLOB PK, player_id, flags INTEGER DEFAULT 0,
-ended_reason, crew, body, started_seq)`.
+`0001_init.sql:34-39` creates `flight_state(flight_id BLOB PK, player_id, flags INTEGER DEFAULT 0,
+ended_reason, crew, body, started_seq)`. Migration `0009_flight_engine_count.sql` adds nullable
+`engine_count INTEGER`: SQL `NULL` means `flight.started` was not folded or its game read failed;
+present 0 means no rocket engine was installed when the flight began.
 
 Flag bits (`stats/flight.go:12-30`): 0 `teleport`, 1 `refuel`, 2 `resource_edit`, 3 `console`,
 4 `tuning`, **5 `other`** for an unrecognised value (PROJ-002).
 
-`flightFold` (`:92-127`) runs first in every list. **Every** flight-bearing event creates the row
-(`EnsureFlight`), not only `flight.started` — a batch may fold `flight.flagged` before the
-`flight.started` it belongs to.
+`flightFold` (`stats/flight.go:91-128`) runs first in every list. **Every** flight-bearing event
+creates the row (`EnsureFlight`), not only `flight.started` — a batch may fold `flight.flagged` before the
+`flight.started` it belongs to. On `flight.started`, `StartFlight` overwrites the nullable column
+with the payload's exact absent/0/positive state. No current consumer reads it; it is persisted so a
+later challenge need not reconstruct a launch fact from subsequent events.
 
 Consumers: `scoreable` (`stats/fold.go:226-241`) — events with **no flight** are scoreable, a missing
 row is treated as unflagged, otherwise `st.Flags == 0`; `Recovered()` for the rebuild refinement on
@@ -2925,9 +2948,9 @@ rather than on Go map order, so a rebuild reproduces the incremental `context` b
 
 | File | Pins |
 |---|---|
-| `batches/batch-001.ndjson` | 32 envelopes, one line each |
+| `batches/batch-001.ndjson` | 32 envelopes, one line each; SHA-256 `bef470a859aedc370ed39c7db7a29207280920ad1759490da4e49f4e03441ebf` |
 | `batches/batch-001.br` | the Brotli body as sent |
-| `batches/batch-001.bh.txt` | `SHA1MlQrNEQwN71JLQ465EGitCoHvPjzqYQaC_flzRA` — base64url SHA-256 of the compressed body |
+| `batches/batch-001.bh.txt` | `ibvCc-TAstwkoPpx9PpVm3OBwSepdnXiMNSgGLjuP2k` — base64url SHA-256 of the compressed body |
 | `keys/*`, `license/*`, `proofs/*`, `expected/verify-results.json` | the credential / JWS layer, not events |
 
 **Covered by a vector: 25 of 25.** Every registered type appears at least once, at the `ver` the
@@ -2943,7 +2966,7 @@ to say.
 | `system.discovered` | 1, 5 | line 1 is complete and precedes its catalogue; line 5 is `complete: false` and has no body rows. |
 | `system.body` | 2, 3, 4 | line 2 is a root with `parent` and all six orbital-shape keys absent; line 3 is a bound body with `parent`, all six shape keys and finite period present; line 4 is an unbound body with the six shape keys present and `period_s` absent. All three carry finite normalised orientations. |
 | `telemetry.window` | 11, 15 | line 11 carries `peak_g`, `max_q_pa` **and** the `radar_alt_m` aggregate, `n` 60, `warp_max` 1; line 15 is the same type on rails at 1000× warp with all three **absent** and `n` 3. A consumer that reads an absent optional as `0` passes line 11 and fails line 15. |
-| `flight.started` | 7, 21 | line 7 is crewed — `kids` populated, `stage_count` 3, `lat` / `lon` present; line 21 is an uncrewed probe — `kids` `[]`, `stage_count` 0, `lat` / `lon` **absent**. The pair is what separates "omitted because unreadable" from "`0` because that is the reading". |
+| `flight.started` | 7, 21 | line 7 is crewed with `kids` populated, `stage_count` 3 and `lat` / `lon` present, while `engine_count` is **absent**; line 21 is an uncrewed probe with explicit `engine_count: 0`, `kids` `[]`, `stage_count` 0 and `lat` / `lon` absent. The pair separates unknown from meaningful zero. |
 | `flight.ended` | 26, 27, 31 | `recovered` with crew and a position; the silent-removal safety net (`despawned`, `crew_count` 0, `kids` `[]`, `body: "unknown"`, no position); and `destroyed`. |
 | `vehicle.docked` / `vehicle.undocked` | 17, 22 | `other_flight` **null** and `other_flight` a ULID — the one in-payload `null` in the taxonomy. |
 
