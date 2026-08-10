@@ -2255,6 +2255,19 @@ freezing its size would repeat the brittle catalogue assertion rejected by PROJ-
 Moving the clock after an event cannot retroactively admit it, so manual testing must start with a
 fresh data directory when changing the seed receive instant.
 
+### PROJ-136 — Admin clients accept every successful HTTP status, while rebuild tests choose wait explicitly
+
+*Accepted · 2026-08-10 · final integration gate.*
+
+The detached rebuild contract answers `202 Accepted`, but the shared `catlogctl` admin client treated
+every status except `200 OK` as an error. That made the documented polling path fail before it could
+read the job it was meant to follow. The client now accepts the complete HTTP success class and still
+decodes the endpoint's typed response; redirects and error statuses remain failures.
+
+Integration tests that need to compare projections after the swap send `{"wait": true}` explicitly.
+This preserves the production default—operators get a detached job—without racing a board read
+against an in-progress rebuild or teaching tests a response shape the ordinary POST does not return.
+
 ## Archive & restore
 
 The filesystem archiver, the manifest, restore verification, and the R2 design that is deliberately not built.

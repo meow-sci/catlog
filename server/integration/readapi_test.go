@@ -199,13 +199,17 @@ func TestSeededReadAPI(t *testing.T) {
 		_, before := s.public(t, "/v1/leaderboards/"+stats.StatBiggestLithobrakeSurvived)
 
 		var res struct {
-			Events  int64  `json:"events"`
-			LastSeq int64  `json:"last_seq"`
-			Stats   int64  `json:"stats"`
-			Path    string `json:"path"`
+			Phase  string `json:"phase"`
+			Head   int64  `json:"head"`
+			Result *struct {
+				Events  int64 `json:"events"`
+				LastSeq int64 `json:"last_seq"`
+				Stats   int64 `json:"stats"`
+			} `json:"result"`
 		}
-		s.adminJSON(t, http.MethodPost, "/admin/projections/rebuild", &res)
-		if res.Events != int64(seeded.Events) || res.LastSeq != seeded.FoldedTo || res.Stats == 0 {
+		s.adminJSONBody(t, http.MethodPost, "/admin/projections/rebuild", map[string]bool{"wait": true}, &res)
+		if res.Phase != "done" || res.Head != seeded.FoldedTo || res.Result == nil ||
+			res.Result.Events != int64(seeded.Events) || res.Result.LastSeq != seeded.FoldedTo || res.Result.Stats == 0 {
 			t.Fatalf("rebuild = %+v", res)
 		}
 
@@ -252,9 +256,22 @@ func (s *server) public(t *testing.T, path string) (*http.Response, []byte) {
 // adminJSON calls the loopback admin API and decodes the response.
 func (s *server) adminJSON(t *testing.T, method, path string, out any) {
 	t.Helper()
-	var body io.Reader
+	var in any
 	if method == http.MethodPost {
-		body = bytes.NewReader([]byte(`{}`))
+		in = struct{}{}
+	}
+	s.adminJSONBody(t, method, path, in, out)
+}
+
+func (s *server) adminJSONBody(t *testing.T, method, path string, in, out any) {
+	t.Helper()
+	var body io.Reader
+	if in != nil {
+		raw, err := json.Marshal(in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body = bytes.NewReader(raw)
 	}
 	req, err := http.NewRequest(method, s.adminURL+path, body)
 	if err != nil {

@@ -574,14 +574,25 @@ func assertStoredRows(t *testing.T, s *server, cred credential, events int) {
 			t.Errorf("row %d has no timestamps: %+v", row.Seq, row)
 		}
 	}
-	// The golden batch opens with session.started, whose `flight` is null.
+	// The golden batch opens with the cached system catalogue. The boundary
+	// ordering is header, bodies, then session.started, and none is flight-bound.
 	if len(rows) > 0 {
-		if rows[0].Type != "session.started" {
-			t.Errorf("first row is %q, want session.started", rows[0].Type)
+		if rows[0].Type != "system.discovered" {
+			t.Errorf("first row is %q, want system.discovered", rows[0].Type)
 		}
 		if !rows[0].FlightID.IsZero() {
+			t.Error("system.discovered must store a NULL flight_id")
+		}
+	}
+	foundSession := false
+	for _, row := range rows {
+		if row.Type == "session.started" && !row.FlightID.IsZero() {
 			t.Error("session.started must store a NULL flight_id")
 		}
+		foundSession = foundSession || row.Type == "session.started"
+	}
+	if !foundSession {
+		t.Error("golden batch has no session.started row")
 	}
 	if !strings.Contains(strings.Join(types, ","), "vehicle.impact") {
 		t.Errorf("stored types = %v, want the golden batch's vehicle.impact", types)
