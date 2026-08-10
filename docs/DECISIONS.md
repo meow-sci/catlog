@@ -2202,6 +2202,30 @@ Nullable projector context is preserved as nil `json.RawMessage` rather than rew
 different JSON value. H5 adds no endpoint or UI: publishing requires the Phase I privacy and
 visibility work, and a storage method should not guess that presentation contract early.
 
+### PROJ-134 — Challenge publication shares ranked visibility but keeps a raw scoped-row denominator
+
+*Accepted · 2026-08-10 · Task I1.*
+
+Challenge pages use the existing generic over-fetch-and-drop visibility path instead of growing a
+challenge-specific moderation loop. A hidden player may own several save-scoped rows, so applying
+the requested offset before visibility would skip visible entrants and copying a player-stat-only
+helper would almost certainly drift. Dropping first makes the public page and its positional ranks
+describe exactly the same visible population.
+
+`entrants` remains the raw matching-row census, including hidden owners, for the same reason board
+counts do: exact visible aggregates would scan an unbounded result on each cached read and would make
+the aggregate itself a moderation oracle. It counts saves separately at career scope because each
+save is an independently ranked entrant; player and system definitions already enforce their own
+one-row scope keys. The apparent mismatch is intentional and documented: ranks describe the visible
+page, while the denominator describes retained scoped rows.
+
+Challenge state is presentation derived solely from catlogd's server clock. A public cache can
+therefore show the preceding state for at most its 30-second freshness window at an opening or close,
+but no stored result depends on that answer: folds continue to gate on immutable server receive
+timestamps. Closed challenges stay readable because retained results are the archive. Publication
+also performs the privacy joins promised by PROJ-133—per-player save labels, friendly systems,
+receive times and recursive context redaction—so raw career identity never enters a response type.
+
 ## Archive & restore
 
 The filesystem archiver, the manifest, restore verification, and the R2 design that is deliberately not built.

@@ -77,11 +77,10 @@ type Deps struct {
 	MinBoardPlayers int
 	// Now is the server clock. Defaults to [time.Now].
 	//
-	// Read for exactly one thing: deciding which rolling window "this week"
-	// means when `?period=` is given without `?at=`. It is the same clock that
-	// stamps recv_time and therefore the same clock the buckets were computed
-	// from, which is what stops the live weekly board from pointing at a window
-	// the folds are not writing to.
+	// Read for presentation decisions tied to server time: deciding which rolling
+	// window "this week" means when `?period=` omits `?at=`, and the current
+	// upcoming/open/closed state of compile-time challenges. It is the same clock
+	// that stamps recv_time and therefore the same clock the folds used.
 	Now func() time.Time
 	// AllowedOrigins is [config.CORS.AllowedOrigins] — the browser origins that
 	// may read these endpoints cross-origin. Empty means same-origin only.
@@ -161,6 +160,8 @@ func (s *Server) Register(mux *http.ServeMux) {
 	s.public(mux, "/v1/leaderboards/{stat}", s.handleBoard)
 	s.public(mux, "/v1/badges", s.handleBadges)
 	s.public(mux, "/v1/badges/{badge}", s.handleBadge)
+	s.public(mux, "/v1/challenges", s.handleChallenges)
+	s.public(mux, "/v1/challenges/{challenge}", s.handleChallenge)
 	s.public(mux, "/v1/players", s.handleSearch)
 	s.public(mux, "/v1/players/{handle}", s.handlePlayer)
 	s.public(mux, "/v1/players/{handle}/badges", s.handlePlayerBadges)

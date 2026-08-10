@@ -10,6 +10,7 @@ import { CHALLENGES } from "../../../data/challenges";
 
 Challenge definitions stay here after their window closes. See [how challenges
 work](/catlog/challenges/) for the receive-time deadline, scopes and rebuild rules shared by every
-entry.
+entry. The [live JSON index](https://catlog.science.fail/v1/challenges) reports whether each one is
+upcoming, open or closed according to the server clock; closed result rows remain available.
 
 {CHALLENGES.map((challenge) => <ChallengeDetail challenge={challenge.challenge} />)}

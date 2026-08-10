@@ -285,8 +285,8 @@ live in the server's compile-time `stats.Challenge` registry so an incremental f
 rebuild cannot silently apply different mutable rules. Six Week 33 definitions and executable rules
 ship in catalogue order; catlogd validates their one-to-one construction, keys, windows, scopes,
 board collisions and fold identities before creating runtime state. Generic challenge folds occupy
-the second-pass slot after badges and before the event census. Challenge results have a store-only
-read seam; no challenge endpoint or visitor result page exists yet.
+the second-pass slot after badges and before the event census. The store-only result seam feeds the
+public read API described below; visitor-rendered result pages remain a later web-layer concern.
 
 The batch foundation
 loads one scoped `challenge_member` set on demand, merges pending additions, and flushes new members
@@ -337,6 +337,16 @@ The empty career/system scope sentinels remain private store values; this layer 
 career nor resolves a system for publication. A SQL `NULL` context scans as a nil
 `json.RawMessage`, not the bytes `null` or an empty object. Phase I owns directory visibility,
 public save/system labels and context redaction before any row can leave the process.
+
+`readapi/challenges.go` is that publication boundary. `ChallengeList` reads the server clock once,
+combines every compile-time definition with its raw entrant census, and orders open, upcoming and
+closed groups newest-window-first. `Challenge` uses the shared generic visibility pager: hidden
+owners are over-fetched and dropped so visible offsets and ranks close, while the raw row census
+remains the denominator. It resolves career rows to per-player save ordinals/labels and rewind
+marks, system rows to public system references, receive sequences to timestamps, and recursively
+redacts context. The response types contain no raw career field. The two HTTP adapters are public
+cached/CORS routes; the non-HTTP methods are the seam a later web page will call without touching
+the store.
 
 Awards are insert-once inside one projection build: the first qualifying event keeps its
 `earned_seq`, matching server-side `recv_time` in `earned_at`, nullable event career clock in

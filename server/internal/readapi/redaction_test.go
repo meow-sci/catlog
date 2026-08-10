@@ -53,6 +53,8 @@ func publicGETs(handle string) []string {
 		"/v1/leaderboards/" + stats.StatKittenTumbles,
 		"/v1/badges",
 		"/v1/badges/first_flight",
+		"/v1/challenges",
+		"/v1/challenges/tumbleweek",
 		"/v1/players?q=" + handle[:3],
 		"/v1/players/" + handle,
 		"/v1/players/" + handle + "/badges",
@@ -134,6 +136,7 @@ func TestNoPublicResponseCarriesARawCareer(t *testing.T) {
 		fmt.Sprintf(`{"career":%q,"nested":{"career":%q}}`, sentinel, sentinel))
 	seedBadgeAward(t, f, player, sentinel, stats.BadgeFirstFlight, "", "", 4, 1_800_000_000_004, nil,
 		fmt.Sprintf(`{"career":%q}`, sentinel))
+	seedChallengeRow(t, f, player, sentinel, "", "speedrun_orbit", 12, fmt.Sprintf(`{"career":%q}`, sentinel), 10)
 	// The established profile and player-board shapes also carry contexts. They
 	// sit beside the new career shapes so future response additions can extend
 	// one table instead of inventing another privacy boundary.
@@ -180,6 +183,10 @@ func TestNoPublicResponseCarriesARawCareer(t *testing.T) {
 		{
 			name: "player save badges", path: "/v1/players/sentinel_pilot/saves/1/badges",
 			nonVacant: func(body map[string]any) bool { return jsonArrayHasRows(body, "earned") },
+		},
+		{
+			name: "career challenge", path: "/v1/challenges/speedrun_orbit",
+			nonVacant: func(body map[string]any) bool { return jsonArrayHasRows(body, "rows") },
 		},
 	}
 

@@ -57,6 +57,8 @@ var readPaths = []string{
 	"/v1/leaderboards/kitten_tumbles",
 	"/v1/badges",
 	"/v1/badges/first_flight",
+	"/v1/challenges",
+	"/v1/challenges/tumbleweek",
 	"/v1/players?q=whis",
 	"/v1/players/whiskers",
 	"/v1/players/whiskers/badges",

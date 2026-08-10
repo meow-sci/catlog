@@ -227,6 +227,8 @@ All responses `Cache-Control: public, s-maxage=30, stale-while-revalidate=300` e
 - `GET /v1/leaderboards/{stat}?scope=player&period=alltime&system=<slug-or-hash>&limit=50&offset=0` (limit ≤ 200) → `{"stat": s, "title": s, "unit": s, "ascending": b, "scope": "player" | "career" | "system", "period": s, "bucket"?: s, "limit": n, "offset": n, "rows": [{"rank": 1, "handle": s, "save"?: n, "save_id"?: s, "system"?: {"hash": s, "name": s, "slug": s}, "value": f, "context"?: {…}, "updated": unix_ms, "rewound"?: true}]}`
 - `GET /v1/badges` → `{"min_players": n, "badges": [{"badge": s, "title": s, "blurb": s, "group": s, "tier"?: n, "holders": n}]}`
 - `GET /v1/badges/{badge}?system=<slug-or-hash>&limit=50&offset=0` (limit ≤ 200) → `{"badge": s, "title": s, "blurb": s, "group": s, "tier"?: n, "holders": n, "limit": n, "offset": n, "rows": [{"rank": n, "handle": s, "save"?: n, "save_id"?: s, "system"?: {"hash": s, "name": s, "slug": s}, "earned": unix_ms, "sim_t"?: f, "context"?: {…}}]}`
+- `GET /v1/challenges` → `{"now": unix_ms, "challenges": [{"challenge": s, "title": s, "blurb": s, "unit": s, "ascending": b, "scope": "player" | "career" | "system", "opens": unix_ms, "closes": unix_ms, "state": "upcoming" | "open" | "closed", "entrants": n}]}`
+- `GET /v1/challenges/{challenge}?limit=50&offset=0` (limit ≤ 200) → the same flat challenge metadata plus `{"limit": n, "offset": n, "rows": [{"rank": n, "handle": s, "save"?: n, "save_id"?: s, "system"?: {"hash": s, "name": s, "slug": s}, "value": f, "context"?: {…}, "updated": unix_ms, "rewound"?: true}]}`
 - `GET /v1/players/{handle}` → `{"handle": s, "since": unix_ms, "stats": [{"stat": s, "title": s, "unit": s, "value": f, "ascending": b, "rank": n, "players": n, "system"?: {"hash": s, "name": s, "slug": s}, "context": {…}, "updated": unix_ms, "rewound"?: true}]}` (404 if unknown/banned)
 - `GET /v1/players/{handle}/badges` → `{"handle": s, "earned": [<badge award>], "unearned": [<badge summary>]}`
 - `GET /v1/players/{handle}/saves` → `{"handle": s, "saves": [{"save": n, "save_id": s, "system"?: {"hash": s, "name": s, "slug": s}, "system_changed"?: true, "playtime_ms": f, "first": unix_ms, "last": unix_ms, "rewound"?: true, "boards": n}]}`
@@ -358,6 +360,35 @@ is projector-authored JSON passed through recursive `Redact`; career and kitten 
 and install keys removed. `earned` is server receive time, while optional `sim_t` is the career clock
 in seconds. These are final pre-launch v1 shapes, so no read-API version advances.
 
+### Challenges — `GET /v1/challenges` and `GET /v1/challenges/{challenge}`
+
+The index publishes every compile-time definition. `now` and `state` use catlogd's server clock,
+not event time or a player's clock: opening is inclusive and closing exclusive. Open definitions
+come first, then upcoming, then closed; each group is newest opening window first, then newest
+closing instant, with registry order settling an identical window. The public cache may retain a
+state for up to its 30-second freshness window across a boundary. That presentation staleness never
+changes projection eligibility, which uses each event's server-assigned receive time. Closed
+definitions and their retained rows continue to serve as the archive.
+
+`entrants` counts raw matching projection rows, including rows owned by hidden accounts. One row is
+a player for player scope, a separately ranked save for career scope, or one player within one
+system for system scope. This matches leaderboard denominators and avoids turning an aggregate into
+a ban oracle. The common visibility pager over-fetches and drops banned, purged and handleless
+owners before applying the visible offset; ranks therefore close around every hidden row even when
+one hidden player owns several saves.
+
+Career rows alone carry `save`, the player's first-seen ordinal, and `save_id`, its per-player public
+label. System rows alone carry the friendly system reference. Player rows carry neither. `rewound`
+can appear only on a career row and only when true. Raw career keys and store scope sentinels never
+leave the process. `updated` is the server receive time of the event that last changed the result;
+optional projector context passes through the same recursive career/kitten relabelling and install
+removal as every other public response.
+
+An unknown definition is the standard cached `404 not_found`. Paging uses the common defaults and
+clamps (`limit` defaults to 50 and is capped at 200; `offset` is nonnegative). Both routes use the
+public CORS/cache wrapper, including errors. There is no system filter on this first challenge read
+surface: a system-scoped detail lists all system rows and identifies each one in the row.
+
 ### Saves — `GET /v1/players/{handle}/saves`, `GET /v1/players/{handle}/saves/{ordinal}`
 
 The collection endpoint returns every save known for the player in ascending `save` order. `save` is
@@ -461,9 +492,8 @@ Three things worth knowing before comparing numbers:
 size. `collection.badge_awards` counts all current award rows at lifetime and per-save scope. Both
 are rebuildable current-projection counts and share the response's `(WriteGen, 10 s TTL)` cache.
 `collection.challenge_stats` counts retained ranked challenge rows and
-`collection.challenge_members` counts their retained distinct-member facts. At the H1 storage
-boundary both are normally zero because challenge definitions and folds do not exist yet; exposing
-the bounded projection census does not imply a challenge catalogue or result endpoint.
+`collection.challenge_members` counts their retained distinct-member facts. These are raw current
+projection counts and are independent of the visible challenge result pages' account filtering.
 
 ### Handle search — `GET /v1/players?q=`
 

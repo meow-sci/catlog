@@ -46,6 +46,29 @@ Closed challenge results are designed to remain available rather than expiring l
 daily or weekly leaderboard. That makes an archive of past challenges possible without treating
 last week's result as disposable.
 
+## Public JSON results
+
+The [public challenge index](https://catlog.science.fail/v1/challenges) lists every definition with
+an `upcoming`, `open` or `closed` state and its entrant count. That state comes from the catlog
+server's clock, not from your browser. A shared cache can briefly retain the previous state at the
+opening or closing instant, for up to 30 seconds.
+
+Each challenge has a detail response at `GET /v1/challenges/{challenge}`; for example, [Heavy Lift
+Week's JSON results](https://catlog.science.fail/v1/challenges/heavy_lift_week). A closed challenge
+is served exactly like an open one, with its final rows intact. Closing moves it into the archive; it
+does not make the result disappear.
+
+Visible rows leave hidden accounts out and close the resulting rank gaps. The published `entrants`
+number still counts the raw matching rows, including hidden accounts, just as it does on a
+leaderboard. On a save-scoped challenge those rows are saves rather than distinct players, so the
+number can also include several saves belonging to one player.
+
+Public labels follow the challenge scope. A player-scoped result carries neither a save nor a system
+unless its rule explicitly constrains one. A save-scoped result adds its public save number and
+per-player save label. A system-scoped result carries the celestial system's public name, hash and
+slug. The mod's raw save identity is never published, and optional `context` is passed through the
+same redaction as a leaderboard row.
+
 ## Eligibility and rebuilds
 
 A challenge contribution tied to a flight follows the same final eligibility as a leaderboard
@@ -69,8 +92,8 @@ propellant. catlog cannot separate cargo from rocket and does not pretend it can
 means no engine was installed at launch, not no propulsion: RCS thrusters, decoupler springs and a
 docking port's push can still move the vehicle.
 
-<Aside type="note" title="The read surface comes later">
-  The six definitions and their result folds exist, but a public challenge JSON API and visitor
-  result pages are not built yet. There is no admin screen or runtime setting for creating or
-  changing a challenge.
+<Aside type="note" title="JSON is live; visitor result pages come later">
+  The challenge index and result rows are public through the JSON API. The visitor-facing challenge
+  catalogue and result pages are not built until I2. There is no admin screen or runtime setting for
+  creating or changing a challenge.
 </Aside>

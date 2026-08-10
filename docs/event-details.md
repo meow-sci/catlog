@@ -2499,9 +2499,9 @@ It never reads or writes `career_body`: an earlier powered or out-of-window visi
 suppress a later qualifying visit, the same body in two systems is distinct, and parentless system
 roots are ordinary members.
 
-These contexts are projector-authored minimal provenance and never carry the raw career. There is
-still no challenge result read API or visitor result page at this boundary; the player-facing docs
-archive describes the compile-time definitions only.
+These contexts are projector-authored minimal provenance and never carry the raw career. The public
+challenge read API now exposes the catalogue and retained result pages; a visitor-rendered result
+page remains a later web-layer concern.
 
 #### Store read seam
 
@@ -2527,9 +2527,22 @@ population rather than distinct players, so separately ranked saves are separate
 
 This is deliberately not a public response type. Empty career/system sentinels still encode
 player/save/system scope exactly as stored and are not relabelled here. Nullable SQL context stays a
-nil `json.RawMessage`; it is not normalised to `{}` or JSON `null`. Phase I must resolve handles,
-save ordinals and system references, apply ban visibility and redact context before publication.
-There is no challenge endpoint or visitor result page yet.
+nil `json.RawMessage`; it is not normalised to `{}` or JSON `null`.
+
+#### Public challenge read
+
+`GET /v1/challenges` joins every compile-time definition to its raw scoped-row entrant count and a
+presentation state derived solely from one reading of the server clock. Its order is open, upcoming,
+closed, then newest window first within each group. `GET /v1/challenges/{challenge}` retains the
+definition fields and returns the canonical value-ordered page even after close.
+
+Both paths use the same generic over-fetch/drop visibility primitive as the other ranked reads.
+Hidden owners therefore close visible ranks and offsets; the entrant denominator deliberately
+remains the raw row count, including hidden rows and separately ranked saves. The read layer resolves
+career scope to per-player ordinal/label plus an optional rewind mark, system scope to a public
+system reference, and `updated_seq` to receive time. It recursively redacts context, and its public
+types have no raw career field. A 30-second cached response may briefly show the preceding state at
+an opening or closing boundary; projection's receive-time gate is unaffected.
 
 ### Badge accumulator and dual-scope writer
 
@@ -3143,6 +3156,7 @@ one.
 | `GET /v1/leaderboards` | `readapi.go:223` → `query.go:82 BoardList` | `{boards:[{stat,title,unit,ascending,count,periods}], min_players}`. `count` is the **unfiltered** row count, banned players included (PROJ-008). |
 | `GET /v1/leaderboards/{stat}` | `readapi.go:271` → `query.go:117 Board` | `{stat,title,unit,ascending,period,bucket?,limit,offset,rows[]}`; rows `{rank,handle,value,context?,updated,rewound?}`. 404 when the key is neither fixed nor a family board anybody holds. |
 | `GET /v1/badges`, `GET /v1/badges/{badge}` | `badges.go` | Fixed plus publication-gated family catalogue; first-earned visible holder rows, optionally narrowed to one system and deduplicated by player. |
+| `GET /v1/challenges`, `GET /v1/challenges/{challenge}` | `challenges.go` | Compile-time dated catalogue and retained visible ranked pages; raw scoped-row entrant denominator, public save/system provenance and redacted context. |
 | `GET /v1/players/{handle}` | `readapi.go:425` → `query.go:262` | Every row the player holds, listed board or not. A stat this build cannot `Describe` is dropped. Unknown / retired / banned handles are one 404 — deliberately not a ban oracle (PROJ-007). |
 | `GET /v1/players/{handle}/badges`, `GET /v1/players/{handle}/saves/{ordinal}/badges` | `badges.go` | Ordered earned/unearned checklists. Lifetime unearned is fixed-only; a save adds its effectively complete system catalogue's three body families. |
 | `GET /v1/compare?handles=` | `compare.go:109` | N ≤ 8 profiles pivoted board-first, display order from `Catalog(counts, 1)`. An absent player is absent, not zero. |

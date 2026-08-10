@@ -38,6 +38,10 @@ const formatUTC = (milliseconds: number) =>
     <dt>Closes</dt>
     <dd>{formatUTC(challenge.closes)}</dd>
   </dl>
+
+  <p>
+    <a href={`https://catlog.science.fail/v1/challenges/${challenge.challenge}`}>View live JSON results</a>
+  </p>
 </section>
 
 <style is:global>
