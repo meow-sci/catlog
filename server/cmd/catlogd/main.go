@@ -42,6 +42,7 @@ import (
 	"github.com/meow-sci/catlog/server/internal/keys"
 	"github.com/meow-sci/catlog/server/internal/projector"
 	"github.com/meow-sci/catlog/server/internal/readapi"
+	"github.com/meow-sci/catlog/server/internal/stats"
 	"github.com/meow-sci/catlog/server/internal/store"
 	"github.com/meow-sci/catlog/server/internal/web"
 )
@@ -119,6 +120,13 @@ func main() {
 // both servers are accepting connections — the seam the startup test uses to
 // reach ports chosen by the kernel.
 func run(ctx context.Context, cfg config.Config, log *slog.Logger, ready func(public, admin net.Addr)) error {
+	return runWithChallengeValidation(ctx, cfg, log, ready, stats.ValidateChallenges)
+}
+
+func runWithChallengeValidation(ctx context.Context, cfg config.Config, log *slog.Logger, ready func(public, admin net.Addr), validate func() error) error {
+	if err := validate(); err != nil {
+		return fmt.Errorf("validate challenges: %w", err)
+	}
 	// Keys first: cheap, and a bad keys directory should fail before database
 	// files are created.
 	keySet, err := keys.LoadOrCreate(cfg.KeysDir())

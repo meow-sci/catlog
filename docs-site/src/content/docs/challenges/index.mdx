@@ -16,6 +16,9 @@ edited while the server is running. That keeps a later rebuild honest: old histo
 by the same challenge definition as live history, rather than by a rule somebody changed after the
 events arrived.
 
+The compile-time registry and its startup checks now exist, but its shipped catalogue is empty. No
+challenge definition has been published yet.
+
 ## The deadline is when catlog receives the flight
 
 Challenge windows use UTC and the time each event reaches the catlog server. They do not use your
@@ -42,8 +45,12 @@ Closed challenge results are designed to remain available rather than expiring l
 daily or weekly leaderboard. That makes an archive of past challenges possible without treating
 last week's result as disposable.
 
+## Shipped challenges
+
+No challenges have been shipped yet.
+
 <Aside type="note" title="The read surface comes later">
-  H1 only lays down the projection storage and these rules of meaning. Challenge definitions,
-  results, a challenge catalogue or result JSON API, and visitor result pages are not built yet. The
-  general catlog census can report how many storage rows exist without exposing a result.
+  The registry exists, but it contains no definitions, so there are no challenge results. A public
+  challenge JSON API and visitor result pages are not built yet. There is no admin screen or runtime
+  setting for creating or changing a challenge.
 </Aside>

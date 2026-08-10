@@ -2100,6 +2100,31 @@ pending additions before counting, so flush size cannot change a set-valued resu
 player-owned for structural moderation and rebuild, while their row counts join the existing cached
 collection census as storage facts rather than an early challenge API.
 
+### PROJ-130 — The challenge registry ships empty before definitions and folds land together
+
+*Accepted · 2026-08-10 · Task H2.*
+
+Challenge metadata now has one compile-time Go registry and one derived player-facing TypeScript
+mirror, but H2 puts no placeholder challenge in either. A believable-looking example with dates and
+no fold would claim that players can enter a contest the projector cannot score; a hidden fold-free
+literal would also change future catalogue and build assumptions before its rule was reviewable.
+The first six definitions therefore land with their concrete folds in H4. The empty registry is a
+deliberate, validated state, not an unfinished runtime configuration.
+
+Startup validation happens before catlogd creates keys or opens databases. Keys must be canonical
+stat suffixes and cannot overlap either fixed or derivable family board keys; windows must be
+positive and ordered; scopes and the reserved one-per-definition `challenge:<key>` fold identities
+must be exact and unique. Stopping at startup makes compile-time corruption loud without putting
+defensive branches in every event fold. The registry has no admin route or database representation,
+because changing a dated rule underneath an incremental projection would make rebuild disagreement
+an architectural property rather than a bug.
+
+The window API takes a timestamp argument and compares only the server-assigned event receive time
+against `[opens, closes)`. `Open(now)` is presentation-only; a future fold must call `InWindow` with
+the event, preserving PROJ-043 across replay. Past windows remain legal because PROJ-090's ordinary
+rebuild is the one backfill mechanism. The docs component is fail-fast against the derived mirror,
+so H4 cannot add a player-visible challenge by prose alone or silently render an unknown key.
+
 ## Archive & restore
 
 The filesystem archiver, the manifest, restore verification, and the R2 design that is deliberately not built.

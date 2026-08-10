@@ -2420,11 +2420,26 @@ earlier events in the current transaction, so a future set-valued rule sees the 
 count at batch size one or 500.
 
 These tables deliberately are not `player_stat_period`. Period buckets expire; closed challenge
-results and qualifying member facts do not. Challenge definitions will be compile-time server rules
-so rebuilding the immutable log applies the same dated predicate as incremental projection. At the
-H1 boundary no definition registry or fold exists, so no gameplay event feeds either table and no
-challenge result endpoint exists. The collection census nevertheless includes both row counts, and
-moderation treats both tables as player-owned facts removed by structural log exclusion plus
+results and qualifying member facts do not. Challenge definitions are compile-time server rules, so
+rebuilding the immutable log applies the same dated predicate as incremental projection.
+
+`stats.Challenge` is the registry contract: stable key, title, player-facing rule, literal UTC Unix-ms
+opening and closing instants, unit, direction and one of player/save/system scope. `Challenges`
+returns the ordered catalogue without exposing its backing slice, and `ChallengeByKey` is an exact
+lookup. `Challenge.Open(nowMS)` exists only for future presentation; projection uses
+`Challenge.InWindow(ev.RecvTime)`, whose sole rule is the half-open interval
+`recv_time >= opens && recv_time < closes`. It never reads `time.Now` or client `wall_t` (PROJ-043).
+A definition already in the past remains legal: adding its fold and rebuilding discovers matching
+retained history rather than running a separate backfill (PROJ-090).
+
+`ValidateChallenges` runs at catlogd startup before keys or databases are created. It refuses
+duplicate or noncanonical stat-suffix keys, non-positive or reversed windows, unknown scopes,
+definition/fold-count disagreement, duplicate or empty reserved `challenge:<key>` fold identities,
+and any key that `stats.Describe` recognises as a fixed or dynamic board. Definitions are never
+runtime configuration: there is no definition table, admin mutation or challenge result API.
+The H2 shipped catalogue is intentionally empty, and no `challenge:*` fold is registered, so no
+gameplay event yet feeds either table. The collection census nevertheless includes both row counts,
+and moderation treats both tables as player-owned facts removed by structural log exclusion plus
 rebuild.
 
 ### Badge accumulator and dual-scope writer

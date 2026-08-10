@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -16,6 +17,20 @@ import (
 	"github.com/meow-sci/catlog/server/internal/keys"
 	"github.com/meow-sci/catlog/server/internal/testutil"
 )
+
+func TestStartupRejectsInvalidChallengeRegistryBeforeCreatingState(t *testing.T) {
+	cfg := testutil.Config(t)
+	err := runWithChallengeValidation(t.Context(), cfg, testutil.DiscardLogger(), nil,
+		func() error { return errors.New("duplicate challenge key \"bad\"") })
+	if got, want := err.Error(), `validate challenges: duplicate challenge key "bad"`; got != want {
+		t.Fatalf("startup error = %q, want %q", got, want)
+	}
+	for _, path := range []string{cfg.EventsDBPath(), cfg.ProjectionsDBPath(), cfg.KeysDir()} {
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("invalid registry created %s: %v", path, err)
+		}
+	}
+}
 
 // TestHealthz pins the §4.4 health contract: 200, JSON content type, exact body.
 func TestHealthz(t *testing.T) {
