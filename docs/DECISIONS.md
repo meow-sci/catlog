@@ -2041,6 +2041,28 @@ player projection that has already merged systems. Across every scope, the raw f
 value cell under UI-028: a formatted duration is presentation and cannot be used to test or sort the
 ranking it represents.
 
+### UI-059 — Saves are a profile drill-down, not a new top-level destination or a second stat renderer
+
+*Accepted · 2026-08-10 · Task B5.*
+
+A save has meaning in the context of the player who owns it: its ordinal and public label are
+deliberately per-player, and the raw career identity never leaves the read API boundary (PROJ-111).
+The two save pages therefore hang from the profile and the profile gains a Saves action, while the
+five-link global navigation stays about collection-wide destinations. A top-level Saves link would
+ask for a global save directory catlog neither exposes nor needs.
+
+The list presents the distinct facts available for every save: friendly system when known,
+simulation playtime, first and last activity, and board participation. Unknown system is an em dash
+rather than a synthetic value. Badge space is absent until badge data exists; a zero or empty column
+would turn implementation order into a false player-facing measurement.
+
+Save detail reuses the board/profile value and context cells rather than growing a parallel number
+renderer. That preserves exact raw floats, unit formatting, context display policy and the rewound
+marker automatically. Its rank copy says saves because career-scope entrants are careers, not
+accounts; saying players would be visibly wrong as soon as one player places with two saves.
+`system_changed` receives a separate explanatory mark because it qualifies per-system comparison,
+but like `rewound` it is provenance rather than punishment and changes no placement.
+
 ---
 
 ## The mod and its KSA-free core

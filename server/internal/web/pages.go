@@ -354,6 +354,49 @@ func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// --- GET /p/{handle}/saves ----------------------------------------------------
+
+func (s *Server) handleSaves(w http.ResponseWriter, r *http.Request) {
+	saves, known, err := s.deps.Read.Saves(r.Context(), r.PathValue("handle"))
+	switch {
+	case err != nil:
+		s.serverError(w, r, err, "read the player's saves")
+		return
+	case !known:
+		s.notFound(w, r, "No such player.")
+		return
+	}
+	s.render(w, r, http.StatusOK, "saves", publicCache, page{
+		Title: saves.Handle + "'s saves — catlog",
+		Nav:   "boards",
+		Data:  saves,
+	})
+}
+
+// --- GET /p/{handle}/saves/{ordinal} -----------------------------------------
+
+func (s *Server) handleSave(w http.ResponseWriter, r *http.Request) {
+	ordinal, err := strconv.ParseInt(r.PathValue("ordinal"), 10, 64)
+	if err != nil || ordinal < 1 {
+		s.notFound(w, r, "No such save.")
+		return
+	}
+	save, found, err := s.deps.Read.Save(r.Context(), r.PathValue("handle"), ordinal)
+	switch {
+	case err != nil:
+		s.serverError(w, r, err, "read the player's save")
+		return
+	case !found:
+		s.notFound(w, r, "No such save.")
+		return
+	}
+	s.render(w, r, http.StatusOK, "save", publicCache, page{
+		Title: "Save " + strconv.FormatInt(save.Save, 10) + " — " + save.Handle + " — catlog",
+		Nav:   "boards",
+		Data:  save,
+	})
+}
+
 // --- GET /search -------------------------------------------------------------------
 
 // SearchRows is how many handles a results page shows.

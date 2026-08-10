@@ -31,6 +31,8 @@ var pageTemplates = []string{
 	"boards",
 	"board",
 	"profile",
+	"saves",
+	"save",
 	"events",
 	"events_all",
 	"stats",

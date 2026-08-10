@@ -1,0 +1,36 @@
+{{define "content" -}}
+{{- $s := .Data -}}
+<nav aria-label="Breadcrumb" class="muted text-sm"><a href="{{playerPath $s.Handle}}">{{$s.Handle}}</a> / Saves</nav>
+
+<section class="panel" id="saves-panel">
+  <header><h1 id="saves-title" data-handle="{{$s.Handle}}">{{$s.Handle}}&#8217;s saves</h1></header>
+  <div class="table-wrap" role="region" tabindex="0" aria-label="{{$s.Handle}}&#8217;s saves">
+  <table id="saves-table">
+    <thead>
+      <tr>
+        <th scope="col" class="save">Save</th>
+        <th scope="col" class="system">System</th>
+        <th scope="col" class="value">Played</th>
+        <th scope="col">First seen</th>
+        <th scope="col">Last seen</th>
+        <th scope="col" class="value">Boards</th>
+      </tr>
+    </thead>
+    <tbody>
+      {{- range $s.Saves}}
+      <tr class="save-row" data-save="{{.Save}}" data-save-id="{{.SaveID}}">
+        <td class="save"><a href="{{playerPath $s.Handle}}/saves/{{.Save}}">Save {{.Save}}</a></td>
+        <td class="system">{{with .System}}<a href="/systems/{{.Slug}}">{{.Name}}</a>{{else}}&#8212;{{end}}</td>
+        <td class="value" data-value="{{exact .PlaytimeMS}}" title="{{exactUnit .PlaytimeMS "ms"}}">{{numUnit .PlaytimeMS "ms"}}</td>
+        <td class="when"><time datetime="{{iso .First}}">{{datetime .First}}</time></td>
+        <td class="when"><time datetime="{{iso .Last}}">{{datetime .Last}}</time></td>
+        <td class="value" data-value="{{.Boards}}">{{num .Boards}}</td>
+      </tr>
+      {{- else}}
+      <tr id="saves-empty"><td colspan="6">No saves recorded yet.</td></tr>
+      {{- end}}
+    </tbody>
+  </table>
+  </div>
+</section>
+{{- end}}

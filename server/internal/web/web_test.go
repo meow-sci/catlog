@@ -383,6 +383,33 @@ func newFixture(t *testing.T) *fixture {
 			{Rank: 2, Handle: "demo_ace", Value: 62, Updated: 1767225600000},
 		},
 	}
+	sol := read.system["solar-system"]
+	read.saves["demo_crasher"] = readapi.SavesResponse{
+		Handle: "demo_crasher",
+		Saves: []readapi.SaveSummary{
+			{Save: 1, SaveID: "save-label-one", System: &sol, SystemChanged: true,
+				PlaytimeMS: 367_200_000, First: 1767225600000, Last: 1767312000000, Rewound: true, Boards: 7},
+			{Save: 2, SaveID: "save-label-two", PlaytimeMS: 313_000,
+				First: 1767398400000, Last: 1767398700000, Boards: 0},
+		},
+	}
+	read.saves["demo_ace"] = readapi.SavesResponse{Handle: "demo_ace", Saves: []readapi.SaveSummary{}}
+	read.save["demo_crasher/1"] = readapi.SaveResponse{
+		Handle: "demo_crasher", Save: 1, SaveID: "save-label-one", System: &sol,
+		SystemChanged: true, PlaytimeMS: 367_200_000, Rewound: true,
+		Stats: []readapi.SaveStat{{
+			Stat: stats.StatLandings, Title: "Landings", Unit: "landings", Value: 12.5,
+			Rank: 3, Entrants: 41, Context: json.RawMessage(`{"body":"duna","career":"save-label-one"}`),
+			Updated: 1767225600000,
+		}},
+	}
+	read.save["demo_crasher/2"] = readapi.SaveResponse{
+		Handle: "demo_crasher", Save: 2, SaveID: "save-label-two", PlaytimeMS: 313_000,
+		Stats: []readapi.SaveStat{{
+			Stat: stats.StatStagings, Title: "Stagings", Unit: "stagings", Value: 4,
+			Rank: 8, Entrants: 20, Updated: 1767398700000,
+		}},
+	}
 
 	accounts := &fakeAccounts{}
 	broadcaster := projector.NewBroadcaster()
@@ -477,6 +504,8 @@ func TestEveryPageRenders(t *testing.T) {
 		{"/boards/biggest_lithobrake_survived?period=nope", 400, []string{`id="not-found"`}},
 		{"/p/demo_crasher", 200, []string{`id="profile-handle"`, `data-stat="biggest_lithobrake_survived"`, "#1"}},
 		{"/p/nobody", 404, []string{`id="not-found"`}},
+		{"/p/demo_crasher/saves", 200, []string{`id="saves-table"`, `data-save="1"`, "Save 2"}},
+		{"/p/demo_crasher/saves/1", 200, []string{`id="save-title"`, `id="save-stats"`, "#3"}},
 		{"/p/demo_crasher/events", 200, []string{
 			`id="events-log"`, `data-type="vehicle.impact"`, `id="events-older"`,
 		}},
@@ -741,6 +770,97 @@ func TestBodyDerivedPlayerBoardExplainsNameCollisionAndLinksSystemScope(t *testi
 		t.Errorf("career body-derived board: scope note count = %d, want 1", strings.Count(body, `id="board-scope-note"`))
 	}
 	mustNotContain(t, body, `This board ranks a <strong>name</strong>.`, "career body-derived board")
+}
+
+func TestSavesPageRendersExactColumnsRowsAndEmptyState(t *testing.T) {
+	f := newFixture(t)
+	body := f.get(t, "/p/demo_crasher/saves").Body.String()
+	for _, want := range []string{
+		`<th scope="col" class="save">Save</th>`,
+		`<th scope="col" class="system">System</th>`,
+		`<th scope="col" class="value">Played</th>`,
+		`<th scope="col">First seen</th>`,
+		`<th scope="col">Last seen</th>`,
+		`<th scope="col" class="value">Boards</th>`,
+		`href="/p/demo_crasher/saves/1">Save 1</a>`,
+		`href="/systems/solar-system">Solar System</a>`,
+		`data-value="367200000" title="367200000 ms">4d 06h`,
+		`datetime="2026-01-01T00:00:00Z">2026-01-01 00:00 UTC</time>`,
+		`datetime="2026-01-02T00:00:00Z">2026-01-02 00:00 UTC</time>`,
+		`<td class="system">&#8212;</td>`,
+		`data-value="313000" title="313000 ms">5m 13s`,
+		`data-value="7"`,
+	} {
+		mustContain(t, body, want, "saves list")
+	}
+	if strings.Contains(strings.ToLower(body), "badge") {
+		t.Error("saves list rendered a badge placeholder")
+	}
+
+	empty := f.get(t, "/p/demo_ace/saves").Body.String()
+	mustContain(t, empty, `<tr id="saves-empty"><td colspan="6">No saves recorded yet.</td></tr>`, "empty saves")
+}
+
+func TestSavePageRendersScopedStatsAndProvenanceMarks(t *testing.T) {
+	f := newFixture(t)
+	body := f.get(t, "/p/demo_crasher/saves/1").Body.String()
+	for _, want := range []string{
+		`id="save-title" data-handle="demo_crasher" data-save="1">Save 1</h1>`,
+		`href="/systems/solar-system">Solar System</a>`,
+		`played 4d 06h`,
+		`#3 of <span class="n" data-n="41" data-d="0">41</span> saves on <a href="/boards/landings?scope=career">Landings</a>`,
+		`data-stat="landings" data-rank="3" data-ascending="false"`,
+		`data-value="12.5" title="12.5 landings"`,
+		`<span class="ctx-key">body</span> <span class="ctx-value">Duna</span>`,
+		`save-label-one`,
+		`An earlier save of this career was loaded, so its clock did not only run forwards.`,
+		`The celestial system this save is in changed. Per-system comparisons before and after are not comparing the same worlds.`,
+	} {
+		mustContain(t, body, want, "save detail")
+	}
+
+	plain := f.get(t, "/p/demo_crasher/saves/2").Body.String()
+	mustContain(t, plain, `id="save-title" data-handle="demo_crasher" data-save="2">Save 2</h1>`, "plain save")
+	mustContain(t, plain, `played 5m 13s`, "plain save duration")
+	mustNotContain(t, plain, `class="system-changed"`, "unchanged save")
+	mustNotContain(t, plain, `class="rewound"`, "unrewound save")
+	mustNotContain(t, plain, `/systems/`, "save without a known system")
+}
+
+func TestSaveRoutesCacheSuccessAndReturnHonest404sAnd500s(t *testing.T) {
+	f := newFixture(t)
+	for _, path := range []string{"/p/demo_crasher/saves", "/p/demo_crasher/saves/1"} {
+		rec := f.get(t, path)
+		if rec.Code != http.StatusOK || rec.Header().Get("Cache-Control") != readapi.CacheControl {
+			t.Errorf("GET %s = %d, cache %q", path, rec.Code, rec.Header().Get("Cache-Control"))
+		}
+	}
+	for _, path := range []string{
+		"/p/nobody/saves", "/p/nobody/saves/1", "/p/demo_crasher/saves/99",
+		"/p/demo_crasher/saves/0", "/p/demo_crasher/saves/-1", "/p/demo_crasher/saves/not-a-number",
+		"/p/demo_crasher/saves/999999999999999999999999",
+	} {
+		rec := f.get(t, path)
+		if rec.Code != http.StatusNotFound || rec.Header().Get("Cache-Control") != "no-store" {
+			t.Errorf("GET %s = %d, cache %q", path, rec.Code, rec.Header().Get("Cache-Control"))
+		}
+		mustContain(t, rec.Body.String(), `id="not-found"`, path)
+	}
+
+	f.read.err = errors.New("projections are unreadable")
+	for _, path := range []string{"/p/demo_crasher/saves", "/p/demo_crasher/saves/1"} {
+		rec := f.get(t, path)
+		if rec.Code != http.StatusInternalServerError || rec.Header().Get("Cache-Control") != "no-store" {
+			t.Errorf("GET %s error = %d, cache %q", path, rec.Code, rec.Header().Get("Cache-Control"))
+		}
+	}
+}
+
+func TestProfileLinksToSavesWithoutAddingATopNavigationEntry(t *testing.T) {
+	f := newFixture(t)
+	body := f.get(t, "/p/demo_crasher").Body.String()
+	mustContain(t, body, `<a class="button secondary" id="profile-saves" href="/p/demo_crasher/saves">Saves</a>`, "profile saves button")
+	mustNotContain(t, body, `id="nav-saves"`, "top navigation")
 }
 
 // The comparison marks the best cell from the board's published direction. It

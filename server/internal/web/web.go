@@ -195,6 +195,8 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /boards", s.handleBoards)
 	mux.HandleFunc("GET /boards/{stat}", s.handleBoard)
 	mux.HandleFunc("GET /p/{handle}", s.handleProfile)
+	mux.HandleFunc("GET /p/{handle}/saves", s.handleSaves)
+	mux.HandleFunc("GET /p/{handle}/saves/{ordinal}", s.handleSave)
 	mux.HandleFunc("GET /p/{handle}/events", s.handlePlayerEvents)
 	mux.HandleFunc("GET /events", s.handleEvents)
 	mux.HandleFunc("GET /stats", s.handleStats)

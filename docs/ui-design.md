@@ -616,6 +616,8 @@ surface and the pages that document it; `/login` and `/dashboard` need a session
 | `/boards` | ● | The index. Which boards exist, how populated, which way each reads |
 | `/boards/{stat}` | ● | One board ranked by players, saves or systems, paged, with applicable period controls and my row highlighted |
 | `/p/{handle}` | ● | One player: every placement, every rank *and its denominator*, and a way to start comparing |
+| `/p/{handle}/saves` | ● | One player's saves: system, played time, activity bounds and number of boards |
+| `/p/{handle}/saves/{ordinal}` | ● | One save: its system and playtime, then every board placement ranked among saves |
 | `/p/{handle}/events` | ● | **New.** The raw event log for that handle, live-tailed on page one |
 | `/events` | ● | **New.** The whole raw log, every player mixed together — same rows, same redaction, `?type=`/`?handle=` filters, live-tailed on page one |
 | `/compare?handles=a,b,c` | ● | **New.** Up to 8 players side by side across every board any of them is on |
@@ -638,6 +640,36 @@ surface and the pages that document it; `/login` and `/dashboard` need a session
   and, when they are off-page, shows a sticky **You: #147** strip at the table foot linking
   to the page containing them;
 - `/p/{handle}` says "This is you" rather than "This is me".
+
+The profile button row places **Saves** beside **Compare** and **Raw events**. Saves are subordinate
+to a player's public profile, so neither save route gets a top-level navigation entry; the header
+keeps its existing five links.
+
+`/p/{handle}/saves` is one `.panel` containing a table headed **Save · System · Played · First
+seen · Last seen · Boards**. Each Save link is the player's first-seen ordinal and opens its detail
+page. System is the friendly name linked to `/systems/{slug}`, never the content hash; a save that
+has not reported a system shows the ordinary no-value glyph `—`, not `NaN`, `0`, blank text or an
+empty link. Played passes `playtime_ms` through `units.Format` as `ms`, so the duration ladder may
+render `37.5 s`, `4d 06h` or another appropriate pair. First seen and Last seen are fixed-UTC
+instants under §4.4, not durations. Boards is the save's board-row count. The empty state is exactly
+*"No saves recorded yet."*
+
+There is no Badges column, zero badge count or reserved badge space on this page. Badges arrive only
+with the projection that derives them; a placeholder would look like a measured zero when catlog
+does not yet know the answer.
+
+`/p/{handle}/saves/{ordinal}` identifies the page as *"Save 2 · Sol · played 4d 06h"* (omitting the
+system segment when it is unknown) and renders that save's stats as the profile table scoped to one
+career. A placement says *"#3 of 41 saves on Landings"*: both the visible rank and the raw entrant
+denominator are save rows, never players. The table reuses the shared `value-cell` and
+`context-cell` partials, so §4.4's exact `data-value`, title and unit rendering and §6.1's context
+allow-list remain identical to board and profile rows.
+
+The existing rewound dagger and its exact tooltip remain unchanged: *"An earlier save of this
+career was loaded, so its clock did not only run forwards."* A true `system_changed` adds a separate
+mark with the exact tooltip *"The celestial system this save is in changed. Per-system comparisons
+before and after are not comparing the same worlds."* Both qualify the save's provenance; neither
+excludes a row, changes its value or changes its rank.
 
 **B — "see global stats for all."** `/` opens with global tiles, then the featured boards,
 then the feed. The **period selector** on `/boards/{stat}` —
@@ -1238,7 +1270,7 @@ contain the server's `min_players` number); `#board-title[data-stat]`;
 `#board-bucket[data-bucket]`; `#board-prev`, `#board-next`, `#board-range`;
 `thead th.value` (the unit header, §4.4); `#profile-handle[data-handle]`;
 `#profile-stats tr[data-stat][data-rank]` with `td.rank[data-players]`;
-`#profile-me-toggle`, `#profile-me-note`, `#profile-compare`, `#profile-events`;
+`#profile-me-toggle`, `#profile-me-note`, `#profile-compare`, `#profile-saves`, `#profile-events`;
 `#me-chip`, `#me-link`, `#me-gone`, `#me-standing`, `#me-standing-rows .standing-row`,
 `tr.is-me`; `#search-q`, `#search-results li[data-handle]`, `#search-suggest li a`,
 `#search-short`, `#search-empty`; `#compare-table` with `th.handle-col[data-handle]`,
