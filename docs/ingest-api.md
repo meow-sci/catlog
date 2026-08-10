@@ -225,9 +225,13 @@ All responses `Cache-Control: public, s-maxage=30, stale-while-revalidate=300` e
 
 - `GET /v1/leaderboards` → `{"min_players": n, "boards": [{"stat": "biggest_lithobrake_survived", "title": s, "unit": "m/s", "ascending": false, "count": n, "periods": ["alltime", "daily", "weekly", "monthly", "yearly"], "scopes": ["player", "career", "system"], "body_derived"?: true}]}`
 - `GET /v1/leaderboards/{stat}?scope=player&period=alltime&system=<slug-or-hash>&limit=50&offset=0` (limit ≤ 200) → `{"stat": s, "title": s, "unit": s, "ascending": b, "scope": "player" | "career" | "system", "period": s, "bucket"?: s, "limit": n, "offset": n, "rows": [{"rank": 1, "handle": s, "save"?: n, "save_id"?: s, "system"?: {"hash": s, "name": s, "slug": s}, "value": f, "context"?: {…}, "updated": unix_ms, "rewound"?: true}]}`
+- `GET /v1/badges` → `{"min_players": n, "badges": [{"badge": s, "title": s, "blurb": s, "group": s, "tier"?: n, "holders": n}]}`
+- `GET /v1/badges/{badge}?system=<slug-or-hash>&limit=50&offset=0` (limit ≤ 200) → `{"badge": s, "title": s, "blurb": s, "group": s, "tier"?: n, "holders": n, "limit": n, "offset": n, "rows": [{"rank": n, "handle": s, "save"?: n, "save_id"?: s, "system"?: {"hash": s, "name": s, "slug": s}, "earned": unix_ms, "sim_t"?: f, "context"?: {…}}]}`
 - `GET /v1/players/{handle}` → `{"handle": s, "since": unix_ms, "stats": [{"stat": s, "title": s, "unit": s, "value": f, "ascending": b, "rank": n, "players": n, "system"?: {"hash": s, "name": s, "slug": s}, "context": {…}, "updated": unix_ms, "rewound"?: true}]}` (404 if unknown/banned)
+- `GET /v1/players/{handle}/badges` → `{"handle": s, "earned": [<badge award>], "unearned": [<badge summary>]}`
 - `GET /v1/players/{handle}/saves` → `{"handle": s, "saves": [{"save": n, "save_id": s, "system"?: {"hash": s, "name": s, "slug": s}, "system_changed"?: true, "playtime_ms": f, "first": unix_ms, "last": unix_ms, "rewound"?: true, "boards": n}]}`
 - `GET /v1/players/{handle}/saves/{ordinal}` → `{"handle": s, "save": n, "save_id": s, "system"?: {"hash": s, "name": s, "slug": s}, "system_changed"?: true, "playtime_ms": f, "rewound"?: true, "stats": [{"stat": s, "title": s, "unit": s, "value": f, "ascending": b, "rank": n, "entrants": n, "context"?: {…}, "updated": unix_ms}]}`
+- `GET /v1/players/{handle}/saves/{ordinal}/badges` → the same `{"handle": s, "earned": [<badge award>], "unearned": [<badge summary>]}` envelope, filtered to that save. A badge award is `{"badge": s, "title": s, "blurb": s, "group": s, "tier"?: n, "save"?: n, "save_id"?: s, "system"?: {"hash": s, "name": s, "slug": s}, "earned": unix_ms, "sim_t"?: f, "context"?: {…}}`; a summary has the catalogue fields above, including the badge's lifetime `holders` census.
 - `GET /v1/players?q=whis&limit=20` → `{"query": s, "limit": n, "handles": [s], "truncated"?: true}` — handle search
 - `GET /v1/players/{handle}/events?limit=50&before=<cursor>&type=<event type>` → `{"handle": s, "limit": n, "type"?: s, "next"?: <cursor>, "events": [{"seq": n, "id": ulid, "type": s, "ver": n, "session"?: ulid, "flight"?: ulid, "career"?: s, "sim_t"?: f, "recv": unix_ms, "payload": {…}}]}` (404 if unknown/banned)
 - `GET /v1/events?limit=50&before=<cursor>&type=<event type>&handle=<handle>` → the same envelope with every player's events mixed together, newest first; each row additionally carries `"handle": s`. `?handle=` narrows to one player (404 if unknown/banned, the same one answer); the unfiltered envelope omits `handle`.
@@ -317,6 +321,42 @@ banned, purged or handleless row closes the gap and paging offsets apply to the 
 Aggregate counts and entrant denominators remain raw and ban-inclusive, matching the existing board
 and profile contract; filtering them exactly would require reading the whole board on every request.
 This is the final pre-launch v1 shape, so there is no read-API version bump.
+
+### Merit badges — `GET /v1/badges`, badge holders and player/save checklists
+
+The badge index always lists all 35 fixed badges in registry order. Dynamic `reached_`, `orbited_`
+and `landed_on_` members enter at their declared exploration-family slot only after their lifetime
+holder count reaches `min_players`; members within a family are ordered by key. A held family key is
+still directly readable below that publication threshold, while a valid but wholly unearned family
+key and an invalid key are both `404 not_found`.
+
+The holder endpoint is first-earned order (`earned_seq`, then player id). Without `system`, its
+canonical rows are lifetime awards and the save fields identify `first_career`. With `system`, the
+slug or hash is resolved first and both rows and `holders` come from per-save awards in that exact
+system. One player's several qualifying saves become one representative: the earliest
+`earned_seq`, then raw-career tie-break. Thus a later-system award is visible even when the lifetime
+row records another system, without inflating the denominator. The raw career is never published;
+`save` is the player's ordinal and `save_id` its per-player relabel. A missing save or system leaves
+its optional friendly fields absent.
+
+The common over-fetch-and-drop pass removes banned, purged and handleless holders before paging.
+Ranks are positional over the remaining rows, so hidden holders close gaps. `holders` deliberately
+remains the raw, ban-inclusive distinct-player census, matching board `count`/profile `players`:
+filtering it would require scanning the whole result and make aggregate counts a ban oracle. The
+system filter still applies identically to rows and the census before visibility filtering.
+
+The lifetime player checklist has every earned lifetime award and only unearned fixed badges: one
+player can have many systems, so there is no bounded lifetime body checklist. A save checklist adds
+unearned members of all three body families derived from that save's own `system_body` rows, but
+only when its system catalogue is effectively complete. It never enumerates family keys observed
+globally, and an incomplete, missing or empty catalogue adds no dynamic checklist. Earned and
+unearned entries use registry catalogue order. Unknown, retired and banned handles share one player
+404; a known handle's absent ordinal uses the established save 404.
+
+All four routes use the public CORS/cache wrapper, including their 400/404 errors. Optional context
+is projector-authored JSON passed through recursive `Redact`; career and kitten keys are relabelled
+and install keys removed. `earned` is server receive time, while optional `sim_t` is the career clock
+in seconds. These are final pre-launch v1 shapes, so no read-API version advances.
 
 ### Saves — `GET /v1/players/{handle}/saves`, `GET /v1/players/{handle}/saves/{ordinal}`
 

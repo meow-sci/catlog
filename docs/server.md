@@ -256,8 +256,11 @@ same population, and `BadgeCounts` groups lifetime rows only
 
 `GET /v1/stats` reports `collection.badges` as the number of badge keys with at least one lifetime
 holder and `collection.badge_awards` as all current lifetime plus per-save award rows. Both are part
-of the existing whole-response cache keyed by projection `WriteGen` with a 10-second TTL; no badge
-holder or player-award endpoint is registered yet (`readapi/stats.go`).
+of the existing whole-response cache keyed by projection `WriteGen` with a 10-second TTL
+(`readapi/stats.go`). `readapi/badges.go` uses the same store seams for the four public badge routes:
+the stable/gated catalogue, lifetime or system-filtered distinct-player holder pages, and lifetime
+or exact-save checklists. It resolves raw save provenance to ordinals and per-player labels before
+building any response and passes every context through the shared recursive redactor.
 
 Awards are insert-once inside one projection build: the first qualifying event keeps its
 `earned_seq`, matching server-side `recv_time` in `earned_at`, nullable event career clock in

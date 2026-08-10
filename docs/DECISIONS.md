@@ -2036,6 +2036,30 @@ as cheaply. Detecting plausibility would require a server body list or accumulat
 machinery, both more complex and less honest than this hobby project's proportionate integrity
 boundary.
 
+### PROJ-127 — Badge reads share board visibility but keep system meaning at save scope
+
+*Accepted · 2026-08-10 · Task G1.*
+
+Badge holder pages reuse the leaderboard over-fetch-and-drop pass rather than creating another
+moderation filter. Hidden, purged and handleless players therefore close ranks and offsets count
+visible rows. The published `holders` value remains the raw, ban-inclusive distinct-player census,
+like board `count` and profile `players`: making it exact would require reading the entire holder set
+on every request and would expose aggregate changes as a ban oracle. Rows and counts still use the
+same lifetime or system-filtered population before that display-only filter.
+
+A lifetime award is the canonical unfiltered holder and exposes its first earning save only through
+the player's ordinal and per-player relabel. A system-filtered holder view instead uses per-save
+awards, keeping one deterministic earliest save per player, because the lifetime row cannot retain
+later-system achievements. Player lifetime checklists intentionally offer only fixed unearned
+badges; there is no single bounded body catalogue across all of a player's saves. An exact-save
+checklist may add family members only from that save's own effectively complete system catalogue.
+This preserves modified-system meaning, avoids global family enumeration, and makes an incomplete
+catalogue an absent checklist rather than a misleading list of missing achievements.
+
+All award context crosses the existing recursive redaction boundary, and raw career columns exist
+only long enough to resolve a save ordinal and stable per-player label. The four endpoints are part
+of the final pre-launch v1 contract, so adding them does not advance an API version.
+
 ## Archive & restore
 
 The filesystem archiver, the manifest, restore verification, and the R2 design that is deliberately not built.

@@ -51,8 +51,12 @@ func publicGETs(handle string) []string {
 		"/v1/leaderboards",
 		"/v1/leaderboards/" + stats.StatFastestToOrbit,
 		"/v1/leaderboards/" + stats.StatKittenTumbles,
+		"/v1/badges",
+		"/v1/badges/first_flight",
 		"/v1/players?q=" + handle[:3],
 		"/v1/players/" + handle,
+		"/v1/players/" + handle + "/badges",
+		"/v1/players/" + handle + "/saves/1/badges",
 		"/v1/players/" + handle + "/events",
 		"/v1/players/" + handle + "/events?type=session.started",
 		"/v1/compare?handles=alpha_pilot,beta_pilot",
@@ -126,6 +130,10 @@ func TestNoPublicResponseCarriesARawCareer(t *testing.T) {
 	first, last := f.event(player, 1), f.event(player, 2)
 	seedDetailedCareer(t, f, player, sentinel, "", 1, false, false, 90, first, last)
 	seedCareerBoardRow(t, f, player, sentinel, "", stats.StatStagings, 7, 3)
+	seedBadgeAward(t, f, player, "", stats.BadgeFirstFlight, "", sentinel, 4, 1_800_000_000_004, nil,
+		fmt.Sprintf(`{"career":%q,"nested":{"career":%q}}`, sentinel, sentinel))
+	seedBadgeAward(t, f, player, sentinel, stats.BadgeFirstFlight, "", "", 4, 1_800_000_000_004, nil,
+		fmt.Sprintf(`{"career":%q}`, sentinel))
 	// The established profile and player-board shapes also carry contexts. They
 	// sit beside the new career shapes so future response additions can extend
 	// one table instead of inventing another privacy boundary.
@@ -156,6 +164,22 @@ func TestNoPublicResponseCarriesARawCareer(t *testing.T) {
 		{
 			name: "save detail", path: "/v1/players/sentinel_pilot/saves/1",
 			nonVacant: func(body map[string]any) bool { return jsonArrayHasRows(body, "stats") },
+		},
+		{
+			name: "badge catalogue", path: "/v1/badges",
+			nonVacant: func(body map[string]any) bool { return jsonArrayHasRows(body, "badges") },
+		},
+		{
+			name: "badge holder", path: "/v1/badges/first_flight",
+			nonVacant: func(body map[string]any) bool { return jsonArrayHasRows(body, "rows") },
+		},
+		{
+			name: "player lifetime badges", path: "/v1/players/sentinel_pilot/badges",
+			nonVacant: func(body map[string]any) bool { return jsonArrayHasRows(body, "earned") },
+		},
+		{
+			name: "player save badges", path: "/v1/players/sentinel_pilot/saves/1/badges",
+			nonVacant: func(body map[string]any) bool { return jsonArrayHasRows(body, "earned") },
 		},
 	}
 

@@ -2381,10 +2381,12 @@ orders the resulting holders by `earned_seq` then `player_id`. Counts use the id
 so saves never inflate the holder denominator. `BadgeCounts` groups lifetime rows only
 (`store/projections.go`, merit-badge reads).
 
-The only public F6 use is the collection census: `GET /v1/stats` adds `collection.badges`, the number
-of distinct keys with a lifetime holder, and `collection.badge_awards`, the total lifetime plus
-per-save award rows. They share the response's `(WriteGen, 10 s TTL)` memoization. Individual badge
-and player-award endpoints remain absent until G1.
+`GET /v1/stats` exposes the collection census, while G1's four public badge reads use these rows for
+the catalogue, holder pages and lifetime/save checklists. Holder pages resolve optional system
+slug/hash filters before applying the store query. Their shared over-fetch-and-drop visibility pass
+closes ranks around hidden accounts; the holder denominator remains the raw distinct-player count,
+matching board aggregates. Player responses resolve `first_career` or exact per-save `career` to an
+ordinal and per-player label and never serialise either raw key (`readapi/badges.go`).
 
 Within one projection build, an award is first-write via `INSERT ... ON CONFLICT DO NOTHING`.
 `earned_seq` is the first qualifying projector sequence, `earned_at` is that event's server
@@ -3018,7 +3020,9 @@ one.
 |---|---|---|
 | `GET /v1/leaderboards` | `readapi.go:223` → `query.go:82 BoardList` | `{boards:[{stat,title,unit,ascending,count,periods}], min_players}`. `count` is the **unfiltered** row count, banned players included (PROJ-008). |
 | `GET /v1/leaderboards/{stat}` | `readapi.go:271` → `query.go:117 Board` | `{stat,title,unit,ascending,period,bucket?,limit,offset,rows[]}`; rows `{rank,handle,value,context?,updated,rewound?}`. 404 when the key is neither fixed nor a family board anybody holds. |
+| `GET /v1/badges`, `GET /v1/badges/{badge}` | `badges.go` | Fixed plus publication-gated family catalogue; first-earned visible holder rows, optionally narrowed to one system and deduplicated by player. |
 | `GET /v1/players/{handle}` | `readapi.go:425` → `query.go:262` | Every row the player holds, listed board or not. A stat this build cannot `Describe` is dropped. Unknown / retired / banned handles are one 404 — deliberately not a ban oracle (PROJ-007). |
+| `GET /v1/players/{handle}/badges`, `GET /v1/players/{handle}/saves/{ordinal}/badges` | `badges.go` | Ordered earned/unearned checklists. Lifetime unearned is fixed-only; a save adds its effectively complete system catalogue's three body families. |
 | `GET /v1/compare?handles=` | `compare.go:109` | N ≤ 8 profiles pivoted board-first, display order from `Catalog(counts, 1)`. An absent player is absent, not zero. |
 | `GET /v1/players?q=` | `search.go:70` | Scans the **in-memory directory only** — no database at all. |
 | `GET /v1/feed`, `/v1/feed/stream`, `/v1/feed/sse` | `readapi/feed.go`, `web` | see [`feed`](#feed) |

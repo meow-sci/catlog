@@ -11,10 +11,10 @@ Merit badges are once-only recognitions for things that happened in your recorde
 not scores or levels, and earning one does not make a leaderboard value larger. The [full
 catalogue](/catlog/badges/catalog/) gives the event and eligibility rule behind every badge.
 
-<Aside type="note" title="Awards are active; award pages are not">
-  All thirty-five fixed badges and all three place-name families can now be awarded. The API and
-  player pages do not expose individual awards yet. The collection statistics can report only
-  aggregate counts of badge keys held and award rows.
+<Aside type="note" title="Awards are public as JSON">
+  Anyone can look at anyone else's badge awards, just as they can look at a leaderboard row. The
+  four public badge endpoints are available now; the corresponding player-facing website pages are
+  not built yet.
 </Aside>
 
 Thirty-five badges have fixed names. Three more are families whose place name comes from the game,
@@ -39,6 +39,33 @@ For a lifetime recognition, catlog also remembers which save and celestial syste
 in the current result. A per-save recognition already belongs to that save and keeps its system
 alongside it. The time attached to either comes from when the catlog server received the event; a
 career-clock time is kept only when the event had one.
+
+## What the public badge API shows
+
+The [public badge catalogue](https://catlog.science.fail/v1/badges) lists every fixed badge and the
+place-name badges that have enough holders to be published. A particular place-name award can exist
+before it appears there, so this catalogue is deliberately not a complete inventory of every badge
+key in the database.
+
+The other three JSON views are:
+
+- `GET /v1/badges/{badge}` — everyone who holds one badge, earliest first. Add
+  `?system=<system-slug>` to compare holders within one celestial system. That matters for badges
+  such as Every World, whose denominator belongs to the system. Each player appears once in a
+  filtered view, represented by the earliest save in that system that earned it.
+- `GET /v1/players/{handle}/badges` — one player's lifetime awards and the fixed badges they have
+  not earned.
+- `GET /v1/players/{handle}/saves/{number}/badges` — the awards for one numbered save. Its unearned
+  list also includes Reached, Orbited and Landed-on badges for worlds in that save's own complete
+  celestial catalogue.
+
+If a save's celestial catalogue is missing or incomplete, catlog does not invent a list of worlds:
+the save view gives no unearned place-name checklist. The fixed-badge checklist is still useful and
+does not depend on a system catalogue.
+
+These responses use your public handle, `Save 1`, `Save 2` and so on, and a public label derived for
+that player. They never publish the raw identity the mod uses for a save, and somebody else's save
+label cannot be used to match yours.
 
 ## “Once” means once in the current result
 
