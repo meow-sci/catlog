@@ -1,6 +1,7 @@
 package readapi_test
 
 import (
+	"net/http"
 	"testing"
 	"time"
 
@@ -175,5 +176,53 @@ func TestStatsOnAnEmptyCollection(t *testing.T) {
 		if w.Types == nil {
 			t.Errorf("window %q has a null breakdown", w.Period)
 		}
+	}
+}
+
+func TestStatsCountsSystemsAndBodiesAndCachesByProjectionGeneration(t *testing.T) {
+	f := newFixture(t)
+	counting := &countingLive{p: f.proj}
+	srv, err := readapi.New(readapi.Deps{
+		Projections: counting, Events: f.events, Directory: f.dir,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := srv.Stats(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterFirst := counting.calls
+	if first.Collection.Systems != 0 || first.Collection.SystemBodies != 0 {
+		t.Fatalf("empty system census = %+v", first.Collection)
+	}
+	if _, err := srv.Stats(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if counting.calls != afterFirst {
+		t.Errorf("cached stats queried projections again: %d -> %d", afterFirst, counting.calls)
+	}
+
+	seedSystem(t, f, "hash-sol", "Sol", "Solar System", "solar-system", 2, 1, 1)
+	seedRoot(t, f, "hash-sol", "sol", "Sol", 0, 1)
+	seedOrbitingBody(t, f, "hash-sol")
+	updated, err := srv.Stats(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Collection.Systems != 1 || updated.Collection.SystemBodies != 2 {
+		t.Errorf("system census = %d systems, %d bodies, want 1 and 2",
+			updated.Collection.Systems, updated.Collection.SystemBodies)
+	}
+	if counting.calls == afterFirst {
+		t.Error("projection write generation did not invalidate the stats cache")
+	}
+}
+
+func TestStatsProjectionFailureIsA500(t *testing.T) {
+	f := newFixture(t, func(d *readapi.Deps) { d.Projections = failedProjections{} })
+	rec := f.get("/v1/stats")
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500: %s", rec.Code, rec.Body)
 	}
 }

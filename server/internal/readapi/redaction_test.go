@@ -323,6 +323,29 @@ func TestRedactionReachesNestedPayloadKeys(t *testing.T) {
 	}
 }
 
+func TestRedactionPreservesPublicSystemHashes(t *testing.T) {
+	const hash = "ADRTaA6cER7uqfoM_p880GQ6gEevTrhCycd44NRSQ_I"
+	tests := []struct {
+		name string
+		raw  string
+	}{
+		{"top-level system field", `{"system":"` + hash + `"}`},
+		{"nested system field", `{"catalogue":{"system":"` + hash + `"}}`},
+		{"system beside private career", `{"system":"` + hash + `","career":"private-career"}`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := readapi.Redact(7, json.RawMessage(tc.raw))
+			if !strings.Contains(string(got), hash) {
+				t.Errorf("system hash was redacted: %s", got)
+			}
+			if strings.Contains(string(got), "private-career") {
+				t.Errorf("control career was not redacted: %s", got)
+			}
+		})
+	}
+}
+
 // --- fixture helpers used by the tests above ---------------------------------
 
 // rawEvent inserts one real §4.1 envelope for a player, with a payload written

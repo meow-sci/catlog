@@ -225,21 +225,29 @@ All responses `Cache-Control: public, s-maxage=30, stale-while-revalidate=300` e
 
 - `GET /v1/leaderboards` → `{"min_players": n, "boards": [{"stat": "biggest_lithobrake_survived", "title": s, "unit": "m/s", "ascending": false, "count": n, "periods": ["alltime", "daily", "weekly", "monthly", "yearly"], "scopes": ["player", "career", "system"], "body_derived"?: true}]}`
 - `GET /v1/leaderboards/{stat}?scope=player&period=alltime&system=<slug-or-hash>&limit=50&offset=0` (limit ≤ 200) → `{"stat": s, "title": s, "unit": s, "ascending": b, "scope": "player" | "career" | "system", "period": s, "bucket"?: s, "limit": n, "offset": n, "rows": [{"rank": 1, "handle": s, "save"?: n, "save_id"?: s, "system"?: {"hash": s, "name": s, "slug": s}, "value": f, "context"?: {…}, "updated": unix_ms, "rewound"?: true}]}`
-- `GET /v1/players/{handle}` → `{"handle": s, "since": unix_ms, "stats": [{"stat": s, "title": s, "unit": s, "value": f, "ascending": b, "rank": n, "players": n, "context": {…}, "updated": unix_ms, "rewound"?: true}]}` (404 if unknown/banned)
+- `GET /v1/players/{handle}` → `{"handle": s, "since": unix_ms, "stats": [{"stat": s, "title": s, "unit": s, "value": f, "ascending": b, "rank": n, "players": n, "system"?: {"hash": s, "name": s, "slug": s}, "context": {…}, "updated": unix_ms, "rewound"?: true}]}` (404 if unknown/banned)
 - `GET /v1/players/{handle}/saves` → `{"handle": s, "saves": [{"save": n, "save_id": s, "system"?: {"hash": s, "name": s, "slug": s}, "system_changed"?: true, "playtime_ms": f, "first": unix_ms, "last": unix_ms, "rewound"?: true, "boards": n}]}`
 - `GET /v1/players/{handle}/saves/{ordinal}` → `{"handle": s, "save": n, "save_id": s, "system"?: {"hash": s, "name": s, "slug": s}, "system_changed"?: true, "playtime_ms": f, "rewound"?: true, "stats": [{"stat": s, "title": s, "unit": s, "value": f, "ascending": b, "rank": n, "entrants": n, "context"?: {…}, "updated": unix_ms}]}`
 - `GET /v1/players?q=whis&limit=20` → `{"query": s, "limit": n, "handles": [s], "truncated"?: true}` — handle search
 - `GET /v1/players/{handle}/events?limit=50&before=<cursor>&type=<event type>` → `{"handle": s, "limit": n, "type"?: s, "next"?: <cursor>, "events": [{"seq": n, "id": ulid, "type": s, "ver": n, "session"?: ulid, "flight"?: ulid, "career"?: s, "sim_t"?: f, "recv": unix_ms, "payload": {…}}]}` (404 if unknown/banned)
 - `GET /v1/events?limit=50&before=<cursor>&type=<event type>&handle=<handle>` → the same envelope with every player's events mixed together, newest first; each row additionally carries `"handle": s`. `?handle=` narrows to one player (404 if unknown/banned, the same one answer); the unfiltered envelope omits `handle`.
 - `GET /v1/events/stream?type=<event type>&handle=<handle>` → live raw events as SSE (no cache)
-- `GET /v1/stats` → `{"generated": unix_ms, "events": {"total": n, "types": [{"type": s, "count": n, "share": f, "first"?: unix_ms, "last"?: unix_ms}], "windows": [{"period": s, "bucket": s, "count": n, "types": [...]}], "first"?: unix_ms, "last"?: unix_ms, "days": n, "per_day": f, "busiest"?: {"period": s, "bucket": s, "count": n}, "daily": [...]}, "collection": {"boards": n, "placements": n, "types": n, "handles": n, "scoring_players": n, "flights": n, "flagged_flights": n, "careers": n, "rewound_careers": n, "kittens": n, "bodies": n, "feed_rows": n, "log_head": n, "projected": n, "lag": n}}` — the collection census; see below
+- `GET /v1/stats` → `{"generated": unix_ms, "events": {"total": n, "types": [{"type": s, "count": n, "share": f, "first"?: unix_ms, "last"?: unix_ms}], "windows": [{"period": s, "bucket": s, "count": n, "types": [...]}], "first"?: unix_ms, "last"?: unix_ms, "days": n, "per_day": f, "busiest"?: {"period": s, "bucket": s, "count": n}, "daily": [...]}, "collection": {"boards": n, "placements": n, "types": n, "handles": n, "scoring_players": n, "flights": n, "flagged_flights": n, "careers": n, "rewound_careers": n, "kittens": n, "systems": n, "system_bodies": n, "bodies": n, "feed_rows": n, "log_head": n, "projected": n, "lag": n}}` — the collection census; see below
 - `GET /v1/feed?limit=30` → `{"limit": n, "rows": [{"id": n, "at": unix_ms, "handle": s, "type": s, "summary": s}]}` — the JSON activity feed, newest first; `limit` clamps to the feed table's cap (500)
 - `GET /v1/feed/stream` → the same rows live, as SSE (no cache)
-- `GET /v1/compare?handles=a,b,c` → `{"handles": [{"handle": s, "found": b, "since"?: unix_ms}], "boards": [{"stat": s, "title": s, "unit": s, "ascending": b, "players": n, "rows": [{"handle": s, "value": f, "rank": n, "context": {…}, "updated": unix_ms, "rewound"?: true}]}]}`
+- `GET /v1/compare?handles=a,b,c` → `{"handles": [{"handle": s, "found": b, "since"?: unix_ms}], "boards": [{"stat": s, "title": s, "unit": s, "ascending": b, "players": n, "rows": [{"handle": s, "value": f, "rank": n, "system"?: {"hash": s, "name": s, "slug": s}, "context": {…}, "updated": unix_ms, "rewound"?: true}]}]}`
 - `GET /v1/systems` → `{"systems": [{"hash": s, "system_id": s, "name": s, "slug": s, "home_body": s, "bodies": n, "complete": b, "players": n, "careers": n}]}`
 - `GET /v1/systems/{slug-or-hash}` → `{"hash": s, "system_id": s, "name": s, "slug": s, "home_body": s, "roots": [s], "players": n, "careers": n, "complete": b, "bodies": [{"body": s, "name": s, "class": s, "kind": s, "rank": n, "parent"?: s, "radius_m": f, "mass_kg": f, "soi_m": f, "atmo_m": f, "ocean_m": f, "angvel": f, "axis": {"x": f, "y": f, "z": f}, "sma_m"?: f, "ecc"?: f, "inc_deg"?: f, "lan_deg"?: f, "argp_deg"?: f, "t_pe"?: f, "period_s"?: f, "ccf_to_cce_t0": {"x": f, "y": f, "z": f, "w": f}}]}` (404 if unknown)
 
 `ascending` and `players` on a profile row are what a profile page needs to render "#3 of 41" without also fetching the board index; `players` is the board's row count, banned players included, exactly like `count` above — the rank is filtered, so a rank is never *worse* than that denominator implies.
+
+When a profile stat's winning context names a save whose system is known, the row also carries the
+complete `{"hash", "name", "slug"}` `system` reference. It describes the origin of that current
+value; it does not make the lifetime row system-scoped or undo the merge across the player's saves.
+The field is omitted when the winning context has no career, its save has not reported a system, or
+the association cannot be resolved. The hash is the raw shared content fingerprint and is not passed
+through recursive redaction; the install-derived career in `context` remains relabelled. This is the
+final pre-launch v1 shape, so the added optional metadata does not bump an earlier read-API version.
 
 ### Leaderboard scopes — `GET /v1/leaderboards`, `GET /v1/leaderboards/{stat}`
 
@@ -407,7 +415,7 @@ Three things worth knowing before comparing numbers:
 - **`events.days` is days that carried an event**, not days since the first one — so `per_day` is not diluted by a fortnight the service was switched off — and `daily` contains only those days, because a day with no events is not a zero anybody measured.
 - **The all-time total is a stored row, not a sum of the types.** A type this build cannot name is in the total and absent from the breakdown, which is the honest way round.
 
-`collection.bodies` is the one figure catlog could not have known in advance: bodies are opaque strings on the wire and the server keeps no list of them, so it counts the ones players actually reached.
+`collection.bodies` is the one figure catlog could not have known in advance: bodies are opaque strings on the wire and the server keeps no list of them, so it counts the ones players actually reached. `collection.systems` and `collection.system_bodies` instead count the stored shared system-header and catalogue-body projection rows. They describe what players' mods surveyed, not a built-in allow-list, and a catalogue body need not have been visited to count there.
 
 ### Handle search — `GET /v1/players?q=`
 
@@ -417,11 +425,21 @@ Handles and nothing else: a result is a list of links, and everything behind one
 
 Up to **8** handles, deduplicated case-insensitively, in request order — repeating `?handles=` is the same as one comma-separated list, and extras past the cap are dropped rather than rejected, so the echoed `handles` array is the authoritative column order. Each handle is assembled by the same code behind `GET /v1/players/{handle}` and then pivoted board-first, so the two endpoints cannot disagree. `rank` is the position on the whole board, not among the compared handles.
 
+For the same reason, a comparison row carries the profile row's optional complete `system`
+reference. It identifies the known system bound to that displayed lifetime value's winning context;
+it does not turn the comparison into a system-scoped leaderboard.
+
 An unknown, retired or banned handle comes back as `{"handle": s, "found": false}` — one answer for all three, exactly as the profile endpoint 404s all three, and no more than asking for that one profile already reveals. A board is included when **at least one** of the compared handles is on it, and carries only the rows that exist: an absent player is absent, not zero. The `min_players` listing rule does not apply here, for the same reason it does not apply to a profile — that threshold governs the public index.
 
 ### Raw event browsing — `GET /v1/players/{handle}/events`, `GET /v1/events`
 
 What catlog actually recorded, newest first: the §4.1 envelope and the §4.2 payload, including payload keys this build has never heard of. Paging is by cursor (`next` → `?before=`), not offset, because the log grows at the head; treat the cursor as opaque, and page until `next` is **absent** rather than until a page comes back short — a `?type=`-filtered page that hits the server's scan bound looks identical to the last page. `limit` defaults to 50 and clamps to 200.
+
+Raw event rows do not gain a joined `system` reference. They publish the envelope and payload that
+were recorded; attaching a save's later first-write system binding would manufacture a historical
+association, particularly after a `system_changed` marker. A `system.discovered` event still exposes
+the system fields that are part of its own payload, but that does not change the generic raw-event
+shape.
 
 `/v1/events` is the same page over the whole log, every player mixed together, so each row names its `handle`; the per-player endpoint omits the per-row handle because its envelope already names it. Every row on both carries `seq` — the server-assigned position in the stored log, which is also what the cursor is made of and the `id:` of the row's stream frame. `?handle=` on the global view is answered by the same code as the per-player endpoint, so the two cannot disagree, and an unknown, retired or banned handle is the same one-answer 404 everywhere.
 

@@ -287,13 +287,14 @@ func (s *Server) board(ctx context.Context, stat string) (stats.Board, bool, err
 
 // rowContext is the sliver of a board row's context this package reads. The
 // column is otherwise passed through verbatim — the fold decides what goes in it
-// and the reader renders it — but `career` is the join key for the rewind mark.
+// and the reader renders it — but `career` is the join key for the rewind mark
+// and the winning save's friendly system identity.
 type rowContext struct {
 	Career string `json:"career"`
 }
 
-// careerOf extracts the career a career-time row was set in, or "" when the row
-// has none (a non-career board, or a row written before the key existed).
+// careerOf extracts the career a row was set in, or "" when its winning context
+// has none. It never guesses from the player's other saves.
 func careerOf(row store.StatRow) string {
 	if len(row.Context) == 0 {
 		return ""
@@ -403,7 +404,14 @@ func (s *Server) Player(ctx context.Context, handle string) (PlayerResponse, boo
 	if err != nil {
 		return PlayerResponse{}, false, err
 	}
-	return s.player(ctx, handle, counts)
+	out, known, err := s.player(ctx, handle, counts)
+	if err != nil || !known {
+		return out, known, err
+	}
+	if err := s.attachPlayerSystems(ctx, []*PlayerResponse{&out}); err != nil {
+		return PlayerResponse{}, true, err
+	}
+	return out, true, nil
 }
 
 // player is [Server.Player] with the board census supplied, so a comparison of
@@ -485,12 +493,75 @@ func (s *Server) player(ctx context.Context, handle string, counts map[string]in
 			// Relabelled per player, for the same reason as a board row's; see
 			// privacy.go. The rewind mark above is resolved from the real career
 			// key first, so the qualification survives the redaction.
-			Context: Redact(entry.PlayerID, row.Context),
-			Updated: times[row.UpdatedSeq],
-			Rewound: board.Career && marked[careerOf(row)],
+			Context:  Redact(entry.PlayerID, row.Context),
+			Updated:  times[row.UpdatedSeq],
+			Rewound:  board.Career && marked[careerOf(row)],
+			playerID: entry.PlayerID,
+			career:   careerOf(row),
 		})
 	}
 	return out, true, nil
+}
+
+// attachPlayerSystems resolves the friendly system for every player row whose
+// winning context carries a raw career. Career bindings are read once per
+// player under one projections view, then all distinct system headers are read
+// in one metadata batch. A missing career, an unbound career and an orphaned
+// hash all remain the same honest optional omission.
+func (s *Server) attachPlayerSystems(ctx context.Context, profiles []*PlayerResponse) error {
+	needed := map[careerKey]bool{}
+	byPlayer := map[int64]bool{}
+	for _, profile := range profiles {
+		for _, row := range profile.Stats {
+			key := careerKey{player: row.playerID, career: row.career}
+			if key.player != 0 && key.career != "" {
+				needed[key] = true
+				byPlayer[key.player] = true
+			}
+		}
+	}
+	if len(needed) == 0 {
+		return nil
+	}
+
+	bindings := make(map[careerKey]string, len(needed))
+	err := s.deps.Projections.With(func(p *store.Projections) error {
+		for playerID := range byPlayer {
+			careers, err := p.PlayerCareers(ctx, playerID)
+			if err != nil {
+				return err
+			}
+			for _, career := range careers {
+				key := careerKey{player: playerID, career: career.Career}
+				if needed[key] && career.System != "" {
+					bindings[key] = career.System
+				}
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	hashes := make([]string, 0, len(bindings))
+	for _, hash := range bindings {
+		hashes = append(hashes, hash)
+	}
+	refs, err := s.systemRefs(ctx, hashes)
+	if err != nil {
+		return err
+	}
+	for _, profile := range profiles {
+		for i := range profile.Stats {
+			row := &profile.Stats[i]
+			hash := bindings[careerKey{player: row.playerID, career: row.career}]
+			if ref, ok := refs[hash]; ok {
+				copy := ref
+				row.System = &copy
+			}
+		}
+	}
+	return nil
 }
 
 // aheadCounts resolves the unfiltered half of every rank on a profile: for each

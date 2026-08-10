@@ -149,6 +149,10 @@ type CollectionStats struct {
 	RewoundCareers int64 `json:"rewound_careers"`
 	// Kittens is every kitten anybody has ever flown.
 	Kittens int64 `json:"kittens"`
+	// Systems and SystemBodies count the surveyed celestial-system headers and
+	// immutable catalogue rows catlog has projected.
+	Systems      int64 `json:"systems"`
+	SystemBodies int64 `json:"system_bodies"`
 	// Bodies is how many distinct celestial bodies anybody has reached.
 	//
 	// The one number here catlog could not have known in advance: bodies are
@@ -307,6 +311,8 @@ func (s *Server) buildStats(ctx context.Context, now time.Time) (StatsResponse, 
 		Careers:        counts.Career,
 		RewoundCareers: counts.RewoundCareers,
 		Kittens:        counts.Kitten,
+		Systems:        counts.System,
+		SystemBodies:   counts.SystemBody,
 		Bodies:         counts.Bodies,
 		FeedRows:       counts.Feed,
 		LogHead:        head,

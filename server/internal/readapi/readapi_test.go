@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/meow-sci/catlog/server/internal/directory"
@@ -586,6 +587,40 @@ func TestPlayerProfile(t *testing.T) {
 		}
 		if string(s.Context) != `{"body":"duna"}` {
 			t.Errorf("stat %s context = %s", s.Stat, s.Context)
+		}
+	}
+}
+
+func TestPlayerProfileAttachesOnlyTheWinningCareersKnownSystem(t *testing.T) {
+	f := newFixture(t)
+	p := f.player("system_pilot")
+	seedSystem(t, f, "hash-sol", "Sol", "Solar System", "solar-system", 0, 1, 1)
+	knownSeq, orphanSeq := f.event(p, 1), f.event(p, 2)
+	seedDetailedCareer(t, f, p, "known-winning-career", "hash-sol", 1, false, false, 20, knownSeq, knownSeq)
+	seedDetailedCareer(t, f, p, "orphan-winning-career", "missing-header", 2, false, false, 30, orphanSeq, orphanSeq)
+	f.statContext(p, stats.StatFastestToOrbit, 20_000, `{"career":"known-winning-career","body":"earth"}`)
+	f.statContext(p, stats.StatCareerPlaytime, 30_000, `{"career":"orphan-winning-career"}`)
+	f.stat(p, stats.StatStagings, 4, 5)
+
+	rec := f.get("/v1/players/system_pilot")
+	got := decode[readapi.PlayerResponse](t, rec)
+	rows := make(map[string]readapi.PlayerRow, len(got.Stats))
+	for _, row := range got.Stats {
+		rows[row.Stat] = row
+	}
+	if ref := rows[stats.StatFastestToOrbit].System; ref == nil ||
+		*ref != (readapi.SystemRef{Hash: "hash-sol", Name: "Solar System", Slug: "solar-system"}) {
+		t.Errorf("known winning system = %+v", ref)
+	}
+	if rows[stats.StatCareerPlaytime].System != nil {
+		t.Errorf("orphan system metadata was published: %+v", rows[stats.StatCareerPlaytime].System)
+	}
+	if rows[stats.StatStagings].System != nil {
+		t.Errorf("ordinary row guessed a system from another save: %+v", rows[stats.StatStagings].System)
+	}
+	for _, raw := range []string{"known-winning-career", "orphan-winning-career"} {
+		if strings.Contains(rec.Body.String(), raw) {
+			t.Errorf("profile published raw career %q: %s", raw, rec.Body)
 		}
 	}
 }

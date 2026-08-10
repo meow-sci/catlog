@@ -1652,6 +1652,24 @@ actually changes career identity. Fixed board keys are asserted by inclusion and
 separately, never by total catalogue size, because content-defined bodies and RUD causes make an
 exact count inherently stale (PROJ-039).
 
+### PROJ-113 — Friendly system identity follows a derived value, but is never joined onto raw history
+
+*Accepted · 2026-08-10 · Task C5.*
+
+Profile and comparison rows carry the optional friendly system reference when their winning context
+names a save with a known binding. Resolving the page's distinct hashes in one batch gives clients a
+usable name and link without an N+1 system lookup, while keeping the player projection's meaning
+honest: the row is still one merged lifetime result, and the system is provenance rather than a new
+ranking dimension. The shared content hash remains raw because cross-player equality is its purpose;
+the install-derived career identity remains recursively relabelled under PROJ-049.
+
+Raw event pages deliberately do not receive the same join. A career's system is immutable
+first-write derived state, not a field recorded on every historical envelope, so adding the current
+binding to an old event would invent evidence and become especially misleading after
+`system_changed`. The collection census does add system-header and catalogue-body row counts: those
+bounded projection counts make adoption and catalogue scale observable and distinguish surveyed
+bodies from `collection.bodies`, which counts places players actually reached.
+
 ## Archive & restore
 
 The filesystem archiver, the manifest, restore verification, and the R2 design that is deliberately not built.

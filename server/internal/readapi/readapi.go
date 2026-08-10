@@ -496,6 +496,10 @@ type PlayerRow struct {
 	Title string  `json:"title"`
 	Unit  string  `json:"unit"`
 	Value float64 `json:"value"`
+	// System is the friendly content identity of the save that set this row,
+	// when the winning row's context names a career and that career has a known
+	// system. Ordinary rows do not guess a system from the player's other saves.
+	System *SystemRef `json:"system,omitempty"`
 	// Ascending reports that the smallest value ranks first — the same flag
 	// [BoardSummary] publishes, repeated here because a profile shows a rank
 	// next to a value and "#1 with the lowest number" is unreadable without it.
@@ -516,6 +520,11 @@ type PlayerRow struct {
 	Updated int64           `json:"updated"`
 	// Rewound qualifies a career-time value; see [BoardRow.Rewound].
 	Rewound bool `json:"rewound,omitempty"`
+	// playerID and career are the private join provenance used while assembling
+	// one response. Neither is serialised; career is relabelled only inside
+	// Context before the public row leaves this package.
+	playerID int64
+	career   string
 }
 
 func (s *Server) handlePlayer(w http.ResponseWriter, r *http.Request) {
