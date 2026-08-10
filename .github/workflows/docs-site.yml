@@ -19,7 +19,7 @@ on:
   #
   # Note the deliberate asymmetry with docs/event-details.md: a commit that
   # changes the technical reference is *required* to change docs-site/ too
-  # (CLAUDE.md, CONSTITUTION.md §9.1, DOCS-003), so the path filter cannot miss a
+  # (AGENTS.md, CONSTITUTION.md §9.1, DOCS-003), so the path filter cannot miss a
   # content change that was made correctly.
   push:
     branches: ["main"]

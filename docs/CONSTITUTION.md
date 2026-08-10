@@ -160,7 +160,7 @@ are built against. A change that leaves a document wrong is an **incomplete chan
 commit: update the affected document, and record the decision and its *reasoning* in
 [DECISIONS.md](DECISIONS.md). The full table of what to update when is in
 [ARCHITECTURE.md](ARCHITECTURE.md#7-keeping-the-documentation-true), and the agent-facing version is in
-[../CLAUDE.md](../CLAUDE.md).
+[../AGENTS.md](../AGENTS.md).
 
 *Why:* one person maintains this, assisted by agents that read the repository fresh every time, and
 neither can hold the reasons in their head. A wrong document is worse than a missing one, because it

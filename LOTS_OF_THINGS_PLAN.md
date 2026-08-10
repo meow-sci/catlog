@@ -17,7 +17,7 @@ add, the documents it must update in the **same commit**, and an acceptance chec
 
 | Read | Why |
 |---|---|
-| [`CLAUDE.md`](CLAUDE.md) | The documentation constitution. It is not advisory. |
+| [`AGENTS.md`](AGENTS.md) | The documentation constitution. It is not advisory. |
 | [`docs/CONSTITUTION.md`](docs/CONSTITUTION.md) | §5 (rebuildable), §6 (derived never claimed), §8 (anti-cheat cap), §9.1 (the two-halves doc rule). |
 | [`docs/event-details.md`](docs/event-details.md) §§ *Projections*, *Boards*, *Rebuild ≠ incremental* | How a fold actually works today. |
 | [`docs/DECISIONS.md`](docs/DECISIONS.md) `PROJ-024`, `PROJ-026`, `PROJ-033`–`PROJ-037`, `PROJ-042`–`PROJ-047`, `PROJ-049`, `PROJ-088`, `PROJ-096`, `PROJ-099` | Every one of these constrains something below. |
@@ -4079,7 +4079,7 @@ Then, by hand:
    every non-root body has the seven orbital keys and an epoch, every body has a parent that resolves,
    and exactly one body has none. This is the §3.20 contract, and the only moment anybody will check
    it before somebody tries to build the renderer.
-7. Re-read `CLAUDE.md`'s update table and tick every row this work touched.
+7. Re-read `AGENTS.md`'s update table and tick every row this work touched.
 
 ---
 

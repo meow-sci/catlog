@@ -13,7 +13,7 @@ This site is one half of catlog's event and projection reference.
 **[`docs/event-details.md`](../docs/event-details.md) is the other half, and it is
 the primary one.** A commit that changes an event, a payload field, a detector, a
 game reading, a fold, a board or an eligibility rule updates **both**, in that
-commit. See `CLAUDE.md`, `docs/CONSTITUTION.md` §9.1, and `DOCS-003` in
+commit. See `AGENTS.md`, `docs/CONSTITUTION.md` §9.1, and `DOCS-003` in
 `docs/DECISIONS.md`.
 
 Code identifiers, file paths and patch points belong in `event-details.md` and

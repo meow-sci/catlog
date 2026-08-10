@@ -256,4 +256,4 @@ Two further rules:
   one without the other is an incomplete change (Constitution §9.1, DOCS-003).
 
 `AGENTS`-facing detail, including where to look first for a given kind of task, is in
-[../CLAUDE.md](../CLAUDE.md).
+[../AGENTS.md](../AGENTS.md).

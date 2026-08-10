@@ -2,7 +2,7 @@
  * The machine-readable mirror of the board catalog.
  *
  * DERIVED DATA. `docs/event-details.md` in the repository root is the primary
- * reference and wins any disagreement. See CLAUDE.md and CONSTITUTION.md §9.1.
+ * reference and wins any disagreement. See AGENTS.md and CONSTITUTION.md §9.1.
  */
 
 export interface Board {

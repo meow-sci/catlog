@@ -3,7 +3,7 @@
  *
  * This is DERIVED DATA. `docs/event-details.md` in the repository root is the
  * primary reference and wins any disagreement; when they differ, this file is
- * the thing to fix. See CLAUDE.md and docs/CONSTITUTION.md §9.1.
+ * the thing to fix. See AGENTS.md and docs/CONSTITUTION.md §9.1.
  *
  * The prose here is player-facing: it says where a number comes from in terms a
  * player can check against their own screen. Code identifiers, file paths and

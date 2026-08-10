@@ -8,7 +8,7 @@ as that change.
 It has a mandatory companion. The player-facing site under [`docs-site/`](../docs-site/) is the same
 information rewritten for people who play the game rather than build it. **The two move together.**
 See [Maintenance contract](#maintenance-contract) below, and the rule as stated in
-[`CLAUDE.md`](../CLAUDE.md) and [`docs/CONSTITUTION.md`](CONSTITUTION.md).
+[`AGENTS.md`](../AGENTS.md) and [`docs/CONSTITUTION.md`](CONSTITUTION.md).
 
 Related, narrower documents that remain authoritative for their own slice:
 [`events.md`](events.md) (the wire contract as a specification),
