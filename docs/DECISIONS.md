@@ -1439,6 +1439,41 @@ rather than only the furthest total ever seen for a reused name. There is no pub
 preserve, so documenting and building the intended final meaning is safer than carrying a known
 pre-launch quirk.
 
+### PROJ-107 — System identity is the canonical surveyed forest, shared across installs
+
+*Accepted · 2026-08-10 · celestial-system survey.*
+
+A system id is SHA-256 over every stable value the survey will publish—raw identity strings, the
+complete parent forest, semantic class/kind, physical values, rotation/orientation and orbital
+elements—using a versioned, length-prefixed binary encoding. It is truncated to ten bytes and
+rendered as lowercase Crockford. There is deliberately **no install-id salt**: this identity exists
+to put different players running the same public game content into the same comparison scope. A
+private per-install id would make that impossible, while a bespoke system's residual correlation is
+the same accepted content correlator as a player-chosen vehicle or kitten name (PROJ-050).
+
+The hash uses KSA's canonical surveyed output even where KSA derives it at runtime, because two
+published catalogue rows must not claim one identity. It excludes sanitised join keys,
+completeness/session fields, terrain samples, mutable positions/state vectors and cosmetic assets:
+those either collapse raw content, describe emission health rather than the system, vary with time or
+machine settings, or are not published at all. Length-prefixed UTF-8 and fixed-width big-endian
+numbers replace the old tab/newline text formula because ids may contain separators, cultures format
+numbers differently, and `-0`/NaN payloads otherwise make equal content hash differently.
+
+The registered `All.OfType<IParentBody>()` forest is the source of truth, not a template count and
+not `CelestialSystem.Count`. The latter includes vehicles, its backing list uses swap-remove, and a
+save load removes template vehicles and reorders surviving celestials. Sorting raw ids ordinally
+before hashing makes identity independent of that lifecycle accident. Treating the catalogue as a
+forest also preserves mod systems with multiple roots; selecting the game's first sun would silently
+delete content from identity.
+
+The survey runs once, in a postfix on `Universe.LoadSystem`, and its immutable result is cached for
+session-boundary emission. A prefix would run before `CurrentSystem` is assigned; re-enumerating on
+every session would spend game-thread work for data that save loading cannot change. KSA also
+swallows construction failures per root, so the survey hashes what actually registered. A partial
+forest therefore gets its own honest id rather than impersonating the intact template. This choice
+serves Constitution §3's frame budget and §6's derived, explainable data without inventing recovery
+state or a server-side celestial allow-list.
+
 ## Archive & restore
 
 The filesystem archiver, the manifest, restore verification, and the R2 design that is deliberately not built.

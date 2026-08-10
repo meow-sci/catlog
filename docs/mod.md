@@ -249,6 +249,7 @@ The only code that touches KSA, and deliberately thin: everything else is a call
 | `StatusWindow.cs` | Read-only ImGui rows: patches, vehicles, session, install, **event types**, recorded/queued counts, last ship, health. The *Event types* row reads `all reported`, or `N off in catlog.toml: <names>` in the warning colour — a player who switched something off months ago and forgot is otherwise looking at an empty board with no visible cause. It reports; it does not edit ([ROADMAP.md](ROADMAP.md)) |
 | `Patcher.cs` | The Harmony patches, each carrying its `ksa-integration.md` table row as a comment |
 | `VehicleTelemetry.cs` | **Every** KSA read, each with a `[KsaAnchor]` |
+| `SystemSurvey.cs` | The one-per-launch celestial forest survey, canonical system hash inputs and immutable cache; every KSA read carries a `[KsaAnchor]` |
 | `PolledSignals.cs` | The 2 Hz poll, vehicle tracking, and the roster read at **two cadences** — an allocation-free KIA scan every tick, the `roster.snapshot` payload only when one is due. It raises the tumble signal on the kitten's own EVA vehicle, which is what gives `kitten.tumble` its flight; the `KillCrew` patch in `Patcher.cs` raises the crew-kill signal that gives `kitten.kia` its own |
 | `CatlogRuntime.cs`, `ModPaths.cs`, `KsaAnchor.cs` | Wiring, paths, the anchor attribute |
 
@@ -283,6 +284,29 @@ Patch points that were chosen carefully, because the obvious target was wrong:
 - **Engine events are whole-vehicle, not per-engine**, using the two globals the game already
   publishes. The consequence is recorded rather than hidden: a vehicle that shuts down one of two
   engine groups reports nothing until the last one stops.
+
+### System survey, identity and cache
+
+`SystemSurvey` is another deliberately thin game-thread adapter. A postfix on
+`Universe.LoadSystem(string)` materialises `CurrentSystem.All.OfType<IParentBody>()`, sorts the plain
+snapshot by raw body id using ordinal comparison, models every parentless body as a root, and passes
+KSA-free immutable records into `catlog.lib`. It never uses `CelestialSystem.Count`, because that
+collection also contains vehicles and uses swap-remove; the same loaded content can otherwise hash
+differently before and after a save load.
+
+The system id is SHA-256 over the versioned binary `SystemHashInput` described normatively in
+[ksa-integration.md](ksa-integration.md#normative-hash-encoding), truncated to ten bytes and rendered
+as 16 lowercase Crockford characters. It hashes raw authored values and canonical runtime-derived
+values separately from the sanitised/lowercased wire fields. It has no install-id salt: identical
+content must join across players, unlike private career and kitten identities.
+
+The survey is cached for the launch. Save loads do not reload a celestial system, so each later
+session boundary reuses the immutable snapshot and only supplies fresh session/career/sim/wall
+context when events are emitted. Startup also surveys an already-present `CurrentSystem` if lifecycle
+ordering changes; null produces nothing. A root that failed inside KSA's exception-swallowing system
+constructor is not reconstructed from templates: the registered forest is reported and hashed as a
+distinct partial system. This keeps the cost to one bounded game-thread enumeration per launch and
+keeps failures honest rather than silent.
 
 Runtime state lives in the player's KSA user directory — `catlog.toml`, `outbox.db`,
 `install-id.txt`, the credential — **never beside the installed DLLs**, because a mod update replaces

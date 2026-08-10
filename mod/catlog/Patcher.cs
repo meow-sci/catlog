@@ -112,6 +112,13 @@ public static class Patcher
 
     private static void InstallAll(Harmony harmony)
     {
+        // Universe.CurrentSystem is assigned only after CelestialSystem construction returns, so
+        // the system survey must be a postfix. LoadSystem runs once per launch; save loads reuse
+        // the immutable cache rather than re-enumerating a swap-removed collection.
+        Install(harmony, "Universe.LoadSystem(string)",
+            AccessTools.Method(typeof(Universe), nameof(Universe.LoadSystem), [typeof(string)]),
+            postfix: nameof(LoadSystemPostfix));
+
         // ── docs/ksa-integration.md §2, "batch boundary" row ────────────────────────────────
         // | — (batch boundary) | Universe.ApplyVehicleSolvers() KSA/Universe.cs:1653 — public
         // | static, called from Program.PrepareFrame KSA/Program.cs:1912 |
@@ -372,6 +379,22 @@ public static class Patcher
 
     /// <summary>How many solver batches have been applied since load — the "is the game feeding us" heartbeat.</summary>
     public static long SolverBatches { get; private set; }
+
+    [KsaAnchor("Universe.LoadSystem(string)",
+        SourceFile = "KSA/Universe.cs:167-179", Verified = "2026-08-10",
+        GameVersion = "2026.8.5.5168", Risk = ChurnRisk.Low,
+        Notes = "Postfix is required: CurrentSystem is assigned at line 174 after construction.")]
+    private static void LoadSystemPostfix()
+    {
+        try
+        {
+            SystemSurvey.CaptureCurrent();
+        }
+        catch (Exception ex)
+        {
+            ModLog.Log.Warn($"catlog: system survey failed: {ex.Message}");
+        }
+    }
 
     private static void DestroyVehicleFromEventPrefix(Vehicle vehicle, VehicleDestructionEvent destructionEvent)
     {

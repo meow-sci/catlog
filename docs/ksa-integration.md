@@ -316,6 +316,176 @@ Items the older plan could not have covered.
 
 ---
 
+## System survey and stable identity
+
+This inventory is the contract behind the one-per-launch system survey. Every symbol was verified
+against KSA build **2026.8.5.5168** and every game access in `SystemSurvey` carries a `[KsaAnchor]`,
+so a future decompile bump turns this into a mechanical re-check. Raw values used for identity stay
+separate from the sanitised/lowercased values later put on the wire.
+
+### Which objects are bodies
+
+The loaded system is `Universe.CurrentSystem` (`KSA/Universe.cs:92`). Its public surface is
+`CelestialSystem.Id`, `All`, `Count` and `HomeBody` (`KSA/CelestialSystem.cs:55-61`). `All` is a
+`LookupCollection<Astronomical>`, not a body collection: stock content registers five template
+vehicles there too, and `Count` is exactly `_all.Count`. The only correct enumeration is therefore:
+
+```csharp
+foreach (IParentBody body in Universe.CurrentSystem.All.OfType<IParentBody>()) { ... }
+```
+
+`Celestial` and `StellarBody` implement `IParentBody` (`KSA/Celestial.cs:23`,
+`KSA/StellarBody.cs:12`); `Vehicle` does not (`KSA/Vehicle.cs:27`). Thus the filter includes every
+celestial body and excludes every registered vehicle. `LookupCollection<T>.TypeFilter<T2>` is a
+`ref struct` over a span with `GetEnumerator`, `MoveNext` and `Current`
+(`KSA/LookupCollection.cs:12-43`), so this `foreach` is allocation-free but may neither escape the
+game-thread frame nor survive a registration/deregistration. The survey immediately materialises a
+plain immutable snapshot list. **That filtered list's count**, never `CelestialSystem.Count`, is the
+body count used by the hash, completeness cap and tests.
+
+Every enumerated value is also an `Astronomical`. `IParentBody` has no `Class`, so the survey casts
+to that base and reads its virtual `Class` (`KSA/Astronomical.cs:12,100`); virtual dispatch preserves
+the concrete runtime string rather than guessing it from an id. The normalised semantic `kind` is a
+separate value derived from that class and the direct parent's class; the raw `class` remains opaque.
+
+The derived `kind` used by the hash is exhaustive and fixed:
+
+| `kind` | Rule over the runtime `Class` and direct parent |
+|---|---|
+| `star` | `StellarBody` |
+| `planet` | `PlanetaryBody`, `TerrestrialBody` or `AtmosphericBody`, with a direct `StellarBody` parent |
+| `moon` | one of those same three classes, with a non-stellar parent |
+| `minor` | `MinorBody`, `Asteroid`, `Comet`, `PeriodicComet` or `InterstellarComet` |
+| `other` | any future or unknown class |
+
+This mapping depends on class and parent topology, never a body-name allow-list. A stellar parent
+need not itself be a root, so it remains correct in a multiple-star mod system.
+
+### A forest, not a selected sun
+
+`CelestialSystem` calls `CreateTreeFromRoot` for **every** template body whose parent is null
+(`KSA/CelestialSystem.cs:137-151,186-199`). A mod system may therefore have multiple roots.
+`GetWorldSun()` choosing one star for the game UI does not turn the catalogue into a single tree.
+The snapshot retains every parentless body, calculates `rank` as depth from that body's own root,
+and derives `roots[]` in raw-id ordinal order from the body rows. There is no singular `root_body`,
+preferred-root invariant or display-root fallback. Parent absence plus the sorted body rows already
+encodes the roots in the hash, so `roots[]` is not hashed a second time.
+
+### The order hazard
+
+`CelestialSystem.All` order is unstable even without changing content. `LookupCollection.Deregister`
+uses swap-remove (`KSA/LookupCollection.cs:148-161`), while every
+`Universe.DeserializeSave(UniverseData)` first calls `CurrentSystem.DestroyAllVehicles()`
+(`KSA/Universe.cs:2140,2152`). Removing the five stock template vehicles pulls celestial entries
+into their vacated slots. Sandbox can omit those vehicles altogether, and `CelestialSystem.Rename`
+deregisters and appends a vehicle (`KSA/CelestialSystem.cs:102-114`). The same system can therefore
+enumerate differently at boot and after a save load.
+
+**The materialised body list is sorted by raw `Id`, ordinal ascending, before any hash byte is
+written.** Sorting only the emitted presentation rows, or hashing first and sorting afterwards,
+would split identical content into two system identities.
+
+### Exact source inventory
+
+The hash intentionally follows the canonical surveyed content, including values KSA derives at
+runtime. If two surveys would publish different body rows, they must not share an identity.
+
+| Hash input | KSA source in build 5168 | Authored or derived | Why it is included |
+|---|---|---|---|
+| raw system id | `CelestialSystem.Id` → `_template.Id` (`KSA/CelestialSystem.cs:61`) | authored system template | Names which catalogue was loaded; kept raw so separator-bearing ids remain distinguishable. |
+| raw system display name | matching `SystemInfo.Id` and `SystemInfo.DisplayName.Value` (`KSA/SystemInfo.cs:10-11,29`; `KSA/StringReference.cs:9`; selection list `KSA/SelectSystem.cs:18`) | authored launcher metadata | It is published content and may differ between two otherwise similar mods. If metadata is absent, raw system id is the fallback. |
+| raw home-body id | `CelestialSystem.HomeBody.Id` (`KSA/CelestialSystem.cs:55`; authored marker `KSA/AstronomicalTemplate.cs:23-24`, selection/fallback `KSA/CelestialSystem.cs:154-181,210-230`) | authored marker, runtime-resolved | A different home body changes the system players enter. |
+| body count | materialised `All.OfType<IParentBody>()` list | runtime-derived from what registered successfully | Commits the catalogue cardinality without counting template vehicles. |
+| raw body id and optional raw parent id | `Astronomical.Id` (`KSA/Astronomical.cs:96`); `Celestial.Parent` (`KSA/Celestial.cs:73`) | authored graph, runtime instances | Identifies each node and the complete forest topology. |
+| concrete `class` | virtual `Astronomical.Class` (`KSA/Astronomical.cs:100`; `KSA/Celestial.cs:97`; `KSA/StellarBody.cs:34`) | runtime-dispatched from the instantiated type | Preserves the game's own opaque classification. |
+| normalised `kind` | fixed mapping from concrete class plus whether the direct parent is `StellarBody` | catlog-derived semantic value | It is published separately from `class`; a changed published meaning must change identity. |
+| `rank` | depth calculated by walking the parent links from each root | catlog-derived | Commits the published forest depth and catches topology changes. |
+| `radius_m` | `IParentBody.MeanRadius`; loaded from `CelestialTemplate.MeanRadius` (`KSA/Astronomical.cs:104`; `KSA/CelestialTemplate.cs:27-28`; `KSA/Celestial.cs:215`; `KSA/StellarBody.cs:36,46`) | authored template value | Published physical size. |
+| `mass_kg` | `IParentBody.Mass` (`KSA/IParentBody.cs:11`; `KSA/Celestial.cs:93,216`; `KSA/StellarBody.cs:38,47`) | authored template value | Published mass and the exact source from which `mu` can be recovered. |
+| `soi_m` | `IParentBody.SphereOfInfluence` (`KSA/IParentBody.cs:23`; `KSA/Celestial.cs:85,217-225`; stellar `+Inf` at `KSA/StellarBody.cs:28`) | authored when present, otherwise KSA-derived | The resolved value is what the game uses and what the catalogue reports. |
+| `atmo_m` | `GetAtmosphereReference()?.Physical.Height` (`KSA/IParentBody.cs:57`; `KSA/AtmosphereReference.cs:8`; `KSA/PhysicalAtmosphereReference.cs:23,40-48`) | KSA-derived boundary from authored scale height/density/pressure; zero when absent | Published atmosphere extent. |
+| `ocean_m` | `GetOceanReference()?.Level` (`KSA/IParentBody.cs:59`; `KSA/Astronomical.cs:327-330`; `KSA.Rendering.Water.Data/OceanReference.cs:8-9`) | authored template value; zero when absent | Published ocean level above mean radius. |
+| `angvel` | `IParentBody.GetAngularVelocity()` (`KSA/IParentBody.cs:78`; `KSA/Celestial.cs:192-195,239,627-642`; stellar zero at `KSA/StellarBody.cs:137-140`) | KSA-derived from authored rotation and, when tidally locked, orbital period | Published signed spin rate, including retrograde rotation. |
+| `axis.{x,y,z}` | `Celestial.GetRotationAxisCce()` (`KSA/Celestial.cs:622-625`); stellar fixed axis/identity orientation | KSA-derived orientation | Published body-centred-ecliptic rotation axis. |
+| `ccf_to_cce_t0.{x,y,z,w}` | `IParentBody.GetCcf2Cce(SimTime.Zero)` (`KSA/IParentBody.cs:35`; composition `KSA/Celestial.cs:564-578`; stellar identity `KSA/StellarBody.cs:126-129`); fields `Brutal.Numerics/doubleQuat.cs:18-27` | KSA-derived axis, phase and frame orientation | Supplies the prime-meridian phase that an axis alone omits. The survey normalises and canonicalises the quaternion before hashing. |
+| orbital group: `sma_m`, `ecc`, `inc_deg`, `lan_deg`, `argp_deg`, `t_pe` | non-root `Celestial.Orbit` and its getters (`KSA/Celestial.cs:71,99-113`; `KSA/Orbit.cs:1150-1170`) | constructed by KSA from authored orbital elements; angles converted radians→degrees by catlog | The complete six-value shape group is published; roots carry one absent-group marker instead. |
+| `period_s` | `Orbit.Period` (`KSA/Orbit.cs:1170`; calculation and unbound `NaN` in `KSA/OrbitData.cs:35-75`) | KSA-derived | Published independently of the shape group because an unbound orbit has elements but no finite period. |
+
+The orientation deserves emphasis: `GetCcf2Cce(SimTime.Zero)` already composes body-fixed spin phase
+with inertial-to-body-centred-ecliptic orientation. Reconstructing it from `axis` would lose the
+azimuth/prime-meridian phase. The four returned `doubleQuat` fields are public; stellar bodies return
+the identity quaternion.
+
+The following readable values are deliberately **excluded** from identity:
+
+| Excluded value | Source | Reason |
+|---|---|---|
+| sanitised display/body strings and lowercased join keys | catlog presentation conversion | Identity uses raw KSA strings; sanitisation can collapse distinct content. |
+| `complete`, event/session/career ids, `sim_t`, `wall_t` and envelope time | emission health/session state | None describes celestial-system content. |
+| install id | catlog local state | Unlike career/kitten ids, a system must hash identically for every player running the same content. There is intentionally no salt. |
+| `CelestialSystem.Count` and the template body count | mixed live collection / authored template | The former includes vehicles; the latter includes roots/subtrees that may have failed to instantiate. The registered `IParentBody` list is truth. |
+| `mu` | default `IParentBody.Mu = Mass * 6.6743E-11` (`KSA/IParentBody.cs:15`) | Fully derived from the included mass and not separately published. |
+| terrain/heightmap samples and envelope, positions, velocities, current state vectors | terrain and mutable per-frame state | Machine/settings/time dependent or mutable; `system.body` publishes none of them. |
+| textures, colours, meshes, locations and other cosmetic metadata | body templates/render assets | Not part of the published physical catalogue and may vary with rendering assets. |
+
+### Normative hash encoding
+
+`SystemHashInput` is encoded in this exact logical order:
+
+1. raw system id, raw display name, raw home-body id, then the filtered body count;
+2. for each body sorted by raw id ordinal: raw id, optional raw parent id, concrete `class`,
+   normalised `kind`, and forest `rank`;
+3. `radius_m`, `mass_kg`, `soi_m`, `atmo_m`, `ocean_m`, `angvel`, axis x/y/z and canonical
+   `ccf_to_cce_t0` x/y/z/w;
+4. one presence byte for the six-value orbital group, followed when present by `sma_m`, `ecc`,
+   `inc_deg`, `lan_deg`, `argp_deg`, `t_pe`; then an independent period-presence byte followed by
+   `period_s` when present.
+
+The byte stream begins with the literal ASCII domain prefix `catlog-system-v1`. Every string after
+it is strict UTF-8 encoded as a big-endian unsigned 32-bit byte length followed by exactly those
+bytes; separators in ids therefore have no structural meaning. Body count and rank are big-endian
+signed 32-bit integers. Optional parent, orbital group and period each use one byte, exactly `0` or
+`1`, before any optional content.
+
+Every finite double is tag byte `0x00` followed by its IEEE-754 binary64 bits in big-endian order,
+with `-0` canonicalised to `+0`. Positive infinity is the single byte `0x01`, negative infinity is
+the single byte `0x02`, and every NaN payload is the single byte `0x03`; platform NaN payload bits
+never enter the stream. This non-finite rule keeps identity deterministic even when the later wire
+conversion marks a catalogue incomplete. Text formatting and the current culture never participate.
+
+SHA-256 hashes the completed byte stream. The system id is the first ten digest bytes encoded as
+16 lowercase Crockford characters. There is **no install-id salt**: the purpose of the id is to join
+different players running identical public content. Known-vector tests pin the whole stream, plus
+body reordering, `fr-FR`, `-0`, NaN/infinities and separator-bearing ids.
+
+`SystemSnapshot` keeps these raw hash inputs separate from canonical wire fields. Both it and
+`SystemBodySnapshot` are immutable records in `catlog.lib` and contain no KSA type; the existing
+assembly guard enforces that boundary.
+
+### Survey timing, cache and failure behavior
+
+The survey is captured by a Harmony **postfix** on `Universe.LoadSystem(string)`
+(`KSA/Universe.cs:167-179`). A prefix is wrong: `CurrentSystem` is assigned only at line 174, after
+the constructor returns, so it would see the previous system or null. `LoadSystem` runs once per
+game launch; save loading uses `Universe.DeserializeSave` and does not reload the system. The game
+thread therefore pays for one enumeration per launch, then session boundaries re-emit the cached
+immutable snapshot rather than walking KSA objects again.
+
+StarMap's `AllModsLoaded` currently precedes KSA's default `LoadSystem`, so the postfix observes the
+initial load. Startup also checks `Universe.CurrentSystem` and surveys it when already non-null, in
+case lifecycle ordering changes. A null system produces no fabricated fallback survey. Session,
+career, sim and wall timestamps are attached only when C2 emits events; they are not cached as part
+of system identity.
+
+Finally, `CelestialSystem` catches exceptions **per root** while constructing the forest
+(`KSA/CelestialSystem.cs:137-153`). A bad modded root can silently lose its whole subtree while the
+rest of the system continues loading. The survey does not compare against template cardinality and
+does not pretend the missing tree exists: it hashes and reports exactly the registered, materialised
+`IParentBody` forest. A partial load consequently receives its own honest identity instead of
+colliding with the intact system.
+
+---
+
 ## 5b. Career identity and the career clock — **re-verified 2026-08-07 against 2026.8.5.5168**
 
 The question: catlog wants "fastest time from game start to first orbit". That needs two things — a
