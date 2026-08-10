@@ -713,6 +713,7 @@ type ProjectionCounts struct {
 	CareerKitten int64 `json:"career_kitten"`
 	System       int64 `json:"system"`
 	SystemBody   int64 `json:"system_body"`
+	BadgeAward   int64 `json:"badge_award"`
 	Feed         int64 `json:"feed"`
 	// FlaggedFlights is how many flights carry at least one flag bit — the
 	// number that says whether the anti-cheat surface is doing anything.
@@ -750,6 +751,7 @@ func (p *Projections) Counts(ctx context.Context) (ProjectionCounts, error) {
 		{`SELECT count(*) FROM career_kitten`, &c.CareerKitten},
 		{`SELECT count(*) FROM system`, &c.System},
 		{`SELECT count(*) FROM system_body`, &c.SystemBody},
+		{`SELECT count(*) FROM badge_award`, &c.BadgeAward},
 		{`SELECT count(*) FROM feed`, &c.Feed},
 		{`SELECT count(*) FROM flight_state WHERE flags <> 0`, &c.FlaggedFlights},
 		{`SELECT count(DISTINCT player_id) FROM player_stat`, &c.ScoringPlayers},

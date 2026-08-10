@@ -1844,6 +1844,36 @@ write, because the save and player answers remain meaningful without a compariso
 new stable fold identity `body_sprints` changes `BuildID` so immutable history backfills, while the
 event wire, schema and `BuildVersion` remain unchanged.
 
+### PROJ-120 — Badge awards are insert-once inside a rebuild-authoritative two-scope projection
+
+*Accepted · 2026-08-10 · Task F1.*
+
+A merit badge is a milestone, so the useful historical fact is the first event at which the current
+projection awards it. `badge_award` therefore keeps the first row for `(player, scope, badge)` inside
+one build and has no revocation column. A rebuild remains authoritative and may omit that row when
+current rules or final flight state no longer award it, or discover a newly introduced badge in old
+history. Keeping punitive or irrevocable badge history beside the immutable event log would create
+a second eligibility engine that could disagree with the boards and would violate the project's
+rebuildable-projection model.
+
+Lifetime and per-save awards share one table because their columns and first-write rule are
+identical. The empty career sentinel cannot collide with a real save id, and avoids parallel
+schemas, flushes and readers that would inevitably drift. The lifetime row keeps both the first
+qualifying save and its system because it otherwise has no career to join through; the per-save row
+needs no duplicate `first_career`. `earned_at` uses the server receive stamp rather than the
+untrusted client wall clock, while nullable `earned_sim_t` preserves the career-relative time only
+when one existed. Context remains projector-authored and under the same field and public-redaction
+promise as board context — including the four-key default display allow-list — rather than becoming
+a route for arbitrary payload data.
+
+The table is player-owned projection output, so moderation must not enumerate or mutate it directly.
+Structural removal from the live log followed by rebuild removes shadowbanned or purged players'
+awards; restoring withheld events at their original sequence positions and rebuilding restores any
+currently eligible awards. This inherits STORE-019's future-proof Constitution §7 guarantee and
+leaves shared celestial-system catalogue facts alone. The player site describes only this model
+foundation now: badge predicates, catalogues and public award surfaces belong to later tasks and are
+not implied by the existence of storage.
+
 ## Archive & restore
 
 The filesystem archiver, the manifest, restore verification, and the R2 design that is deliberately not built.

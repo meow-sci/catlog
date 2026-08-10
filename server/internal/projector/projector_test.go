@@ -267,6 +267,7 @@ type snapshot struct {
 	Careers       []string
 	Systems       []string
 	SystemBodies  []string
+	Badges        []string
 	Periods       []string
 	Census        []string
 	Feed          []string
@@ -310,6 +311,9 @@ func (r *rig) snapshot() snapshot {
 			return err
 		}
 		if s.SystemBodies, err = dump(ctx, p, `SELECT hash, body, name, class, kind, rank, parent, radius_m, mass_kg, soi_m, atmo_m, ocean_m, angvel, axis_x, axis_y, axis_z, sma_m, ecc, inc_deg, lan_deg, argp_deg, t_pe, period_s, ccf_to_cce_t0_x, ccf_to_cce_t0_y, ccf_to_cce_t0_z, ccf_to_cce_t0_w, first_seq FROM system_body ORDER BY hash, body`); err != nil {
+			return err
+		}
+		if s.Badges, err = dump(ctx, p, `SELECT player_id, career, badge, system, first_career, earned_seq, earned_at, earned_sim_t, context FROM badge_award ORDER BY player_id, career, badge`); err != nil {
 			return err
 		}
 		if s.Periods, err = dump(ctx, p, `SELECT player_id, stat, period, bucket, value, context, updated_seq FROM player_stat_period ORDER BY player_id, stat, period, bucket`); err != nil {
@@ -397,6 +401,7 @@ func diffSnapshot(t *testing.T, got, want snapshot, feedContentOnly bool) {
 	diff(t, "career", got.Careers, want.Careers)
 	diff(t, "system", got.Systems, want.Systems)
 	diff(t, "system_body", got.SystemBodies, want.SystemBodies)
+	diff(t, "badge_award", got.Badges, want.Badges)
 	diff(t, "player_stat_period", got.Periods, want.Periods)
 	diff(t, "event_census", got.Census, want.Census)
 	if feedContentOnly {
@@ -415,6 +420,29 @@ func TestNewScopeTablesStartEmpty(t *testing.T) {
 	snap := newRig(t).snapshot()
 	if len(snap.CareerStats) != 0 || len(snap.SystemStats) != 0 {
 		t.Fatalf("new scope tables are not empty: career=%v system=%v", snap.CareerStats, snap.SystemStats)
+	}
+}
+
+func TestBadgeAwardSnapshotIncludesEveryColumnInStableOrder(t *testing.T) {
+	r := newRig(t)
+	err := r.live.With(func(p *store.Projections) error {
+		_, err := p.Writer().ExecContext(t.Context(), `
+			INSERT INTO badge_award
+				(player_id, career, badge, system, first_career, earned_seq, earned_at, earned_sim_t, context)
+			VALUES
+				(2, 'save-two', 'career-award', 'system-hash', '', 12, 1770000001000, 42.5, '{"body":"luna"}'),
+				(1, '', 'lifetime', '', 'save-one', 11, 1770000000000, NULL, NULL)`)
+		return err
+	})
+	if err != nil {
+		t.Fatalf("seed badge awards: %v", err)
+	}
+	want := []string{
+		"player_id=1 career= badge=lifetime system= first_career=save-one earned_seq=11 earned_at=1770000000000 earned_sim_t=<nil> context=<nil>",
+		"player_id=2 career=save-two badge=career-award system=system-hash first_career= earned_seq=12 earned_at=1770000001000 earned_sim_t=42.5 context={\"body\":\"luna\"}",
+	}
+	if got := r.snapshot().Badges; !slices.Equal(got, want) {
+		t.Errorf("badge snapshot = %v, want %v", got, want)
 	}
 }
 

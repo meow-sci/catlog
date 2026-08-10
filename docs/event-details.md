@@ -2356,6 +2356,43 @@ A **period is a dimension of a board, not a board** (PROJ-042): the board index 
 board**; a published board's windows are published with it, and `?period=weekly` may legitimately be
 empty (PROJ-045).
 
+### The badge award projection table
+
+Migration `0011_badges.sql` creates
+`badge_award(player_id, career, badge, system, first_career, earned_seq, earned_at,
+earned_sim_t, context, PRIMARY KEY(player_id, career, badge))`. The empty career sentinel is the
+lifetime award; a nonempty career is an award earned independently by that save. The same badge may
+therefore have one lifetime row and one row for each save that qualifies. A lifetime row records the
+system and `first_career` in which the **current projection** first awards it. A per-save row records
+that save's system and leaves `first_career` empty because its primary-key career already supplies
+the provenance (`migrations/projections/0011_badges.sql:6-20`).
+
+The three read-order indexes are `badge_system(system, badge, earned_seq)`,
+`badge_holders(badge, earned_seq)` and `badge_by_career(player_id, career, earned_seq)`. No read API,
+badge registry or awarding fold exists in this slice; the table establishes the projection model
+they will use.
+
+Within one projection build, an award is first-write via `INSERT ... ON CONFLICT DO NOTHING`.
+`earned_seq` is the first qualifying projector sequence, `earned_at` is that event's server
+`recv_time` in Unix milliseconds — never client `wall_t` — and nullable `earned_sim_t` is the event's
+career clock in seconds when present. `context` is nullable projector-authored JSON with the same
+shape and public promise as `player_stat.context`: recursive career/kitten relabelling applies before
+publication, and default tables show only the established `body`, `from`, `energy_j` and `t1_sim`
+allow-list. It is never an unfiltered client payload.
+
+“Once” means the earliest row in the current projection, not an irrevocable entitlement. There is
+no `revoked` state. Rebuilding from seq 0 creates a fresh `badge_award`, so current folds and final
+flight state may omit an award formerly present, while a newly added rule may discover one in old
+history. This is the same rebuild-authoritative correction model as the boards, without a second
+historical eligibility engine.
+
+The rows are player-owned. Withholding a player's events and rebuilding removes every award;
+restoring those events at their original sequence numbers and rebuilding can restore them with the
+same first-award ordering. Purging their events makes the removal permanent. No moderation path
+enumerates this table: structural log exclusion plus rebuild supplies Constitution §7's totality,
+while shared `system` and `system_body` rows remain catalogue facts rather than player awards
+(STORE-019).
+
 ---
 
 ## Boards

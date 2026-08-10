@@ -1,0 +1,40 @@
+---
+title: Merit badges
+description: How catlog will recognise once-only achievements across a player and their saves.
+sidebar:
+  order: 1
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+Merit badges are catlog's planned once-only recognitions for things that happened in your recorded
+history. A badge will not be a score or a level, and earning one will not make a leaderboard value
+larger.
+
+<Aside type="note" title="The foundation is here; the badges are not">
+  catlog can now store this kind of recognition while rebuilding its derived data. No badge rules
+  are active yet, and no awards, catalogue or player badge pages are exposed. Those arrive in later
+  work.
+</Aside>
+
+## Two views of the same achievement
+
+The model keeps lifetime and per-save recognition separate. A qualifying achievement can be
+remembered once for the player and independently once for the save in which it happened. A new save
+starts with no per-save badges of its own; it does not erase a lifetime recognition that still
+qualifies.
+
+For a lifetime recognition, catlog also remembers which save and celestial system first produced it
+in the current result. A per-save recognition already belongs to that save and keeps its system
+alongside it. The time attached to either comes from when the catlog server received the event; a
+career-clock time is kept only when the event had one.
+
+## “Once” means once in the current result
+
+Awards will keep the first qualifying moment while one set of derived data is being built. Like the
+leaderboards, they are rebuilt from the recorded event history rather than kept as permanent claims.
+A rebuild may remove a recognition when the current rules or final flight facts no longer award it,
+and a future rule may discover one in older history.
+
+That also keeps moderation complete. Withheld history produces no badges after a rebuild; restored
+history can produce them again in its original order; deleted history cannot.

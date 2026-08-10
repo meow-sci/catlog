@@ -207,6 +207,7 @@ byte-identical across events. Rows written either way stay readable, so the swit
 | `career_kitten` | Per-save kitten totals folded from `roster.snapshot`, with system identity denormalised; unlike `kitten`, it does not merge same-named kittens from different saves (migration 0007) |
 | `system` | One immutable first-seen identity/header per celestial-system hash: raw system id, display name, stable URL slug, home body, declared body count, monotone reported-complete bit and first seq (migration 0008) |
 | `system_body` | One immutable first-seen catalogue row per `(hash, body)`, including opaque game class, semantic kind, forest topology, physical values, orientation and optional orbital elements (migration 0008) |
+| `badge_award` | Current-projection merit-badge awards at lifetime and per-save scope, with first-award sequence, server receive time, optional career time and provenance (migration 0011) |
 | `feed` | The activity feed, capped at 500 rows |
 | `event_census` | One row per `(type, period, bucket)` — what makes `GET /v1/stats` affordable |
 
@@ -231,6 +232,34 @@ missing system identity; only the system-scoped result is omitted.
 `career_kitten` has primary key
 `(player_id, career, kid)`, plus indexes on `(player_id, career)` and `(player_id, system)`. Both
 tables denormalise `system` from the career, and both are rebuildable additions from migration 0007.
+
+Migration `0011_badges.sql` adds
+`badge_award(player_id, career, badge, system, first_career, earned_seq, earned_at,
+earned_sim_t, context, PRIMARY KEY(player_id, career, badge))`. It has indexes
+`badge_system(system, badge, earned_seq)`, `badge_holders(badge, earned_seq)` and
+`badge_by_career(player_id, career, earned_seq)` (`0011_badges.sql:6-20`). The empty career is the
+lifetime scope; a nonempty career is that save's independent award. A lifetime row retains the
+system and save in which the current projection first awarded it. Per-save rows retain their system
+and leave `first_career` empty because `career` already identifies the save. Migration 0011 advances
+the projection schema to version 11, and `ProjectionCounts.BadgeAward` includes the table in the
+admin projection census (`store/projections.go:716,754`).
+
+Awards are insert-once inside one projection build: the first qualifying event keeps its
+`earned_seq`, matching server-side `recv_time` in `earned_at`, nullable event career clock in
+`earned_sim_t`, and nullable JSON `context`. `earned_at` never trusts the client's wall clock.
+Context is projector-authored and promises the same shape and public treatment as
+`player_stat.context`: recursive career/kitten relabelling happens before publication, and the
+default display allow-list remains exactly `body`, `from`, `energy_j` and `t1_sim`; it is not
+arbitrary client JSON. There is no revocation column or accumulated punishment. A rebuild creates a
+fresh table from the live immutable log and is authoritative: current folds and final state may omit
+an award that an earlier build contained, or discover one in old history.
+
+`badge_award` is player-owned projection output and therefore needs no moderation-specific delete
+list. A shadow ban structurally removes the player's events from the live log; the queued rebuild
+drops their awards, and restoring the events at their original sequence numbers plus rebuilding
+restores the same eligible awards. A purge removes the source events permanently, so rebuilding
+cannot recreate the rows. This is the STORE-019 rule; shared `system` and `system_body` catalogue
+facts remain governed by their content, not by whichever player first reported them.
 
 `system` is keyed by the content hash, **not** by `system_id` or display name: two mods may both
 call different content `Sol`. Its unique `slug` is ASCII-only and rebuild-stable. Lowercase ASCII
