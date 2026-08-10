@@ -430,6 +430,8 @@ func signProof(key *ecdsa.PrivateKey, claims authz.ProofClaims) (string, error) 
 //   - a nested array of objects (`roster.snapshot.kittens`) and a nested
 //     optional object (`telemetry.window.radar_alt_m`);
 //   - a JSON `null` inside a payload (`vehicle.docked.other_flight`).
+//   - both meaningful `kitten.tumble.from` cases: airborne for a botched
+//     landing and grounded for a trip;
 //   - celestial-system orbit optionals in all three legal forms: absent as a
 //     group on a root, all six plus a finite period on a bound body, and all
 //     six with period absent on an unbound conic.
@@ -608,10 +610,16 @@ func batch001() []byte {
 		label: "ev-13", typ: "kitten.eva_start", ver: 1, flight: &eva, simT: 215,
 		payload: map[string]any{"kid": kidAce, "name": "Ace"},
 	}, {
-		// A tumble that names the flight it happened on.
+		// A botched landing: the kitten was airborne immediately before tumbling.
 		label: "ev-14", typ: "kitten.tumble", ver: 1, flight: &eva, simT: 218.5,
 		payload: map[string]any{
 			"kid": kidAce, "name": "Ace", "speed_ms": 4.25, "body": "duna", "from": "airborne",
+		},
+	}, {
+		// A trip: the kitten was grounded immediately before tumbling.
+		label: "ev-14-grounded", typ: "kitten.tumble", ver: 1, flight: &eva, simT: 220,
+		payload: map[string]any{
+			"kid": kidAce, "name": "Ace", "speed_ms": 2.75, "body": "duna", "from": "grounded",
 		},
 	}, {
 		// `flight` is explicitly null here, asymmetrically with eva_start.

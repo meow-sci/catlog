@@ -220,6 +220,82 @@ public sealed class ContractVectorTests
         Assert.True(missing.Length == 0, $"no vector line covers: {string.Join(", ", missing)}");
     }
 
+    /// <summary>Pins the combined D1-D3c final-v1 shapes and paired discriminating values.</summary>
+    [ContractVectorFact]
+    public void Batch001_PinsTheCombinedFinalV1PayloadMatrix()
+    {
+        string root = RequireVectors();
+        string[] affected =
+        [
+            EventTypes.VehicleRud,
+            EventTypes.FlightStarted,
+            EventTypes.KittenTumble,
+            EventTypes.VehicleOrbit,
+            EventTypes.TelemetryWindow,
+        ];
+        var rows = affected.ToDictionary(
+            static type => type,
+            static _ => new List<(int Version, JsonElement Payload)>(),
+            StringComparer.Ordinal);
+
+        foreach (string line in BatchLines(root))
+        {
+            using JsonDocument document = JsonDocument.Parse(line);
+            JsonElement envelope = document.RootElement;
+            string type = envelope.GetProperty("type").GetString()!;
+            if (rows.TryGetValue(type, out List<(int Version, JsonElement Payload)>? found))
+                found.Add((envelope.GetProperty("ver").GetInt32(), envelope.GetProperty("payload").Clone()));
+        }
+
+        foreach ((string type, List<(int Version, JsonElement Payload)> values) in rows)
+        {
+            Assert.NotEmpty(values);
+            Assert.All(values, row => Assert.Equal(1, row.Version));
+        }
+
+        (int _, JsonElement rud) = Assert.Single(rows[EventTypes.VehicleRud]);
+        Assert.Equal(31, rud.GetProperty("part_count").GetInt32());
+
+        List<(int Version, JsonElement Payload)> starts = rows[EventTypes.FlightStarted];
+        Assert.Equal(2, starts.Count);
+        Assert.Single(starts, row => !row.Payload.TryGetProperty("engine_count", out _));
+        (int _, JsonElement explicitZero) = Assert.Single(
+            starts,
+            row => row.Payload.TryGetProperty("engine_count", out _));
+        Assert.Equal(0, explicitZero.GetProperty("engine_count").GetInt32());
+
+        List<(int Version, JsonElement Payload)> tumbles = rows[EventTypes.KittenTumble];
+        Assert.Equal(2, tumbles.Count);
+        string[] origins = tumbles
+            .Select(static row => row.Payload.GetProperty("from").GetString()!)
+            .OrderBy(static value => value, StringComparer.Ordinal)
+            .ToArray();
+        Assert.Equal(["airborne", "grounded"], origins);
+
+        (int _, JsonElement orbit) = Assert.Single(rows[EventTypes.VehicleOrbit]);
+        Assert.Equal(6557100.375, orbit.GetProperty("sma_m").GetDouble());
+        Assert.Equal(72.25, orbit.GetProperty("lan_deg").GetDouble());
+        Assert.Equal(14.75, orbit.GetProperty("argp_deg").GetDouble());
+        Assert.Equal(160.125, orbit.GetProperty("t_pe").GetDouble());
+        Assert.Equal(5420.5, orbit.GetProperty("period_s").GetDouble());
+
+        List<(int Version, JsonElement Payload)> windows = rows[EventTypes.TelemetryWindow];
+        Assert.Equal(2, windows.Count);
+        Assert.Single(windows, row => !row.Payload.TryGetProperty("state", out _));
+        (int _, JsonElement withState) = Assert.Single(
+            windows,
+            row => row.Payload.TryGetProperty("state", out _));
+        JsonElement state = withState.GetProperty("state");
+        JsonElement pos = state.GetProperty("pos");
+        JsonElement vel = state.GetProperty("vel");
+        Assert.Equal(6557100.375, pos.GetProperty("x").GetDouble());
+        Assert.Equal(-182500.25, pos.GetProperty("y").GetDouble());
+        Assert.Equal(42125.5, pos.GetProperty("z").GetDouble());
+        Assert.Equal(215.75, vel.GetProperty("x").GetDouble());
+        Assert.Equal(7640.5, vel.GetProperty("y").GetDouble());
+        Assert.Equal(-38.125, vel.GetProperty("z").GetDouble());
+    }
+
     /// <summary>
     /// Every payload must survive a round trip through its C# record with no key gained or lost.
     /// </summary>

@@ -536,6 +536,26 @@ The stream chain's documented justification is now honest, and `stream_state.gap
 
 Regeneration remains byte-identical (INGEST-008, INGEST-009). `docs/event-details.md`'s "Conformance coverage" section and its per-event **Vectors.** lines were rewritten in the same commit, and drift item 27 (and the residual of item 26) are closed by this.
 
+### INGEST-026 — Final-v1 discriminator pairs are cross-language fixture obligations, not illustrative examples
+
+*Accepted · 2026-08-10 · Task D6.*
+
+The 33-line conformance batch carries both sides wherever a final-v1 payload distinction can be
+lost without a syntax error: `flight.started.engine_count` absent versus explicit 0,
+`telemetry.window.state` wholly present versus wholly absent, and `kitten.tumble.from` airborne
+versus grounded. A fixture with only one side lets a decoder collapse unknown into zero, invent an
+origin for missing state, or accidentally treat an open discriminator as a one-value enum while
+both language suites still report agreement. The paired rows therefore test meaning, not merely
+deserialisation. Required `vehicle.rud.part_count` and the five required `vehicle.orbit` additions
+remain single rows because there is no optional discriminator to pair.
+
+All five final-v1 payload extensions are audited together because the fixture is the integration
+seam between independently maintained C# and Go implementations. Regenerating one addition in
+isolation can leave a sibling shape, line citation, compressed-body hash or proof stale while the
+changed row itself passes. Keeping the audit atomic makes the batch, its Brotli body, its `bh`, the
+proof layer and both references describe the same bytes. These are pre-launch final `ver` 1 shapes,
+so this strengthens coverage without inventing a version history or upcaster that never shipped.
+
 ---
 
 ## Identity, handles & moderation

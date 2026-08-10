@@ -7,6 +7,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -28,8 +29,8 @@ func TestBatch001PinsEverySystemCatalogueShape(t *testing.T) {
 		Payload map[string]json.RawMessage `json:"payload"`
 	}
 	lines := bytes.Split(bytes.TrimSpace(batch001()), []byte{'\n'})
-	if len(lines) != 32 {
-		t.Fatalf("batch has %d lines, want 32 after the three system-body shapes", len(lines))
+	if len(lines) != 33 {
+		t.Fatalf("batch has %d lines, want 33 after the three system-body shapes and paired tumbles", len(lines))
 	}
 	covered := map[string]bool{}
 	bodies := map[string]map[string]json.RawMessage{}
@@ -122,76 +123,114 @@ func TestBatch001PinsEverySystemCatalogueShape(t *testing.T) {
 	}
 }
 
-func TestBatch001PinsVehicleRUDPartCountAtVersionOne(t *testing.T) {
+func TestBatch001PinsTheCombinedFinalV1PayloadMatrix(t *testing.T) {
 	type envelope struct {
 		Type    string                     `json:"type"`
 		Ver     int                        `json:"ver"`
 		Payload map[string]json.RawMessage `json:"payload"`
 	}
-	var found int
+	rows := map[string][]envelope{}
 	for _, line := range bytes.Split(bytes.TrimSpace(batch001()), []byte{'\n'}) {
 		var row envelope
 		if err := json.Unmarshal(line, &row); err != nil {
 			t.Fatal(err)
 		}
-		if row.Type != "vehicle.rud" {
-			continue
+		rows[row.Type] = append(rows[row.Type], row)
+	}
+	for _, typ := range []string{"vehicle.rud", "flight.started", "kitten.tumble", "vehicle.orbit", "telemetry.window"} {
+		if len(rows[typ]) == 0 {
+			t.Fatalf("no %s vector rows", typ)
 		}
-		found++
-		if row.Ver != 1 {
-			t.Errorf("vehicle.rud ver = %d, want 1", row.Ver)
-		}
-		raw, ok := row.Payload["part_count"]
-		if !ok {
-			t.Fatal("vehicle.rud vector has no required part_count")
-		}
-		var count int
-		if err := json.Unmarshal(raw, &count); err != nil {
-			t.Fatal(err)
-		}
-		if count != 31 {
-			t.Errorf("vehicle.rud part_count = %d, want 31", count)
+		for _, row := range rows[typ] {
+			if row.Ver != 1 {
+				t.Errorf("%s ver = %d, want 1", typ, row.Ver)
+			}
 		}
 	}
-	if found != 1 {
-		t.Errorf("vehicle.rud vector rows = %d, want 1", found)
-	}
-}
 
-func TestBatch001PinsFlightStartedEngineCountPresentZeroAndAbsent(t *testing.T) {
-	type envelope struct {
-		Type    string                     `json:"type"`
-		Ver     int                        `json:"ver"`
-		Payload map[string]json.RawMessage `json:"payload"`
+	if got := len(rows["vehicle.rud"]); got != 1 {
+		t.Fatalf("vehicle.rud rows = %d, want 1", got)
 	}
-	var present, absent int
-	for _, line := range bytes.Split(bytes.TrimSpace(batch001()), []byte{'\n'}) {
-		var row envelope
-		if err := json.Unmarshal(line, &row); err != nil {
-			t.Fatal(err)
-		}
-		if row.Type != "flight.started" {
-			continue
-		}
-		if row.Ver != 1 {
-			t.Errorf("flight.started ver = %d, want 1", row.Ver)
-		}
+	var rudParts int
+	if err := json.Unmarshal(rows["vehicle.rud"][0].Payload["part_count"], &rudParts); err != nil || rudParts != 31 {
+		t.Errorf("vehicle.rud part_count = %d, err %v; want 31", rudParts, err)
+	}
+
+	var enginePresent, engineAbsent int
+	if got := len(rows["flight.started"]); got != 2 {
+		t.Fatalf("flight.started rows = %d, want 2", got)
+	}
+	for _, row := range rows["flight.started"] {
 		raw, ok := row.Payload["engine_count"]
 		if !ok {
-			absent++
+			engineAbsent++
 			continue
 		}
-		present++
-		var count int
-		if err := json.Unmarshal(raw, &count); err != nil {
-			t.Fatal(err)
-		}
-		if count != 0 {
-			t.Errorf("present engine_count = %d, want explicit zero", count)
+		enginePresent++
+		var n int
+		if err := json.Unmarshal(raw, &n); err != nil || n != 0 {
+			t.Errorf("flight.started explicit engine_count = %d, err %v; want 0", n, err)
 		}
 	}
-	if present != 1 || absent != 1 {
-		t.Errorf("flight.started engine_count shapes = present %d, absent %d; want one each", present, absent)
+	if enginePresent != 1 || engineAbsent != 1 {
+		t.Errorf("flight.started engine_count shapes = present %d absent %d, want 1 and 1", enginePresent, engineAbsent)
+	}
+
+	if got := len(rows["kitten.tumble"]); got != 2 {
+		t.Fatalf("kitten.tumble rows = %d, want 2", got)
+	}
+	from := make([]string, 0, 2)
+	for _, row := range rows["kitten.tumble"] {
+		var value string
+		if err := json.Unmarshal(row.Payload["from"], &value); err != nil {
+			t.Fatal(err)
+		}
+		from = append(from, value)
+	}
+	slices.Sort(from)
+	if !slices.Equal(from, []string{"airborne", "grounded"}) {
+		t.Errorf("kitten.tumble from values = %v, want airborne and grounded", from)
+	}
+
+	if got := len(rows["vehicle.orbit"]); got != 1 {
+		t.Fatalf("vehicle.orbit rows = %d, want 1", got)
+	}
+	orbit := rows["vehicle.orbit"][0].Payload
+	for key, want := range map[string]float64{
+		"sma_m": 6557100.375, "lan_deg": 72.25, "argp_deg": 14.75,
+		"t_pe": 160.125, "period_s": 5420.5,
+	} {
+		var got float64
+		if err := json.Unmarshal(orbit[key], &got); err != nil || got != want {
+			t.Errorf("vehicle.orbit %s = %v, err %v; want %v", key, got, err, want)
+		}
+	}
+
+	if got := len(rows["telemetry.window"]); got != 2 {
+		t.Fatalf("telemetry.window rows = %d, want 2", got)
+	}
+	var statePresent, stateAbsent int
+	for _, row := range rows["telemetry.window"] {
+		raw, ok := row.Payload["state"]
+		if !ok {
+			stateAbsent++
+			continue
+		}
+		statePresent++
+		var state struct {
+			Pos struct{ X, Y, Z float64 } `json:"pos"`
+			Vel struct{ X, Y, Z float64 } `json:"vel"`
+		}
+		if err := json.Unmarshal(raw, &state); err != nil {
+			t.Fatal(err)
+		}
+		if state.Pos.X != 6557100.375 || state.Pos.Y != -182500.25 || state.Pos.Z != 42125.5 ||
+			state.Vel.X != 215.75 || state.Vel.Y != 7640.5 || state.Vel.Z != -38.125 {
+			t.Errorf("telemetry state = %+v, want exact position and velocity", state)
+		}
+	}
+	if statePresent != 1 || stateAbsent != 1 {
+		t.Errorf("telemetry.window state shapes = present %d absent %d, want 1 and 1", statePresent, stateAbsent)
 	}
 }
 
