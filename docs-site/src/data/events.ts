@@ -71,6 +71,29 @@ export interface CatlogEvent {
 
 export const EVENTS: CatlogEvent[] = [
   {
+    type: "session.started",
+    alwaysOn: true,
+    family: "session",
+    ver: 1,
+    summary: "You started playing, or loaded a save.",
+    trigger: "event",
+    cause:
+      "The mod starts up with the game, and starts a fresh session again every time you load a save or begin a new game.",
+    source:
+      "The mod's own version, the game build string shown in the game's version info, and a random identifier generated once for this installation.",
+    fields: [
+      { key: "mod_ver", unit: "", what: "Which version of the catlog mod produced this." },
+      { key: "game_build", unit: "", what: "Which build of Kitten Space Agency you were running." },
+      {
+        key: "install",
+        unit: "",
+        what: "A random id generated once on this machine. It never leaves your computer in readable form — the server strips it before anything is published.",
+      },
+    ],
+    feeds: [],
+    page: "sessions-and-flights",
+  },
+  {
     type: "system.discovered",
     alwaysOn: true,
     family: "system",
@@ -186,29 +209,6 @@ export const EVENTS: CatlogEvent[] = [
     ],
     feeds: [],
     page: "systems",
-  },
-  {
-    type: "session.started",
-    alwaysOn: true,
-    family: "session",
-    ver: 1,
-    summary: "You started playing, or loaded a save.",
-    trigger: "event",
-    cause:
-      "The mod starts up with the game, and starts a fresh session again every time you load a save or begin a new game.",
-    source:
-      "The mod's own version, the game build string shown in the game's version info, and a random identifier generated once for this installation.",
-    fields: [
-      { key: "mod_ver", unit: "", what: "Which version of the catlog mod produced this." },
-      { key: "game_build", unit: "", what: "Which build of Kitten Space Agency you were running." },
-      {
-        key: "install",
-        unit: "",
-        what: "A random id generated once on this machine. It never leaves your computer in readable form — the server strips it before anything is published.",
-      },
-    ],
-    feeds: [],
-    page: "sessions-and-flights",
   },
   {
     type: "flight.started",

@@ -430,6 +430,9 @@ func signProof(key *ecdsa.PrivateKey, claims authz.ProofClaims) (string, error) 
 //   - a nested array of objects (`roster.snapshot.kittens`) and a nested
 //     optional object (`telemetry.window.radar_alt_m`);
 //   - a JSON `null` inside a payload (`vehicle.docked.other_flight`).
+//   - celestial-system orbit optionals in all three legal forms: absent as a
+//     group on a root, all six plus a finite period on a bound body, and all
+//     six with period absent on an unbound conic.
 //
 // Determinism: every identifier is a [fixedULID] of a constant, every `wall_t`
 // is derived from the line's index, and the payloads are `map[string]any`, which
@@ -470,7 +473,7 @@ func batch001() []byte {
 		label: "ev-system-complete", typ: "system.discovered", ver: 1, flight: nil, simT: 0,
 		payload: map[string]any{
 			"system": "01kittensol", "id": "Sol", "name": "Sol", "home": "earth",
-			"bodies": 2, "complete": true,
+			"bodies": 3, "complete": true,
 		},
 	}, {
 		label: "ev-system-root", typ: "system.body", ver: 1, flight: nil, simT: 0,
@@ -491,6 +494,19 @@ func batch001() []byte {
 			"ccf_to_cce_t0": map[string]any{"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0},
 			"sma_m":         149597870700.0, "ecc": 0.0167086, "inc_deg": 0.00005,
 			"lan_deg": -11.26064, "argp_deg": 114.20783, "t_pe": -1234.5, "period_s": 31558149.8,
+		},
+	}, {
+		// An unbound conic still has a complete six-value orbital shape. Only
+		// period is absent: serialising it as zero would claim a finite repeat.
+		label: "ev-system-unbound", typ: "system.body", ver: 1, flight: nil, simT: 0,
+		payload: map[string]any{
+			"system": "01kittensol", "body": "whisker-comet", "name": "Whisker Comet", "class": "Celestial",
+			"kind": "other", "rank": 1, "parent": "sol", "radius_m": 1200.0,
+			"mass_kg": 8.5e12, "soi_m": 250000.0, "atmo_m": 0.0, "ocean_m": 0.0,
+			"angvel": 0.00012, "axis": map[string]any{"x": 0.0, "y": 1.0, "z": 0.0},
+			"ccf_to_cce_t0": map[string]any{"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0},
+			"sma_m":         -42000000000.0, "ecc": 1.25, "inc_deg": 73.5,
+			"lan_deg": 22.0, "argp_deg": 147.25, "t_pe": 86400.0,
 		},
 	}, {
 		label: "ev-system-incomplete", typ: "system.discovered", ver: 1, flight: nil, simT: 0,

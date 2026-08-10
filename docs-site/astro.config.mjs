@@ -48,6 +48,7 @@ export default defineConfig({
           items: [
             { label: "The event catalog", slug: "events" },
             { label: "Browse every event", slug: "events/browse" },
+            { label: "Celestial systems", slug: "events/systems" },
             { label: "Sessions and flights", slug: "events/sessions-and-flights" },
             { label: "Your vehicle", slug: "events/vehicle" },
             { label: "Engines", slug: "events/engines" },
