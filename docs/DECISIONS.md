@@ -3198,3 +3198,25 @@ catalogue changes. That keeps them compositional with the folds that award them 
 historical eligibility engine whose answer could disagree with the leaderboards it claims to
 recognise. Each implementing task still records the appropriate area decision with its code; this
 entry records why the plan contains no unresolved alternative branches.
+
+### DOCS-006 — Per-save rankings get one player-facing explanation, while shared board mechanics stay linked
+
+*Accepted · 2026-08-10 · Task B6.*
+
+Every board can be viewed by player, save or celestial system, but repeating that explanation in
+every catalogue entry would make scope look like three different scoring rules and create dozens of
+copies to drift. The catalogue therefore carries one concise scope pill per board and links to one
+Per-save boards page for the identity, ranking and time-window consequences. The ordinary board
+remains the player view, so existing readers meet the new dimension without having their familiar
+answer silently redefined.
+
+The save page uses only facts a player can observe: continuing the same KSA game keeps the save,
+starting another game creates one, and catlog numbers saves because it never learns their local
+names. It says explicitly where identity has limits and that a rewind mark excludes nothing. This
+keeps the privacy boundary understandable without publishing or teaching internal identifiers.
+
+The page links to the existing empty-board explanation instead of copying it. Empty-on-rebuild is
+one projection-swap behaviour shared by save, badge and challenge work; separate player-facing
+versions would eventually disagree about timing or guarantees. One canonical explanation makes the
+new page shorter and keeps the mechanism owned where eligibility and rebuild effects are already
+explained.

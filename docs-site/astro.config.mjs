@@ -61,6 +61,7 @@ export default defineConfig({
             { label: "How boards are built", slug: "leaderboards" },
             { label: "Every board", slug: "leaderboards/catalog" },
             { label: "What counts and what doesn't", slug: "leaderboards/eligibility" },
+            { label: "Per-save boards", slug: "leaderboards/saves" },
           ],
         },
         {
