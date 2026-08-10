@@ -141,11 +141,15 @@ public static class VehicleTelemetry
     /// <returns>The snapshot, or null.</returns>
     [KsaAnchor("Vehicle.Id/Situation/GetBarometricAltitude/GetSurfaceSpeed/OrbitalSpeed/AccelerationBody/"
                + "TotalMass/Parts.Count/Crew/StructuralLoad; Orbit.Eccentricity/Apoapsis/Periapsis/Inclination/"
+               + "SemiMajorAxis/LongitudeOfAscendingNode/ArgumentOfPeriapsis/TimeAtPeriapsis/Period/"
                + "IsBound/IsHyperbolic/IsParabolic; IParentBody.Id/MeanRadius/GetAtmosphereReference; "
                + "PhysicalAtmosphereReference.GetDynamicPressure(Vehicle)",
-        SourceFile = "KSA/Vehicle.cs / KSA/Orbit.cs / KSA/IParentBody.cs / KSA/PhysicalAtmosphereReference.cs",
-        Verified = "2026-08-07", GameVersion = "2026.8.5.5168", Risk = ChurnRisk.Low,
-        Notes = "UNITS: Orbit.Inclination is RADIANS (Orbit.cs:1160) — converted to degrees here. "
+        SourceFile = "KSA/Vehicle.cs / KSA/Orbit.cs:1152-1170,1757-1775 / KSA/IParentBody.cs / "
+                     + "KSA/PhysicalAtmosphereReference.cs",
+        Verified = "2026-08-10", GameVersion = "2026.8.5.5168", Risk = ChurnRisk.Low,
+        Notes = "UNITS: Orbit.Inclination, LongitudeOfAscendingNode and ArgumentOfPeriapsis are RADIANS "
+                + "(Orbit.cs:1160-1164) — converted to degrees here. SemiMajorAxis is metres, Period is "
+                + "seconds, and TimeAtPeriapsis.Seconds() is game seconds (Orbit.cs:1152-1170). "
                 + "Orbit.Apoapsis/Periapsis are RADII FROM BODY CENTRE (Orbit.cs:1166-1168) — MeanRadius is "
                 + "subtracted here, see ksa-integration §1 and docs/events.md. "
                 + "Vehicle.TotalMass is float (Vehicle.cs:551). "
@@ -197,6 +201,13 @@ public static class VehicleTelemetry
                     : 0.0,
                 PeAltM = Sanitize.RadiusToAltitude(orbit.Periapsis, meanRadius),
                 IncDeg = Sanitize.Finite(orbit.Inclination * RadToDeg),
+                SmaM = Sanitize.Finite(orbit.SemiMajorAxis),
+                LanDeg = Sanitize.Finite(orbit.LongitudeOfAscendingNode * RadToDeg),
+                ArgpDeg = Sanitize.Finite(orbit.ArgumentOfPeriapsis * RadToDeg),
+                TPe = Sanitize.Finite(orbit.TimeAtPeriapsis.Seconds()),
+                // OrbitData's unbound Period is NaN today, but classify explicitly: a future game
+                // returning a finite sentinel must not turn an open trajectory into a closed one.
+                PeriodS = conic == OrbitClass.Bound ? Sanitize.Finite(orbit.Period) : 0.0,
                 OrbitClass = conic,
                 CrewCount = CrewCount(vehicle),
                 PartCount = PartCount(vehicle),

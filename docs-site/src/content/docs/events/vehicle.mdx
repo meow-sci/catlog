@@ -62,6 +62,16 @@ state catlog has not seen.
 <EventDetail type="vehicle.atmosphere" />
 <EventDetail type="vehicle.orbit" />
 
+Besides the high point, low point, shape and tilt used by today's orbit boards,
+each orbit record carries the rest of the information needed to describe the
+path: its semi-major axis, the direction of its ascending node and periapsis,
+the game time of periapsis, and its period. These values are **recorded, not
+scored**. No leaderboard ranks any of the five.
+
+An escape path is not closed and will never repeat, so its period is recorded as
+zero. A zero in any of the other new figures can be a real orbital value or the
+fallback for a reading that was not finite; none creates a leaderboard result.
+
 <Aside type="note" title="What counts as orbit">
   Your periapsis has to clear the top of the atmosphere by 1000 m. Around an airless body the bar is
   1000 m above the mean radius. Dropping back below it does not record anything — the bar simply

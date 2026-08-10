@@ -115,6 +115,21 @@ public sealed class SimVehicle
     /// <summary>Inclination, in degrees.</summary>
     public double IncDeg { get; set; }
 
+    /// <summary>Semi-major axis, in metres.</summary>
+    public double SmaM { get; set; }
+
+    /// <summary>Longitude of the ascending node, in degrees.</summary>
+    public double LanDeg { get; set; }
+
+    /// <summary>Argument of periapsis, in degrees.</summary>
+    public double ArgpDeg { get; set; }
+
+    /// <summary>Time at periapsis, in game seconds.</summary>
+    public double TPe { get; set; }
+
+    /// <summary>Orbital period in seconds, or 0 for an unbound trajectory.</summary>
+    public double PeriodS { get; set; }
+
     /// <summary>The conic class the game project would report.</summary>
     public OrbitClass OrbitClass { get; set; }
 
@@ -151,6 +166,11 @@ public sealed class SimVehicle
         ApAltM = ApAltM,
         PeAltM = PeAltM,
         IncDeg = IncDeg,
+        SmaM = SmaM,
+        LanDeg = LanDeg,
+        ArgpDeg = ArgpDeg,
+        TPe = TPe,
+        PeriodS = PeriodS,
         OrbitClass = OrbitClass,
         CrewCount = CrewCount,
         PartCount = PartCount,
@@ -187,6 +207,8 @@ public sealed class SimVehicle
         ApAltM = apAltM;
         PeAltM = peAltM;
         Ecc = apAltM <= peAltM ? 0.0 : (apAltM - peAltM) / (apAltM + peAltM + 2 * 600_000);
+        SmaM = 600_000 + ((apAltM + peAltM) * 0.5);
+        PeriodS = 2 * System.Math.PI * SmaM / System.Math.Max(1, orbitalSpeedMs);
         OrbitClass = OrbitClass.Bound;
         OrbitalSpeedMs = orbitalSpeedMs;
         SurfaceSpeedMs = surfaceSpeedMs;

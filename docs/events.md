@@ -80,7 +80,7 @@ Kitten identity: `kid` = lowercase Crockford base32 of the first 10 bytes of `SH
 | `flight.ended` | `{"reason": "recovered"\|"destroyed"\|"despawned", "crew_count": i, "kids": [s], "body": s, "lat": f?, "lon": f?}` — `body` may be the literal `"unknown"` |
 | `vehicle.situation` | `{"from": s, "to": s, "body": s, "altitude_m": f, "surface_speed_ms": f, "orbital_speed_ms": f, "radar_alt_m": f?}` |
 | `vehicle.atmosphere` | `{"dir": "entered"\|"exited", "body": s, "speed_ms": f, "dyn_pressure_pa": f}` |
-| `vehicle.orbit` | `{"phase": "achieved"\|"escaped", "body": s, "ap_m": f, "pe_m": f, "ecc": f, "inc_deg": f, "mass_kg": f}` — `mass_kg` is the mass at the instant the milestone fired |
+| `vehicle.orbit` | `{"phase": "achieved"\|"escaped", "body": s, "ap_m": f, "pe_m": f, "ecc": f, "inc_deg": f, "sma_m": f, "lan_deg": f, "argp_deg": f, "t_pe": f, "period_s": f, "mass_kg": f}` — `mass_kg` is the mass at the instant the milestone fired |
 | `vehicle.soi` | `{"from_body": s, "to_body": s}` |
 | `vehicle.rud` | `{"cause": "ground_impact"\|"ocean_impact"\|"collision"\|"excessive_g_force"\|"aerodynamic_forces"\|"hydrodynamic_forces", "peak_g": f, "peak_q_pa": f, "speed_ms": f, "altitude_m": f, "body": s, "crew_count": i, "part_count": i, "lat": f?, "lon": f?}` |
 | `vehicle.impact` | `{"speed_ms": f, "energy_j": f, "survived": b, "launch_pad": b, "body": s, "crew_count": i, "lat": f?, "lon": f?}` — `survived` = no destruction of the same vehicle in that frame **or the next** (mod-computed, §7.2) |
@@ -144,15 +144,23 @@ positive zero.
 
 **An unreadable value never scores.** The first three keys below are non-optional and read as a
 defined numeric fallback; every current board that reads one gates that fallback because it is
-indistinguishable from a real reading of the same number. The final key is optional and is omitted
-instead. `vehicle.rud.part_count` is not read by any fold yet:
+indistinguishable from a real reading of the same number. The new orbit-element group is likewise
+non-optional and uses zero for a non-finite reading, but no current fold reads it. `period_s` is also
+zero deliberately for a hyperbolic or parabolic trajectory: an open path has no period. The final
+key is optional and is omitted instead. `vehicle.rud.part_count` is not read by any fold yet:
 
 | key | reads as when the mod could not say | what stops it scoring |
 |---|---|---|
 | `vehicle.orbit.mass_kg` | `0` | `heaviest_to_orbit` requires `> 0` |
 | `flight.started.stage_count` | `0` | `biggest_stack` requires `> 0` |
 | `vehicle.rud.part_count` | `0` | no current fold reads it |
+| `vehicle.orbit.sma_m` / `lan_deg` / `argp_deg` / `t_pe` / `period_s` | `0` | no current fold reads them; `period_s == 0` also means an unbound trajectory |
 | `telemetry.window.radar_alt_m` | absent | `lowest_pass` refuses the absent aggregate, then requires `min > 0` |
+
+On `vehicle.orbit`, `sma_m` is the semi-major axis in metres; `lan_deg` and `argp_deg` are longitude
+of the ascending node and argument of periapsis in degrees; `t_pe` is the absolute game time of
+periapsis in seconds; and `period_s` is the orbital period in seconds. All five are recorded for
+both orbit phases but are not scored by any current board.
 
 **Optional keys — omit, never zero.** `lat`, `lon` and `radar_alt_m` (on `vehicle.situation`,
 `vehicle.landed` and as an aggregate on `telemetry.window`) join `peak_g` / `max_q_pa` under the

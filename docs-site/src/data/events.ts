@@ -395,6 +395,23 @@ export const EVENTS: CatlogEvent[] = [
       { key: "ecc", unit: "", what: "Eccentricity." },
       { key: "inc_deg", unit: "°", what: "Inclination, in degrees." },
       {
+        key: "sma_m",
+        unit: "m",
+        what: "Semi-major axis: the size parameter of the orbital path.",
+      },
+      { key: "lan_deg", unit: "°", what: "Longitude of the ascending node." },
+      { key: "argp_deg", unit: "°", what: "Argument of periapsis." },
+      {
+        key: "t_pe",
+        unit: "s",
+        what: "The game-clock time at periapsis, not time remaining until periapsis.",
+      },
+      {
+        key: "period_s",
+        unit: "s",
+        what: "Time for one full orbit. Zero for an escape path, which never repeats.",
+      },
+      {
         key: "mass_kg",
         unit: "kg",
         what: "What the vehicle weighed at the instant the milestone fired. Beside the mass it started with, this is what is left once the propellant that got you there has been burned.",

@@ -115,12 +115,17 @@ type VehicleAtmosphere struct {
 // not from-centre radii. §4.2 left that ambiguous; docs/ksa-integration.md
 // settles it, and the mod names its snapshot fields ApAltM/PeAltM to match.
 type VehicleOrbit struct {
-	Phase  string  `json:"phase"` // achieved | escaped
-	Body   string  `json:"body"`
-	ApM    float64 `json:"ap_m"`
-	PeM    float64 `json:"pe_m"`
-	Ecc    float64 `json:"ecc"`
-	IncDeg float64 `json:"inc_deg"`
+	Phase   string  `json:"phase"` // achieved | escaped
+	Body    string  `json:"body"`
+	ApM     float64 `json:"ap_m"`
+	PeM     float64 `json:"pe_m"`
+	Ecc     float64 `json:"ecc"`
+	IncDeg  float64 `json:"inc_deg"`
+	SmaM    float64 `json:"sma_m"`
+	LanDeg  float64 `json:"lan_deg"`
+	ArgpDeg float64 `json:"argp_deg"`
+	TPe     float64 `json:"t_pe"`
+	PeriodS float64 `json:"period_s"`
 	// MassKg is the mass at the instant the milestone fired, and is written as
 	// 0 when the read failed — the same thing FlightStarted.MassKg does. That
 	// is why `heaviest_to_orbit` gates on `> 0` rather than trusting the field:

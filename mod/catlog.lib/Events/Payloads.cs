@@ -171,6 +171,11 @@ public sealed record VehicleAtmospherePayload(
 /// <param name="PeM">Periapsis <b>altitude</b> above the parent's mean radius, in metres.</param>
 /// <param name="Ecc">Eccentricity.</param>
 /// <param name="IncDeg">Inclination in degrees (the game stores radians — convert).</param>
+/// <param name="SmaM">Semi-major axis in metres.</param>
+/// <param name="LanDeg">Longitude of the ascending node in degrees.</param>
+/// <param name="ArgpDeg">Argument of periapsis in degrees.</param>
+/// <param name="TPe">Time at periapsis, in game seconds.</param>
+/// <param name="PeriodS">Orbital period in seconds, or 0 for an unbound trajectory.</param>
 /// <param name="MassKg">
 /// Total mass at the instant the milestone fired, in kilograms. Paired with
 /// <c>flight.started.mass_kg</c> it is the only honest efficiency-shaped number reachable without
@@ -183,6 +188,11 @@ public sealed record VehicleOrbitPayload(
     [property: JsonPropertyName("pe_m")] double PeM,
     [property: JsonPropertyName("ecc")] double Ecc,
     [property: JsonPropertyName("inc_deg")] double IncDeg,
+    [property: JsonPropertyName("sma_m")] double SmaM,
+    [property: JsonPropertyName("lan_deg")] double LanDeg,
+    [property: JsonPropertyName("argp_deg")] double ArgpDeg,
+    [property: JsonPropertyName("t_pe")] double TPe,
+    [property: JsonPropertyName("period_s")] double PeriodS,
     [property: JsonPropertyName("mass_kg")] double MassKg);
 
 /// <summary><c>vehicle.soi</c>.</summary>

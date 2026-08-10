@@ -176,7 +176,7 @@ const BOARD_DEFINITIONS: Omit<Board, "scopes">[] = [
     career: false,
     from: ["vehicle.orbit"],
     what: "The far end of the widest orbit you have ever settled into.",
-    how: "The greatest apoapsis altitude of any orbit you actually reached, measured above the world's average radius rather than from its centre.",
+    how: "The greatest apoapsis altitude of any orbit you actually reached, measured above the world's average radius rather than from its centre. The same event records semi-major axis, node and periapsis directions, periapsis time and period, but no leaderboard scores those five figures.",
     excluded: [
       "The path was not a closed orbit. A fly-by or an escape has no far end to report, and catlog records nothing rather than a nonsense number.",
       "The flight was flagged.",

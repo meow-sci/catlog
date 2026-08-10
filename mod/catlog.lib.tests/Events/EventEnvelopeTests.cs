@@ -47,6 +47,20 @@ public sealed class EventEnvelopeTests
             CatlogJson.Serialize(payload));
     }
 
+    [Fact]
+    public void VehicleOrbit_FinalV1ElementsAreRequiredAndInDeclarationOrder()
+    {
+        var payload = new VehicleOrbitPayload(
+            "achieved", "earth", 185_000.5, 172_400.25, 0.0034, 28.58,
+            6_557_100.375, 72.25, 14.75, 160.125, 5_420.5, 4_820.75);
+
+        Assert.Equal(
+            "{\"phase\":\"achieved\",\"body\":\"earth\",\"ap_m\":185000.5,\"pe_m\":172400.25,"
+            + "\"ecc\":0.0034,\"inc_deg\":28.58,\"sma_m\":6557100.375,\"lan_deg\":72.25,"
+            + "\"argp_deg\":14.75,\"t_pe\":160.125,\"period_s\":5420.5,\"mass_kg\":4820.75}",
+            CatlogJson.Serialize(payload));
+    }
+
     /// <summary>
     /// §4.1 spells the field as <c>"flight": null</c> for session and roster events — the key is
     /// present, not omitted, so the Go decoder's strict unknown/missing handling stays simple.

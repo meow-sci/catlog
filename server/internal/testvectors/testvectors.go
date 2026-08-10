@@ -572,6 +572,8 @@ func batch001() []byte {
 		payload: map[string]any{
 			"phase": "achieved", "body": "earth",
 			"ap_m": 185000.5, "pe_m": 172400.25, "ecc": 0.0034, "inc_deg": 28.58,
+			"sma_m": 6557100.375, "lan_deg": 72.25, "argp_deg": 14.75,
+			"t_pe": 160.125, "period_s": 5420.5,
 			"mass_kg": 4820.75,
 		},
 	}, {

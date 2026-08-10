@@ -253,7 +253,7 @@ The only code that touches KSA, and deliberately thin: everything else is a call
 | `Mod.cs` | Lifecycle, config load, the status window (F10) |
 | `StatusWindow.cs` | Read-only ImGui rows: patches, vehicles, session, install, **event types**, recorded/queued counts, last ship, health. The *Event types* row reads `all reported`, or `N off in catlog.toml: <names>` in the warning colour — a player who switched something off months ago and forgot is otherwise looking at an empty board with no visible cause. It reports; it does not edit ([ROADMAP.md](ROADMAP.md)) |
 | `Patcher.cs` | The Harmony patches, each carrying its `ksa-integration.md` table row as a comment |
-| `VehicleTelemetry.cs` | **Every** KSA read, each with a `[KsaAnchor]` |
+| `VehicleTelemetry.cs` | **Every** KSA read, each with a `[KsaAnchor]`. Its 2 Hz orbit snapshot reads the complete milestone element set once: semi-major axis in metres, node/periapsis angles converted radians→degrees, absolute periapsis game time in seconds, and period in seconds |
 | `SystemSurvey.cs` | The one-per-launch celestial forest survey, canonical system hash inputs and immutable cache; every KSA read carries a `[KsaAnchor]` |
 | `PolledSignals.cs` | The 2 Hz poll, vehicle tracking, and the roster read at **two cadences** — an allocation-free KIA scan every tick, the `roster.snapshot` payload only when one is due. It retains each kitten's previous locomotion mode and reports that mode through a total lowercase mapper when the state enters tumbling; an unseen value becomes `"unknown"`. It raises the tumble signal on the kitten's own EVA vehicle, which is what gives `kitten.tumble` its flight; the `KillCrew` patch in `Patcher.cs` raises the crew-kill signal that gives `kitten.kia` its own |
 | `CatlogRuntime.cs`, `ModPaths.cs`, `KsaAnchor.cs` | Wiring, paths, the anchor attribute |
@@ -284,6 +284,13 @@ Patch points that were chosen carefully, because the obvious target was wrong:
   not coalesce the game's edges: after stock KSA has kept a tumbling kitten airborne for 0.5 s it
   changes the mode back to `Airborne`, so a later bounce can make the same visible cartwheel emit
   another tumble.
+- **Orbit elements use one non-optional fallback convention.** `SemiMajorAxis`,
+  `LongitudeOfAscendingNode`, `ArgumentOfPeriapsis`, `TimeAtPeriapsis.Seconds()` and `Period` are
+  captured in the same snapshot that drives `vehicle.orbit`. Angles are converted from KSA's
+  radians to degrees. Every non-finite scalar becomes 0; `period_s` is explicitly 0 for a
+  hyperbolic or parabolic trajectory because an open path has no period. An exception rejects the
+  whole vehicle sample rather than emitting a partly filled event. These five values are recorded,
+  not scored by a current fold.
 - **`flight.ended` has one emitter**, the true removal choke point, with the *reason* decided by
   intent flags the earlier patches set. A silent-removal safety net closes any tracked vehicle that
   vanished without one, so a flight never leaks open.

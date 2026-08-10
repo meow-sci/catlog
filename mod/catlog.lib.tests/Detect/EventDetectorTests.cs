@@ -352,12 +352,18 @@ public sealed class EventDetectorTests
 
         DetectedEvent detected = Assert.Single(detector.Observe(TestData.Snapshot(
             simT: 10, peAltM: 180_000, apAltM: 220_000, ecc: 0.01, incDeg: 51.6,
+            smaM: 6_571_000, lanDeg: 72.25, argpDeg: 14.75, tPe: 8.5, periodS: 5_420.5,
             orbitClass: OrbitClass.Bound)));
         var payload = Assert.IsType<VehicleOrbitPayload>(detected.Payload);
         Assert.Equal("achieved", payload.Phase);
         Assert.Equal(220_000, payload.ApM);
         Assert.Equal(180_000, payload.PeM);
         Assert.Equal(51.6, payload.IncDeg);
+        Assert.Equal(6_571_000, payload.SmaM);
+        Assert.Equal(72.25, payload.LanDeg);
+        Assert.Equal(14.75, payload.ArgpDeg);
+        Assert.Equal(8.5, payload.TPe);
+        Assert.Equal(5_420.5, payload.PeriodS);
 
         // The mass at the milestone, which is what makes it comparable with flight.started.mass_kg.
         Assert.Equal(1_000, payload.MassKg);
@@ -373,6 +379,23 @@ public sealed class EventDetectorTests
         Assert.Empty(detector.Observe(TestData.Snapshot(simT: 20, peAltM: 210_000, orbitClass: OrbitClass.Bound)));
         Assert.Empty(detector.Observe(TestData.Snapshot(simT: 30, peAltM: 10_000, orbitClass: OrbitClass.Bound)));
         Assert.Single(detector.Observe(TestData.Snapshot(simT: 40, peAltM: 200_000, orbitClass: OrbitClass.Bound)));
+    }
+
+    [Fact]
+    public void OrbitPayloadCarriesTheCaptureBoundaryZeroFallbacks()
+    {
+        var detector = new EventDetector();
+        detector.Observe(TestData.Snapshot(simT: 0, peAltM: 0, orbitClass: OrbitClass.Bound));
+
+        DetectedEvent detected = Assert.Single(detector.Observe(TestData.Snapshot(
+            simT: 10, peAltM: 200_000, orbitClass: OrbitClass.Bound)));
+        var payload = Assert.IsType<VehicleOrbitPayload>(detected.Payload);
+
+        Assert.Equal(0, payload.SmaM);
+        Assert.Equal(0, payload.LanDeg);
+        Assert.Equal(0, payload.ArgpDeg);
+        Assert.Equal(0, payload.TPe);
+        Assert.Equal(0, payload.PeriodS);
     }
 
     [Fact]
@@ -404,6 +427,20 @@ public sealed class EventDetectorTests
         Assert.Equal("escaped", payload.Phase);
         Assert.Equal(1.4, payload.Ecc);
         Assert.Equal(-5_000_000, payload.ApM);
+        Assert.Equal(0, payload.PeriodS);
+    }
+
+    [Fact]
+    public void OrbitEscaped_ZeroesAStaleFinitePeriodOnAnUnboundSnapshot()
+    {
+        var detector = new EventDetector();
+        detector.Observe(TestData.Snapshot(simT: 0, ecc: 0.7, periodS: 4_200,
+            orbitClass: OrbitClass.Bound));
+
+        DetectedEvent detected = Assert.Single(detector.Observe(TestData.Snapshot(
+            simT: 10, ecc: 1.4, periodS: 4_200, orbitClass: OrbitClass.Hyperbolic)));
+
+        Assert.Equal(0, Assert.IsType<VehicleOrbitPayload>(detected.Payload).PeriodS);
     }
 
     [Fact]
@@ -413,8 +450,11 @@ public sealed class EventDetectorTests
         detector.Observe(TestData.Snapshot(simT: 0, ecc: 0.9, orbitClass: OrbitClass.Bound));
 
         DetectedEvent detected = Assert.Single(detector.Observe(TestData.Snapshot(
-            simT: 10, ecc: 1.0, apAltM: double.NaN, orbitClass: OrbitClass.Parabolic)));
-        Assert.Equal("escaped", ((VehicleOrbitPayload)detected.Payload).Phase);
+            simT: 10, ecc: 1.0, apAltM: double.NaN, periodS: 99,
+            orbitClass: OrbitClass.Parabolic)));
+        var payload = Assert.IsType<VehicleOrbitPayload>(detected.Payload);
+        Assert.Equal("escaped", payload.Phase);
+        Assert.Equal(0, payload.PeriodS);
     }
 
     /// <summary>

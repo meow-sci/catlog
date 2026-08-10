@@ -2764,6 +2764,26 @@ new fact is recorded now because it cannot be reconstructed later; choosing whet
 filter it is a separate projection decision. This is the final pre-launch `ver: 1` payload under
 DOCS-005, not a fictional migration: no deployed history or client population requires an upcaster.
 
+### MOD-084 — Orbit milestones carry the complete drawable element set, while boards keep their existing meanings
+
+*Accepted · 2026-08-10 · Task D3b.*
+
+Apoapsis, periapsis, eccentricity and inclination describe the broad shape of an orbit but cannot
+place that shape in space or time. Recording semi-major axis, the two orientation angles, time at
+periapsis and period at the same milestone closes that gap while the game values are in hand. The
+semi-major axis is recorded directly rather than re-derived from rounded payload values, and angles
+are converted from the game's radians to the wire's degrees beside the existing inclination.
+
+The fields are facts, not new scores. No fold reads them and no board is added or silently changes
+meaning. They use the existing orbit payload's non-optional zero policy so one record does not mix
+two absence conventions: a non-finite reading becomes zero, and an unbound conic has period zero
+because it has no repeating cycle. Consumers can distinguish that case using the milestone's conic
+meaning rather than treating a fabricated period as real.
+
+This completes the final pre-launch `vehicle.orbit` `ver: 1` shape under DOCS-005. There is no
+deployed event history or old client population to upcast, so minting a v2 would preserve a contract
+nobody has consumed and make the two implementations carry needless compatibility machinery.
+
 ## The load harness
 
 `catlog.loadgen`: many randomised players through the real pipeline, and what one laptop actually does.

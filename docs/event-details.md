@@ -1084,57 +1084,84 @@ directly comparable with the lithobrake and RUD speeds. Context
 **Wire.** `"vehicle.orbit"` (`EventTypes.cs`), `ver` 1, kind 1. Detector kinds
 `OrbitAchieved = 3`, `OrbitEscaped = 4` (`EventDetector.cs:20-24`), independent debounce timers.
 
-**Payload** — `VehicleOrbitPayload`, `Payloads.cs:137-144`
+**Payload** — `VehicleOrbitPayload`, `Payloads.cs:167-196`
 
 | Key | Type | Units | Source / gotcha |
 |---|---|---|---|
-| `phase` | string | — | literal `"achieved"` (`:373`) / `"escaped"` (`:401`) |
+| `phase` | string | — | literal `"achieved"` (`EventDetector.cs:442`) / `"escaped"` (`:470`) |
 | `body` | string | — | `curr.Body` |
-| `ap_m` | number | **metres of ALTITUDE above the parent's mean radius** | `Sanitize.RadiusToAltitude(orbit.Apoapsis, parent.MeanRadius)` **only when `OrbitClass.Bound`, else 0.0** (`VehicleTelemetry.cs:162-164`). The game's `Orbit.Apoapsis` (`KSA/Orbit.cs:1168`) is a **radius from body centre**, and is **negative** on a hyperbola / NaN on a parabola (B4). |
-| `pe_m` | number | metres of altitude | `Sanitize.RadiusToAltitude(orbit.Periapsis, meanRadius)`, computed **unconditionally** (`:165`) — so it can legitimately be negative. |
+| `ap_m` | number | **metres of ALTITUDE above the parent's mean radius** | `Sanitize.RadiusToAltitude(orbit.Apoapsis, parent.MeanRadius)` **only when `OrbitClass.Bound`, else 0.0** (`VehicleTelemetry.cs:195-200`). The game's `Orbit.Apoapsis` (`KSA/Orbit.cs:1168`) is a **radius from body centre**, and is **negative** on a hyperbola / NaN on a parabola (B4). |
+| `pe_m` | number | metres of altitude | `Sanitize.RadiusToAltitude(orbit.Periapsis, meanRadius)`, computed **unconditionally** (`:201`) — so it can legitimately be negative. |
 | `ecc` | number | — | `orbit.Eccentricity` (`KSA/Orbit.cs:1154`), `Sanitize.Finite`d |
-| `inc_deg` | number | **degrees** | `orbit.Inclination * (180/π)` (`VehicleTelemetry.cs:166`). **The game stores radians** (`KSA/Orbit.cs:1160`). |
+| `inc_deg` | number | **degrees** | `orbit.Inclination * (180/π)` (`VehicleTelemetry.cs:202`). **The game stores radians** (`KSA/Orbit.cs:1160`). |
+| `sma_m` | number | m | `Orbit.SemiMajorAxis` (`KSA/Orbit.cs:1156`), `Sanitize.Finite`d. It is positive for a bound ellipse, negative for a hyperbola and zero when the game's value is non-finite (including a parabolic `+Inf`). |
+| `lan_deg` | number | degrees | `Orbit.LongitudeOfAscendingNode` (`KSA/Orbit.cs:1162`) converted radians→degrees and `Sanitize.Finite`d. |
+| `argp_deg` | number | degrees | `Orbit.ArgumentOfPeriapsis` (`KSA/Orbit.cs:1164`) converted radians→degrees and `Sanitize.Finite`d. |
+| `t_pe` | number | game seconds | `Orbit.TimeAtPeriapsis.Seconds()` (`KSA/Orbit.cs:1152`; `KSA/SimTime.cs:67-70`), the absolute periapsis time on the same game clock as `sim_t`, not a countdown. Non-finite becomes 0. |
+| `period_s` | number | s | `Orbit.Period` (`KSA/Orbit.cs:1170`) on a bound orbit. Hyperbolic and parabolic trajectories carry 0 because they have no repeating period; any non-finite bound reading also becomes 0. |
 | `mass_kg` | number | kg | `Vehicle.TotalMass` at the instant the milestone fired — the same read `flight.started.mass_kg` takes, sampled again. Non-optional; `0` when unreadable. |
 
 **Detector — two independent rules.**
 
-`CheckOrbitAchieved` (`EventDetector.cs:344-376`):
+`CheckOrbitAchieved` (`EventDetector.cs:413-445`):
 
 ```
 safeAltitude = curr.AtmoHeightM + 1000        // Wire.OrbitAchievedMarginM
 above        = curr.IsBoundOrbit && curr.PeAltM > safeAltitude
 baseline: OrbitAchieved = above               (emits nothing)
-rising edge only; falling back below the bar re-arms silently (:360-366)
+rising edge only; falling back below the bar re-arms silently (:429-434)
 2 s debounce on DetectKind.OrbitAchieved
 ```
 
-On an airless body `AtmoHeightM == 0`, so the 1000 m margin alone is the bar (`:347-348`).
+On an airless body `AtmoHeightM == 0`, so the 1000 m margin alone is the bar (`:420-421`).
 
-`CheckOrbitEscaped` (`:378-404`): edge on `IsBoundOrbit` going **true → false**; regaining a bound
+`CheckOrbitEscaped` (`:447-473`): edge on `IsBoundOrbit` going **true → false**; regaining a bound
 orbit re-arms silently.
 
-**No NaN sniffing anywhere.** `TelemetrySnapshot.IsBoundOrbit` (`Telemetry/TelemetrySnapshot.cs:151-156`)
+**No NaN sniffing anywhere.** `TelemetrySnapshot.IsBoundOrbit` (`Telemetry/TelemetrySnapshot.cs:216-225`)
 uses the `OrbitClass` the game project supplied, falling back to finite `ecc < 1` only for callers
 (simulator, hand-built fixtures) that have no classifier.
 
-**Game source.** `VehicleTelemetry.ClassifyOrbit` (`:192-199`) calls the game's own predicates in
+The same 2 Hz snapshot carries all five new element values through both detector arms unchanged.
+They do not participate in either threshold or debounce: `CheckOrbitAchieved` and
+`CheckOrbitEscaped` decide only *when* to emit, and the payload captures the current snapshot. Each
+member is non-optional to match the existing orbit numbers. A non-finite scalar is sanitised to 0;
+an exception while sampling the orbit rejects the whole vehicle sample, so no partly invented
+milestone is emitted. `PeriodS` additionally uses the game-supplied conic class and is fixed at 0
+for every unbound path rather than forwarding KSA's `NaN`.
+
+**Game source.** `VehicleTelemetry.ClassifyOrbit` (`:231-248`) calls the game's own predicates in
 this order — **parabolic first, because `ecc == 1` is the knife-edge**: `Orbit.IsParabolic()`
 (`KSA/Orbit.cs:1757`), `Orbit.IsHyperbolic()` (`:1763`), `Orbit.IsBound()` (`:1775`). The result is
-carried on the snapshot as `OrbitClass` (`TelemetrySnapshot.cs:15-28,112`) precisely because
+carried on the snapshot as `OrbitClass` (`TelemetrySnapshot.cs:15-28,126-127`) precisely because
 `catlog.lib` must stay KSA-free.
 
-Guard before any orbit read: `VehicleTelemetry.IsReadable` (`:92-105`) checks
+The element reads are direct `Orbit` properties: `SemiMajorAxis` is a `double` in metres;
+`LongitudeOfAscendingNode` and `ArgumentOfPeriapsis` are `double` radians converted to degrees;
+`TimeAtPeriapsis` is a `SimTime` converted with `Seconds()`; and `Period` is a `double` in seconds
+(`KSA/Orbit.cs:1152-1170`). KSA computes `Period = NaN` for both parabolic and hyperbolic conics
+(`KSA/OrbitData.cs:35-75`), which is why the mod's bound/unbound decision precedes sanitisation.
+The exact read and conversion path is `VehicleTelemetry.Sample` (`:142-220`), into init-only
+snapshot fields (`TelemetrySnapshot.cs:111-124`), then `EventDetector.Orbit` (`:475-494`).
+
+Guard before any orbit read: `VehicleTelemetry.IsReadable` (`:108-132`) checks
 `vehicle.FlightPlan.Patches.Count > 0`, because `Vehicle.Parent => Orbit.Parent => Patch =>
 FlightPlan.Patches[0]` **throws `ArgumentOutOfRangeException`** on an uninitialised vehicle rather
 than returning null (B6, `KSA/FlightPlan.cs:64`). Sampled at 2 Hz.
 
 **Classification.** **PASSIVE.** Threshold `pe_alt > atmo_height + 1000 m`; conic class from the
-game; 2 s debounce per phase; baseline seeds silently.
+game; 2 s debounce per phase; baseline seeds silently. The five new element values are descriptive
+only and change none of those rules.
 
 **Server.** `orbitsFold` counts `phase == "achieved"` on an unflagged flight into `orbits_achieved`
 (`stats/boards.go:910-925`); `toOrbitFold` takes the same events into `fastest_to_orbit`
 (`:1160-1180`); the feed renders `"{h} made orbit around {body} ({ap} × {pe})"` (`stats/feed.go:53`).
 `escaped` counts nothing anywhere.
+
+**No current server fold reads `sma_m`, `lan_deg`, `argp_deg`, `t_pe` or `period_s`.** They are
+decoded and retained in the immutable event payload for drawing and later derived uses, but they do
+not enter a board context, ranking predicate, score or feed sentence. Adding them therefore changes
+no board formula and creates no board.
 
 `orbitMassFold` takes the same `phase == "achieved"` events onto `heaviest_to_orbit`, gated
 `mass_kg > 0`. It is a separate type rather than a fifth `orbitRecordFold` because it does not take
@@ -1161,7 +1188,9 @@ rather than crowning it. All four share one context `{"body", "flight", "ap_m", 
 "inc_deg"}` — a reader looking at a periapsis wants the apoapsis beside it, and one context shape
 means the four rows of one orbit are the same blob.
 
-**Vectors.** `batch-001.ndjson` line 14 — carries `mass_kg`.
+**Vectors.** `batch-001.ndjson` line 14 — carries `mass_kg` and all five non-optional orbital
+element fields: `sma_m: 6557100.375`, `lan_deg: 72.25`, `argp_deg: 14.75`, `t_pe: 160.125` and
+the bound `period_s: 5420.5`.
 
 ---
 
@@ -2509,6 +2538,11 @@ key only if a future build starts attributing the event.
 becomes the seq at which the counter reached its current value, so the tie-break is *whoever got to N
 first*.
 
+The five additional orbital elements (`sma_m`, `lan_deg`, `argp_deg`, `t_pe`, `period_s`) are not
+read by `orbitRecordFold`, `orbitMassFold`, `orbitsFold` or `toOrbitFold`, and are not copied into
+their contexts. They are recorded facts only; every orbit board above keeps the same field,
+eligibility and tie rule.
+
 - `kitten_tumbles`, `dockings`, `stagings`, `evas`, `flameouts`, `engine_ignitions`: `countFold`
   (`:861-879`) on the event type alone. In particular, `kitten_tumbles` does not inspect `from`:
   failed landings, grounded trips and repeated bounce edges all still increment the same counter.
@@ -2966,9 +3000,9 @@ rather than on Go map order, so a rebuild reproduces the incremental `context` b
 
 | File | Pins |
 |---|---|
-| `batches/batch-001.ndjson` | 32 envelopes, one line each; SHA-256 `644e3f9a673a12a8aeea77e4eb7e4455f4e0c919a1bf3c061bf51ebd6dd5e967` |
+| `batches/batch-001.ndjson` | 32 envelopes, one line each; SHA-256 `cb52ab2dbbb46ab778fe33a48ad6379e4241cfe4aca3f31f4cbe5c45a777e2ee` |
 | `batches/batch-001.br` | the Brotli body as sent |
-| `batches/batch-001.bh.txt` | `HpfGdWGD3Nm_1zdFWFBXQDlvCn9Lnhq3OYwu6JSxFGs` — base64url SHA-256 of the compressed body |
+| `batches/batch-001.bh.txt` | `Pl2bpW2Lj6Gm6u5ykEfMfzIChnxhgIEdS9WvzpHCfyY` — base64url SHA-256 of the compressed body |
 | `keys/*`, `license/*`, `proofs/*`, `expected/verify-results.json` | the credential / JWS layer, not events |
 
 **Covered by a vector: 25 of 25.** Every registered type appears at least once, at the `ver` the
@@ -2994,7 +3028,8 @@ object (`telemetry.window`'s `radar_alt_m`), an in-payload `null`, and all three
 cases — always non-null, always null, and conditionally null (`kitten.tumble`, `kitten.kia`, both
 naming a flight). Line 19 additionally pins `kitten.tumble.from: "airborne"`, including the open-set
 string that distinguishes a failed landing from a grounded trip without changing the current count
-fold.
+fold. Line 14 pins all five non-optional `vehicle.orbit` element keys and a finite bound period;
+the separate system-body rows continue to pin the catalogue's different optional-period convention.
 
 Vector-level assertions that apply to every line regardless: every `type` is in the registry, every
 `id` parses as a ULID, the `flight` key is always present and is `null` or a ULID, `session` is
