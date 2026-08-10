@@ -1,0 +1,31 @@
+{{define "content" -}}
+<nav aria-label="Breadcrumb" class="muted text-sm"><a href="/boards">Leaderboards</a> / Celestial systems</nav>
+
+<section class="panel" id="systems-panel">
+  <header><h1 id="systems-title">Celestial systems</h1></header>
+  <div class="table-wrap" role="region" tabindex="0" aria-label="Celestial systems">
+  <table id="systems-index">
+    <thead>
+      <tr>
+        <th scope="col">Name</th>
+        <th scope="col" class="value">Bodies</th>
+        <th scope="col" class="value">Players</th>
+        <th scope="col" class="value">Saves</th>
+      </tr>
+    </thead>
+    <tbody>
+      {{- range .Data.Systems}}
+      <tr class="system-row" data-system="{{.Slug}}">
+        <td><a href="/systems/{{.Slug}}">{{.Name}}</a></td>
+        <td class="value" data-value="{{.Bodies}}">{{num .Bodies}}</td>
+        <td class="value" data-value="{{.Players}}">{{num .Players}}</td>
+        <td class="value" data-value="{{.Careers}}">{{num .Careers}}</td>
+      </tr>
+      {{- else}}
+      <tr id="systems-empty"><td colspan="4">No systems recorded yet.</td></tr>
+      {{- end}}
+    </tbody>
+  </table>
+  </div>
+</section>
+{{- end}}

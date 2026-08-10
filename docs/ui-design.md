@@ -615,6 +615,8 @@ surface and the pages that document it; `/login` and `/dashboard` need a session
 | `/` | ● | **Where am I and what is happening?** Global tiles, three featured boards, the live feed, a search box, and — if a "me" handle is set — a personal card above the fold |
 | `/boards` | ● | The index. Which boards exist, how populated, which way each reads |
 | `/boards/{stat}` | ● | One board ranked by players, saves or systems, paged, with applicable period controls and my row highlighted |
+| `/systems` | ● | The systems catlog has recorded, with catalogue size and participation counts |
+| `/systems/{slug}` | ● | One system as a reference catalogue: its home world and the physical/orbital facts for every body |
 | `/p/{handle}` | ● | One player: every placement, every rank *and its denominator*, and a way to start comparing |
 | `/p/{handle}/saves` | ● | One player's saves: system, played time, activity bounds and number of boards |
 | `/p/{handle}/saves/{ordinal}` | ● | One save: its system and playtime, then every board placement ranked among saves |
@@ -712,6 +714,33 @@ where the row itself provides the comparison context.
 None of these columns changes §4.4. Every `td.value` continues to carry
 `data-value="<the exact float, as sent>"`, even when the rendered value is a duration such as
 `5m 13s`; pager, sorting and e2e assertions never recover a number from display text.
+
+**Celestial-system reference pages.** Systems do not take a top-level navigation slot. They are
+context for a comparison rather than a destination every visit begins with, so a reader reaches
+them from a board's scope controls, a friendly System link on a save or scoped board row, or the
+`/boards` header sentence *"catlog is tracking N celestial systems"*. That sentence links to
+`/systems` and uses the server's actual count. It is present even when the count is zero; the empty
+index then says exactly *"No systems recorded yet."*
+
+`/systems` is one `.panel` containing a **Name · Bodies · Players · Saves** table, ordered by player
+count descending. The name links to `/systems/{slug}`. Counts are plain tabular numerals: these are
+catalogue and participation facts, not placements, so the table has no rank column, bar or winner
+accent.
+
+`/systems/{slug}` opens with the friendly system name, home body, body count and player count, then
+one table headed **Name · Class · Parent · Radius · Sphere of influence · Semi-major axis · Period**.
+Rows order by tree depth and then semi-major axis so the catalogue reads outward from its roots.
+Every numeric cell uses `units.Format`, remains `tabular-nums`, and carries the exact source float in
+`data-value`; absent parent/orbit values use the ordinary em dash. Home and parent keys resolve to
+body display names, with the key itself as the honest fallback; neither page renders the system's
+content hash. The six orbital angles remain in the API for a future renderer and are intentionally
+absent from this table: seven useful columns are a reference, while expanding it into an element
+dump would make the page harder to answer from.
+
+Both pages use the restrained reference treatment established by `/docs/api`: one bordered panel,
+ordinary table rows and no leaderboard ranks, bars or accent fills. Their purpose is to answer
+*"which Luna is that?"* and *"what is the game actually simulating?"*, not to imply that a system or
+body has won anything.
 
 **C — "compare with friends."** From a profile, **Compare** adds that handle to a set held
 in the URL. From search, a multi-select adds several. `/compare?handles=…` renders one row
@@ -1267,6 +1296,10 @@ Things a redesign will delete without noticing, and what breaks when it does.
 contain the server's `min_players` number); `#board-title[data-stat]`;
 `#board-direction[data-ascending]`; `#board-periods a[data-period]`;
 `#board-scopes a[data-scope]`; `#board-scope-note`; `td.save`;
+`#boards-systems`; `#systems-index tr.system-row[data-system]` (the value is the slug) with numeric
+`td.value[data-value]`; `#system-title[data-system]` (also the slug); `#system-bodies
+tr.system-body[data-body][data-rank]` with numeric `td.value[data-value]` (the `value` class supplies
+tabular numerals);
 `#board-bucket[data-bucket]`; `#board-prev`, `#board-next`, `#board-range`;
 `thead th.value` (the unit header, §4.4); `#profile-handle[data-handle]`;
 `#profile-stats tr[data-stat][data-rank]` with `td.rank[data-players]`;

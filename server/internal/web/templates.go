@@ -30,6 +30,8 @@ var pageTemplates = []string{
 	"home",
 	"boards",
 	"board",
+	"systems",
+	"system",
 	"profile",
 	"saves",
 	"save",

@@ -2100,6 +2100,24 @@ accounts; saying players would be visibly wrong as soon as one player places wit
 `system_changed` receives a separate explanatory mark because it qualifies per-system comparison,
 but like `rewound` it is provenance rather than punishment and changes no placement.
 
+### UI-060 — Celestial systems are comparison references reached from the question that needs them
+
+*Accepted · 2026-08-10 · Task C7.*
+
+A system catalogue answers which same-named world a result refers to and what the game is simulating;
+it does not rank anything. Its pages therefore use the restrained API-reference table treatment with
+no ranks, bars or winner accents. The detail table shows the physical and orbital facts a player can
+scan, while leaving the six angles to the complete API response for a future renderer. Showing every
+element in HTML would make the common question harder to answer without adding a useful comparison.
+
+Systems do not consume a top-level navigation slot. They are linked from board scope controls,
+friendly system cells and the board index's measured system count, placing the reference beside the
+moment a player asks whether two Luna results mean the same world. This preserves the global header
+for collection-wide destinations while keeping the catalogue discoverable without guessing a URL.
+The raw fingerprint remains content identity rather than personal identity, but the player docs call
+out that a unique custom catalogue can still be recognisable; making that trade explicit is safer
+than implying that non-personal data can never identify context.
+
 ---
 
 ## The mod and its KSA-free core

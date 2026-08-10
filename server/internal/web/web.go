@@ -77,6 +77,10 @@ type Read interface {
 	// ResolveSystem turns a URL-facing slug or hash into the canonical compact
 	// identity a scoped board read accepts.
 	ResolveSystem(ctx context.Context, key string) (readapi.SystemRef, bool, error)
+	// Systems and System are the catalogue read seam. Pages never reach into
+	// projections directly, including when a URL supplies the raw hash form.
+	Systems(ctx context.Context) (readapi.SystemsResponse, error)
+	System(ctx context.Context, key string) (readapi.SystemDetail, bool, error)
 	Player(ctx context.Context, handle string) (readapi.PlayerResponse, bool, error)
 	// Saves and Save are the read seam for the B5 pages. B4 adds them here so
 	// those pages cannot be tempted to query projections directly.
@@ -194,6 +198,8 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /{$}", s.handleHome)
 	mux.HandleFunc("GET /boards", s.handleBoards)
 	mux.HandleFunc("GET /boards/{stat}", s.handleBoard)
+	mux.HandleFunc("GET /systems", s.handleSystems)
+	mux.HandleFunc("GET /systems/{slug}", s.handleSystem)
 	mux.HandleFunc("GET /p/{handle}", s.handleProfile)
 	mux.HandleFunc("GET /p/{handle}/saves", s.handleSaves)
 	mux.HandleFunc("GET /p/{handle}/saves/{ordinal}", s.handleSave)

@@ -1,0 +1,48 @@
+{{define "content" -}}
+{{- $s := .Data -}}
+<nav aria-label="Breadcrumb" class="muted text-sm"><a href="/boards">Leaderboards</a> / <a href="/systems">Celestial systems</a> / {{$s.Name}}</nav>
+
+<div class="page-head">
+  <h1 id="system-title" data-system="{{$s.Slug}}">{{$s.Name}}</h1>
+  <p id="system-summary">Home body {{$s.HomeName}} · <span class="tnum" data-value="{{len $s.Rows}}">{{num (len $s.Rows)}}</span> bodies · <span class="tnum" data-value="{{$s.Players}}">{{num $s.Players}}</span> players</p>
+</div>
+
+<section class="panel" id="system-catalogue">
+  <div class="table-wrap" role="region" tabindex="0" aria-label="{{$s.Name}} bodies">
+  <table id="system-bodies">
+    <thead>
+      <tr>
+        <th scope="col">Name</th>
+        <th scope="col">Class</th>
+        <th scope="col">Parent</th>
+        <th scope="col" class="value">Radius</th>
+        <th scope="col" class="value">Sphere of influence</th>
+        <th scope="col" class="value">Semi-major axis</th>
+        <th scope="col" class="value">Period</th>
+      </tr>
+    </thead>
+    <tbody>
+      {{- range $s.Rows}}
+      <tr class="system-body" data-body="{{.Body}}" data-rank="{{.Rank}}">
+        <td>{{.Name}}</td>
+        <td>{{.Class}}</td>
+        <td>{{if .ParentName}}{{.ParentName}}{{else}}&#8212;{{end}}</td>
+        <td class="value" data-value="{{exact .RadiusM}}">{{numUnit .RadiusM "m"}}</td>
+        <td class="value" data-value="{{exact .SoiM}}">{{numUnit .SoiM "m"}}</td>
+        {{- if .HasSma}}
+        <td class="value" data-value="{{exact .SmaM}}">{{numUnit .SmaM "m"}}</td>
+        {{- else}}
+        <td class="value">&#8212;</td>
+        {{- end}}
+        {{- if .HasPeriod}}
+        <td class="value" data-value="{{exact .PeriodS}}">{{numUnit .PeriodS "s"}}</td>
+        {{- else}}
+        <td class="value">&#8212;</td>
+        {{- end}}
+      </tr>
+      {{- end}}
+    </tbody>
+  </table>
+  </div>
+</section>
+{{- end}}

@@ -63,6 +63,7 @@ export default defineConfig({
             { label: "Every board", slug: "leaderboards/catalog" },
             { label: "What counts and what doesn't", slug: "leaderboards/eligibility" },
             { label: "Per-save boards", slug: "leaderboards/saves" },
+            { label: "Celestial systems", slug: "leaderboards/systems" },
           ],
         },
         {

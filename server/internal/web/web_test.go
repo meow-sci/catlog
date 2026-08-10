@@ -29,24 +29,28 @@ import (
 // is the rendering, not the queries — those are readapi's, and its own suite
 // covers them.
 type fakeRead struct {
-	boards readapi.BoardsResponse
-	board  map[string]readapi.BoardResponse
-	system map[string]readapi.SystemRef
-	player map[string]readapi.PlayerResponse
-	saves  map[string]readapi.SavesResponse
-	save   map[string]readapi.SaveResponse
-	events map[string]readapi.EventsResponse
-	global readapi.EventsResponse
+	boards        readapi.BoardsResponse
+	board         map[string]readapi.BoardResponse
+	system        map[string]readapi.SystemRef
+	systems       readapi.SystemsResponse
+	systemDetails map[string]readapi.SystemDetail
+	player        map[string]readapi.PlayerResponse
+	saves         map[string]readapi.SavesResponse
+	save          map[string]readapi.SaveResponse
+	events        map[string]readapi.EventsResponse
+	global        readapi.EventsResponse
 	// players maps a player id to its handle for PublicEvents; an id off the
 	// map is a handle-less player, which PublicEvents must drop.
-	players map[int64]string
-	handles []string
-	err     error
+	players    map[int64]string
+	handles    []string
+	err        error
+	systemsErr error
 	// lastPeriod and lastOffset record what the board page actually asked for,
 	// so a test can assert that `?period=` and `?offset=` reach the read layer
 	// rather than merely appearing in the URL.
 	lastPeriod, lastBucket, lastScope, lastSystem string
 	lastLimit, lastOffset                         int
+	lastSystemKey                                 string
 }
 
 func (f *fakeRead) BoardList(context.Context) (readapi.BoardsResponse, error) {
@@ -78,6 +82,25 @@ func (f *fakeRead) ResolveSystem(_ context.Context, key string) (readapi.SystemR
 	}
 	ref, ok := f.system[key]
 	return ref, ok, nil
+}
+
+func (f *fakeRead) Systems(context.Context) (readapi.SystemsResponse, error) {
+	if f.err != nil {
+		return readapi.SystemsResponse{}, f.err
+	}
+	return f.systems, f.systemsErr
+}
+
+func (f *fakeRead) System(_ context.Context, key string) (readapi.SystemDetail, bool, error) {
+	f.lastSystemKey = key
+	if f.err != nil {
+		return readapi.SystemDetail{}, true, f.err
+	}
+	if f.systemsErr != nil {
+		return readapi.SystemDetail{}, true, f.systemsErr
+	}
+	out, ok := f.systemDetails[key]
+	return out, ok, nil
 }
 
 func (f *fakeRead) Player(_ context.Context, handle string) (readapi.PlayerResponse, bool, error) {
@@ -307,9 +330,15 @@ func newFixture(t *testing.T) *fixture {
 			"solar-system": {Hash: "hash-sol", Name: "Solar System", Slug: "solar-system"},
 			"hash-sol":     {Hash: "hash-sol", Name: "Solar System", Slug: "solar-system"},
 		},
-		saves:   map[string]readapi.SavesResponse{},
-		save:    map[string]readapi.SaveResponse{},
-		handles: []string{"demo_crasher", "demo_ace"},
+		systems: readapi.SystemsResponse{Systems: []readapi.SystemSummary{
+			{Hash: "raw-sol-hash-must-not-render", Name: "Solar System", Slug: "solar-system", HomeBody: "sun", Bodies: 4, Players: 4, Careers: 7, Complete: true},
+			{Hash: "raw-alpha-hash-must-not-render", Name: "Alpha Centauri", Slug: "alpha-centauri", HomeBody: "alpha-a", Bodies: 2, Players: 9, Careers: 11, Complete: true},
+			{Hash: "raw-beta-hash-must-not-render", Name: "Beta Pictoris", Slug: "beta-pictoris", HomeBody: "beta", Bodies: 3, Players: 9, Careers: 10, Complete: true},
+		}},
+		systemDetails: map[string]readapi.SystemDetail{},
+		saves:         map[string]readapi.SavesResponse{},
+		save:          map[string]readapi.SaveResponse{},
+		handles:       []string{"demo_crasher", "demo_ace"},
 		player: map[string]readapi.PlayerResponse{
 			"demo_crasher": {
 				Handle: "demo_crasher", Since: 1767225600000,
@@ -373,6 +402,25 @@ func newFixture(t *testing.T) *fixture {
 		},
 		players: map[int64]string{1: "demo_crasher", 2: "demo_ace"},
 	}
+	sun := "sun"
+	earth := "earth"
+	solarDetail := readapi.SystemDetail{
+		Hash: "raw-sol-hash-must-not-render", Name: "Solar System", Slug: "solar-system",
+		HomeBody: "earth", Players: 4, Careers: 7, Complete: true,
+		// Deliberately not display order: the page owns rank/SMA ordering.
+		Bodies: []readapi.SystemBody{
+			{Body: "luna", Name: "Luna", Class: "moon", Rank: 2, Parent: &earth,
+				RadiusM: 1_737_400, SoiM: 66_100_000, SmaM: ptr(384_400_000.25), PeriodS: ptr(2_360_591.5), IncDeg: ptr(5.145)},
+			{Body: "earth", Name: "Kerbin", Class: "planet", Rank: 1, Parent: &sun,
+				RadiusM: 6_371_000.125, SoiM: 924_000_000, SmaM: ptr(149_597_870_700.75), PeriodS: ptr(31_558_149.8), LanDeg: ptr(12.5)},
+			{Body: "wanderer", Name: "Wanderer", Class: "minor body", Rank: 1, Parent: &sun,
+				RadiusM: 1234.5, SoiM: 0},
+			{Body: "sun", Name: "Helios", Class: "star", Rank: 0,
+				RadiusM: 696_340_000, SoiM: 0},
+		},
+	}
+	read.systemDetails["solar-system"] = solarDetail
+	read.systemDetails["raw-sol-hash-must-not-render"] = solarDetail
 	for _, stat := range web.FeaturedBoards {
 		read.board[stat] = readapi.BoardResponse{Stat: stat, Title: "Board " + stat, Unit: "m/s"}
 	}
@@ -493,7 +541,7 @@ func TestEveryPageRenders(t *testing.T) {
 			`id="boards-index"`, `data-stat="rud_total"`, "Biggest Lithobrake Survived",
 			// The index is whatever the server listed, including a board no
 			// constant in this repository names.
-			`data-stat="fastest_to_zephyria"`, "Fastest to Zephyria", `id="boards-note"`,
+			`data-stat="fastest_to_zephyria"`, "Fastest to Zephyria", `id="boards-note"`, `id="boards-systems"`,
 		}},
 		{"/boards/biggest_lithobrake_survived", 200, []string{
 			`id="board-title"`, `data-handle="demo_crasher"`, `data-rank="2"`,
@@ -506,6 +554,9 @@ func TestEveryPageRenders(t *testing.T) {
 		{"/p/nobody", 404, []string{`id="not-found"`}},
 		{"/p/demo_crasher/saves", 200, []string{`id="saves-table"`, `data-save="1"`, "Save 2"}},
 		{"/p/demo_crasher/saves/1", 200, []string{`id="save-title"`, `id="save-stats"`, "#3"}},
+		{"/systems", 200, []string{`id="systems-index"`, `data-system="solar-system"`, "Alpha Centauri"}},
+		{"/systems/solar-system", 200, []string{`id="system-title" data-system="solar-system"`, `id="system-bodies"`, "Luna"}},
+		{"/systems/no-such-system", 404, []string{`id="not-found"`}},
 		{"/p/demo_crasher/events", 200, []string{
 			`id="events-log"`, `data-type="vehicle.impact"`, `id="events-older"`,
 		}},
@@ -542,6 +593,122 @@ func TestEveryPageRenders(t *testing.T) {
 				mustContain(t, body, want, tc.path)
 			}
 		})
+	}
+}
+
+func TestSystemsIndexOrdersByPlayersAndRendersExactCounts(t *testing.T) {
+	f := newFixture(t)
+	body := f.get(t, "/systems").Body.String()
+
+	alpha := strings.Index(body, `data-system="alpha-centauri"`)
+	beta := strings.Index(body, `data-system="beta-pictoris"`)
+	sol := strings.Index(body, `data-system="solar-system"`)
+	if alpha < 0 || beta < 0 || sol < 0 || alpha > beta || beta > sol {
+		t.Fatalf("systems are not ordered by player count descending:\n%s", body)
+	}
+	// Alpha and Beta both have nine players. Stable sorting deliberately keeps
+	// the read API's first-seen order for that tie.
+	for _, want := range []string{
+		`<section class="panel" id="systems-panel">`,
+		`<th scope="col">Name</th>`, `<th scope="col" class="value">Bodies</th>`,
+		`<th scope="col" class="value">Players</th>`, `<th scope="col" class="value">Saves</th>`,
+		`<a href="/systems/alpha-centauri">Alpha Centauri</a>`,
+		`class="value" data-value="9"`, `class="value" data-value="11"`,
+	} {
+		mustContain(t, body, want, "systems index")
+	}
+	mustNotContain(t, body, "raw-alpha-hash-must-not-render", "systems index")
+	mustNotContain(t, body, "raw-beta-hash-must-not-render", "systems index")
+	mustNotContain(t, body, "raw-sol-hash-must-not-render", "systems index")
+
+	f.read.systems.Systems = nil
+	empty := f.get(t, "/systems").Body.String()
+	mustContain(t, empty, `<tr id="systems-empty"><td colspan="4">No systems recorded yet.</td></tr>`, "empty systems index")
+}
+
+func TestSystemPageResolvesNamesSortsOutwardAndFormatsExactValues(t *testing.T) {
+	f := newFixture(t)
+	body := f.get(t, "/systems/solar-system").Body.String()
+	if f.read.lastSystemKey != "solar-system" {
+		t.Errorf("System key = %q, want solar-system", f.read.lastSystemKey)
+	}
+	for _, want := range []string{
+		`id="system-title" data-system="solar-system">Solar System</h1>`,
+		`id="system-summary">Home body Kerbin`,
+		`<span class="tnum" data-value="4">`,
+		`<td>Helios</td>`, `<td>Kerbin</td>`,
+		`data-value="6371000.125"`, `>6.37</span> Mm`,
+		`data-value="149597870700.75"`, `data-value="31558149.8"`,
+		`<td>Helios</td>`, // the parent key "sun" resolves to its display name
+	} {
+		mustContain(t, body, want, "system detail")
+	}
+
+	// Rank first, then missing SMA, then finite SMA, with rank-2 Luna last.
+	last := -1
+	for _, key := range []string{"sun", "wanderer", "earth", "luna"} {
+		at := strings.Index(body, `data-body="`+key+`"`)
+		if at < 0 || at <= last {
+			t.Fatalf("body %q is not in outward order:\n%s", key, body)
+		}
+		last = at
+	}
+
+	for _, hidden := range []string{
+		"raw-sol-hash-must-not-render", "inc_deg", "lan_deg", "argp_deg", "5.145", "12.5",
+		`class="rank"`, `class="bar"`, `class="accent"`,
+	} {
+		mustNotContain(t, body, hidden, "system reference page")
+	}
+	wandererStart := strings.Index(body, `data-body="wanderer"`)
+	if wandererStart < 0 {
+		t.Fatalf("wanderer row missing from system page:\n%s", body)
+	}
+	wandererEnd := strings.Index(body[wandererStart:], `</tr>`)
+	if wandererEnd < 0 {
+		t.Fatalf("wanderer row is not closed:\n%s", body[wandererStart:])
+	}
+	wanderer := body[wandererStart : wandererStart+wandererEnd]
+	if got := strings.Count(wanderer, `<td class="value">&#8212;</td>`); got != 2 {
+		t.Errorf("unbound body's absent SMA/period em dashes = %d, want 2:\n%s", got, wanderer)
+	}
+	if got := strings.Count(wanderer, `data-value=`); got != 2 {
+		t.Errorf("unbound body's numeric data values = %d, want only radius and SOI:\n%s", got, wanderer)
+	}
+
+	// Raw hashes are accepted as route keys but the canonical page still shows
+	// only the friendly name and slug.
+	byHash := f.get(t, "/systems/raw-sol-hash-must-not-render")
+	if byHash.Code != http.StatusOK || f.read.lastSystemKey != "raw-sol-hash-must-not-render" {
+		t.Fatalf("raw-hash route = %d, key %q", byHash.Code, f.read.lastSystemKey)
+	}
+	mustNotContain(t, byHash.Body.String(), "raw-sol-hash-must-not-render", "raw-hash system page")
+}
+
+func TestSystemRoutesCacheAndErrorsAndBoardsLink(t *testing.T) {
+	f := newFixture(t)
+	for _, path := range []string{"/systems", "/systems/solar-system"} {
+		rec := f.get(t, path)
+		if rec.Code != http.StatusOK || rec.Header().Get("Cache-Control") != readapi.CacheControl {
+			t.Errorf("GET %s = %d, cache %q", path, rec.Code, rec.Header().Get("Cache-Control"))
+		}
+	}
+	notFound := f.get(t, "/systems/unknown")
+	if notFound.Code != http.StatusNotFound || notFound.Header().Get("Cache-Control") != "no-store" {
+		t.Errorf("unknown system = %d, cache %q", notFound.Code, notFound.Header().Get("Cache-Control"))
+	}
+	mustContain(t, notFound.Body.String(), "catlog has no such celestial system.", "unknown system")
+
+	boards := f.get(t, "/boards").Body.String()
+	mustContain(t, boards, `id="boards-systems"><a href="/systems">catlog is tracking <span class="n" data-n="3" data-d="0">3</span> celestial systems</a>.`, "boards systems link")
+	mustNotContain(t, boards, `id="nav-systems"`, "top navigation")
+
+	f.read.systemsErr = errors.New("projections are unreadable")
+	for _, path := range []string{"/boards", "/systems", "/systems/solar-system"} {
+		rec := f.get(t, path)
+		if rec.Code != http.StatusInternalServerError || rec.Header().Get("Cache-Control") != "no-store" {
+			t.Errorf("GET %s error = %d, cache %q", path, rec.Code, rec.Header().Get("Cache-Control"))
+		}
 	}
 }
 

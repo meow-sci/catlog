@@ -3,6 +3,8 @@ package web
 import (
 	"net/http"
 	"net/url"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -103,16 +105,125 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 
 // --- GET /boards ---------------------------------------------------------------
 
+type boardsData struct {
+	readapi.BoardsResponse
+	Systems int
+}
+
 func (s *Server) handleBoards(w http.ResponseWriter, r *http.Request) {
 	list, err := s.deps.Read.BoardList(r.Context())
 	if err != nil {
 		s.serverError(w, r, err, "read the board list")
 		return
 	}
+	systems, err := s.deps.Read.Systems(r.Context())
+	if err != nil {
+		s.serverError(w, r, err, "read the celestial systems")
+		return
+	}
 	s.render(w, r, http.StatusOK, "boards", publicCache, page{
 		Title: "Leaderboards — catlog",
 		Nav:   "boards",
-		Data:  list,
+		Data:  boardsData{BoardsResponse: list, Systems: len(systems.Systems)},
+	})
+}
+
+// --- GET /systems --------------------------------------------------------------
+
+type systemsData struct {
+	Systems []readapi.SystemSummary
+}
+
+func (s *Server) handleSystems(w http.ResponseWriter, r *http.Request) {
+	out, err := s.deps.Read.Systems(r.Context())
+	if err != nil {
+		s.serverError(w, r, err, "read the celestial systems")
+		return
+	}
+	// The read API preserves first-seen order. The index answers a different,
+	// player-facing question: where is this community playing most?
+	rows := slices.Clone(out.Systems)
+	sort.SliceStable(rows, func(i, j int) bool { return rows[i].Players > rows[j].Players })
+	s.render(w, r, http.StatusOK, "systems", publicCache, page{
+		Title: "Celestial systems — catlog",
+		Nav:   "boards",
+		Data:  systemsData{Systems: rows},
+	})
+}
+
+type systemBodyData struct {
+	Body, Name, Class, ParentName string
+	Rank                          int64
+	RadiusM, SoiM                 float64
+	SmaM, PeriodS                 float64
+	HasSma, HasPeriod             bool
+}
+
+type systemData struct {
+	readapi.SystemDetail
+	HomeName string
+	Rows     []systemBodyData
+}
+
+func (s *Server) handleSystem(w http.ResponseWriter, r *http.Request) {
+	detail, found, err := s.deps.Read.System(r.Context(), r.PathValue("slug"))
+	if err != nil {
+		s.serverError(w, r, err, "read that celestial system")
+		return
+	}
+	if !found {
+		s.notFound(w, r, "catlog has no such celestial system.")
+		return
+	}
+
+	bodies := slices.Clone(detail.Bodies)
+	sort.SliceStable(bodies, func(i, j int) bool {
+		if bodies[i].Rank != bodies[j].Rank {
+			return bodies[i].Rank < bodies[j].Rank
+		}
+		left, right := bodies[i].SmaM, bodies[j].SmaM
+		if left == nil || right == nil {
+			return left == nil && right != nil
+		}
+		if *left != *right {
+			return *left < *right
+		}
+		if bodies[i].Name != bodies[j].Name {
+			return bodies[i].Name < bodies[j].Name
+		}
+		return bodies[i].Body < bodies[j].Body
+	})
+	names := make(map[string]string, len(bodies))
+	for _, body := range bodies {
+		names[body.Body] = body.Name
+	}
+	data := systemData{SystemDetail: detail, HomeName: detail.HomeBody, Rows: make([]systemBodyData, 0, len(bodies))}
+	if name, ok := names[detail.HomeBody]; ok {
+		data.HomeName = name
+	}
+	for _, body := range bodies {
+		row := systemBodyData{
+			Body: body.Body, Name: body.Name, Class: body.Class, Rank: body.Rank,
+			RadiusM: body.RadiusM, SoiM: body.SoiM,
+		}
+		if body.Parent != nil {
+			row.ParentName = *body.Parent
+			if name, ok := names[*body.Parent]; ok {
+				row.ParentName = name
+			}
+		}
+		if body.SmaM != nil {
+			row.SmaM, row.HasSma = *body.SmaM, true
+		}
+		if body.PeriodS != nil {
+			row.PeriodS, row.HasPeriod = *body.PeriodS, true
+		}
+		data.Rows = append(data.Rows, row)
+	}
+	s.render(w, r, http.StatusOK, "system", publicCache, page{
+		Title: detail.Name + " — catlog",
+		Nav:   "boards",
+		Data:  data,
 	})
 }
 
