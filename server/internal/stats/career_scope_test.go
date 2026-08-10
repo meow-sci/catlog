@@ -1,7 +1,6 @@
 package stats
 
 import (
-	"context"
 	"database/sql"
 	"fmt"
 	"testing"
@@ -294,27 +293,204 @@ func TestCareerSystemAndCareerStatValueReadThrough(t *testing.T) {
 	})
 }
 
-func TestExistingFoldsDoNotWriteScopedRowsYet(t *testing.T) {
-	p := scopeProjections(t)
-	seedCareer(t, p, 1, "testcareer000001", "testsystem000001")
+func readPlayerScopeStats(t *testing.T, proj *store.Projections) map[string]scopedRow {
+	t.Helper()
+	rows, err := proj.Reader().QueryContext(t.Context(),
+		`SELECT player_id, stat, value, context, updated_seq
+		 FROM player_stat ORDER BY player_id, stat`)
+	if err != nil {
+		t.Fatalf("read player_stat: %v", err)
+	}
+	defer rows.Close()
 
-	withScopeBatch(t, p, 1000, func(b *Batch) error {
-		ev := Event{
-			Seq: 1, PlayerID: 1, FlightID: ids.ID{1}, Career: "testcareer000001",
-			Type: "vehicle.staging", Payload: VehicleStaging{StageIndex: 1},
+	out := map[string]scopedRow{}
+	for rows.Next() {
+		var (
+			player, seq int64
+			stat        string
+			value       float64
+			cx          sql.NullString
+		)
+		if err := rows.Scan(&player, &stat, &value, &cx, &seq); err != nil {
+			t.Fatalf("scan player_stat: %v", err)
 		}
-		for _, fold := range Folds() {
-			if err := fold.Apply(context.Background(), b, ev); err != nil {
-				return fmt.Errorf("%s: %w", fold.Name(), err)
+		out[fmt.Sprintf("%d/%s", player, stat)] = scopedRow{
+			value: value, context: cx.String, seq: seq,
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("player_stat rows: %v", err)
+	}
+	return out
+}
+
+func scopeFlight(n byte) ids.ID {
+	var id ids.ID
+	id[0], id[15] = 1, n
+	return id
+}
+
+func foldScopeEvents(t *testing.T, p *store.Projections, events ...Event) {
+	t.Helper()
+	withScopeBatch(t, p, 1000, func(b *Batch) error {
+		for _, ev := range events {
+			for _, fold := range Folds() {
+				if err := fold.Apply(t.Context(), b, ev); err != nil {
+					return fmt.Errorf("fold %s at seq %d: %w", fold.Name(), ev.Seq, err)
+				}
 			}
 		}
 		return nil
 	})
+}
 
+func TestEveryBoardKindWritesItsCareerScope(t *testing.T) {
+	p := scopeProjections(t)
+	career := "testcareer000001"
+	foldScopeEvents(t, p,
+		Event{Seq: 1, PlayerID: 1, FlightID: scopeFlight(1), Career: career,
+			Type: "vehicle.impact", Payload: VehicleImpact{
+				SpeedMs: 120, Survived: true, Body: "luna", CrewCount: 1,
+			}},
+		Event{Seq: 2, PlayerID: 1, FlightID: scopeFlight(2), Career: career,
+			Type: "vehicle.landed", Payload: VehicleLanded{
+				Body: "luna", VerticalSpeedMs: 2, HorizontalSpeedMs: 1, CrewCount: 1, Survived: true,
+			}},
+		Event{Seq: 3, PlayerID: 1, FlightID: scopeFlight(3), Career: career,
+			Type: "vehicle.staging", Payload: VehicleStaging{StageIndex: 1}},
+	)
+
+	player := readPlayerScopeStats(t, p)
+	saves := readCareerStats(t, p)
+	for _, stat := range []string{StatBiggestLithobrakeSurvived, StatSoftestLanding, StatStagings} {
+		got := saves["1/"+career+"/"+stat]
+		want := player["1/"+stat]
+		if got.value != want.value || got.context != want.context || got.seq != want.seq {
+			t.Errorf("%s career row = %+v, player row = %+v", stat, got, want)
+		}
+	}
+}
+
+func TestCareerScopeIsPerSaveNotPerPlayer(t *testing.T) {
+	p := scopeProjections(t)
+	careerA, careerB := "testcareer000001", "testcareer000002"
+	var events []Event
+	for i, career := range []string{careerA, careerA, careerB, careerA} {
+		events = append(events, Event{
+			Seq: int64(i + 1), PlayerID: 1, FlightID: scopeFlight(byte(i + 1)), Career: career,
+			Type: "vehicle.landed", Payload: VehicleLanded{
+				Body: "earth", VerticalSpeedMs: float64(i + 1), Survived: true,
+			},
+		})
+	}
+	foldScopeEvents(t, p, events...)
+
+	player := readPlayerScopeStats(t, p)
+	saves := readCareerStats(t, p)
+	if got := player["1/"+StatLandings].value; got != 4 {
+		t.Errorf("player landings = %v, want 4", got)
+	}
+	if got := saves["1/"+careerA+"/"+StatLandings].value; got != 3 {
+		t.Errorf("career A landings = %v, want 3", got)
+	}
+	if got := saves["1/"+careerB+"/"+StatLandings].value; got != 1 {
+		t.Errorf("career B landings = %v, want 1", got)
+	}
+}
+
+func TestAnEventWithNoCareerWritesNoCareerRow(t *testing.T) {
+	p := scopeProjections(t)
+	foldScopeEvents(t, p, Event{
+		Seq: 1, PlayerID: 1, FlightID: scopeFlight(1),
+		Type: "vehicle.staging", Payload: VehicleStaging{StageIndex: 1},
+	})
+	if got := readPlayerScopeStats(t, p)["1/"+StatStagings].value; got != 1 {
+		t.Errorf("player stagings = %v, want 1", got)
+	}
 	if got := readCareerStats(t, p); len(got) != 0 {
-		t.Errorf("existing folds wrote career scope before A3: %v", got)
+		t.Errorf("career rows = %v, want none", got)
+	}
+}
+
+func TestCareerScopeTieKeepsTheEarlierSeq(t *testing.T) {
+	p := scopeProjections(t)
+	career := "testcareer000001"
+	foldScopeEvents(t, p,
+		Event{Seq: 1, PlayerID: 1, FlightID: scopeFlight(1), Career: career,
+			Type: "vehicle.impact", Payload: VehicleImpact{SpeedMs: 80, Survived: true, Body: "earth", CrewCount: 1}},
+		Event{Seq: 2, PlayerID: 1, FlightID: scopeFlight(2), Career: career,
+			Type: "vehicle.impact", Payload: VehicleImpact{SpeedMs: 80, Survived: true, Body: "mars", CrewCount: 1}},
+	)
+	got := readCareerStats(t, p)["1/"+career+"/"+StatBiggestLithobrakeSurvived]
+	if got.seq != 1 || got.context == "" {
+		t.Errorf("tied career record = %+v, want the contextual seq-1 claim", got)
+	}
+}
+
+func TestDynamicBoardsGetTheirCareerScopeForFree(t *testing.T) {
+	p := scopeProjections(t)
+	career := "testcareer000001"
+	foldScopeEvents(t, p,
+		Event{Seq: 1, PlayerID: 1, FlightID: scopeFlight(1), Career: career,
+			Type: "vehicle.rud", Payload: VehicleRUD{Cause: "quantum_foam", Body: "earth"}},
+		Event{Seq: 2, PlayerID: 1, FlightID: scopeFlight(2), Career: career,
+			Type: "vehicle.soi", Payload: VehicleSOI{FromBody: "earth", ToBody: "zephyria_prime"},
+			SimTime: 500, HasSimTime: true},
+	)
+	saves := readCareerStats(t, p)
+	for stat, want := range map[string]float64{
+		"rud_quantum_foam": 1, "fastest_to_zephyria_prime": 500_000,
+	} {
+		if got := saves["1/"+career+"/"+stat].value; got != want {
+			t.Errorf("dynamic %s = %v, want %v", stat, got, want)
+		}
+	}
+}
+
+func TestFlaggedFlightScoresNothingInEitherScope(t *testing.T) {
+	p := scopeProjections(t)
+	career, system := "testcareer000001", "testsystem000001"
+	seedCareer(t, p, 1, career, system)
+	flight := scopeFlight(1)
+	foldScopeEvents(t, p,
+		Event{Seq: 1, PlayerID: 1, FlightID: flight, Career: career,
+			Type: "flight.flagged", Payload: FlightFlagged{Flag: "teleport"}},
+		Event{Seq: 2, PlayerID: 1, FlightID: flight, Career: career,
+			Type: "vehicle.impact", Payload: VehicleImpact{SpeedMs: 900, Survived: true, CrewCount: 1}},
+	)
+	if got := readPlayerScopeStats(t, p); len(got) != 0 {
+		t.Errorf("flagged flight scored player rows: %v", got)
+	}
+	if got := readCareerStats(t, p); len(got) != 0 {
+		t.Errorf("flagged flight scored career rows: %v", got)
 	}
 	if got := readSystemStats(t, p); len(got) != 0 {
-		t.Errorf("existing folds wrote system scope before A3: %v", got)
+		t.Errorf("flagged flight scored system rows: %v", got)
+	}
+}
+
+func TestDerivedTotalsUseScopeSpecificValues(t *testing.T) {
+	p := scopeProjections(t)
+	career, system := "testcareer000001", "testsystem000001"
+	seedCareer(t, p, 1, career, system)
+	withScopeBatch(t, p, 1000, func(b *Batch) error {
+		ev := Event{Seq: 2, PlayerID: 1, Career: career}
+		if err := setValue(t.Context(), b, ev, "derived", 100); err != nil {
+			return err
+		}
+		if err := setCareerValue(t.Context(), b, ev, "derived", 40); err != nil {
+			return err
+		}
+		return setSystemValue(t.Context(), b, ev, "derived", 70)
+	})
+
+	if got := readPlayerScopeStats(t, p)["1/derived"].value; got != 100 {
+		t.Errorf("player derived total = %v, want 100", got)
+	}
+	if got := readCareerStats(t, p)["1/"+career+"/derived"].value; got != 40 {
+		t.Errorf("career derived total = %v, want 40", got)
+	}
+	if got := readSystemStats(t, p)["1/"+system+"/derived"].value; got != 70 {
+		t.Errorf("system derived total = %v, want 70", got)
 	}
 }

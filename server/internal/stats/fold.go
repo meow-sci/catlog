@@ -151,6 +151,12 @@ func BoardFolds() []Fold {
 // *larger* value, in memory and again in the flushed `ON CONFLICT` guard, so an
 // equal value leaves the earlier `updated_seq` — and therefore the earlier
 // claimant's rank — untouched (§5.6).
+//
+// Record, best and count writes fan out to every scope because the same event
+// contribution has the same meaning in each. A set write does not: it is a
+// derived total read from another table, and the player, career and system
+// totals are different queries. Those folds call [setValue], [setCareerValue]
+// and [setSystemValue] with independently computed values.
 
 // putBest writes a min-record board: the row is replaced only by a strictly
 // *smaller* value. It is the exact mirror of [putRecord], including the tie
@@ -164,6 +170,9 @@ func putBest(ctx context.Context, b *Batch, ev Event, stat string, value float64
 		return err
 	}
 	b.putStat(kindBest, ev.PlayerID, stat, value, cx, ev.Seq)
+	if err := b.putScoped(ctx, kindBest, ev, stat, value, cx); err != nil {
+		return err
+	}
 	return periodBest(ctx, b, ev, stat, value, cx)
 }
 
@@ -174,6 +183,9 @@ func putRecord(ctx context.Context, b *Batch, ev Event, stat string, value float
 		return err
 	}
 	b.putStat(kindRecord, ev.PlayerID, stat, value, cx, ev.Seq)
+	if err := b.putScoped(ctx, kindRecord, ev, stat, value, cx); err != nil {
+		return err
+	}
 	return periodRecord(ctx, b, ev, stat, value, cx)
 }
 
@@ -183,6 +195,9 @@ func putRecord(ctx context.Context, b *Batch, ev Event, stat string, value float
 // carries the last contributing seq alongside the summed delta.
 func addCount(ctx context.Context, b *Batch, ev Event, stat string, delta float64) error {
 	b.putStat(kindCount, ev.PlayerID, stat, delta, nil, ev.Seq)
+	if err := b.putScoped(ctx, kindCount, ev, stat, delta, nil); err != nil {
+		return err
+	}
 	return periodAdd(ctx, b, ev, stat, delta)
 }
 
@@ -206,6 +221,45 @@ func setValue(ctx context.Context, b *Batch, ev Event, stat string, value float6
 	if delta := value - prev; delta > 0 {
 		return periodAdd(ctx, b, ev, stat, delta)
 	}
+	return nil
+}
+
+// setCareerValue writes a derived total in the career scope.
+//
+// Separate from [setValue] rather than folded into it because a derived total is
+// a function of another table, and the per-save figure is a different query from
+// the lifetime one. A fan-out here would write the lifetime number into a row
+// labelled with one save — wrong, and wrong invisibly. The three folds that use
+// setValue each compute their own career figure and call this beside it.
+//
+// There is no period form: setValue's window write is an increase read from the
+// previous value, and a career scope has no windows (see 0006_career_scope.sql).
+func setCareerValue(ctx context.Context, b *Batch, ev Event, stat string, value float64) error {
+	if ev.Career == "" {
+		return nil
+	}
+	system, err := b.CareerSystem(ctx, ev.PlayerID, ev.Career)
+	if err != nil {
+		return err
+	}
+	b.putCareerStat(kindSet, ev, system, stat, value, nil)
+	return nil
+}
+
+// setSystemValue is its system-scoped twin, and it takes a separate value.
+//
+// A system's derived total is not one save's. "Bodies visited in the Sol
+// system" is the union across every save played there, so it is its own query;
+// mirroring the career figure would label one save's number as all of them.
+func setSystemValue(ctx context.Context, b *Batch, ev Event, stat string, value float64) error {
+	if ev.Career == "" {
+		return nil
+	}
+	system, err := b.CareerSystem(ctx, ev.PlayerID, ev.Career)
+	if err != nil || system == "" {
+		return err
+	}
+	b.putSystemStat(kindSet, ev, system, stat, value, nil)
 	return nil
 }
 

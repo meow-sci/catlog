@@ -1401,6 +1401,24 @@ from a board's `updated_seq` would erase precisely that activity and would leave
 undatable. `last_seq` records provenance only; it excludes and scores nothing, and because event seq
 is the server's total order it is deterministic across batch sizes and rebuilds.
 
+### PROJ-105 — Every board receives every scope through the shared write helpers, with no opt-out registry
+
+*Accepted · 2026-08-09 · career and system scopes.*
+
+Every record, best and counter contribution now writes the player row and fans into its career row
+and, when the career's celestial system is known, its system row. The fan-out lives in the three
+shared write helpers rather than in individual folds. That is the same compositional property
+periods established in PROJ-044: all fixed boards, both event-named families and a future board get
+the scopes without another list to update. An opt-out list was rejected because it would make every
+new board depend on somebody remembering a second registry, while the downside of a rarely useful
+per-save view is only an uninteresting row.
+
+Set-backed totals are deliberately outside the generic fan-out. A lifetime sum, one save's sum and
+the union across a player's saves in one system are different queries; copying one value under all
+three labels would be plausible and wrong. Their three helpers therefore accept separately computed
+values. Unknown systems are skipped rather than back-filled: career identity is still enough for the
+save row, while a system row without a system cannot make a comparable claim.
+
 ## Archive & restore
 
 The filesystem archiver, the manifest, restore verification, and the R2 design that is deliberately not built.

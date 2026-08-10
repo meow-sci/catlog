@@ -1976,9 +1976,10 @@ board-metadata order purely so the two lists read the same way; no two board fol
 ### `stats.Batch` — the write-back accumulator
 
 `stats/batch.go:60`. In-memory read-through caches (`flights`, `careers`, `bodies`, `kittens`,
-`values`) plus per-`statKind` write accumulators, flushed as multi-row statements
-(`DefaultFlushRows = 500`). Flush order is fixed and key-sorted (`:983-993`) so a rebuild is
-byte-comparable to the incremental result.
+`values`, career values and career systems) plus per-`statKind` write accumulators for player,
+career, system and period rows, flushed as multi-row statements (`DefaultFlushRows = 500`). Flush
+order is fixed and every widened key is sorted before writing, so a rebuild is byte-comparable to
+the incremental result.
 
 | kind | rule | `player_stat` guard | `player_stat_period` guard |
 |---|---|---|---|
@@ -1990,12 +1991,28 @@ byte-comparable to the incremental result.
 **Tie semantics.** Because record/best replace only on a **strict** inequality, an equal value leaves
 the earlier `updated_seq`: *whoever got there first keeps the rank* (`stats/doc.go:30-33`).
 
-### The two projection tables
+### The board projection tables
 
 **`player_stat`** — `migrations/projections/0001_init.sql:20-26`:
 `player_stat(player_id, stat, value REAL, context TEXT /*JSON*/, updated_seq, PRIMARY KEY(player_id, stat))`
 + `INDEX stat_rank(stat, value)`. Because the PK is `(player_id, stat)`, `count(*) GROUP BY stat`
 **is** the distinct-player count — no `DISTINCT` needed (PROJ-034).
+
+**`career_stat`** — `0006_career_scope.sql`: one row per `(player_id, career, stat)`, with the
+career's `system` denormalised beside `value`, JSON `context` and `updated_seq`. It ranks saves rather
+than players. **`system_stat`** uses `(player_id, system, stat)` and ranks one player's result in one
+celestial system. Both carry the same strict record/best tie rules and additive counter rule as
+`player_stat`; neither carries a period column.
+
+`putRecord`, `putBest` and `addCount` write the player row, then fan the same contribution into the
+career and known-system rows through one shared helper. This is intentionally universal: all fixed
+boards, both dynamic families and any future ordinary board get the scopes without a registry.
+An event with no career still moves only the player row. A career whose system is not yet known gets
+its career row and no system row.
+
+`kindSet` does **not** use that fan-out. A derived player total, one save's total and the union across
+all saves in a system are different queries; `setValue`, `setCareerValue` and `setSystemValue` accept
+those separately so a lifetime total can never be copied into a row labelled as one save.
 
 **`player_stat_period`** — `0003_period.sql:38-50`:
 `player_stat_period(player_id, stat, period, bucket, value REAL, context, updated_seq,
@@ -2028,6 +2045,12 @@ empty (PROJ-045).
 `stats/boards.go`. `Board` is `{Stat, Title, Unit, Ascending, Career}` (`:52-69`). **`Unit` is a
 label, never a conversion factor.** `Career` marks a value that is a career-relative time and whose
 row context carries `career`.
+
+**Every board has player, career and system scope.** Scope is a ranking dimension, not a second board
+key: player scope ranks players, career scope ranks `(player, save)` pairs, and system scope ranks
+`(player, celestial system)` pairs. This applies to all 40 fixed rows below and both dynamic
+families, with no opt-out list. `Career` in the table is unrelated: it says the board's *value* is a
+time measured from the start of a career.
 
 ### The 40 fixed boards, in display order
 
@@ -2101,7 +2124,8 @@ source event rather than a choice: `scoreable` passes every event carrying no fl
 ### The two dynamic families
 
 `stats/boards.go:192-204`. **There is no allow-list.** A key exists because a name appeared in the
-data.
+data. Both families have the same player, career and system scopes as every fixed board; a dynamic
+key receives all three on the event that creates it, with no registration step.
 
 | prefix | listed under | Title | Unit | Asc | Career |
 |---|---|---|---|---|---|

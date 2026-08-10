@@ -18,6 +18,12 @@ export interface Board {
   ascending: boolean;
   /** True when the value is a time measured from the start of a career. */
   career: boolean;
+  /**
+   * The ranking dimensions this board supports. This is distinct from
+   * `career`: that flag describes the value's clock, while scopes describe
+   * whose rows are ranked.
+   */
+  scopes: ("player" | "career" | "system")[];
   /** Event types that move this board. */
   from: string[];
   /** What the number is, in one line. */
@@ -30,8 +36,10 @@ export interface Board {
   family?: { pattern: string; from: string };
 }
 
+const UNIVERSAL_SCOPES: Board["scopes"] = ["player", "career", "system"];
+
 /** The 40 fixed boards, in the order the site publishes them. */
-export const BOARDS: Board[] = [
+const BOARD_DEFINITIONS: Omit<Board, "scopes">[] = [
   {
     stat: "biggest_lithobrake_survived",
     title: "Biggest Lithobrake Survived",
@@ -565,8 +573,16 @@ export const BOARDS: Board[] = [
   },
 ];
 
+// Scope is deliberately attached here rather than repeated on 40 entries. A
+// board added to the catalog receives every scope automatically; there is no
+// opt-out registry to forget to update.
+export const BOARDS: Board[] = BOARD_DEFINITIONS.map((board) => ({
+  ...board,
+  scopes: [...UNIVERSAL_SCOPES],
+}));
+
 /** Boards whose keys are built from the data rather than fixed in advance. */
-export const BOARD_FAMILIES: Board[] = [
+const BOARD_FAMILY_DEFINITIONS: Omit<Board, "scopes">[] = [
   {
     stat: "rud_<cause>",
     title: "RUDs — <Cause>",
@@ -598,6 +614,11 @@ export const BOARD_FAMILIES: Board[] = [
     },
   },
 ];
+
+export const BOARD_FAMILIES: Board[] = BOARD_FAMILY_DEFINITIONS.map((board) => ({
+  ...board,
+  scopes: [...UNIVERSAL_SCOPES],
+}));
 
 export function boardByStat(stat: string): Board | undefined {
   return [...BOARDS, ...BOARD_FAMILIES].find((b) => b.stat === stat);
