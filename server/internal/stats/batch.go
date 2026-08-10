@@ -76,13 +76,16 @@ type Batch struct {
 	kittens map[int64]map[string]*kittenEntry
 	// values caches `player_stat.value` for the one helper that has to read it
 	// back (setValue, for its window delta).
-	values map[statKey]float64
+	values       map[statKey]float64
+	careerValues map[careerStatKey]float64
 
 	// Write accumulators, one map per rule. Cleared by every flush. Indexed by
 	// [statKind] rather than carrying it in the value, so the flush walks one
 	// kind at a time — each kind's ON CONFLICT clause is a different statement.
-	stats   [numStatKinds]map[statKey]*pendingStat
-	periods [numStatKinds]map[periodKey]*pendingStat
+	stats       [numStatKinds]map[statKey]*pendingStat
+	careerStats [numStatKinds]map[careerStatKey]*pendingCareerStat
+	systemStats [numStatKinds]map[systemStatKey]*pendingStat
+	periods     [numStatKinds]map[periodKey]*pendingStat
 	// census is the event count per (type, period, bucket). One map rather than
 	// one per kind: there is only one rule — add — and the flush is one
 	// statement.
@@ -112,10 +115,12 @@ type Batch struct {
 	// reallocated: a drain flushes once per batch forever, and a fresh slice of
 	// every pending key each time was the largest allocation the batch made
 	// that was not the driver's.
-	statKeys   []statKey
-	periodKeys []periodKey
-	censusKeys []censusKey
-	args       []any
+	statKeys       []statKey
+	careerStatKeys []careerStatKey
+	systemStatKeys []systemStatKey
+	periodKeys     []periodKey
+	censusKeys     []censusKey
+	args           []any
 }
 
 // DefaultFlushRows is how many rows one flushed statement carries. Beyond a
@@ -134,17 +139,20 @@ type BatchOptions struct {
 // NewBatch opens an incremental batch over tx.
 func NewBatch(tx *sql.Tx, opts BatchOptions) *Batch {
 	b := &Batch{
-		tx:        tx,
-		flushRows: opts.FlushRows,
-		flights:   map[ids.ID]*flightEntry{},
-		careers:   map[careerKey]*careerEntry{},
-		bodies:    map[int64]map[bodyKey]*bodyEntry{},
-		kittens:   map[int64]map[string]*kittenEntry{},
-		values:    map[statKey]float64{},
-		census:    map[censusKey]*pendingCensus{},
+		tx:           tx,
+		flushRows:    opts.FlushRows,
+		flights:      map[ids.ID]*flightEntry{},
+		careers:      map[careerKey]*careerEntry{},
+		bodies:       map[int64]map[bodyKey]*bodyEntry{},
+		kittens:      map[int64]map[string]*kittenEntry{},
+		values:       map[statKey]float64{},
+		careerValues: map[careerStatKey]float64{},
+		census:       map[censusKey]*pendingCensus{},
 	}
 	for k := range b.stats {
 		b.stats[k] = map[statKey]*pendingStat{}
+		b.careerStats[k] = map[careerStatKey]*pendingCareerStat{}
+		b.systemStats[k] = map[systemStatKey]*pendingStat{}
 		b.periods[k] = map[periodKey]*pendingStat{}
 	}
 	if b.flushRows <= 0 {
@@ -344,6 +352,7 @@ type careerEntry struct {
 	rewound  bool
 	firstSeq int64
 	lastSeq  int64
+	system   string
 	exists   bool
 	dirty    bool
 }
@@ -355,8 +364,8 @@ func (b *Batch) careerEntry(ctx context.Context, k careerKey) (*careerEntry, err
 	e := &careerEntry{}
 	var rewound int64
 	err := b.tx.QueryRowContext(ctx,
-		`SELECT max_sim_t, rewound, first_seq, last_seq FROM career WHERE player_id = ? AND career = ?`,
-		k.playerID, k.career).Scan(&e.maxSimT, &rewound, &e.firstSeq, &e.lastSeq)
+		`SELECT max_sim_t, rewound, first_seq, last_seq, system FROM career WHERE player_id = ? AND career = ?`,
+		k.playerID, k.career).Scan(&e.maxSimT, &rewound, &e.firstSeq, &e.lastSeq, &e.system)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 	case err != nil:
@@ -458,6 +467,16 @@ func (b *Batch) Career(ctx context.Context, playerID int64, career string) (Care
 		PlayerID: playerID, Career: career,
 		MaxSimT: e.maxSimT, Rewound: e.rewound, FirstSeq: e.firstSeq, LastSeq: e.lastSeq,
 	}, true, nil
+}
+
+// CareerSystem reads the system a save is playing in, answering from this
+// batch's own pending writes first. "" means not yet known.
+func (b *Batch) CareerSystem(ctx context.Context, playerID int64, career string) (string, error) {
+	e, err := b.careerEntry(ctx, careerKey{playerID, career})
+	if err != nil || !e.exists {
+		return "", err
+	}
+	return e.system, nil
 }
 
 // --- player_body ---------------------------------------------------------------
@@ -747,10 +766,31 @@ type periodKey struct {
 	bucket   string
 }
 
+// careerStatKey is the primary key of career_stat. `system` is a written column,
+// not part of the key — a save cannot change systems (§3.15), so it can never
+// split a row in two.
+type careerStatKey struct {
+	playerID int64
+	career   string
+	stat     string
+}
+
+// systemStatKey is the primary key of system_stat.
+type systemStatKey struct {
+	playerID int64
+	system   string
+	stat     string
+}
+
 type pendingStat struct {
 	value float64
 	cx    any
 	seq   int64
+}
+
+type pendingCareerStat struct {
+	pendingStat
+	system string
 }
 
 // merge folds a new write into a pending one under the kind's rule, reporting
@@ -804,6 +844,59 @@ func (b *Batch) putPeriod(kind statKind, playerID int64, stat, period, bucket st
 	b.periods[kind][k] = &pendingStat{value: value, cx: cx, seq: seq}
 }
 
+// putScoped records a record/best/count board write in every scope beyond
+// `player`, so a fold never has to name them and a scope added later composes
+// for free. Derived totals (kindSet) use explicit scope-specific queries and
+// writers instead; one scope's total is not another's.
+func (b *Batch) putScoped(ctx context.Context, kind statKind, ev Event, stat string, value float64, cx any) error {
+	if ev.Career == "" {
+		return nil
+	}
+	system, err := b.CareerSystem(ctx, ev.PlayerID, ev.Career)
+	if err != nil {
+		return err
+	}
+	b.putCareerStat(kind, ev, system, stat, value, cx)
+	if system != "" {
+		b.putSystemStat(kind, ev, system, stat, value, cx)
+	}
+	return nil
+}
+
+// putCareerStat records a board write in the career scope. A no-op when the
+// event has no career: a row keyed on "" would merge every save at once.
+func (b *Batch) putCareerStat(kind statKind, ev Event, system, stat string, value float64, cx any) {
+	if ev.Career == "" {
+		return
+	}
+	k := careerStatKey{ev.PlayerID, ev.Career, stat}
+	if p, ok := b.careerStats[kind][k]; ok {
+		p.merge(kind, value, cx, ev.Seq)
+	} else {
+		b.careerStats[kind][k] = &pendingCareerStat{
+			pendingStat: pendingStat{value: value, cx: cx, seq: ev.Seq},
+			system:      system,
+		}
+	}
+	if kind == kindSet {
+		b.careerValues[k] = value
+	}
+}
+
+// putSystemStat records a board write keyed by (player, celestial system,
+// stat). An unknown system has no comparable scope and writes no row.
+func (b *Batch) putSystemStat(kind statKind, ev Event, system, stat string, value float64, cx any) {
+	if system == "" {
+		return
+	}
+	k := systemStatKey{ev.PlayerID, system, stat}
+	if p, ok := b.systemStats[kind][k]; ok {
+		p.merge(kind, value, cx, ev.Seq)
+	} else {
+		b.systemStats[kind][k] = &pendingStat{value: value, cx: cx, seq: ev.Seq}
+	}
+}
+
 // StatValue is a player's current value on a board, counting writes this batch
 // has buffered but not yet flushed. Only setValue needs it — a derived total's
 // *window* contribution is what it grew by, which needs the previous total.
@@ -822,6 +915,28 @@ func (b *Batch) StatValue(ctx context.Context, playerID int64, stat string) (flo
 		return 0, fmt.Errorf("stats: read %s for player %d: %w", stat, playerID, err)
 	}
 	b.values[k] = v
+	return v, nil
+}
+
+// CareerStatValue reads a career-scoped board value, answering from this
+// batch's own pending writes first so two reads in one batch see each other
+// exactly as they did when each was its own statement.
+func (b *Batch) CareerStatValue(ctx context.Context, playerID int64, career, stat string) (float64, error) {
+	k := careerStatKey{playerID, career, stat}
+	if v, ok := b.careerValues[k]; ok {
+		return v, nil
+	}
+	var v float64
+	err := b.tx.QueryRowContext(ctx,
+		`SELECT value FROM career_stat WHERE player_id = ? AND career = ? AND stat = ?`,
+		playerID, career, stat).Scan(&v)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		v = 0
+	case err != nil:
+		return 0, fmt.Errorf("stats: read %s for player %d career %q: %w", stat, playerID, career, err)
+	}
+	b.careerValues[k] = v
 	return v, nil
 }
 
@@ -853,6 +968,34 @@ var periodFlush = [numStatKinds]string{
 	   value = player_stat_period.value + excluded.value, updated_seq = excluded.updated_seq`,
 }
 
+var careerStatFlush = [numStatKinds]string{
+	kindRecord: ` ON CONFLICT (player_id, career, stat) DO UPDATE SET
+	   value = excluded.value, context = excluded.context, updated_seq = excluded.updated_seq
+	 WHERE excluded.value > career_stat.value`,
+	kindBest: ` ON CONFLICT (player_id, career, stat) DO UPDATE SET
+	   value = excluded.value, context = excluded.context, updated_seq = excluded.updated_seq
+	 WHERE excluded.value < career_stat.value`,
+	kindCount: ` ON CONFLICT (player_id, career, stat) DO UPDATE SET
+	   value = career_stat.value + excluded.value, updated_seq = excluded.updated_seq`,
+	kindSet: ` ON CONFLICT (player_id, career, stat) DO UPDATE SET
+	   value = excluded.value, context = excluded.context, updated_seq = excluded.updated_seq
+	 WHERE excluded.value <> career_stat.value`,
+}
+
+var systemStatFlush = [numStatKinds]string{
+	kindRecord: ` ON CONFLICT (player_id, system, stat) DO UPDATE SET
+	   value = excluded.value, context = excluded.context, updated_seq = excluded.updated_seq
+	 WHERE excluded.value > system_stat.value`,
+	kindBest: ` ON CONFLICT (player_id, system, stat) DO UPDATE SET
+	   value = excluded.value, context = excluded.context, updated_seq = excluded.updated_seq
+	 WHERE excluded.value < system_stat.value`,
+	kindCount: ` ON CONFLICT (player_id, system, stat) DO UPDATE SET
+	   value = system_stat.value + excluded.value, updated_seq = excluded.updated_seq`,
+	kindSet: ` ON CONFLICT (player_id, system, stat) DO UPDATE SET
+	   value = excluded.value, context = excluded.context, updated_seq = excluded.updated_seq
+	 WHERE excluded.value <> system_stat.value`,
+}
+
 func (b *Batch) flushStats(ctx context.Context) error {
 	for kind, pending := range b.stats {
 		if len(pending) == 0 {
@@ -871,6 +1014,54 @@ func (b *Batch) flushStats(ctx context.Context) error {
 			})
 		if err != nil {
 			return fmt.Errorf("stats: flush player_stat: %w", err)
+		}
+		clear(pending)
+	}
+	return nil
+}
+
+func (b *Batch) flushCareerStats(ctx context.Context) error {
+	for kind, pending := range b.careerStats {
+		if len(pending) == 0 {
+			continue
+		}
+		keys := slices.AppendSeq(b.careerStatKeys[:0], maps.Keys(pending))
+		slices.SortFunc(keys, compareCareerStatKey)
+		b.careerStatKeys = keys
+		err := b.write(ctx, len(keys), 7,
+			`INSERT INTO career_stat (player_id, career, system, stat, value, context, updated_seq) VALUES `,
+			careerStatFlush[statKind(kind)],
+			func(i int, args []any) []any {
+				k := keys[i]
+				p := pending[k]
+				return append(args, k.playerID, k.career, p.system, k.stat, p.value, p.cx, p.seq)
+			})
+		if err != nil {
+			return fmt.Errorf("stats: flush career_stat: %w", err)
+		}
+		clear(pending)
+	}
+	return nil
+}
+
+func (b *Batch) flushSystemStats(ctx context.Context) error {
+	for kind, pending := range b.systemStats {
+		if len(pending) == 0 {
+			continue
+		}
+		keys := slices.AppendSeq(b.systemStatKeys[:0], maps.Keys(pending))
+		slices.SortFunc(keys, compareSystemStatKey)
+		b.systemStatKeys = keys
+		err := b.write(ctx, len(keys), 6,
+			`INSERT INTO system_stat (player_id, system, stat, value, context, updated_seq) VALUES `,
+			systemStatFlush[statKind(kind)],
+			func(i int, args []any) []any {
+				k := keys[i]
+				p := pending[k]
+				return append(args, k.playerID, k.system, k.stat, p.value, p.cx, p.seq)
+			})
+		if err != nil {
+			return fmt.Errorf("stats: flush system_stat: %w", err)
 		}
 		clear(pending)
 	}
@@ -985,7 +1176,8 @@ func (b *Batch) flushCensus(ctx context.Context) error {
 func (b *Batch) Flush(ctx context.Context) error {
 	for _, fn := range []func(context.Context) error{
 		b.flushFlights, b.flushCareers, b.flushBodies,
-		b.flushKittens, b.flushStats, b.flushPeriods, b.flushCensus,
+		b.flushKittens, b.flushStats, b.flushCareerStats, b.flushSystemStats,
+		b.flushPeriods, b.flushCensus,
 	} {
 		if err := fn(ctx); err != nil {
 			return err
@@ -1063,6 +1255,26 @@ func comparePeriodKey(x, y periodKey) int {
 		return c
 	}
 	return strings.Compare(x.bucket, y.bucket)
+}
+
+func compareCareerStatKey(x, y careerStatKey) int {
+	if c := cmpInt64(x.playerID, y.playerID); c != 0 {
+		return c
+	}
+	if c := strings.Compare(x.career, y.career); c != 0 {
+		return c
+	}
+	return strings.Compare(x.stat, y.stat)
+}
+
+func compareSystemStatKey(x, y systemStatKey) int {
+	if c := cmpInt64(x.playerID, y.playerID); c != 0 {
+		return c
+	}
+	if c := strings.Compare(x.system, y.system); c != 0 {
+		return c
+	}
+	return strings.Compare(x.stat, y.stat)
 }
 
 func compareCareerKey(x, y careerKey) int {
