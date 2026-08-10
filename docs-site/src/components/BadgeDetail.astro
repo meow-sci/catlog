@@ -13,14 +13,12 @@ const badge = badgeByKey(key);
 if (!badge) throw new Error(`Unknown badge in BadgeDetail: ${key}`);
 
 const anchor = badge.badge.replaceAll(/[<>]/g, "");
-const statusLabel = badge.status === "active" ? "Awarded now" : "Not awarded yet";
 ---
 
 <section class="badge-detail" id={anchor}>
   <h3 class="badge-detail-h">
     {badge.title}
     {badge.tier && <span class="ev-pill">tier {badge.tier}</span>}
-    <span class={`ev-pill badge-status-${badge.status}`}>{statusLabel}</span>
   </h3>
 
   <p class="badge-key"><code>{badge.badge}</code></p>
@@ -72,15 +70,6 @@ const statusLabel = badge.status === "active" ? "Awarded now" : "Not awarded yet
 
   .badge-what {
     font-size: var(--sl-text-lg);
-  }
-
-  .badge-status-active {
-    border-color: var(--sl-color-accent);
-    color: var(--sl-color-accent);
-  }
-
-  .badge-status-inactive {
-    color: var(--sl-color-gray-3);
   }
 
   .badge-exclusions {

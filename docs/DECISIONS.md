@@ -3797,3 +3797,19 @@ one projection-swap behaviour shared by save, badge and challenge work; separate
 versions would eventually disagree about timing or guarantees. One canonical explanation makes the
 new page shorter and keeps the mechanism owned where eligibility and rebuild effects are already
 explained.
+
+### DOCS-007 — The badge catalogue is one typed, fail-fast mirror without a publication-status axis
+
+*Accepted · 2026-08-10 · Task G3.*
+
+The player catalogue renders every fixed badge and each dynamic family pattern directly from
+`src/data/badges.ts` through `BadgeDetail.astro`. The component resolves each key and fails the Astro
+build when it is absent, so prose cannot silently name an entry that the typed mirror does not know.
+That single build-time path is preferable to a second hand-maintained list or a client-side island:
+both would create another catalogue whose ordering and rules could drift from `event-details.md`.
+
+The temporary active/inactive field is removed now that every fixed badge and all three families
+award. Keeping a status axis whose only legal value was “active” would imply mutable publication
+state and invite player prose to disagree with the projection. Activation belongs to the implemented
+catalogue contract; family visibility remains the separate holder-count gate described by the read
+API. `docs/event-details.md` remains authoritative when this derived player-facing mirror disagrees.
