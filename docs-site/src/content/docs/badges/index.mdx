@@ -1,106 +1,31 @@
 ---
 title: Merit badges
-description: How catlog will recognise once-only achievements across a player and their saves.
+description: How catlog recognises once-only achievements across a player and their saves.
 sidebar:
   order: 1
 ---
 
 import { Aside } from "@astrojs/starlight/components";
 
-Merit badges are catlog's planned once-only recognitions for things that happened in your recorded
-history. A badge will not be a score or a level, and earning one will not make a leaderboard value
-larger.
+Merit badges are once-only recognitions for things that happened in your recorded history. They are
+not scores or levels, and earning one does not make a leaderboard value larger. The [full
+catalogue](/catlog/badges/catalog/) gives the event and eligibility rule behind every badge.
 
-<Aside type="note" title="The foundation is here; the badges are not">
-  catlog can now store this kind of recognition, knows the catalogue below, and has the once-only
-  writing machinery ready. No badge rules are active yet, so none of these can be earned and no
-  awards or player badge pages are exposed. Those arrive in later work.
+<Aside type="note" title="Awards are active; award pages are not">
+  Thirty-three fixed badges and all three place-name families can now be awarded. Every World and
+  Nothing Left remain inactive until catlog can perform their complete system comparison. The API
+  and player pages do not expose awards yet.
 </Aside>
 
-## The planned catalogue
-
-Thirty-five badges have fixed names. Three more are families: the place name becomes part of the
-badge, using the same names your game reports. The groups only organise the catalogue. A tier is a
-ladder label, not a level that replaces anything below it.
-
-### First steps
-
-| Badge         | Catalogue line                          | Planned rule                  |
-| ------------- | --------------------------------------- | ----------------------------- |
-| Off The Pad   | Your first flight.                      | The first flight.             |
-| Separation    | You let go of something on purpose.     | The first staging.            |
-| Above The Air | You left the atmosphere.                | The first atmospheric exit.   |
-| Around We Go  | You made orbit.                         | The first achieved orbit.     |
-| Wheels Down   | You put something down and it survived. | The first surviving landing.  |
-| Home Again    | You recovered a vehicle.                | The first recovered flight.   |
-| Outside       | A kitten went out.                      | The first spacewalk.          |
-| Well Met      | Two of your vehicles became one.        | The first docking.            |
-| It Happens    | You lost a vehicle. Everyone does.      | The first whole-vehicle loss. |
-
-### Flight
-
-| Badge              | Catalogue line                                  | Planned rule                                                                                                                                                  |
-| ------------------ | ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Passengers         | You brought company into orbit.                 | Reach orbit on a flight that began with at least one kitten aboard.                                                                                           |
-| Round Trip         | You made orbit and brought the vehicle home.    | Recover a flight after that flight reached orbit. An orbit recorded only later does not count.                                                                |
-| Rendezvous         | You docked after making orbit.                  | Dock after that flight has already reached orbit. It does not claim that the docking itself happened in orbit.                                                |
-| Along For The Ride | You reached another sphere without an engine.   | Reach another sphere of influence on a flight that began with no rocket engine installed. RCS thrusters, springs and docking push-off are not rocket engines. |
-| Heavy Lifter       | You put a notably heavy payload into orbit.     | Put a vehicle weighing at least 20,000 kg into orbit. catlog cannot separate cargo from rocket.                                                               |
-| Tall Order         | You built a stack with ambitions.               | Launch a vehicle built from at least five stages.                                                                                                             |
-| Kit Bash           | You assembled a hundred parts into one vehicle. | Launch a vehicle built from at least 100 parts.                                                                                                               |
-| Well Lit           | You have lit rather a lot of engines.           | Light engines 100 times.                                                                                                                                      |
-
-### Survival
-
-| Badge        | Tier | Catalogue line                                    | Planned rule                                           |
-| ------------ | ---: | ------------------------------------------------- | ------------------------------------------------------ |
-| Lithobraker  |    1 | You survived an enthusiastic arrival.             | Survive an impact at 50 m/s or faster.                 |
-| Ground Truth |    2 | You survived an even more enthusiastic arrival.   | Survive an impact at 100 m/s or faster.                |
-| Pressed      |    — | You remained attached through ten g.              | Survive at least 10 g.                                 |
-| Feather      |    — | You landed with unusual restraint.                | Survive a landing at no more than 0.5 m/s, above zero. |
-| Canyon Run   |    — | You passed within a hundred metres of the ground. | Pass no more than 100 m above terrain, above zero.     |
-| Old Hand     |    — | You have landed often enough to look practised.   | Complete 25 surviving landings.                        |
-
-### Exploration
-
-| Badge         | Tier | Catalogue line                           | Planned rule                                                            |
-| ------------- | ---: | ---------------------------------------- | ----------------------------------------------------------------------- |
-| Wanderer      |    1 | You reached three worlds.                | Visit at least three distinct worlds.                                   |
-| Voyager       |    2 | You reached five worlds.                 | Visit at least five distinct worlds.                                    |
-| Grand Tour    |    3 | You reached eight worlds.                | Visit at least eight distinct worlds.                                   |
-| Groundskeeper |    — | You landed on three worlds.              | Land on at least three distinct worlds.                                 |
-| Every World   |    — | You visited every planet in this system. | Visit every world your save's complete system catalogue calls a planet. |
-| Nothing Left  |    — | You visited everything in this system.   | Visit every body in your save's complete system catalogue.              |
-
-The three exploration families are **Reached _&lt;world&gt;_** — “You reached _&lt;world&gt;_.”,
-**Orbited _&lt;world&gt;_** — “You made orbit around _&lt;world&gt;_.”, and **Landed on
-_&lt;world&gt;_** — “You landed on _&lt;world&gt;_.” They use the world's reported name and have no built-in
-list of places. A game update or a modified celestial system can therefore supply its own names. A
-name that cannot form a safe page address gets no family badge, but still counts towards the fixed
-visit totals.
-
-### Kittens
-
-| Badge                    | Catalogue line                             | Planned rule                                                       |
-| ------------------------ | ------------------------------------------ | ------------------------------------------------------------------ |
-| Not On Their Feet        | A kitten failed to land on their feet.     | Record a tumble that began while the kitten was airborne.          |
-| Persistently Upside Down | Your kittens have tumbled fifty times.     | Reach 50 kitten tumbles.                                           |
-| Crowded Capsule          | You brought four kittens home at once.     | Recover at least four kittens at once.                             |
-| Spacewalker              | Your kittens have taken ten spacewalks.    | Reach ten spacewalks.                                              |
-| The Long Walk            | A kitten spent an hour outside.            | Complete a spacewalk lasting at least one hour.                    |
-| Ferry Service            | You brought ten kittens to orbit and home. | Bring ten save-local kittens to orbit and back to their home body. |
-
-Fixed badges always belong in the catalogue. By default, a place-specific family badge will be
-published only after two players have it — the same configurable threshold as a place-specific
-leaderboard. That prevents one person's private system name from becoming a public catalogue entry,
-without teaching catlog a list of permitted worlds.
+Thirty-five badges have fixed names. Three more are families whose place name comes from the game,
+with no built-in list of worlds. The groups only organise the catalogue. A tier is a ladder label,
+not a level that replaces anything below it.
 
 ## Two views of the same achievement
 
-The model keeps lifetime and per-save recognition separate. A qualifying achievement can be
-remembered once for the player and independently once for the save in which it happened. A new save
-starts with no per-save badges of its own; it does not erase a lifetime recognition that still
-qualifies.
+The model keeps lifetime and per-save recognition separate. A qualifying achievement is remembered
+once for the player and independently once for the save in which it happened. A new save starts with
+no per-save badges of its own; it does not erase a lifetime recognition that still qualifies.
 
 For a lifetime recognition, catlog also remembers which save and celestial system first produced it
 in the current result. A per-save recognition already belongs to that save and keeps its system
@@ -109,15 +34,21 @@ career-clock time is kept only when the event had one.
 
 ## “Once” means once in the current result
 
-Awards will keep the first qualifying moment while one set of derived data is being built. Like the
+Awards keep the first qualifying moment while one set of derived data is being built. Like the
 leaderboards, they are rebuilt from the recorded event history rather than kept as permanent claims.
 A rebuild may remove a recognition when the current rules or final flight facts no longer award it,
 and a future rule may discover one in older history.
 
-The writer is already prepared for several qualifying moments arriving together: the earliest one
-keeps all of its matching time, save, system and detail, and a later duplicate changes nothing. One
-qualifying moment can be kept independently for your lifetime and for that save. Nothing invokes
-that writer yet; the planned catalogue above remains unearnable for now.
+When several qualifying moments arrive together, the earliest one keeps all of its matching time,
+save, system and detail, and a later duplicate changes nothing. One qualifying moment can be kept
+independently for your lifetime and for that save.
 
 That also keeps moderation complete. Withheld history produces no badges after a rebuild; restored
 history can produce them again in its original order; deleted history cannot.
+
+## What a flight has to prove
+
+Every badge attached to a flight uses the flight's final recorded facts. A later flag can therefore
+remove an award on rebuild. Badges that need two moments keep their order strict: Round Trip requires
+orbit before recovery, and Rendezvous requires orbit before docking. An orbit recorded afterwards
+does not count, and Rendezvous does not claim the docking itself happened in orbit.

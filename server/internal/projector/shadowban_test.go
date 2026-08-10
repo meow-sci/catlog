@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -175,9 +176,7 @@ func TestShadowbanLeavesTheBoardsOnRebuild(t *testing.T) {
 
 	before := playerProjectionRows(t, r, subject, "griefer")
 	requirePopulatedPlayerProjections(t, before)
-	if got := before["badge_award"]; len(got) != 1 {
-		t.Fatalf("subject badge fixture = %v, want one row", got)
-	}
+	requireSeededBadge(t, before["badge_award"])
 	bystanderBefore := playerProjectionRows(t, r, bystander, "honest_cat")
 	requirePopulatedPlayerProjections(t, bystanderBefore)
 	systemsBefore, bodiesBefore := sharedCatalogueRows(t, r)
@@ -271,9 +270,7 @@ func TestPurgeLeavesNoPlayerOwnedProjectionRowsAfterRebuild(t *testing.T) {
 
 	before := playerProjectionRows(t, r, subject, "deleted_cat")
 	requirePopulatedPlayerProjections(t, before)
-	if got := before["badge_award"]; len(got) != 1 {
-		t.Fatalf("subject badge fixture = %v, want one row", got)
-	}
+	requireSeededBadge(t, before["badge_award"])
 	bystanderBefore := playerProjectionRows(t, r, bystander, "honest_cat")
 	systemsBefore, bodiesBefore := sharedCatalogueRows(t, r)
 
@@ -306,6 +303,16 @@ func TestPurgeLeavesNoPlayerOwnedProjectionRowsAfterRebuild(t *testing.T) {
 		t.Errorf("purge removed shared catalogue rows: before=%v/%v after=%v/%v",
 			systemsBefore, bodiesBefore, systemsAfter, bodiesAfter)
 	}
+}
+
+func requireSeededBadge(t *testing.T, rows []string) {
+	t.Helper()
+	for _, row := range rows {
+		if strings.Contains(row, "badge=subject-badge ") {
+			return
+		}
+	}
+	t.Fatalf("subject badge fixture missing from %v", rows)
 }
 
 // --- the build stamp ----------------------------------------------------------

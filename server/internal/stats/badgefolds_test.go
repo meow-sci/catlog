@@ -108,6 +108,29 @@ func TestBelowThresholdRejectsZero(t *testing.T) {
 	}
 }
 
+func TestBelowThresholdSeesFirstBestAfterEarlierAbsentRead(t *testing.T) {
+	p := testutil.MemProjections(t)
+	f := thresholdBadge{badge: "below", stat: "soft", n: 0.5, below: true}
+	runBadgeBatch(t, p, 0, func(b *Batch) error {
+		if err := b.EnsureCareer(t.Context(), 1, "save", 1); err != nil {
+			return err
+		}
+		before := Event{Seq: 1, PlayerID: 1, Career: "save"}
+		if err := f.Apply(t.Context(), b, before); err != nil {
+			return err
+		}
+		after := Event{Seq: 2, PlayerID: 1, Career: "save"}
+		if err := putBest(t.Context(), b, after, "soft", 0.25, nil); err != nil {
+			return err
+		}
+		return f.Apply(t.Context(), b, after)
+	})
+	rows := badgeRows(t, p)
+	if len(rows) != 2 || rows[0].earnedSeq != 2 || rows[1].earnedSeq != 2 {
+		t.Fatalf("below threshold rows after absent read = %+v", rows)
+	}
+}
+
 func TestCompositeCandidatesUseStoredFactsAndStartOrdering(t *testing.T) {
 	crew := sql.NullInt64{Int64: 1, Valid: true}
 	zeroEngines := sql.NullInt64{Int64: 0, Valid: true}
@@ -120,6 +143,13 @@ func TestCompositeCandidatesUseStoredFactsAndStartOrdering(t *testing.T) {
 	if coasterCandidate(soi, FlightState{StartedSeq: 6, EngineCount: zeroEngines}) ||
 		!coasterCandidate(soi, FlightState{StartedSeq: 4, EngineCount: zeroEngines}) {
 		t.Error("coaster ignored HasStartFactAt or explicit zero")
+	}
+	if coasterCandidate(soi, FlightState{StartedSeq: 4, EngineCount: sql.NullInt64{Int64: 1, Valid: true}}) ||
+		coasterCandidate(soi, FlightState{StartedSeq: 4}) {
+		t.Error("coaster treated installed or unknown engines as zero engines")
+	}
+	if crewedOrbitCandidate(orbit, FlightState{StartedSeq: 4, Crew: sql.NullInt64{Int64: 0, Valid: true}}) {
+		t.Error("crewed orbit accepted an explicit zero crew")
 	}
 	ended := Event{Type: "flight.ended", Payload: FlightEnded{Reason: "recovered"}}
 	ended.Seq = 7
@@ -439,15 +469,18 @@ func TestUnkeyableFamilyBodySkipsOnlyBadge(t *testing.T) {
 }
 
 func TestSecondPassOrderNamesAndBuildIdentity(t *testing.T) {
-	if len(BadgeFolds()) != 0 {
-		t.Fatal("F4 activated a partial production badge catalogue")
+	badges := BadgeFolds()
+	if len(badges) != 36 {
+		t.Fatalf("BadgeFolds() has %d entries, want 33 fixed and 3 families", len(badges))
 	}
 	second := SecondPassFolds()
 	boards := BoardFolds()
 	if err := validateFoldNames(second); err != nil {
 		t.Fatalf("actual second-pass names are not unique: %v", err)
 	}
-	if len(second) != len(boards)+len(LogFolds()) || second[len(boards)].Name() != LogFolds()[0].Name() {
+	if len(second) != len(boards)+len(badges)+len(LogFolds()) ||
+		second[len(boards)].Name() != "badge:"+BadgeFirstFlight ||
+		second[len(boards)+len(badges)].Name() != LogFolds()[0].Name() {
 		t.Fatalf("second-pass boundary = %v", foldNames(second))
 	}
 	t.Run("constructor rejects duplicate names", func(t *testing.T) {
@@ -484,6 +517,264 @@ func TestSecondPassOrderNamesAndBuildIdentity(t *testing.T) {
 	} {
 		if test.fold.Name() != test.want {
 			t.Errorf("fold name = %q, want %q", test.fold.Name(), test.want)
+		}
+	}
+}
+
+func TestActiveBadgeCatalogueCoverageOrderAndShapes(t *testing.T) {
+	want := []struct {
+		key, shape, source string
+		n                  float64
+		below              bool
+	}{
+		{BadgeFirstFlight, "event", "flight.started", 0, false},
+		{BadgeFirstStage, "event", "vehicle.staging", 0, false},
+		{BadgeFirstSpace, "event", "vehicle.atmosphere", 0, false},
+		{BadgeFirstOrbit, "event", "vehicle.orbit", 0, false},
+		{BadgeFirstLanding, "event", "vehicle.landed", 0, false},
+		{BadgeFirstRecovery, "event", "flight.ended", 0, false},
+		{BadgeFirstEVA, "event", "kitten.eva_start", 0, false},
+		{BadgeFirstDock, "event", "vehicle.docked", 0, false},
+		{BadgeFirstRUD, "event", "vehicle.rud", 0, false},
+		{BadgeCrewedOrbit, "composite", "vehicle.orbit", 0, false},
+		{BadgeOrbitAndBack, "composite", "flight.ended", 0, false},
+		{BadgeDockedAfterOrbit, "composite", "vehicle.docked", 0, false},
+		{BadgeCoaster, "composite", "vehicle.soi", 0, false},
+		{BadgeHeavyLifter, "threshold", StatHeaviestToOrbit, 20_000, false},
+		{BadgeBigStack, "threshold", StatBiggestStack, 5, false},
+		{BadgeManyParts, "threshold", StatMostParts, 100, false},
+		{BadgeWellLit, "threshold", StatEngineIgnitions, 100, false},
+		{BadgeLithobraker, "threshold", StatBiggestLithobrakeSurvived, 50, false},
+		{BadgeGroundTruth, "threshold", StatBiggestLithobrakeSurvived, 100, false},
+		{BadgePressed, "threshold", StatPeakGSurvived, 10, false},
+		{BadgeFeather, "threshold", StatSoftestLanding, 0.5, true},
+		{BadgeCanyonRun, "threshold", StatLowestPass, 100, true},
+		{BadgeOldHand, "threshold", StatLandings, 25, false},
+		{BadgeWanderer, "threshold", StatSOIBodies, 3, false},
+		{BadgeVoyager, "threshold", StatSOIBodies, 5, false},
+		{BadgeGrandTour, "threshold", StatSOIBodies, 8, false},
+		{BadgeGroundskeeper, "threshold", StatLandedBodies, 3, false},
+		{"reached_", "family", "vehicle.soi", 0, false},
+		{"orbited_", "family", "vehicle.orbit", 0, false},
+		{"landed_on_", "family", "vehicle.landed", 0, false},
+		{BadgeNotOnTheirFeet, "event", "kitten.tumble", 0, false},
+		{BadgePersistentlyUpsideDown, "threshold", StatKittenTumbles, 50, false},
+		{BadgeCrowdedCapsule, "threshold", StatBiggestRecovery, 4, false},
+		{BadgeSpacewalker, "threshold", StatEVAs, 10, false},
+		{BadgeTheLongWalk, "threshold", StatLongestEVA, 3_600, false},
+		{BadgeFerryService, "threshold", StatKittensToOrbitAndBack, 10, false},
+	}
+
+	folds := BadgeFolds()
+	if len(folds) != len(want) {
+		t.Fatalf("active folds = %d, want %d", len(folds), len(want))
+	}
+	activeFixed := map[string]bool{}
+	for i, fold := range folds {
+		got := want[i]
+		switch f := fold.(type) {
+		case eventBadge:
+			if got.shape != "event" || f.badge != got.key || f.typ != got.source {
+				t.Errorf("fold %d = event %q/%q, want %+v", i, f.badge, f.typ, got)
+			}
+			activeFixed[f.badge] = true
+		case compositeBadge:
+			if got.shape != "composite" || f.badge != got.key || f.typ != got.source {
+				t.Errorf("fold %d = composite %q/%q, want %+v", i, f.badge, f.typ, got)
+			}
+			activeFixed[f.badge] = true
+		case thresholdBadge:
+			if got.shape != "threshold" || f.badge != got.key || f.stat != got.source || f.n != got.n || f.below != got.below {
+				t.Errorf("fold %d = threshold %q/%q/%g/%v, want %+v", i, f.badge, f.stat, f.n, f.below, got)
+			}
+			activeFixed[f.badge] = true
+		case reachedBodyBadge:
+			if got.key != "reached_" || got.source != "vehicle.soi" {
+				t.Errorf("fold %d = reached family, want %+v", i, got)
+			}
+		case orbitedBodyBadge:
+			if got.key != "orbited_" || got.source != "vehicle.orbit" {
+				t.Errorf("fold %d = orbited family, want %+v", i, got)
+			}
+		case landedOnBodyBadge:
+			if got.key != "landed_on_" || got.source != "vehicle.landed" {
+				t.Errorf("fold %d = landed family, want %+v", i, got)
+			}
+		default:
+			t.Errorf("fold %d has unexpected type %T", i, fold)
+		}
+	}
+	for _, badge := range FixedBadges() {
+		wantActive := badge.Key != BadgeBeenToEveryPlanet && badge.Key != BadgeBeenToEverything
+		if activeFixed[badge.Key] != wantActive {
+			t.Errorf("fixed badge %q active=%v, want %v", badge.Key, activeFixed[badge.Key], wantActive)
+		}
+	}
+	withoutBadges := append(foldNames(StateFolds()), foldNames(BoardFolds())...)
+	withoutBadges = append(withoutBadges, foldNames(LogFolds())...)
+	if BuildID(12) == buildIDForNames(12, withoutBadges) {
+		t.Error("activating the F5 catalogue did not change BuildID from the F4 fold set")
+	}
+}
+
+func TestActiveEventPredicatesUseExactBoundaries(t *testing.T) {
+	tests := []struct {
+		name string
+		when func(Event) bool
+		yes  Event
+		no   Event
+	}{
+		{"space", atmosphereExited, Event{Type: "vehicle.atmosphere", Payload: VehicleAtmosphere{Dir: "exited"}}, Event{Type: "vehicle.atmosphere", Payload: VehicleAtmosphere{Dir: "entered"}}},
+		{"orbit", orbitAchieved, Event{Type: "vehicle.orbit", Payload: VehicleOrbit{Phase: "achieved"}}, Event{Type: "vehicle.orbit", Payload: VehicleOrbit{Phase: "escaped"}}},
+		{"landing", landingSurvived, Event{Type: "vehicle.landed", Payload: VehicleLanded{Survived: true}}, Event{Type: "vehicle.landed", Payload: VehicleLanded{Survived: false}}},
+		{"recovery", flightRecovered, Event{Type: "flight.ended", Payload: FlightEnded{Reason: "recovered"}}, Event{Type: "flight.ended", Payload: FlightEnded{Reason: "destroyed"}}},
+		{"tumble", tumbleFromAirborne, Event{Type: "kitten.tumble", Payload: KittenTumble{From: "airborne"}}, Event{Type: "kitten.tumble", Payload: KittenTumble{From: "grounded"}}},
+	}
+	for _, test := range tests {
+		if !test.when(test.yes) || test.when(test.no) || test.when(Event{Payload: struct{}{}}) {
+			t.Errorf("%s predicate did not keep its exact payload boundary", test.name)
+		}
+	}
+}
+
+func TestEveryActiveThresholdPredicateUsesItsExactBoundary(t *testing.T) {
+	count := 0
+	for _, fold := range BadgeFolds() {
+		f, ok := fold.(thresholdBadge)
+		if !ok {
+			continue
+		}
+		count++
+		t.Run(f.badge, func(t *testing.T) {
+			if !f.met(f.n) {
+				t.Errorf("boundary %g did not qualify", f.n)
+			}
+			if f.below {
+				if !f.met(f.n/2) || f.met(0) || f.met(f.n+0.01) {
+					t.Errorf("below predicate is not 0 < value <= %g", f.n)
+				}
+				return
+			}
+			if !f.met(f.n+1) || f.met(f.n-0.01) {
+				t.Errorf("threshold predicate is not value >= %g", f.n)
+			}
+		})
+	}
+	if count != 19 {
+		t.Fatalf("tested %d active thresholds, want all 19", count)
+	}
+}
+
+func TestExplorationTiersCoexistAndFixedContextsAreNull(t *testing.T) {
+	p := testutil.MemProjections(t)
+	runBadgeBatch(t, p, 0, func(b *Batch) error {
+		ev := Event{Seq: 8, PlayerID: 1, Career: "save", Type: "threshold"}
+		if err := b.EnsureCareer(t.Context(), 1, "save", 1); err != nil {
+			return err
+		}
+		if err := setValue(t.Context(), b, ev, StatSOIBodies, 8); err != nil {
+			return err
+		}
+		if err := setCareerValue(t.Context(), b, ev, StatSOIBodies, 8); err != nil {
+			return err
+		}
+		for _, fold := range BadgeFolds() {
+			if f, ok := fold.(thresholdBadge); ok && (f.badge == BadgeWanderer || f.badge == BadgeVoyager || f.badge == BadgeGrandTour) {
+				if err := f.Apply(t.Context(), b, ev); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	})
+	rows := badgeRows(t, p)
+	if len(rows) != 6 {
+		t.Fatalf("tier rows = %+v, want all three in both scopes", rows)
+	}
+	for _, row := range rows {
+		if row.context.Valid {
+			t.Errorf("fixed badge %q context = %q, want SQL NULL", row.badge, row.context.String)
+		}
+	}
+}
+
+func TestFamilyBadgeContextContainsOnlyBody(t *testing.T) {
+	p := testutil.MemProjections(t)
+	runBadgeBatch(t, p, 0, func(b *Batch) error {
+		if err := b.EnsureCareer(t.Context(), 1, "save", 1); err != nil {
+			return err
+		}
+		ev := Event{Seq: 2, PlayerID: 1, Career: "save", FlightID: ids.ID{12}, Type: "vehicle.soi", Payload: VehicleSOI{ToBody: "luna"}}
+		return (reachedBodyBadge{}).Apply(t.Context(), b, ev)
+	})
+	for _, row := range badgeRows(t, p) {
+		if !row.context.Valid || row.context.String != `{"body":"luna"}` {
+			t.Errorf("family context = %+v, want only body", row.context)
+		}
+	}
+}
+
+func TestActiveCatalogueIsSameAcrossBatchSplitsAndRefinedReplay(t *testing.T) {
+	flight := ids.ID{13}
+	zero := 0
+	events := []Event{
+		{Seq: 1, PlayerID: 1, Career: "save", FlightID: flight, Type: "flight.started", Payload: FlightStarted{Body: "earth", CrewCount: 1, EngineCount: &zero, PartCount: 100, StageCount: 5}},
+		{Seq: 2, PlayerID: 1, Career: "save", FlightID: flight, Type: "vehicle.orbit", Payload: VehicleOrbit{Phase: "achieved", Body: "earth", MassKg: 20_000}},
+		{Seq: 3, PlayerID: 1, Career: "save", FlightID: flight, Type: "vehicle.soi", Payload: VehicleSOI{FromBody: "earth", ToBody: "luna"}},
+		{Seq: 4, PlayerID: 1, Career: "save", FlightID: flight, Type: "vehicle.docked", Payload: VehicleDock{}},
+		{Seq: 5, PlayerID: 1, Career: "save", FlightID: flight, Type: "vehicle.landed", Payload: VehicleLanded{Body: "luna", Survived: true, VerticalSpeedMs: 0.5}},
+		{Seq: 6, PlayerID: 1, Career: "save", FlightID: flight, Type: "flight.ended", Payload: FlightEnded{Reason: "recovered", CrewCount: 4, Kids: []string{"a"}}},
+		{Seq: 7, PlayerID: 1, Career: "save", FlightID: flight, Type: "kitten.tumble", Payload: KittenTumble{From: "airborne", Body: "luna"}},
+		{Seq: 8, PlayerID: 1, Career: "save", FlightID: flight, Type: "kitten.eva_start", Payload: struct{}{}},
+		{Seq: 9, PlayerID: 1, Career: "save", FlightID: flight, Type: "vehicle.staging", Payload: VehicleStaging{StageIndex: 0}},
+		{Seq: 10, PlayerID: 1, Career: "save", FlightID: flight, Type: "vehicle.rud", Payload: VehicleRUD{Body: "luna", Cause: "collision", PartCount: 1}},
+	}
+
+	project := func(t *testing.T, mode string) []badgeTestRow {
+		p := testutil.MemProjections(t)
+		applyEvents := func(folds []Fold, refined bool, subset []Event) {
+			t.Helper()
+			if err := p.WithWriteTx(t.Context(), func(tx *sql.Tx) error {
+				b := NewBatch(tx, BatchOptions{})
+				if refined {
+					b = NewRefinedBatch(tx, nil, BatchOptions{})
+				}
+				for _, ev := range subset {
+					for _, fold := range folds {
+						if err := fold.Apply(t.Context(), b, ev); err != nil {
+							return err
+						}
+					}
+				}
+				return b.Flush(t.Context())
+			}); err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		switch mode {
+		case "same":
+			applyEvents(Folds(), false, events)
+		case "split":
+			for _, ev := range events {
+				applyEvents(Folds(), false, []Event{ev})
+			}
+		case "refined":
+			applyEvents(StateFolds(), false, events)
+			applyEvents(SecondPassFolds(), true, events)
+		default:
+			t.Fatalf("unknown mode %q", mode)
+		}
+		return badgeRows(t, p)
+	}
+
+	want := project(t, "same")
+	if len(want) == 0 {
+		t.Fatal("representative active catalogue history earned no badges")
+	}
+	for _, mode := range []string{"split", "refined"} {
+		if got := project(t, mode); !slices.Equal(got, want) {
+			t.Errorf("%s badge projection = %+v, want %+v", mode, got, want)
 		}
 	}
 }

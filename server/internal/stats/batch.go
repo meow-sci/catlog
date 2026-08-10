@@ -86,8 +86,10 @@ type Batch struct {
 	// batch. Threshold badges and derived totals both use this read-through.
 	values            map[statKey]float64
 	valueLoaded       map[statKey]bool
+	valueExists       map[statKey]bool
 	careerValues      map[careerStatKey]float64
 	careerValueLoaded map[careerStatKey]bool
+	careerValueExists map[careerStatKey]bool
 
 	// Write accumulators, one map per rule. Cleared by every flush. Indexed by
 	// [statKind] rather than carrying it in the value, so the flush walks one
@@ -172,8 +174,10 @@ func NewBatch(tx *sql.Tx, opts BatchOptions) *Batch {
 		careerKittens:     map[int64]map[careerKittenKey]*careerKittenEntry{},
 		values:            map[statKey]float64{},
 		valueLoaded:       map[statKey]bool{},
+		valueExists:       map[statKey]bool{},
 		careerValues:      map[careerStatKey]float64{},
 		careerValueLoaded: map[careerStatKey]bool{},
+		careerValueExists: map[careerStatKey]bool{},
 		badges:            map[badgeKey]*badgeEntry{},
 		census:            map[censusKey]*pendingCensus{},
 	}
@@ -1457,8 +1461,10 @@ func (b *Batch) putStat(kind statKind, playerID int64, stat string, value float6
 	if kind == kindSet {
 		b.values[k] = value
 		b.valueLoaded[k] = true
+		b.valueExists[k] = true
 	} else if b.valueLoaded[k] {
-		b.values[k] = mergedBoardValue(kind, b.values[k], true, value)
+		b.values[k] = mergedBoardValue(kind, b.values[k], b.valueExists[k], value)
+		b.valueExists[k] = true
 	}
 }
 
@@ -1508,8 +1514,10 @@ func (b *Batch) putCareerStat(kind statKind, ev Event, system, stat string, valu
 	if kind == kindSet {
 		b.careerValues[k] = value
 		b.careerValueLoaded[k] = true
+		b.careerValueExists[k] = true
 	} else if b.careerValueLoaded[k] {
-		b.careerValues[k] = mergedBoardValue(kind, b.careerValues[k], true, value)
+		b.careerValues[k] = mergedBoardValue(kind, b.careerValues[k], b.careerValueExists[k], value)
+		b.careerValueExists[k] = true
 	}
 }
 
@@ -1569,6 +1577,7 @@ func (b *Batch) StatValue(ctx context.Context, playerID int64, stat string) (flo
 	}
 	b.values[k] = v
 	b.valueLoaded[k] = true
+	b.valueExists[k] = exists
 	return v, nil
 }
 
@@ -1600,6 +1609,7 @@ func (b *Batch) CareerStatValue(ctx context.Context, playerID int64, career, sta
 	}
 	b.careerValues[k] = v
 	b.careerValueLoaded[k] = true
+	b.careerValueExists[k] = exists
 	return v, nil
 }
 

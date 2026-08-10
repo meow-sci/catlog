@@ -68,7 +68,10 @@ export default defineConfig({
         },
         {
           label: "Merit badges",
-          items: [{ label: "How badges work", slug: "badges" }],
+          items: [
+            { label: "How badges work", slug: "badges" },
+            { label: "Every badge", slug: "badges/catalog" },
+          ],
         },
         {
           label: "Reference",

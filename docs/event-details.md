@@ -2413,12 +2413,10 @@ real clock reading of zero. If context encoding fails, neither scope is offered.
 identity still permits the lifetime candidate; missing system identity is retained honestly as the
 empty system rather than suppressing either scope.
 
-`award` deliberately performs no `scoreable` check. A later badge fold owns its predicate and
+`award` deliberately performs no `scoreable` check. The registered badge fold owns its predicate and
 eligibility because flightless events have no flight state to gate, while every flight-bearing fold
 must use the existing final-state rule. It also performs no registry check: a concrete fold supplies
-its compile-time or validated family key. The helper is plumbing, not a badge rule: no registered
-fold calls it yet, so the table remains empty from ordinary event projection
-(`stats/fold.go:296-313`).
+its compile-time or validated family key (`stats/fold.go:296-313`).
 
 `HasBadge(player_id, career, badge)` is a composite-badge read-through: it checks the pending map
 before querying `badge_award`, caching both existence and absence, so a later event in the same
@@ -2468,8 +2466,8 @@ a higher tier never removes a lower one (`stats/badges.go:57-138,196-230`).
 | 25 | `voyager` | Voyager | You reached five worlds. | `exploration` | 2 | `soi_bodies >= 5` |
 | 26 | `grand_tour` | Grand Tour | You reached eight worlds. | `exploration` | 3 | `soi_bodies >= 8` |
 | 27 | `groundskeeper` | Groundskeeper | You landed on three worlds. | `exploration` | — | `landed_bodies >= 3` |
-| 28 | `been_to_every_planet` | Every World | You visited every planet in this system. | `exploration` | — | entered every `kind == "planet"` body in the save's effectively complete system catalogue |
-| 29 | `been_to_everything` | Nothing Left | You visited everything in this system. | `exploration` | — | entered every body in the save's effectively complete system catalogue |
+| 28 | `been_to_every_planet` | Every World | You visited every planet in this system. | `exploration` | — | **inactive until F7**; entered every `kind == "planet"` body in the save's effectively complete system catalogue |
+| 29 | `been_to_everything` | Nothing Left | You visited everything in this system. | `exploration` | — | **inactive until F7**; entered every body in the save's effectively complete system catalogue |
 | 30 | `not_on_their_feet` | Not On Their Feet | A kitten failed to land on their feet. | `kittens` | — | first `kitten.tumble` with `from == "airborne"` |
 | 31 | `persistently_upside_down` | Persistently Upside Down | Your kittens have tumbled fifty times. | `kittens` | — | `kitten_tumbles >= 50` |
 | 32 | `crowded_capsule` | Crowded Capsule | You brought four kittens home at once. | `kittens` | — | `biggest_recovery >= 4` |
@@ -2497,8 +2495,11 @@ described or stored. `KnownBadge` accepts every fixed key and a valid family key
 holder for direct lookup; the stricter catalogue gate is separate
 (`stats/badges.go:161-230`).
 
-F4 supplies the four reusable fold shapes, but `BadgeFolds` remains empty until F5 activates the
-complete starter catalogue; none of these entries is earnable yet. `SecondPassFolds` is ordered
+F5 activates every predicate expressible with F4's four shapes: **33 fixed badges plus all three
+dynamic family folds**. The two fixed subset badges `been_to_every_planet` and
+`been_to_everything` remain registered metadata but deliberately have no fold until F7 implements
+the effectively-complete-catalogue comparison; they cannot currently produce awards.
+`SecondPassFolds` is ordered
 `BoardFolds → BadgeFolds → LogFolds`, so threshold shapes read the post-write player and career board
 values through `Batch`. Event, composite and family shapes offer their first qualifying event to the
 shared two-scope `award` helper. Every concrete fold name contains its fixed badge key or stable
@@ -2512,6 +2513,14 @@ an orbit after it does not, and equal sequence numbers do not manufacture an ord
 predicates derive keys through `statSuffix`; an unkeyable body skips only its family badge and still
 counts toward fixed set and threshold badges. Every flight-bearing shape uses the existing
 final-state `scoreable` rule.
+
+The active folds are in the exact catalogue/group order shown above, with the three family folds in
+their declared order at the exploration slot where F7's two subset folds will later sit before them.
+All fixed awards use SQL NULL context: their badge key, earning sequence and documented predicate
+already identify the achievement, so copying arbitrary payload or a transient board winner into
+context would add data without meaning. A family award has exactly one context key,
+`{"body": <opaque game name>}`, because the derived key is normalised and the original reported name
+is the only additional fact its future detail surface needs.
 
 ---
 
@@ -3082,8 +3091,7 @@ start no later than the SOI event and a distinct nonempty destination. If the SO
 is deliberately never retro-awarded. Orbit remains a raw set-only milestone even when its event was
 early. The orbit fold also lowers `first_orbit_seq` to the earliest achieved-orbit sequence, so a
 composite can distinguish a prior orbit from one the rebuild first pass learned from the future.
-No current board reads the five milestone bits; F4's inactive composite helpers read orbit state,
-but `BadgeFolds` remains empty until the full F5 catalogue is activated.
+`kittens_to_orbit_and_back` reads the orbit state, as do F5's active orbit composites.
 
 `FlightState.HasStartFactAt(candidateSeq, factValid)` is that normative join predicate:
 `StartedSeq > 0 && StartedSeq <= candidateSeq && factValid`. A rebuild's first pass may know a later

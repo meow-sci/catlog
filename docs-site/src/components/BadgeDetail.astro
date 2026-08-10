@@ -1,0 +1,94 @@
+---
+/** Renders one fixed badge or family pattern from src/data/badges.ts. */
+import { badgeByKey } from "../data/badges";
+import { segments } from "./rich";
+import "./detail.css";
+
+interface Props {
+  badge: string;
+}
+
+const { badge: key } = Astro.props;
+const badge = badgeByKey(key);
+if (!badge) throw new Error(`Unknown badge in BadgeDetail: ${key}`);
+
+const anchor = badge.badge.replaceAll(/[<>]/g, "");
+const statusLabel = badge.status === "active" ? "Awarded now" : "Not awarded yet";
+---
+
+<section class="badge-detail" id={anchor}>
+  <h3 class="badge-detail-h">
+    {badge.title}
+    {badge.tier && <span class="ev-pill">tier {badge.tier}</span>}
+    <span class={`ev-pill badge-status-${badge.status}`}>{statusLabel}</span>
+  </h3>
+
+  <p class="badge-key"><code>{badge.badge}</code></p>
+  <p class="badge-what">{badge.what}</p>
+
+  <dl class="ev-dl">
+    <dt>Built from</dt>
+    <dd>
+      {
+        badge.from.map((event, index) => (
+          <>
+            {index > 0 && ", "}
+            <code>{event}</code>
+          </>
+        ))
+      }
+    </dd>
+    {badge.family && <dt>Where the key comes from</dt>}
+    {badge.family && (
+      <dd>{segments(badge.family.from).map((part) => (part.code ? <code>{part.text}</code> : part.text))}</dd>
+    )}
+    <dt>How it is awarded</dt>
+    <dd>{segments(badge.how).map((part) => (part.code ? <code>{part.text}</code> : part.text))}</dd>
+    <dt>What is excluded</dt>
+    <dd>
+      <ul class="badge-exclusions">
+        {badge.excluded.map((item) => <li>{segments(item).map((part) => (part.code ? <code>{part.text}</code> : part.text))}</li>)}
+      </ul>
+    </dd>
+  </dl>
+</section>
+
+<style is:global>
+  .badge-detail {
+    margin-block: 2.5rem;
+  }
+
+  .badge-detail-h {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    align-items: baseline;
+  }
+
+  .badge-key {
+    margin-block: 0.2rem;
+    font-size: var(--sl-text-sm);
+  }
+
+  .badge-what {
+    font-size: var(--sl-text-lg);
+  }
+
+  .badge-status-active {
+    border-color: var(--sl-color-accent);
+    color: var(--sl-color-accent);
+  }
+
+  .badge-status-inactive {
+    color: var(--sl-color-gray-3);
+  }
+
+  .badge-exclusions {
+    margin: 0;
+    padding-inline-start: 1.1rem;
+  }
+
+  .badge-exclusions li {
+    margin-block: 0.15rem;
+  }
+</style>

@@ -1957,6 +1957,34 @@ therefore merge pending count, record, best and set writes over its SQL baseline
 would award one event late after a flush and never award inside a large unflushed batch. Keeping the
 effective value updated after its first read makes both paths identical.
 
+### PROJ-124 — The starter catalogue activates every F4 shape together and leaves completeness to its own fold
+
+*Accepted · 2026-08-10 · Task F5.*
+
+F5 activates 33 fixed badges and all three dynamic body families in the registry's exact group and
+display order. The two remaining fixed entries, `been_to_every_planet` and `been_to_everything`,
+stay metadata-only until F7. They are subset questions over an effectively complete game-reported
+system catalogue, not another threshold or event predicate; pretending they award now would either
+compile a body list into the server or weaken “every” into an answer the documented rule does not
+ask. Keeping them visible but explicitly inactive makes the implementation boundary honest without
+forking the catalogue.
+
+All flight-bearing event, composite and family folds use final flight state; threshold folds inherit
+the board fold's eligibility by reading its post-write effective value after `BoardFolds`. Launch
+facts remain ordered through `HasStartFactAt`; zero-engine means the nullable fact is present and
+exactly zero, never “no propulsion detected.” Orbit/recovery ordering uses `first_orbit_seq`, so a
+rebuild cannot borrow a future orbit. Tier badges are independent rows: reaching eight bodies keeps
+the three-, five- and eight-body awards because they answer cumulative milestones rather than a
+single replaceable level.
+
+Fixed awards deliberately store NULL context. Their key and first qualifying event already state
+what happened, and copying arbitrary payload fields would expand a future public surface without a
+consumer. Dynamic family awards keep exactly `body`, preserving the opaque reported name behind the
+normalised key. Fold names contain the fixed key or stable family identity, so activating this
+catalogue changes `BuildID` and rebuilds existing immutable history. The existing schema and
+`BuildVersion` need no further bump: F5 adds named folds, while PROJ-123 already bumped the one
+existing fold whose meaning changed.
+
 ## Archive & restore
 
 The filesystem archiver, the manifest, restore verification, and the R2 design that is deliberately not built.

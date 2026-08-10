@@ -389,8 +389,10 @@ latter preserves the row an earlier flush already committed. Cache entries survi
 their pending marker cleared (`stats/batch.go:1545-1638,1873-1884`).
 
 Threshold folds read the effective post-board value through `StatValue` and `CareerStatValue`.
-Those caches merge pending count, record, best and set writes over the stored baseline, then update
-the cached effective value as later writes arrive. A threshold therefore fires on the event that
+Those caches retain whether the stored row exists as well as its numeric value, merge pending count,
+record, best and set writes over that baseline, then update the cached effective value as later
+writes arrive. The existence bit matters for ascending boards: an absent row is not a real zero that
+can defeat the first positive best value. A threshold therefore fires on the event that
 crosses it whether that event shares a large projector batch with earlier contributions or follows
 a flush/reload boundary.
 
@@ -398,10 +400,11 @@ The shared `award` helper writes one lifetime candidate and, when a career exist
 per-save candidate with identical sequence, server receive time, nullable simulation time and
 context. `HasSimTime` distinguishes an absent clock from a real zero, and a context-encoding failure
 writes neither scope. It resolves the career's system once; the lifetime row retains that career as provenance,
-whereas the save row already carries it in its key. The helper does not decide eligibility and no
-badge fold calls it yet; registry membership is supplied by the future concrete fold rather than
-checked here. This plumbing therefore writes nothing during ordinary projection
-(`stats/fold.go:296-313`).
+whereas the save row already carries it in its key. The helper does not decide eligibility; each
+registered concrete fold supplies its compile-time or validated family key and owns the established
+flight/board eligibility rule (`stats/fold.go:296-313`). F5 registers 33 fixed folds and three
+dynamic family folds. The two effectively-complete-system subset badges remain metadata-only until
+F7.
 
 State folds run `systemFold → flightFold → careerFold` before every board. `systemFold` is first
 because `system.discovered` precedes `session.started` in the same client boundary and board folds

@@ -5,10 +5,85 @@ import (
 	"fmt"
 )
 
-// BadgeFolds is intentionally empty until F5 activates the complete starter
-// catalogue atomically. F4 supplies and tests the reusable fold shapes without
-// creating an arbitrary partial public award set.
-func BadgeFolds() []Fold { return nil }
+// BadgeFolds returns the active starter catalogue in display order. The two
+// everywhere subset badges remain metadata-only until F7 supplies their
+// complete-system predicate; everything expressible with F4's four shapes is
+// active here.
+func BadgeFolds() []Fold {
+	return []Fold{
+		// First steps.
+		eventBadge{badge: BadgeFirstFlight, typ: "flight.started"},
+		eventBadge{badge: BadgeFirstStage, typ: "vehicle.staging"},
+		eventBadge{badge: BadgeFirstSpace, typ: "vehicle.atmosphere", when: atmosphereExited},
+		eventBadge{badge: BadgeFirstOrbit, typ: "vehicle.orbit", when: orbitAchieved},
+		eventBadge{badge: BadgeFirstLanding, typ: "vehicle.landed", when: landingSurvived},
+		eventBadge{badge: BadgeFirstRecovery, typ: "flight.ended", when: flightRecovered},
+		eventBadge{badge: BadgeFirstEVA, typ: "kitten.eva_start"},
+		eventBadge{badge: BadgeFirstDock, typ: "vehicle.docked"},
+		eventBadge{badge: BadgeFirstRUD, typ: "vehicle.rud"},
+
+		// Flight.
+		compositeBadge{badge: BadgeCrewedOrbit, typ: "vehicle.orbit", when: crewedOrbitCandidate},
+		compositeBadge{badge: BadgeOrbitAndBack, typ: "flight.ended", when: orbitAndBackCandidate},
+		compositeBadge{badge: BadgeDockedAfterOrbit, typ: "vehicle.docked", when: dockedAfterOrbitCandidate},
+		compositeBadge{badge: BadgeCoaster, typ: "vehicle.soi", when: coasterCandidate},
+		thresholdBadge{badge: BadgeHeavyLifter, stat: StatHeaviestToOrbit, n: 20_000},
+		thresholdBadge{badge: BadgeBigStack, stat: StatBiggestStack, n: 5},
+		thresholdBadge{badge: BadgeManyParts, stat: StatMostParts, n: 100},
+		thresholdBadge{badge: BadgeWellLit, stat: StatEngineIgnitions, n: 100},
+
+		// Survival.
+		thresholdBadge{badge: BadgeLithobraker, stat: StatBiggestLithobrakeSurvived, n: 50},
+		thresholdBadge{badge: BadgeGroundTruth, stat: StatBiggestLithobrakeSurvived, n: 100},
+		thresholdBadge{badge: BadgePressed, stat: StatPeakGSurvived, n: 10},
+		thresholdBadge{badge: BadgeFeather, stat: StatSoftestLanding, n: 0.5, below: true},
+		thresholdBadge{badge: BadgeCanyonRun, stat: StatLowestPass, n: 100, below: true},
+		thresholdBadge{badge: BadgeOldHand, stat: StatLandings, n: 25},
+
+		// Exploration. The two everywhere metadata entries sit after
+		// groundskeeper; F7 will insert their subset folds before the families.
+		thresholdBadge{badge: BadgeWanderer, stat: StatSOIBodies, n: 3},
+		thresholdBadge{badge: BadgeVoyager, stat: StatSOIBodies, n: 5},
+		thresholdBadge{badge: BadgeGrandTour, stat: StatSOIBodies, n: 8},
+		thresholdBadge{badge: BadgeGroundskeeper, stat: StatLandedBodies, n: 3},
+		reachedBodyBadge{},
+		orbitedBodyBadge{},
+		landedOnBodyBadge{},
+
+		// Kittens.
+		eventBadge{badge: BadgeNotOnTheirFeet, typ: "kitten.tumble", when: tumbleFromAirborne},
+		thresholdBadge{badge: BadgePersistentlyUpsideDown, stat: StatKittenTumbles, n: 50},
+		thresholdBadge{badge: BadgeCrowdedCapsule, stat: StatBiggestRecovery, n: 4},
+		thresholdBadge{badge: BadgeSpacewalker, stat: StatEVAs, n: 10},
+		thresholdBadge{badge: BadgeTheLongWalk, stat: StatLongestEVA, n: 3_600},
+		thresholdBadge{badge: BadgeFerryService, stat: StatKittensToOrbitAndBack, n: 10},
+	}
+}
+
+func atmosphereExited(ev Event) bool {
+	p, ok := payloadOf[VehicleAtmosphere](ev)
+	return ok && p.Dir == "exited"
+}
+
+func orbitAchieved(ev Event) bool {
+	p, ok := payloadOf[VehicleOrbit](ev)
+	return ok && p.Phase == "achieved"
+}
+
+func landingSurvived(ev Event) bool {
+	p, ok := payloadOf[VehicleLanded](ev)
+	return ok && p.Survived
+}
+
+func flightRecovered(ev Event) bool {
+	p, ok := payloadOf[FlightEnded](ev)
+	return ok && p.Reason == "recovered"
+}
+
+func tumbleFromAirborne(ev Event) bool {
+	p, ok := payloadOf[KittenTumble](ev)
+	return ok && p.From == "airborne"
+}
 
 // eventBadge awards on the first event of typ that satisfies when.
 type eventBadge struct {
