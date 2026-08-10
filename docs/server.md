@@ -792,7 +792,7 @@ issuance to the world.
 | `GET /admin/projections/rebuild` | `rebuild -status` | Phase, events scanned, head, and whether the loop is suspended |
 | `POST /admin/archive/run` / `restore` | `archive` / `archive-restore` | §5.10 |
 | `POST /admin/backup` | `backup` | Quiesce the writer, copy `events.db` **and its `-wal`** |
-| `POST /admin/seed` | `seed` | Deterministic demo histories covering boards plus fixed, tier and publishable family badges |
+| `POST /admin/seed` | `seed` | Deterministic demo histories covering boards, representative badges and all six challenge rules when the server receive clock is inside Week 33 |
 | `POST /admin/events` | — | Insert events directly. The dev-loop tool: push one, watch the feed. |
 | `POST /admin/clock` | — | Move the server's notion of now. Development only, mounted only when enabled. |
 | `POST /admin/denylist/publish` | `denylist` | Regenerate the signed deny-list |
@@ -813,6 +813,14 @@ up when `lag_seq == 0` **and** `checkpoint_seq == events.max_seq`. Both halves a
 an empty log the lag is zero because there is nothing to do, and a checkpoint at the head cannot on
 its own distinguish "caught up" from "the fold loop is not running". Nothing in the test harnesses
 sleeps and hopes.
+
+The throwaway `server-run-test-env` moves the development clock to the fixed in-window instant
+`2026-08-14 00:00 UTC` before `POST /admin/seed`. The seed still inserts ordinary immutable events
+and drains the ordinary projector: it does not write challenge tables directly or alter challenge
+definitions. All six shipped definitions share the Appendix C Week 33 window, so browser coverage
+observes the populated Open state, advances `/admin/clock` past the common close to observe the same
+retained rows under Finished, then restores the in-window clock. Open and Finished cannot honestly
+be populated simultaneously with this registry; the test does not invent a seventh fixture rule.
 
 ## §5.10 Archiver
 

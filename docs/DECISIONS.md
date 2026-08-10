@@ -2226,6 +2226,30 @@ timestamps. Closed challenges stay readable because retained results are the arc
 also performs the privacy joins promised by PROJ-133—per-player save labels, friendly systems,
 receive times and recursive context redaction—so raw career identity never enters a response type.
 
+### PROJ-135 — Challenge demo coverage moves the test clock, not the compile-time calendar
+
+*Accepted · 2026-08-10 · Task I4.*
+
+All six shipped Appendix C challenges deliberately share the same fixed Week 33 window. The older
+I4 outline asked one seeded challenge to be open while another was already closed, but satisfying
+that literally would require changing a shipped window or adding a fixture-only seventh definition.
+Either choice would make the public compile-time catalogue serve the test instead of the product and
+would break the registry/data parity H4 established.
+
+The throwaway e2e server therefore moves its existing development-only clock to the fixed in-window
+instant `2026-08-14 00:00 UTC` before `/admin/seed`. The seed continues to insert real events through
+the immutable log and ordinary projector, now with inputs that genuinely exercise all six challenge
+rules. Browser coverage first proves their Open standings, then moves the same server clock past the
+common close and proves that the retained rows are served from Finished, finally restoring the
+in-window clock. This covers both presentation states truthfully and deterministically, just not at
+the same instant—an impossible state for the current registry.
+
+The fixture pins representative values, scope sentinels, system/save provenance and coasting member
+state, but not entrant or definition totals. New definitions are expected to extend the catalogue;
+freezing its size would repeat the brittle catalogue assertion rejected by PROJ-039 and PROJ-128.
+Moving the clock after an event cannot retroactively admit it, so manual testing must start with a
+fresh data directory when changing the seed receive instant.
+
 ## Archive & restore
 
 The filesystem archiver, the manifest, restore verification, and the R2 design that is deliberately not built.

@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/meow-sci/catlog/server/internal/directory"
 	"github.com/meow-sci/catlog/server/internal/ids"
@@ -22,6 +23,12 @@ import (
 )
 
 func TestDatasetIsDeterministic(t *testing.T) {
+	for _, challenge := range stats.Challenges() {
+		if !challenge.InWindow(seed.ChallengeRecvMS) {
+			t.Errorf("fixed seed receive time %d is outside %s [%d,%d)",
+				seed.ChallengeRecvMS, challenge.Key, challenge.Opens, challenge.Closes)
+		}
+	}
 	a, b := seed.Dataset(), seed.Dataset()
 	if len(a) != len(b) || len(a) != 3 {
 		t.Fatalf("dataset has %d players, want 3", len(a))
@@ -66,9 +73,9 @@ func TestDatasetIsDeterministic(t *testing.T) {
 	}
 }
 
-func TestSeedProducesExpectedBoardsAndBadges(t *testing.T) {
+func TestSeedProducesExpectedBoardsBadgesAndChallenges(t *testing.T) {
 	dir := t.TempDir()
-	events := testutil.EventsAt(t, filepath.Join(dir, "events.db"))
+	events := challengeEventsAt(t, filepath.Join(dir, "events.db"))
 	projections := testutil.ProjectionsAt(t, filepath.Join(dir, "projections.db"))
 	keys := testutil.Keys(t)
 	ctx := t.Context()
@@ -292,6 +299,87 @@ func TestSeedProducesExpectedBoardsAndBadges(t *testing.T) {
 				t.Errorf("demo_ace Save 2 reached_luna provenance = %+v context=%s", family, family.Context)
 			}
 		}
+
+		// Challenge rows are also genuine output of this event history. The
+		// injected receive clock is inside Week 33; event wall_t remains the
+		// deterministic January epoch and must not decide challenge admission.
+		type challengeWant struct {
+			key    string
+			player int64
+			value  float64
+			career string
+			system string
+			body   string
+			keys   []string
+			asc    bool
+		}
+		for _, want := range []challengeWant{
+			{key: "heavy_lift_week", player: 1, value: 51_000, system: seed.DemoSystemHash, body: "earth", keys: []string{"body", "flight"}},
+			{key: "speedrun_orbit", player: 1, value: 37_500, career: aceCareers[1].Career, system: seed.DemoSystemHash, body: "earth", keys: []string{"body", "flight"}, asc: true},
+			{key: "tumbleweek", player: 2, value: 4},
+			{key: "coasting_class", player: 1, value: 3, system: seed.DemoSystemHash, body: "mars", keys: []string{"body", "flight"}},
+			{key: "feather_touch", player: 1, value: 3.1, system: seed.DemoSystemHash, body: "mars", keys: []string{"body", "crew_count", "flight", "horizontal_speed_ms"}, asc: true},
+			{key: "full_house", player: 1, value: 3, keys: []string{"body", "flight"}},
+		} {
+			rows, err := proj.ChallengeLeaderboard(ctx, want.key, want.system, want.asc, 100, 0)
+			if err != nil {
+				return err
+			}
+			if len(rows) == 0 || rows[0].PlayerID != want.player || rows[0].Value != want.value ||
+				rows[0].Career != want.career || rows[0].System != want.system {
+				t.Errorf("seeded challenge %s rows = %+v, want player=%d value=%v career=%q system=%q",
+					want.key, rows, want.player, want.value, want.career, want.system)
+				continue
+			}
+			if want.keys == nil {
+				if rows[0].Context != nil {
+					t.Errorf("seeded challenge %s context = %s, want nil", want.key, rows[0].Context)
+				}
+				continue
+			}
+			var context map[string]any
+			if err := json.Unmarshal(rows[0].Context, &context); err != nil {
+				t.Errorf("seeded challenge %s context %s: %v", want.key, rows[0].Context, err)
+				continue
+			}
+			keys := make([]string, 0, len(context))
+			for key := range context {
+				keys = append(keys, key)
+			}
+			slices.Sort(keys)
+			if !slices.Equal(keys, want.keys) || context["body"] != want.body {
+				t.Errorf("seeded challenge %s context = %v, want keys=%v body=%q", want.key, context, want.keys, want.body)
+			}
+			if flight, ok := context["flight"].(string); !ok || flight == "" {
+				t.Errorf("seeded challenge %s has no flight provenance: %v", want.key, context)
+			}
+		}
+		memberRows, err := proj.Reader().QueryContext(ctx,
+			`SELECT member FROM challenge_member
+			 WHERE player_id = 1 AND career = '' AND system = ? AND challenge = 'coasting_class'
+			 ORDER BY first_seq`, seed.DemoSystemHash)
+		if err != nil {
+			return err
+		}
+		defer memberRows.Close()
+		var members []string
+		for memberRows.Next() {
+			var member string
+			if err := memberRows.Scan(&member); err != nil {
+				return err
+			}
+			members = append(members, member)
+		}
+		if err := memberRows.Err(); err != nil {
+			return err
+		}
+		wantMembers := make([]string, len(seed.StockBodyRun))
+		for i, soi := range seed.StockBodyRun {
+			wantMembers[i] = seed.DemoSystemHash + "\x00" + soi.ToBody
+		}
+		if !slices.Equal(members, wantMembers) {
+			t.Errorf("seeded coasting members = %q, want %q", members, wantMembers)
+		}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -327,7 +415,7 @@ func TestSeedIsWhatARebuildProduces(t *testing.T) {
 	// the flagged flight emits its flag before it scores anything for exactly
 	// this reason.
 	dir := t.TempDir()
-	events := testutil.EventsAt(t, filepath.Join(dir, "events.db"))
+	events := challengeEventsAt(t, filepath.Join(dir, "events.db"))
 	projections := testutil.ProjectionsAt(t, filepath.Join(dir, "projections.db"))
 	keys := testutil.Keys(t)
 	ctx := t.Context()
@@ -352,6 +440,7 @@ func TestSeedIsWhatARebuildProduces(t *testing.T) {
 	}
 	incrementalBoards := boardValues(t, live)
 	incrementalBadges := badgeRows(t, live)
+	incrementalChallenges := challengeRows(t, live)
 
 	if _, err := p.Rebuild(ctx); err != nil {
 		t.Fatalf("rebuild: %v", err)
@@ -362,6 +451,25 @@ func TestSeedIsWhatARebuildProduces(t *testing.T) {
 	if rebuilt := badgeRows(t, live); !slices.Equal(rebuilt, incrementalBadges) {
 		t.Errorf("rebuilt badges differ from seeded incremental state:\n rebuilt: %v\n seeded:  %v", rebuilt, incrementalBadges)
 	}
+	if rebuilt := challengeRows(t, live); !slices.Equal(rebuilt, incrementalChallenges) {
+		t.Errorf("rebuilt challenges differ from seeded incremental state:\n rebuilt: %v\n seeded:  %v", rebuilt, incrementalChallenges)
+	}
+}
+
+func challengeEventsAt(t *testing.T, path string) *store.Events {
+	t.Helper()
+	opts := testutil.Options()
+	opts.Now = func() time.Time { return time.UnixMilli(seed.ChallengeRecvMS) }
+	db, err := store.OpenEvents(t.Context(), path, opts)
+	if err != nil {
+		t.Fatalf("open challenge-timed events store at %s: %v", path, err)
+	}
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("close challenge-timed events store: %v", err)
+		}
+	})
+	return db
 }
 
 // boardValues reads player_stat keyed "handle/stat".
@@ -437,6 +545,54 @@ func badgeRows(t *testing.T, live *projector.Live) []string {
 	})
 	if err != nil {
 		t.Fatalf("read badges: %v", err)
+	}
+	return out
+}
+
+// challengeRows snapshots both challenge tables. Distinct-set membership is
+// projection state too: matching only the visible score could hide a rebuild
+// that forgot which worlds had already contributed.
+func challengeRows(t *testing.T, live *projector.Live) []string {
+	t.Helper()
+	var out []string
+	err := live.With(func(p *store.Projections) error {
+		for _, query := range []string{
+			`SELECT player_id, career, system, challenge, value, context, updated_seq
+			 FROM challenge_stat ORDER BY player_id, career, system, challenge`,
+			`SELECT player_id, career, system, challenge, member, first_seq
+			 FROM challenge_member ORDER BY player_id, career, system, challenge, member`,
+		} {
+			rows, err := p.Reader().QueryContext(t.Context(), query)
+			if err != nil {
+				return err
+			}
+			columns, err := rows.Columns()
+			if err != nil {
+				rows.Close()
+				return err
+			}
+			for rows.Next() {
+				values := make([]any, len(columns))
+				pointers := make([]any, len(columns))
+				for i := range values {
+					pointers[i] = &values[i]
+				}
+				if err := rows.Scan(pointers...); err != nil {
+					rows.Close()
+					return err
+				}
+				out = append(out, fmt.Sprint(values))
+			}
+			if err := rows.Err(); err != nil {
+				rows.Close()
+				return err
+			}
+			rows.Close()
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("read challenges: %v", err)
 	}
 	return out
 }

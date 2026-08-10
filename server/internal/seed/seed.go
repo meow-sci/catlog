@@ -9,7 +9,9 @@
 // `demo_tumbler`, `demo_crasher` — chosen so that between them they set a record
 // on every launch board, including the ones nobody hits by accident (a survived
 // lithobrake, all six RUD causes, a flagged flight that must score nothing), and
-// genuinely earn representative fixed, tier and body-family badges.
+// genuinely earn representative fixed, tier and body-family badges. When the
+// caller fixes the server receive clock inside Week 33, the same ordinary
+// history also exercises every shipped challenge rule.
 //
 // # Why it is deterministic
 //
@@ -92,6 +94,11 @@ var StockBodyRun = []stats.VehicleSOI{
 // derived ULIDs are byte-identical run to run.
 const EpochMS int64 = 1767225600000
 
+// ChallengeRecvMS is the fixed receive clock used by the throwaway e2e
+// server before it installs this dataset. It falls inside the six shipped
+// Week 33 challenge windows; event wall times remain based on EpochMS above.
+const ChallengeRecvMS int64 = 1786665600000
+
 // Result reports what a seed run did.
 type Result struct {
 	Players  []string `json:"players"`
@@ -160,6 +167,7 @@ func Apply(ctx context.Context, events *store.Events, keySet *keys.Set, now int6
 // speed and g boards.
 func ace() PlayerData {
 	b := newBuilder(HandleAce)
+	noEngines := 0
 	b.session()
 	b.startFlight(1, stats.FlightStarted{
 		VehicleName: "Whisker IX", Body: "kerbin", MassKg: 42000, PartCount: 34, CrewCount: 3,
@@ -186,9 +194,11 @@ func ace() PlayerData {
 	b.newCareerInSystem(2, 0)
 	b.startFlight(9, stats.FlightStarted{
 		VehicleName: "Direct Ascent", Body: "earth", MassKg: 51000, PartCount: 41, CrewCount: 2,
+		EngineCount: &noEngines,
 	})
 	b.add("vehicle.orbit", stats.VehicleOrbit{
-		Phase: "achieved", Body: "earth", ApM: 410000, PeM: 402000, Ecc: 0.001, IncDeg: 51.6,
+		Phase: "achieved", Body: "earth", MassKg: 51000,
+		ApM: 410000, PeM: 402000, Ecc: 0.001, IncDeg: 51.6,
 	})
 	for _, soi := range StockBodyRun {
 		b.add("vehicle.soi", soi)

@@ -60,9 +60,14 @@ make sim SCENARIO=hop-lithobrake CRED=$HOME/Downloads/catlog-credential.json
 The site updates while it runs — the feed over server-sent events, with no reload.
 
 **`make seed`** inserts a deterministic demo dataset (`demo_ace`, `demo_tumbler`, `demo_crasher`)
-if you want boards and merit badges to look at without flying anything. The histories include
+if you want boards, merit badges and challenges to look at without flying anything. The histories include
 ordinary, tiered and body-name awards, with two visible players sharing body awards so the dynamic
-catalogue is nonempty at its default publication gate. It is idempotent.
+catalogue is nonempty at its default publication gate. They also contain honest inputs for all six
+Week 33 challenges. Challenge admission uses the server receive clock, so the e2e server moves its
+development-only clock to fixed `2026-08-14 00:00 UTC` before seeding. A manual seed run outside the
+challenge window still populates boards and badges but correctly creates no challenge rows. It is
+idempotent; use a fresh data directory before changing the clock, because accepted events keep their
+original receive time.
 
 `make dev-server` is an alias for `make dev`, kept because `make loadgen`'s help text and the e2e
 instructions name it.
@@ -297,7 +302,8 @@ nothing in `make test` touches docker.
 | Remove build output | `make clean` (keeps `data/` and `node_modules/`) |
 | Inspect the brotli/gzip ratios | `make precompress` (`CHECK=1` writes nothing) |
 
-`POST /admin/clock` is what makes a rolling *yearly* leaderboard testable without waiting a year. It
+`POST /admin/clock` is what makes rolling *yearly* leaderboards and fixed-window challenges testable
+without waiting for their dates. It
 is mounted only when `[server] clock_control = true`, catlogd refuses to start with it on an `https`
 base URL, and the route lives on the loopback-only admin mux.
 
