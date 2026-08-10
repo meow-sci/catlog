@@ -199,7 +199,7 @@ byte-identical across events. Rows written either way stay readable, so the swit
 | `player_stat` | `(player_id, stat) → value, context, updated_seq` — every board row |
 | `career_stat` | `(player_id, career, stat) → system, value, context, updated_seq` — the same board keys ranked per save; `system` is denormalised so filtering does not require a join (migration 0006) |
 | `system_stat` | `(player_id, system, stat) → value, context, updated_seq` — board rows ranked within a celestial-system identity (migration 0006) |
-| `flight_state` | Per flight: exclusion flags, ending/launch facts, first nonempty career, and set-only achievement milestones. Migration 0009 owns nullable `engine_count`; migration 0010 adds `milestones`, `part_count`, `launch_mass_kg` and `career` |
+| `flight_state` | Per flight: exclusion flags, ending/launch facts, first nonempty career, set-only achievement milestones, and the earliest achieved-orbit sequence. Migration 0009 owns nullable `engine_count`; migration 0010 adds the retained facts/milestones; migration 0012 adds `first_orbit_seq` |
 | `career` | Per save: sim-time high-water and rewind mark, first/last event seq, public ordinal, first celestial-system identity and non-punitive `system_changed` provenance mark; `last_seq` advances on every attributed event, including non-scoring and flagged activity |
 | `player_body` | Distinct bodies per player and `kind` — `'soi'` (entered) and `'landed'` (touched down) — plus first-arrival times, which only `'soi'` rows carry |
 | `career_body` | Distinct members per save and `kind`, with the career's system identity denormalised; SOI `first_sim_t` supports per-save arrival sprints, and its novelty signal is independent of `player_body` (migration 0007) |
@@ -325,10 +325,17 @@ event may set it only when a real `flight.started` has already supplied a nonemp
 the start arrives. The raw orbit bit is different: any decoded `phase == "achieved"` sets it even if
 the start event is later; start ordering applies only when a consumer needs a start fact.
 
-The batch cache keys each `flightEntry` by flight id and carries the other eleven columns in the
-entry. Its read-through `SELECT`, `FlightState`, sorted dirty-id flush and 12-placeholder
+Migration `0012_flight_orbit_seq.sql` adds `first_orbit_seq INTEGER NOT NULL DEFAULT 0`. An achieved
+orbit sets the milestone bit and lowers this column to that flight's earliest positive event
+sequence. The bit answers whether orbit ever happened; the sequence answers whether it happened
+strictly before a later candidate. Keeping both prevents the rebuild's completed first pass from
+making a docking or recovery that precedes orbit look eligible.
+
+The batch cache keys each `flightEntry` by flight id and carries the other twelve columns in the
+entry. Its read-through `SELECT`, `FlightState`, sorted dirty-id flush and 13-placeholder
 `INSERT … ON CONFLICT DO UPDATE` use the same order: `player_id, flags, ended_reason, crew, body,
-started_seq, engine_count, milestones, part_count, launch_mass_kg, career` after `flight_id`. This is
+started_seq, engine_count, milestones, part_count, launch_mass_kg, career, first_orbit_seq` after
+`flight_id`. This is
 load-bearing: pending events in one
 projector batch must see the same accumulated facts and milestone bits that a subsequent batch reads
 from SQL. `FlightState.HasStartFactAt(candidateSeq, factValid)` is the shared fact-order predicate:
@@ -380,6 +387,12 @@ badge, chunks nine-column rows by the Batch flush-row bound and uses
 required: the former preserves the earliest candidate offered inside one flush window, while the
 latter preserves the row an earlier flush already committed. Cache entries survive a flush with
 their pending marker cleared (`stats/batch.go:1545-1638,1873-1884`).
+
+Threshold folds read the effective post-board value through `StatValue` and `CareerStatValue`.
+Those caches merge pending count, record, best and set writes over the stored baseline, then update
+the cached effective value as later writes arrive. A threshold therefore fires on the event that
+crosses it whether that event shares a large projector batch with earlier contributions or follows
+a flush/reload boundary.
 
 The shared `award` helper writes one lifetime candidate and, when a career exists, one independent
 per-save candidate with identical sequence, server receive time, nullable simulation time and

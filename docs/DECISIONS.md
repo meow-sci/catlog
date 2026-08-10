@@ -1923,6 +1923,40 @@ two batches.
 This is write plumbing rather than feature exposure. No badge fold calls the helper yet, and no API
 or UI reads the rows, so documenting the machinery does not make the registered catalogue earnable.
 
+### PROJ-123 — Orbit-order badges retain the first achieved-orbit sequence instead of trusting final state
+
+*Accepted · 2026-08-10 · Task F4.*
+
+Badge folds run in the rebuild's second pass, when `flight_state` already contains the completed
+history. The orbit milestone bit can prove only that a flight reached orbit at some point; by itself
+it cannot prove that orbit preceded a docking or recovered ending. Using that bit alone would award
+the composite during rebuild when orbit came later, and could make the answer depend on whether the
+events shared an incremental batch.
+
+Migration 0012 therefore adds `first_orbit_seq`, with zero meaning no achieved orbit and every
+achieved-orbit event lowering it to the earliest positive sequence. `orbit_and_back` and
+`docked_after_orbit` require that sequence to be strictly less than the candidate event's sequence.
+Strict comparison refuses equal sequence numbers rather than inventing an ordering. The existing
+milestone bit remains because it answers the independent set-membership question cheaply; the
+sequence is the smallest durable fact that answers ordering without correlating history inside a
+badge fold or adding a new pipeline stage.
+
+The same strict comparison corrects the existing `kittens_to_orbit_and_back` fold. Its public rule
+already said orbit happened before recovery, but a refined replay previously tested only the final
+milestone bit and could count a kitten when an out-of-order orbit followed recovery. Because that
+changes an existing fold's answer without changing its stable name, `stats.BuildVersion` advances
+from 1 to 2; the schema-version change would also force today's rebuild, but the semantic bump keeps
+the build identity honest independently of migration numbering.
+
+F4 installs the four reusable badge shapes between board and log folds but leaves `BadgeFolds`
+empty. Activating only a convenient subset would turn the documented 35-badge catalogue into a
+misleading partial feature; F5 will register the complete starter set atomically. Stable fold names
+are still defined now so catalogue activation changes `BuildID` and rebuilds immutable history.
+Threshold shapes read each scope's effective board value after board folds run. The Batch cache must
+therefore merge pending count, record, best and set writes over its SQL baseline; reading SQL alone
+would award one event late after a flush and never award inside a large unflushed batch. Keeping the
+effective value updated after its first read makes both paths identical.
+
 ## Archive & restore
 
 The filesystem archiver, the manifest, restore verification, and the R2 design that is deliberately not built.

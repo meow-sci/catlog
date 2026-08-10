@@ -51,7 +51,7 @@ func playerProjectionRows(t *testing.T, r *rig, playerID int64, handle string) m
 		"player_stat":        `SELECT player_id, stat, value, context, updated_seq FROM player_stat WHERE player_id = %d ORDER BY stat`,
 		"career_stat":        `SELECT player_id, career, system, stat, value, context, updated_seq FROM career_stat WHERE player_id = %d ORDER BY career, stat`,
 		"system_stat":        `SELECT player_id, system, stat, value, context, updated_seq FROM system_stat WHERE player_id = %d ORDER BY system, stat`,
-		"flight_state":       `SELECT hex(flight_id), player_id, flags, ended_reason, crew, body, started_seq, engine_count, milestones, part_count, launch_mass_kg, career FROM flight_state WHERE player_id = %d ORDER BY hex(flight_id)`,
+		"flight_state":       `SELECT hex(flight_id), player_id, flags, ended_reason, crew, body, started_seq, engine_count, milestones, part_count, launch_mass_kg, career, first_orbit_seq FROM flight_state WHERE player_id = %d ORDER BY hex(flight_id)`,
 		"player_body":        `SELECT player_id, kind, body, first_seq, first_sim_t FROM player_body WHERE player_id = %d ORDER BY kind, body`,
 		"career_body":        `SELECT player_id, career, system, kind, body, first_seq, first_sim_t FROM career_body WHERE player_id = %d ORDER BY career, kind, body`,
 		"kitten":             `SELECT player_id, kid, name, travelled_m, fastest_ms, missions, mission_time_s, kia, updated_seq FROM kitten WHERE player_id = %d ORDER BY kid`,

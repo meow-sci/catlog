@@ -1,0 +1,502 @@
+package stats
+
+import (
+	"context"
+	"database/sql"
+	"slices"
+	"testing"
+
+	"github.com/meow-sci/catlog/server/internal/ids"
+	"github.com/meow-sci/catlog/server/internal/store"
+	"github.com/meow-sci/catlog/server/internal/testutil"
+)
+
+func runBadgeBatch(t *testing.T, p *store.Projections, flushRows int, fn func(*Batch) error) {
+	t.Helper()
+	if err := p.WithWriteTx(t.Context(), func(tx *sql.Tx) error {
+		b := NewBatch(tx, BatchOptions{FlushRows: flushRows})
+		if err := fn(b); err != nil {
+			return err
+		}
+		return b.Flush(t.Context())
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestEventBadgeIsOnceKeepsEarliestAndWritesBothScopes(t *testing.T) {
+	p := testutil.MemProjections(t)
+	fold := eventBadge{badge: "test_event", typ: "test.event"}
+	runBadgeBatch(t, p, 0, func(b *Batch) error {
+		if err := b.EnsureCareer(t.Context(), 1, "save-a", 1); err != nil {
+			return err
+		}
+		for _, seq := range []int64{30, 10, 20} {
+			if err := fold.Apply(t.Context(), b, Event{Seq: seq, PlayerID: 1, Career: "save-a", Type: "test.event", RecvTime: seq}); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	rows := badgeRows(t, p)
+	if len(rows) != 2 || rows[0].career != "" || rows[1].career != "save-a" || rows[0].earnedSeq != 10 || rows[1].earnedSeq != 10 {
+		t.Fatalf("event badge rows = %+v", rows)
+	}
+}
+
+func TestEventBadgePerSaveDoesNotInventAnotherSave(t *testing.T) {
+	p := testutil.MemProjections(t)
+	fold := eventBadge{badge: "test_event", typ: "test.event"}
+	runBadgeBatch(t, p, 0, func(b *Batch) error {
+		if err := b.EnsureCareer(t.Context(), 1, "save-a", 1); err != nil {
+			return err
+		}
+		if err := b.EnsureCareer(t.Context(), 1, "save-b", 2); err != nil {
+			return err
+		}
+		if err := fold.Apply(t.Context(), b, Event{Seq: 1, PlayerID: 1, Career: "save-a", Type: "test.event"}); err != nil {
+			return err
+		}
+		return fold.Apply(t.Context(), b, Event{Seq: 2, PlayerID: 1, Career: "save-b", Type: "other.event"})
+	})
+	rows := badgeRows(t, p)
+	if len(rows) != 2 || rows[0].earnedSeq != 1 || rows[1].career != "save-a" {
+		t.Fatalf("per-save rows = %+v", rows)
+	}
+}
+
+func TestThresholdBadgeReadsPostWriteValueAndSeparatesScopes(t *testing.T) {
+	for _, split := range []bool{false, true} {
+		t.Run(map[bool]string{false: "one-save", true: "split-saves"}[split], func(t *testing.T) {
+			p := testutil.MemProjections(t)
+			fold := thresholdBadge{badge: "ten_landings", stat: StatLandings, n: 10}
+			runBadgeBatch(t, p, 0, func(b *Batch) error {
+				for i := int64(1); i <= 12; i++ {
+					career := "save-a"
+					if split && i > 6 {
+						career = "save-b"
+					}
+					ev := Event{Seq: i, PlayerID: 1, Career: career, RecvTime: 1770000000000 + i}
+					if err := b.EnsureCareer(t.Context(), 1, career, i); err != nil {
+						return err
+					}
+					if err := addCount(t.Context(), b, ev, StatLandings, 1); err != nil {
+						return err
+					}
+					if err := fold.Apply(t.Context(), b, ev); err != nil {
+						return err
+					}
+				}
+				return nil
+			})
+			rows := badgeRows(t, p)
+			if !split {
+				if len(rows) != 2 || rows[0].earnedSeq != 10 || rows[1].earnedSeq != 10 {
+					t.Fatalf("post-write threshold rows = %+v", rows)
+				}
+			} else if len(rows) != 1 || rows[0].career != "" || rows[0].earnedSeq != 10 {
+				t.Fatalf("split threshold rows = %+v", rows)
+			}
+		})
+	}
+}
+
+func TestBelowThresholdRejectsZero(t *testing.T) {
+	f := thresholdBadge{badge: "below", stat: "soft", n: 0.5, below: true}
+	if f.met(0) || f.met(-1) || !f.met(0.5) || !f.met(0.25) || f.met(0.6) {
+		t.Error("below threshold does not implement 0 < value <= n")
+	}
+}
+
+func TestCompositeCandidatesUseStoredFactsAndStartOrdering(t *testing.T) {
+	crew := sql.NullInt64{Int64: 1, Valid: true}
+	zeroEngines := sql.NullInt64{Int64: 0, Valid: true}
+	orbit := Event{Seq: 5, Type: "vehicle.orbit", Payload: VehicleOrbit{Phase: "achieved"}}
+	if crewedOrbitCandidate(orbit, FlightState{StartedSeq: 6, Crew: crew}) ||
+		!crewedOrbitCandidate(orbit, FlightState{StartedSeq: 4, Crew: crew}) {
+		t.Error("crewed orbit ignored HasStartFactAt")
+	}
+	soi := Event{Seq: 5, Type: "vehicle.soi", Payload: VehicleSOI{ToBody: "luna"}}
+	if coasterCandidate(soi, FlightState{StartedSeq: 6, EngineCount: zeroEngines}) ||
+		!coasterCandidate(soi, FlightState{StartedSeq: 4, EngineCount: zeroEngines}) {
+		t.Error("coaster ignored HasStartFactAt or explicit zero")
+	}
+	ended := Event{Type: "flight.ended", Payload: FlightEnded{Reason: "recovered"}}
+	ended.Seq = 7
+	if !orbitAndBackCandidate(ended, FlightState{Milestones: MilestoneOrbit, FirstOrbitSeq: 5}) {
+		t.Error("orbit-and-back rejected recovered orbit milestone")
+	}
+	docked := Event{Type: "vehicle.docked", Payload: VehicleDock{}}
+	docked.Seq = 7
+	if !dockedAfterOrbitCandidate(docked, FlightState{Milestones: MilestoneOrbit, FirstOrbitSeq: 5}) {
+		t.Error("docked-after-orbit rejected orbit milestone")
+	}
+	if dockedAfterOrbitCandidate(docked, FlightState{Milestones: MilestoneOrbit, FirstOrbitSeq: 8}) ||
+		orbitAndBackCandidate(ended, FlightState{Milestones: MilestoneOrbit, FirstOrbitSeq: 8}) {
+		t.Error("future orbit sequence leaked into an earlier composite candidate")
+	}
+}
+
+func TestOrbitCompositeOrderingIsBatchReloadAndRebuildStable(t *testing.T) {
+	tests := []struct {
+		name      string
+		orbitSeq  int64
+		candidate Event
+		fold      compositeBadge
+		want      int
+	}{
+		{"dock-after", 5, Event{Seq: 7, Type: "vehicle.docked", Payload: VehicleDock{}}, compositeBadge{badge: "dock", typ: "vehicle.docked", when: dockedAfterOrbitCandidate}, 2},
+		{"dock-before", 8, Event{Seq: 7, Type: "vehicle.docked", Payload: VehicleDock{}}, compositeBadge{badge: "dock", typ: "vehicle.docked", when: dockedAfterOrbitCandidate}, 0},
+		{"dock-same-seq", 7, Event{Seq: 7, Type: "vehicle.docked", Payload: VehicleDock{}}, compositeBadge{badge: "dock", typ: "vehicle.docked", when: dockedAfterOrbitCandidate}, 0},
+		{"recovery-after", 5, Event{Seq: 7, Type: "flight.ended", Payload: FlightEnded{Reason: "recovered"}}, compositeBadge{badge: "home", typ: "flight.ended", when: orbitAndBackCandidate}, 2},
+		{"recovery-before", 8, Event{Seq: 7, Type: "flight.ended", Payload: FlightEnded{Reason: "recovered"}}, compositeBadge{badge: "home", typ: "flight.ended", when: orbitAndBackCandidate}, 0},
+		{"recovery-same-seq", 7, Event{Seq: 7, Type: "flight.ended", Payload: FlightEnded{Reason: "recovered"}}, compositeBadge{badge: "home", typ: "flight.ended", when: orbitAndBackCandidate}, 0},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			for _, mode := range []string{"same-batch-final-state", "split-reload", "refined-rebuild"} {
+				t.Run(mode, func(t *testing.T) {
+					p := testutil.MemProjections(t)
+					flight := ids.ID{9}
+					candidate := test.candidate
+					candidate.PlayerID, candidate.Career, candidate.FlightID = 1, "save", flight
+					orbit := Event{Seq: test.orbitSeq, PlayerID: 1, Career: "save", FlightID: flight, Type: "vehicle.orbit", Payload: VehicleOrbit{Phase: "achieved"}}
+
+					if mode == "refined-rebuild" {
+						runBadgeBatch(t, p, 0, func(b *Batch) error { return (flightFold{}).Apply(t.Context(), b, orbit) })
+						if err := p.WithWriteTx(t.Context(), func(tx *sql.Tx) error {
+							b := NewRefinedBatch(tx, nil, BatchOptions{})
+							if err := b.EnsureCareer(t.Context(), 1, "save", 1); err != nil {
+								return err
+							}
+							if err := test.fold.Apply(t.Context(), b, candidate); err != nil {
+								return err
+							}
+							return b.Flush(t.Context())
+						}); err != nil {
+							t.Fatal(err)
+						}
+					} else if mode == "split-reload" && candidate.Seq < orbit.Seq {
+						runBadgeBatch(t, p, 0, func(b *Batch) error {
+							if err := b.EnsureCareer(t.Context(), 1, "save", 1); err != nil {
+								return err
+							}
+							return test.fold.Apply(t.Context(), b, candidate)
+						})
+						runBadgeBatch(t, p, 0, func(b *Batch) error { return (flightFold{}).Apply(t.Context(), b, orbit) })
+					} else {
+						runBadgeBatch(t, p, 0, func(b *Batch) error {
+							if err := b.EnsureCareer(t.Context(), 1, "save", 1); err != nil {
+								return err
+							}
+							if err := (flightFold{}).Apply(t.Context(), b, orbit); err != nil {
+								return err
+							}
+							if mode == "split-reload" {
+								return nil
+							}
+							return test.fold.Apply(t.Context(), b, candidate)
+						})
+						if mode == "split-reload" {
+							runBadgeBatch(t, p, 0, func(b *Batch) error { return test.fold.Apply(t.Context(), b, candidate) })
+						}
+					}
+					if got := len(badgeRows(t, p)); got != test.want {
+						t.Fatalf("badge rows = %d, want %d", got, test.want)
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestFirstOrbitSeqKeepsEarliestAcrossFlushAndReload(t *testing.T) {
+	p := testutil.MemProjections(t)
+	flight := ids.ID{10}
+	for _, seq := range []int64{9, 12, 3, 6} {
+		runBadgeBatch(t, p, 1, func(b *Batch) error {
+			return (flightFold{}).Apply(t.Context(), b, Event{Seq: seq, PlayerID: 1, Career: "save", FlightID: flight, Type: "vehicle.orbit", Payload: VehicleOrbit{Phase: "achieved"}})
+		})
+	}
+	runBadgeBatch(t, p, 0, func(b *Batch) error {
+		state, found, err := b.Flight(t.Context(), flight)
+		if err != nil || !found {
+			return err
+		}
+		if state.FirstOrbitSeq != 3 || state.Milestones&MilestoneOrbit == 0 {
+			t.Fatalf("reloaded orbit state = seq %d milestones %d", state.FirstOrbitSeq, state.Milestones)
+		}
+		return nil
+	})
+}
+
+func TestFlaggedFlightCandidateEarnsNoEventOrCompositeBadge(t *testing.T) {
+	p := testutil.MemProjections(t)
+	flight := ids.ID{1}
+	runBadgeBatch(t, p, 0, func(b *Batch) error {
+		if err := b.EnsureCareer(t.Context(), 1, "save", 1); err != nil {
+			return err
+		}
+		if err := b.EnsureFlight(t.Context(), flight, 1, "save"); err != nil {
+			return err
+		}
+		if err := b.StartFlight(t.Context(), flight, 1, "earth", nil, 1, 1, 1); err != nil {
+			return err
+		}
+		if err := b.FlagFlight(t.Context(), flight, FlagTeleport); err != nil {
+			return err
+		}
+		ev := Event{Seq: 2, PlayerID: 1, Career: "save", FlightID: flight, Type: "vehicle.orbit", Payload: VehicleOrbit{Phase: "achieved"}}
+		if err := (eventBadge{badge: "event", typ: "vehicle.orbit"}).Apply(t.Context(), b, ev); err != nil {
+			return err
+		}
+		return (compositeBadge{badge: "composite", typ: "vehicle.orbit", when: crewedOrbitCandidate}).Apply(t.Context(), b, ev)
+	})
+	if rows := badgeRows(t, p); len(rows) != 0 {
+		t.Errorf("flagged flight earned badges: %+v", rows)
+	}
+}
+
+func TestLateFlagBadgeDivergenceIsCorrectedByRefinedReplay(t *testing.T) {
+	project := func(t *testing.T, refined bool) []badgeTestRow {
+		p := testutil.MemProjections(t)
+		if err := p.WithWriteTx(t.Context(), func(tx *sql.Tx) error {
+			var b *Batch
+			if refined {
+				b = NewRefinedBatch(tx, nil, BatchOptions{})
+			} else {
+				b = NewBatch(tx, BatchOptions{})
+			}
+			flight := ids.ID{3}
+			if err := b.EnsureCareer(t.Context(), 1, "save", 1); err != nil {
+				return err
+			}
+			if err := b.EnsureFlight(t.Context(), flight, 1, "save"); err != nil {
+				return err
+			}
+			if refined {
+				if err := b.FlagFlight(t.Context(), flight, FlagTeleport); err != nil {
+					return err
+				}
+			}
+			ev := Event{Seq: 2, PlayerID: 1, Career: "save", FlightID: flight, Type: "candidate"}
+			if err := (eventBadge{badge: "late_flag", typ: "candidate"}).Apply(t.Context(), b, ev); err != nil {
+				return err
+			}
+			if !refined {
+				if err := b.FlagFlight(t.Context(), flight, FlagTeleport); err != nil {
+					return err
+				}
+			}
+			return b.Flush(t.Context())
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return badgeRows(t, p)
+	}
+	if got := project(t, false); len(got) != 2 {
+		t.Fatalf("incremental late-flag rows = %+v, want optimistic award", got)
+	}
+	if got := project(t, true); len(got) != 0 {
+		t.Fatalf("refined late-flag rows = %+v, want correction", got)
+	}
+}
+
+func TestRefinedKIAAndRecoveryRulesRemoveThresholdBadges(t *testing.T) {
+	impact := func(t *testing.T, refined bool) []badgeTestRow {
+		p := testutil.MemProjections(t)
+		flight := ids.ID{4}
+		kia := map[ids.ID][]float64{flight: {10}}
+		if err := p.WithWriteTx(t.Context(), func(tx *sql.Tx) error {
+			b := NewBatch(tx, BatchOptions{})
+			if refined {
+				b = NewRefinedBatch(tx, kia, BatchOptions{})
+			}
+			if err := b.EnsureCareer(t.Context(), 1, "save", 1); err != nil {
+				return err
+			}
+			ev := Event{Seq: 2, PlayerID: 1, Career: "save", FlightID: flight, Type: "vehicle.impact", SimTime: 10, HasSimTime: true,
+				Payload: VehicleImpact{SpeedMs: 60, EnergyJ: 1, Survived: true, CrewCount: 1, Body: "luna"}}
+			if err := (lithobrakeFold{}).Apply(t.Context(), b, ev); err != nil {
+				return err
+			}
+			if err := (thresholdBadge{badge: "lithobraker_test", stat: StatBiggestLithobrakeSurvived, n: 50}).Apply(t.Context(), b, ev); err != nil {
+				return err
+			}
+			return b.Flush(t.Context())
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return badgeRows(t, p)
+	}
+	if len(impact(t, false)) != 2 || len(impact(t, true)) != 0 {
+		t.Error("KIA refinement did not remove the survived-impact threshold badge")
+	}
+
+	load := func(t *testing.T, refined bool) []badgeTestRow {
+		p := testutil.MemProjections(t)
+		flight := ids.ID{5}
+		if err := p.WithWriteTx(t.Context(), func(tx *sql.Tx) error {
+			b := NewBatch(tx, BatchOptions{})
+			if refined {
+				b = NewRefinedBatch(tx, nil, BatchOptions{})
+			}
+			if err := b.EnsureCareer(t.Context(), 1, "save", 1); err != nil {
+				return err
+			}
+			if err := b.EnsureFlight(t.Context(), flight, 1, "save"); err != nil {
+				return err
+			}
+			if err := b.EndFlight(t.Context(), flight, "destroyed"); err != nil {
+				return err
+			}
+			g := 12.0
+			ev := Event{Seq: 2, PlayerID: 1, Career: "save", FlightID: flight, Type: "telemetry.window", Payload: TelemetryWindow{PeakG: &g}}
+			if err := (peakGFold{}).Apply(t.Context(), b, ev); err != nil {
+				return err
+			}
+			if err := (thresholdBadge{badge: "pressed_test", stat: StatPeakGSurvived, n: 10}).Apply(t.Context(), b, ev); err != nil {
+				return err
+			}
+			return b.Flush(t.Context())
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return badgeRows(t, p)
+	}
+	if len(load(t, false)) != 2 || len(load(t, true)) != 0 {
+		t.Error("recovery refinement did not remove the structural-load threshold badge")
+	}
+}
+
+func TestHonestBadgeHistoryIsBatchAndRefinedStable(t *testing.T) {
+	project := func(t *testing.T, batchSize int, refined bool) []badgeTestRow {
+		p := testutil.MemProjections(t)
+		events := make([]Event, 12)
+		for i := range events {
+			events[i] = Event{Seq: int64(i + 1), PlayerID: 1, Career: "save", Type: "landing", RecvTime: 1770000000000 + int64(i)}
+		}
+		for start := 0; start < len(events); start += batchSize {
+			end := min(start+batchSize, len(events))
+			if err := p.WithWriteTx(t.Context(), func(tx *sql.Tx) error {
+				b := NewBatch(tx, BatchOptions{})
+				if refined {
+					b = NewRefinedBatch(tx, nil, BatchOptions{})
+				}
+				for _, ev := range events[start:end] {
+					if err := b.EnsureCareer(t.Context(), 1, "save", ev.Seq); err != nil {
+						return err
+					}
+					if err := addCount(t.Context(), b, ev, StatLandings, 1); err != nil {
+						return err
+					}
+					if err := (eventBadge{badge: "first", typ: "landing"}).Apply(t.Context(), b, ev); err != nil {
+						return err
+					}
+					if err := (thresholdBadge{badge: "ten", stat: StatLandings, n: 10}).Apply(t.Context(), b, ev); err != nil {
+						return err
+					}
+				}
+				return b.Flush(t.Context())
+			}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return badgeRows(t, p)
+	}
+	want := project(t, 1, false)
+	for _, batchSize := range []int{3, 100} {
+		if got := project(t, batchSize, false); !slices.Equal(got, want) {
+			t.Errorf("batch %d badges = %+v, want %+v", batchSize, got, want)
+		}
+	}
+	if got := project(t, 3, true); !slices.Equal(got, want) {
+		t.Errorf("refined honest badges = %+v, want %+v", got, want)
+	}
+}
+
+func TestUnkeyableFamilyBodySkipsOnlyBadge(t *testing.T) {
+	p := testutil.MemProjections(t)
+	flight := ids.ID{2}
+	runBadgeBatch(t, p, 0, func(b *Batch) error {
+		if err := b.BindCareerSystem(t.Context(), 1, "save", "system", 1); err != nil {
+			return err
+		}
+		ev := Event{Seq: 2, PlayerID: 1, Career: "save", FlightID: flight, Type: "vehicle.soi", Payload: VehicleSOI{ToBody: "bad/body"}}
+		if err := (soiFold{}).Apply(t.Context(), b, ev); err != nil {
+			return err
+		}
+		return (reachedBodyBadge{}).Apply(t.Context(), b, ev)
+	})
+	if rows := badgeRows(t, p); len(rows) != 0 {
+		t.Errorf("unkeyable body earned family badge: %+v", rows)
+	}
+	var value float64
+	if err := p.Reader().QueryRowContext(t.Context(), `SELECT value FROM player_stat WHERE player_id=1 AND stat=?`, StatSOIBodies).Scan(&value); err != nil || value != 1 {
+		t.Errorf("tier source after unkeyable body = %v, %v; want 1", value, err)
+	}
+}
+
+func TestSecondPassOrderNamesAndBuildIdentity(t *testing.T) {
+	if len(BadgeFolds()) != 0 {
+		t.Fatal("F4 activated a partial production badge catalogue")
+	}
+	second := SecondPassFolds()
+	boards := BoardFolds()
+	if err := validateFoldNames(second); err != nil {
+		t.Fatalf("actual second-pass names are not unique: %v", err)
+	}
+	if len(second) != len(boards)+len(LogFolds()) || second[len(boards)].Name() != LogFolds()[0].Name() {
+		t.Fatalf("second-pass boundary = %v", foldNames(second))
+	}
+	t.Run("constructor rejects duplicate names", func(t *testing.T) {
+		defer func() {
+			if recover() == nil {
+				t.Error("second-pass constructor accepted duplicate fold names")
+			}
+		}()
+		secondPassFolds(nil, []Fold{eventBadge{badge: "same"}, thresholdBadge{badge: "same"}}, nil)
+	})
+	t.Run("constructor rejects empty names", func(t *testing.T) {
+		defer func() {
+			if recover() == nil {
+				t.Error("second-pass constructor accepted an empty fold name")
+			}
+		}()
+		secondPassFolds(nil, []Fold{testNamedFold{}}, nil)
+	})
+	base := []string{"state", "board", "census"}
+	added := slices.Insert(slices.Clone(base), 2, "badge:first_orbit")
+	if buildIDForNames(12, base) == buildIDForNames(12, added) || buildIDForNames(12, added) == buildIDForNames(12, base) {
+		t.Error("adding/removing a badge fold did not change build identity")
+	}
+	for _, test := range []struct {
+		fold Fold
+		want string
+	}{
+		{eventBadge{badge: "first_orbit"}, "badge:first_orbit"},
+		{thresholdBadge{badge: "old_hand"}, "badge:old_hand"},
+		{compositeBadge{badge: "crewed_orbit"}, "badge:crewed_orbit"},
+		{reachedBodyBadge{}, "badge-family:reached"},
+		{orbitedBodyBadge{}, "badge-family:orbited"},
+		{landedOnBodyBadge{}, "badge-family:landed_on"},
+	} {
+		if test.fold.Name() != test.want {
+			t.Errorf("fold name = %q, want %q", test.fold.Name(), test.want)
+		}
+	}
+}
+
+func foldNames(folds []Fold) []string {
+	out := make([]string, len(folds))
+	for i, fold := range folds {
+		out[i] = fold.Name()
+	}
+	return out
+}
+
+type testNamedFold struct{ name string }
+
+func (f testNamedFold) Name() string                             { return f.name }
+func (testNamedFold) Apply(context.Context, *Batch, Event) error { return nil }

@@ -82,10 +82,12 @@ type Batch struct {
 	careerBodies   map[int64]map[careerBodyKey]*careerBodyEntry
 	kittens        map[int64]map[string]*kittenEntry
 	careerKittens  map[int64]map[careerKittenKey]*careerKittenEntry
-	// values caches `player_stat.value` for the one helper that has to read it
-	// back (setValue, for its window delta).
-	values       map[statKey]float64
-	careerValues map[careerStatKey]float64
+	// values cache effective board values, including writes pending in this
+	// batch. Threshold badges and derived totals both use this read-through.
+	values            map[statKey]float64
+	valueLoaded       map[statKey]bool
+	careerValues      map[careerStatKey]float64
+	careerValueLoaded map[careerStatKey]bool
 
 	// Write accumulators, one map per rule. Cleared by every flush. Indexed by
 	// [statKind] rather than carrying it in the value, so the flush walks one
@@ -157,21 +159,23 @@ type BatchOptions struct {
 // NewBatch opens an incremental batch over tx.
 func NewBatch(tx *sql.Tx, opts BatchOptions) *Batch {
 	b := &Batch{
-		tx:             tx,
-		flushRows:      opts.FlushRows,
-		flights:        map[ids.ID]*flightEntry{},
-		careers:        map[careerKey]*careerEntry{},
-		systems:        map[string]*systemEntry{},
-		systemBodies:   map[systemBodyKey]*systemBodyEntry{},
-		careerOrdinals: map[int64]int64{},
-		bodies:         map[int64]map[bodyKey]*bodyEntry{},
-		careerBodies:   map[int64]map[careerBodyKey]*careerBodyEntry{},
-		kittens:        map[int64]map[string]*kittenEntry{},
-		careerKittens:  map[int64]map[careerKittenKey]*careerKittenEntry{},
-		values:         map[statKey]float64{},
-		careerValues:   map[careerStatKey]float64{},
-		badges:         map[badgeKey]*badgeEntry{},
-		census:         map[censusKey]*pendingCensus{},
+		tx:                tx,
+		flushRows:         opts.FlushRows,
+		flights:           map[ids.ID]*flightEntry{},
+		careers:           map[careerKey]*careerEntry{},
+		systems:           map[string]*systemEntry{},
+		systemBodies:      map[systemBodyKey]*systemBodyEntry{},
+		careerOrdinals:    map[int64]int64{},
+		bodies:            map[int64]map[bodyKey]*bodyEntry{},
+		careerBodies:      map[int64]map[careerBodyKey]*careerBodyEntry{},
+		kittens:           map[int64]map[string]*kittenEntry{},
+		careerKittens:     map[int64]map[careerKittenKey]*careerKittenEntry{},
+		values:            map[statKey]float64{},
+		valueLoaded:       map[statKey]bool{},
+		careerValues:      map[careerStatKey]float64{},
+		careerValueLoaded: map[careerStatKey]bool{},
+		badges:            map[badgeKey]*badgeEntry{},
+		census:            map[censusKey]*pendingCensus{},
 	}
 	for k := range b.stats {
 		b.stats[k] = map[statKey]*pendingStat{}
@@ -236,17 +240,18 @@ func (b *Batch) bucketsFor(recvMS int64) []string {
 // --- flight_state -------------------------------------------------------------
 
 type flightEntry struct {
-	playerID     int64
-	flags        int64
-	reason       sql.NullString
-	crew         sql.NullInt64
-	body         sql.NullString
-	startedSeq   int64
-	engineCount  sql.NullInt64
-	milestones   int64
-	partCount    sql.NullInt64
-	launchMassKg sql.NullFloat64
-	career       string
+	playerID      int64
+	flags         int64
+	reason        sql.NullString
+	crew          sql.NullInt64
+	body          sql.NullString
+	startedSeq    int64
+	engineCount   sql.NullInt64
+	milestones    int64
+	partCount     sql.NullInt64
+	launchMassKg  sql.NullFloat64
+	career        string
+	firstOrbitSeq int64
 
 	// exists reports that a row exists — in the database, or pending here.
 	exists bool
@@ -260,6 +265,7 @@ func (e *flightEntry) state(id ids.ID) FlightState {
 		StartedSeq: e.startedSeq, EngineCount: e.engineCount,
 		Milestones: e.milestones, PartCount: e.partCount,
 		LaunchMassKg: e.launchMassKg, Career: e.career,
+		FirstOrbitSeq: e.firstOrbitSeq,
 	}
 }
 
@@ -278,8 +284,8 @@ func (b *Batch) flightEntry(ctx context.Context, id ids.ID) (*flightEntry, error
 	}
 	e := &flightEntry{}
 	err := b.tx.QueryRowContext(ctx,
-		`SELECT player_id, flags, ended_reason, crew, body, started_seq, engine_count, milestones, part_count, launch_mass_kg, career FROM flight_state WHERE flight_id = ?`,
-		ids.Bytes(id)).Scan(&e.playerID, &e.flags, &e.reason, &e.crew, &e.body, &e.startedSeq, &e.engineCount, &e.milestones, &e.partCount, &e.launchMassKg, &e.career)
+		`SELECT player_id, flags, ended_reason, crew, body, started_seq, engine_count, milestones, part_count, launch_mass_kg, career, first_orbit_seq FROM flight_state WHERE flight_id = ?`,
+		ids.Bytes(id)).Scan(&e.playerID, &e.flags, &e.reason, &e.crew, &e.body, &e.startedSeq, &e.engineCount, &e.milestones, &e.partCount, &e.launchMassKg, &e.career, &e.firstOrbitSeq)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 	case err != nil:
@@ -348,6 +354,22 @@ func (b *Batch) MarkFlightMilestone(ctx context.Context, id ids.ID, bit int64) e
 	return nil
 }
 
+// MarkFlightOrbit records both the set-only orbit milestone and the earliest
+// achieved-orbit sequence. The sequence is the durable ordering fact used by
+// composites when a rebuild's first pass has already seen the whole flight.
+func (b *Batch) MarkFlightOrbit(ctx context.Context, id ids.ID, seq int64) error {
+	e, err := b.flightEntry(ctx, id)
+	if err != nil {
+		return err
+	}
+	e.milestones |= MilestoneOrbit
+	if seq > 0 && (e.firstOrbitSeq == 0 || seq < e.firstOrbitSeq) {
+		e.firstOrbitSeq = seq
+	}
+	b.touchFlight(id, e)
+	return nil
+}
+
 // EndFlight records `flight.ended`.
 func (b *Batch) EndFlight(ctx context.Context, id ids.ID, reason string) error {
 	e, err := b.flightEntry(ctx, id)
@@ -375,19 +397,19 @@ func (b *Batch) flushFlights(ctx context.Context) error {
 		return nil
 	}
 	slices.SortFunc(b.dirtyFlights, func(x, y ids.ID) int { return strings.Compare(string(x[:]), string(y[:])) })
-	err := b.write(ctx, len(b.dirtyFlights), 12,
-		`INSERT INTO flight_state (flight_id, player_id, flags, ended_reason, crew, body, started_seq, engine_count, milestones, part_count, launch_mass_kg, career) VALUES `,
+	err := b.write(ctx, len(b.dirtyFlights), 13,
+		`INSERT INTO flight_state (flight_id, player_id, flags, ended_reason, crew, body, started_seq, engine_count, milestones, part_count, launch_mass_kg, career, first_orbit_seq) VALUES `,
 		` ON CONFLICT (flight_id) DO UPDATE SET
 		   flags = excluded.flags, ended_reason = excluded.ended_reason,
 		   crew = excluded.crew, body = excluded.body, started_seq = excluded.started_seq,
 		   engine_count = excluded.engine_count, milestones = excluded.milestones,
 		   part_count = excluded.part_count, launch_mass_kg = excluded.launch_mass_kg,
-		   career = excluded.career`,
+		   career = excluded.career, first_orbit_seq = excluded.first_orbit_seq`,
 		func(i int, args []any) []any {
 			id := b.dirtyFlights[i]
 			e := b.flights[id]
 			e.dirty = false
-			return append(args, ids.Bytes(id), e.playerID, e.flags, e.reason, e.crew, e.body, e.startedSeq, e.engineCount, e.milestones, e.partCount, e.launchMassKg, e.career)
+			return append(args, ids.Bytes(id), e.playerID, e.flags, e.reason, e.crew, e.body, e.startedSeq, e.engineCount, e.milestones, e.partCount, e.launchMassKg, e.career, e.firstOrbitSeq)
 		})
 	if err != nil {
 		return fmt.Errorf("stats: flush flight_state: %w", err)
@@ -1434,6 +1456,9 @@ func (b *Batch) putStat(kind statKind, playerID int64, stat string, value float6
 	}
 	if kind == kindSet {
 		b.values[k] = value
+		b.valueLoaded[k] = true
+	} else if b.valueLoaded[k] {
+		b.values[k] = mergedBoardValue(kind, b.values[k], true, value)
 	}
 }
 
@@ -1482,6 +1507,9 @@ func (b *Batch) putCareerStat(kind statKind, ev Event, system, stat string, valu
 	}
 	if kind == kindSet {
 		b.careerValues[k] = value
+		b.careerValueLoaded[k] = true
+	} else if b.careerValueLoaded[k] {
+		b.careerValues[k] = mergedBoardValue(kind, b.careerValues[k], true, value)
 	}
 }
 
@@ -1499,24 +1527,48 @@ func (b *Batch) putSystemStat(kind statKind, ev Event, system, stat string, valu
 	}
 }
 
-// StatValue is a player's current value on a board, counting writes this batch
-// has buffered but not yet flushed. Only setValue needs it — a derived total's
-// *window* contribution is what it grew by, which needs the previous total.
+func mergedBoardValue(kind statKind, current float64, exists bool, pending float64) float64 {
+	if !exists || kind == kindSet {
+		return pending
+	}
+	switch kind {
+	case kindCount:
+		return current + pending
+	case kindRecord:
+		return max(current, pending)
+	case kindBest:
+		return min(current, pending)
+	default:
+		return current
+	}
+}
+
+// StatValue is a player's current value on a board, counting every write rule
+// this batch has buffered but not yet flushed.
 func (b *Batch) StatValue(ctx context.Context, playerID int64, stat string) (float64, error) {
 	k := statKey{playerID, stat}
-	if v, ok := b.values[k]; ok {
+	if b.valueLoaded[k] {
+		v := b.values[k]
 		return v, nil
 	}
 	var v float64
 	err := b.tx.QueryRowContext(ctx,
 		`SELECT value FROM player_stat WHERE player_id = ? AND stat = ?`, playerID, stat).Scan(&v)
+	exists := err == nil
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		v = 0
 	case err != nil:
 		return 0, fmt.Errorf("stats: read %s for player %d: %w", stat, playerID, err)
 	}
+	for kind := range b.stats {
+		if p, ok := b.stats[kind][k]; ok {
+			v = mergedBoardValue(statKind(kind), v, exists, p.value)
+			exists = true
+		}
+	}
 	b.values[k] = v
+	b.valueLoaded[k] = true
 	return v, nil
 }
 
@@ -1525,20 +1577,29 @@ func (b *Batch) StatValue(ctx context.Context, playerID int64, stat string) (flo
 // exactly as they did when each was its own statement.
 func (b *Batch) CareerStatValue(ctx context.Context, playerID int64, career, stat string) (float64, error) {
 	k := careerStatKey{playerID, career, stat}
-	if v, ok := b.careerValues[k]; ok {
+	if b.careerValueLoaded[k] {
+		v := b.careerValues[k]
 		return v, nil
 	}
 	var v float64
 	err := b.tx.QueryRowContext(ctx,
 		`SELECT value FROM career_stat WHERE player_id = ? AND career = ? AND stat = ?`,
 		playerID, career, stat).Scan(&v)
+	exists := err == nil
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		v = 0
 	case err != nil:
 		return 0, fmt.Errorf("stats: read %s for player %d career %q: %w", stat, playerID, career, err)
 	}
+	for kind := range b.careerStats {
+		if p, ok := b.careerStats[kind][k]; ok {
+			v = mergedBoardValue(statKind(kind), v, exists, p.value)
+			exists = true
+		}
+	}
 	b.careerValues[k] = v
+	b.careerValueLoaded[k] = true
 	return v, nil
 }
 

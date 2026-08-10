@@ -2451,8 +2451,8 @@ a higher tier never removes a lower one (`stats/badges.go:57-138,196-230`).
 | 8 | `first_dock` | Well Met | Two of your vehicles became one. | `first-steps` | — | first `vehicle.docked` |
 | 9 | `first_rud` | It Happens | You lost a vehicle. Everyone does. | `first-steps` | — | first `vehicle.rud` |
 | 10 | `crewed_orbit` | Passengers | You brought company into orbit. | `flight` | — | achieved orbit on a flight whose start crew was at least 1 |
-| 11 | `orbit_and_back` | Round Trip | You made orbit and brought the vehicle home. | `flight` | — | recovered flight whose set state contains the orbit milestone |
-| 12 | `docked_after_orbit` | Rendezvous | You docked after making orbit. | `flight` | — | docking after that flight had set its orbit milestone; does not claim docking occurred in orbit |
+| 11 | `orbit_and_back` | Round Trip | You made orbit and brought the vehicle home. | `flight` | — | recovered flight whose first achieved-orbit sequence is strictly earlier than the recovery event |
+| 12 | `docked_after_orbit` | Rendezvous | You docked after making orbit. | `flight` | — | docking whose flight's first achieved-orbit sequence is strictly earlier; does not claim docking occurred in orbit |
 | 13 | `coaster` | Along For The Ride | You reached another sphere without an engine. | `flight` | — | SOI arrival on a flight with known `engine_count == 0` |
 | 14 | `heavy_lifter` | Heavy Lifter | You put a notably heavy payload into orbit. | `flight` | — | `heaviest_to_orbit >= 20,000` |
 | 15 | `big_stack` | Tall Order | You built a stack with ambitions. | `flight` | — | `biggest_stack >= 5` |
@@ -2497,11 +2497,21 @@ described or stored. `KnownBadge` accepts every fixed key and a valid family key
 holder for direct lookup; the stricter catalogue gate is separate
 (`stats/badges.go:161-230`).
 
-This task registers metadata only. There are still **no badge-awarding folds**, so none of these 35
-fixed badges or three families can yet produce a `badge_award` row. Their derivations above are the
-locked predicates the later fold tasks implement, not a claim that an award is currently earnable.
-When those folds land, every flight-bearing predicate also uses the existing final-state
-`scoreable` rule; that eligibility is shared rather than repeated in every table row.
+F4 supplies the four reusable fold shapes, but `BadgeFolds` remains empty until F5 activates the
+complete starter catalogue; none of these entries is earnable yet. `SecondPassFolds` is ordered
+`BoardFolds → BadgeFolds → LogFolds`, so threshold shapes read the post-write player and career board
+values through `Batch`. Event, composite and family shapes offer their first qualifying event to the
+shared two-scope `award` helper. Every concrete fold name contains its fixed badge key or stable
+family name, so adding or removing one changes `BuildID` and reconsiders immutable history.
+
+Composite predicates read the completed `flight_state` row instead of correlating events inside a
+fold. Launch-fact composites use `HasStartFactAt`. The two orbit-order composites additionally
+require `0 < first_orbit_seq < candidate.seq`; the milestone bit alone is insufficient because a
+rebuild's first pass has already seen future events. An orbit before docking or recovery qualifies,
+an orbit after it does not, and equal sequence numbers do not manufacture an order. Family
+predicates derive keys through `statSuffix`; an unkeyable body skips only its family badge and still
+counts toward fixed set and threshold badges. Every flight-bearing shape uses the existing
+final-state `scoreable` rule.
 
 ---
 
@@ -2777,7 +2787,10 @@ carries one — free, because `scoreable` has already cached that row.
 **`kittens_to_orbit_and_back`** — `kittensToOrbitFold` (`boards.go:1351-1411`; registered at
 `fold.go:143`) reads `flight.ended` only when
 `reason == "recovered"` and the ordered `kids` list is nonempty, applies `scoreable`, then requires
-the joined `flight_state` to carry `MilestoneOrbit`. Each recovery-time kitten is inserted as a
+the joined `flight_state` to carry `MilestoneOrbit` and
+`0 < first_orbit_seq < flight.ended.seq`. The sequence comparison prevents a rebuild's completed
+first pass from treating an orbit recorded only after recovery as a prior achievement. Each
+recovery-time kitten is inserted as a
 save-local `career_body(kind='orbit_kid', body=kid)` member. A repeated `(career, kid)` is a no-op;
 the same kid label in another save is a second member. On every new member the fold independently
 recomputes the player total across all `(career, kid)` rows, that save's total, and — only when the
@@ -3048,6 +3061,8 @@ present 0 means no rocket engine was installed when the flight began. Migration
 `0010_flight_facts.sql` then adds `milestones INTEGER NOT NULL DEFAULT 0`, nullable
 `part_count INTEGER`, nullable `launch_mass_kg REAL`, and `career TEXT NOT NULL DEFAULT ''`.
 Migration 0010 does not re-add `engine_count`; 0009 remains its sole owner.
+Migration `0012_flight_orbit_seq.sql` adds `first_orbit_seq INTEGER NOT NULL DEFAULT 0`, the earliest
+positive sequence of an achieved-orbit event on the flight.
 
 Flag bits (`stats/flight.go:12-30`): 0 `teleport`, 1 `refuel`, 2 `resource_edit`, 3 `console`,
 4 `tuning`, **5 `other`** for an unrecognised value (PROJ-002).
@@ -3065,9 +3080,10 @@ Milestone bits are achievements, not exclusions: 0 orbit achieved (`vehicle.orbi
 `milestones |= bit`; no path clears one. Other SOI alone requires a known launch body from an actual
 start no later than the SOI event and a distinct nonempty destination. If the SOI was early, the bit
 is deliberately never retro-awarded. Orbit remains a raw set-only milestone even when its event was
-early; ordering matters only to a composite consumer that joins a nullable start fact.
-No current board or badge reads the five milestone bits; they are retained inputs for a later
-projection, not awards created by D5.
+early. The orbit fold also lowers `first_orbit_seq` to the earliest achieved-orbit sequence, so a
+composite can distinguish a prior orbit from one the rebuild first pass learned from the future.
+No current board reads the five milestone bits; F4's inactive composite helpers read orbit state,
+but `BadgeFolds` remains empty until the full F5 catalogue is activated.
 
 `FlightState.HasStartFactAt(candidateSeq, factValid)` is that normative join predicate:
 `StartedSeq > 0 && StartedSeq <= candidateSeq && factValid`. A rebuild's first pass may know a later
@@ -3075,10 +3091,10 @@ start, but a composite candidate is refused when the incremental projector could
 required fact at that sequence. The set-only folds and this conservative comparison make replay
 deterministic without fabricating historical knowledge.
 
-The in-memory flight-id map is a read-through/write-back cache for all twelve columns; the key is
-the flight id and `flightEntry` carries the other eleven. Its SQL `SELECT`, `FlightState` conversion
+The in-memory flight-id map is a read-through/write-back cache for all thirteen columns; the key is
+the flight id and `flightEntry` carries the other twelve. Its SQL `SELECT`, `FlightState` conversion
 and sorted multi-row flush preserve the exact order through
-`engine_count, milestones, part_count, launch_mass_kg, career`; the flush uses 12 placeholders and
+`engine_count, milestones, part_count, launch_mass_kg, career, first_orbit_seq`; the flush uses 13 placeholders and
 updates every mutable column on conflict. Pending reads therefore see facts and ORed milestones from
 earlier events in the same batch before anything reaches SQL.
 
@@ -3244,7 +3260,7 @@ fold writes. Surfaced as `collection.projected` / `collection.lag` and `projecto
 | An unreadable whole-vehicle part count moves the RUD total and cause family but neither part board | `PartCount <= 0` returns after the existing RUD writes | `rudPartsFold`; PROJ-088 |
 | A crewless RUD moves the RUD and any positive-part boards but neither aboard-lost-vehicle board | `CrewCount < 1` skips only the two crew writes | `rudPartsFold` |
 | A cause that cannot form a family key still moves every independently qualifying part and crew board | `RUDStat` failure skips only the cause-family write | `rudPartsFold` |
-| `kittens_to_orbit_and_back` requires a recovered ending, at least one recovery-time kitten, an orbit milestone on that flight and an unflagged flight | payload predicates → `scoreable` → `flight_state.milestones & MilestoneOrbit` | `kittensToOrbitFold` |
+| `kittens_to_orbit_and_back` requires a recovered ending, at least one recovery-time kitten, an unflagged flight and an achieved orbit strictly earlier than recovery | payload predicates → `scoreable` → `flight_state.milestones & MilestoneOrbit` → `0 < first_orbit_seq < event.seq` | `kittensToOrbitFold` |
 | An unknown career system still moves the player and save `kittens_to_orbit_and_back` sets but produces no system-scoped row | `SystemCareerSetCount` returns `known=false`; the first two independent counts were already written | `stats/batch.go` |
 | A world sprint requires a nonempty destination, career, present nonnegative clock and unflagged flight | payload gate → `careerTime` → `scoreable` | `bodySprintFold` |
 | A world first reached exactly at 31,536,000 s or 315,360,000 s counts; a later arrival does not | `first_sim_t <= threshold` | `CareerBodyCountBefore`, `BodyCountBefore`, `SystemBodyCountBefore` |

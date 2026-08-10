@@ -425,6 +425,19 @@ func TestKittensToOrbitAndBackRequiresEveryPredicate(t *testing.T) {
 	if careerMembers != 2 || lifetimeMembers != 0 {
 		t.Errorf("orbit_kid rows = career %d, player %d; want 2, 0", careerMembers, lifetimeMembers)
 	}
+
+	// A rebuild has already accumulated the later orbit in flight_state before
+	// replaying the earlier recovery. Its stored sequence must keep that future
+	// fact from changing the incremental answer.
+	rebuilt := testutil.MemProjections(t)
+	seedCareerSet(t, rebuilt, defaultCareer, testSystem, 1)
+	apply(t, rebuilt, []input{
+		{career: defaultCareer, flight: outOfOrder, typ: "flight.ended", payload: stats.FlightEnded{Reason: "recovered", Kids: []string{"too-early"}}},
+		{career: defaultCareer, flight: outOfOrder, typ: "vehicle.orbit", payload: stats.VehicleOrbit{Phase: "achieved"}},
+	}, 0, true)
+	if _, ok := readStats(t, rebuilt)["1/"+stats.StatKittensToOrbitAndBack]; ok {
+		t.Error("refined replay used a future orbit to award an earlier recovery")
+	}
 }
 
 func TestKittensToOrbitAndBackCountsCareerRowsIndependentlyByScope(t *testing.T) {

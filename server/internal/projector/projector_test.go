@@ -289,7 +289,7 @@ func (r *rig) snapshot() snapshot {
 		if s.SystemStats, err = dump(ctx, p, `SELECT player_id, system, stat, value, context, updated_seq FROM system_stat ORDER BY player_id, system, stat`); err != nil {
 			return err
 		}
-		if s.Flights, err = dump(ctx, p, `SELECT hex(flight_id), player_id, flags, ended_reason, crew, body, started_seq, engine_count, milestones, part_count, launch_mass_kg, career FROM flight_state ORDER BY hex(flight_id)`); err != nil {
+		if s.Flights, err = dump(ctx, p, `SELECT hex(flight_id), player_id, flags, ended_reason, crew, body, started_seq, engine_count, milestones, part_count, launch_mass_kg, career, first_orbit_seq FROM flight_state ORDER BY hex(flight_id)`); err != nil {
 			return err
 		}
 		if s.Bodies, err = dump(ctx, p, `SELECT player_id, kind, body, first_seq, first_sim_t FROM player_body ORDER BY player_id, kind, body`); err != nil {

@@ -1392,7 +1392,8 @@ func (kittensToOrbitFold) Apply(ctx context.Context, b *Batch, ev Event) error {
 		return err
 	}
 	flight, found, err := b.Flight(ctx, ev.FlightID)
-	if err != nil || !found || flight.Milestones&MilestoneOrbit == 0 {
+	if err != nil || !found || flight.Milestones&MilestoneOrbit == 0 ||
+		flight.FirstOrbitSeq <= 0 || flight.FirstOrbitSeq >= ev.Seq {
 		return err
 	}
 

@@ -645,10 +645,11 @@ const BOARD_DEFINITIONS: Omit<Board, "scopes">[] = [
     ascending: false,
     career: false,
     from: ["flight.ended"],
-    what: "How many save-local kittens rode home on a recovered flight that had reached orbit.",
-    how: "Each kitten aboard at recovery counts once per save. The player view adds distinct save-and-kitten pairs across all saves; the system view does the same across saves whose celestial system is known. A kitten who boarded after orbit counts, while one who transferred away before recovery does not, because the recovery-time crew list is authoritative.",
+    what: "How many save-local kittens rode home on a recovered flight after it reached orbit.",
+    how: "The flight must reach orbit before recovery. Each kitten aboard at recovery counts once per save. The player view adds distinct save-and-kitten pairs across all saves; the system view does the same across saves whose celestial system is known. A kitten who boarded after orbit counts, while one who transferred away before recovery does not, because the recovery-time crew list is authoritative.",
     excluded: [
       "The flight never reached orbit.",
+      "The only recorded orbit happened after recovery.",
       "The flight did not end recovered.",
       "Nobody was aboard at recovery.",
       "The flight was flagged.",

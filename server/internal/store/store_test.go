@@ -143,8 +143,8 @@ func TestMigrationsCreateTheFullDDL(t *testing.T) {
 		if got := indexNames(t, p.DB); !equal(got, wantIdx) {
 			t.Errorf("indexes = %v, want %v", got, wantIdx)
 		}
-		if p.Version != 11 {
-			t.Errorf("schema version = %d, want 11", p.Version)
+		if p.Version != 12 {
+			t.Errorf("schema version = %d, want 12", p.Version)
 		}
 		rows, err := p.Reader().QueryContext(t.Context(), `PRAGMA table_info(flight_state)`)
 		if err != nil {
@@ -174,6 +174,7 @@ func TestMigrationsCreateTheFullDDL(t *testing.T) {
 			"part_count INTEGER null=true default= pk=0",
 			"launch_mass_kg REAL null=true default= pk=0",
 			"career TEXT null=false default='' pk=0",
+			"first_orbit_seq INTEGER null=false default=0 pk=0",
 		}
 		if !slices.Equal(columns, wantColumns) {
 			t.Errorf("flight_state columns = %v, want %v", columns, wantColumns)
@@ -241,8 +242,8 @@ func TestBadgeAwardSurvivesProjectionRestart(t *testing.T) {
 		t.Fatalf("reopen projections: %v", err)
 	}
 	defer second.Close()
-	if second.Version != 11 {
-		t.Fatalf("schema version after reopen = %d, want 11", second.Version)
+	if second.Version != 12 {
+		t.Fatalf("schema version after reopen = %d, want 12", second.Version)
 	}
 	rows, err := second.Reader().QueryContext(t.Context(), `
 		SELECT player_id, career, badge, system, first_career, earned_seq, earned_at,

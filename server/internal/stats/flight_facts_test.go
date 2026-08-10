@@ -41,8 +41,8 @@ func TestFlightFactsMilestonesCareerAndOrdering(t *testing.T) {
 		if err != nil || !ok {
 			t.Fatalf("flight before start = ok %v, err %v", ok, err)
 		}
-		if beforeStart.StartedSeq != 0 || beforeStart.Milestones != stats.MilestoneOrbit {
-			t.Errorf("before start = seq %d milestones %d, want 0 and orbit", beforeStart.StartedSeq, beforeStart.Milestones)
+		if beforeStart.StartedSeq != 0 || beforeStart.Milestones != stats.MilestoneOrbit || beforeStart.FirstOrbitSeq != 1 {
+			t.Errorf("before start = start %d milestones %d orbit %d, want 0, orbit, 1", beforeStart.StartedSeq, beforeStart.Milestones, beforeStart.FirstOrbitSeq)
 		}
 		if beforeStart.HasStartFactAt(4, true) {
 			t.Error("placeholder flight row was treated as an actual flight.started fact")
@@ -92,7 +92,7 @@ func TestFlightFactsMilestonesCareerAndOrdering(t *testing.T) {
 		}
 
 		assertFlightFacts(t, batch, zeroFlight, stats.FlightState{
-			StartedSeq: 5, Milestones: stats.MilestoneOrbit | stats.MilestoneSpace | stats.MilestoneOtherSOI | stats.MilestoneLanded | stats.MilestoneDocked,
+			StartedSeq: 5, Milestones: stats.MilestoneOrbit | stats.MilestoneSpace | stats.MilestoneOtherSOI | stats.MilestoneLanded | stats.MilestoneDocked, FirstOrbitSeq: 1,
 			PartCount: sql.NullInt64{Int64: 0, Valid: true}, LaunchMassKg: sql.NullFloat64{Float64: 0, Valid: true}, Career: "firstcareer00001",
 		})
 		assertFlightFacts(t, batch, absentFlight, stats.FlightState{Career: defaultCareer})
@@ -128,7 +128,7 @@ func TestFlightFactsMilestonesCareerAndOrdering(t *testing.T) {
 			return err
 		}
 		assertFlightFacts(t, batch, zeroFlight, stats.FlightState{
-			StartedSeq: 5, Milestones: stats.MilestoneOrbit | stats.MilestoneSpace | stats.MilestoneOtherSOI | stats.MilestoneLanded | stats.MilestoneDocked,
+			StartedSeq: 5, Milestones: stats.MilestoneOrbit | stats.MilestoneSpace | stats.MilestoneOtherSOI | stats.MilestoneLanded | stats.MilestoneDocked, FirstOrbitSeq: 1,
 			PartCount: sql.NullInt64{Int64: 0, Valid: true}, LaunchMassKg: sql.NullFloat64{Float64: 0, Valid: true}, Career: "firstcareer00001",
 		})
 		assertFlightFacts(t, batch, absentFlight, stats.FlightState{Career: defaultCareer})
@@ -155,5 +155,8 @@ func assertFlightFacts(t *testing.T, batch *stats.Batch, flight ids.ID, want sta
 		t.Errorf("Flight(%s) facts = {seq:%d engine:%+v milestones:%d parts:%+v mass:%+v career:%q}, want {seq:%d engine:%+v milestones:%d parts:%+v mass:%+v career:%q}",
 			ids.String(flight), got.StartedSeq, got.EngineCount, got.Milestones, got.PartCount, got.LaunchMassKg, got.Career,
 			want.StartedSeq, want.EngineCount, want.Milestones, want.PartCount, want.LaunchMassKg, want.Career)
+	}
+	if got.FirstOrbitSeq != want.FirstOrbitSeq {
+		t.Errorf("Flight(%s) first orbit seq = %d, want %d", ids.String(flight), got.FirstOrbitSeq, want.FirstOrbitSeq)
 	}
 }

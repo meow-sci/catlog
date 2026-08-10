@@ -75,7 +75,17 @@ func Folds() []Fold {
 // that have to be kept level. A fold that ran in one and not the other would
 // make a rebuilt projections.db disagree with the incremental one, which is the
 // one property the rebuild exists to guarantee.
-func SecondPassFolds() []Fold { return append(BoardFolds(), LogFolds()...) }
+func SecondPassFolds() []Fold {
+	return secondPassFolds(BoardFolds(), BadgeFolds(), LogFolds())
+}
+
+func secondPassFolds(boards, badges, logs []Fold) []Fold {
+	folds := append(append(boards, badges...), logs...)
+	if err := validateFoldNames(folds); err != nil {
+		panic(err)
+	}
+	return folds
+}
 
 // LogFolds returns the folds that describe the log itself rather than the
 // players in it — currently just the event census behind `GET /v1/stats`.

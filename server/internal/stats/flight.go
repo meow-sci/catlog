@@ -81,18 +81,19 @@ func FlagNames(flags int64) []string {
 
 // FlightState is a row of `flight_state` (§5.4).
 type FlightState struct {
-	FlightID     ids.ID
-	PlayerID     int64
-	Flags        int64
-	EndedReason  string
-	Crew         sql.NullInt64
-	Body         string
-	StartedSeq   int64
-	EngineCount  sql.NullInt64
-	Milestones   int64
-	PartCount    sql.NullInt64
-	LaunchMassKg sql.NullFloat64
-	Career       string
+	FlightID      ids.ID
+	PlayerID      int64
+	Flags         int64
+	EndedReason   string
+	Crew          sql.NullInt64
+	Body          string
+	StartedSeq    int64
+	EngineCount   sql.NullInt64
+	Milestones    int64
+	PartCount     sql.NullInt64
+	LaunchMassKg  sql.NullFloat64
+	Career        string
+	FirstOrbitSeq int64
 }
 
 // Flagged reports whether any flag bit is set.
@@ -150,7 +151,7 @@ func (flightFold) Apply(ctx context.Context, b *Batch, ev Event) error {
 	case "vehicle.orbit":
 		p, ok := payloadOf[VehicleOrbit](ev)
 		if ok && p.Phase == "achieved" {
-			return b.MarkFlightMilestone(ctx, ev.FlightID, MilestoneOrbit)
+			return b.MarkFlightOrbit(ctx, ev.FlightID, ev.Seq)
 		}
 	case "vehicle.atmosphere":
 		p, ok := payloadOf[VehicleAtmosphere](ev)
