@@ -149,13 +149,14 @@ after any registry or payload change is not optional — it is what the tests ar
 ### 3. Functional / acceptance — `make sim`
 
 **One scripted flight, one player, exact leaderboard assertions.** `catlog.sim` is the deterministic
-acceptance tool: six scenarios, each driving the real detector → outbox → proof → shipper chain
+acceptance tool: seven scenarios, each driving the real detector → outbox → proof → shipper chain
 against a live server, then asserting what the boards say.
 
 ```sh
 make sim                                    # list the scenarios
 make sim SCENARIO=hop-lithobrake CRED=… ASSERT=1
 make sim SCENARIO=cheater CRED=… ASSERT=1   # proves a flagged flight scores nothing
+make sim SCENARIO=two-saves CRED=… ASSERT=1 # proves one player can rank two saves
 make sim SCENARIO=soak CRED=… SPEED=100     # pace at 100 sim seconds per wall second
 ```
 

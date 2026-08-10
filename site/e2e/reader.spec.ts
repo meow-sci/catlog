@@ -199,11 +199,12 @@ test.describe("journey B — everyone's stats", () => {
     // The window is named on the page, so a reader can tell which one they have.
     await expect(page.locator("#board-bucket")).toHaveAttribute("data-bucket", /^\d{4}$/);
 
-    // A window this server does not serve is a 404, and says which of the two
-    // things went wrong.
+    // An invalid window is a bad request, and says which dimension went wrong.
     const res = await page.goto(`/boards/${LITHOBRAKE}?period=fortnightly`);
-    expect(res?.status()).toBe(404);
-    await expect(page.locator("#not-found-detail")).toContainText(/window/i);
+    expect(res?.status()).toBe(400);
+    await expect(page.locator("#not-found-detail")).toHaveText(
+      "Period must be one of all time, daily, weekly, monthly or yearly.",
+    );
   });
 
   test("the pager counts ranks and disables what it cannot do", async ({ page }) => {

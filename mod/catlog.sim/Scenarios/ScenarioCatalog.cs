@@ -3,7 +3,7 @@ using System.Collections.Generic;
 
 namespace MeowSci.Catlog.Sim.Scenarios;
 
-/// <summary>The six canonical scenarios of §7.3 (docs/mod.md), in their canonical order.</summary>
+/// <summary>The canonical scenarios of §7.3 (docs/mod.md), in their canonical order.</summary>
 public static class ScenarioCatalog
 {
     private static readonly IScenario[] Scenarios =
@@ -13,6 +13,7 @@ public static class ScenarioCatalog
         new RudSamplerScenario(),
         new TumbleweedScenario(),
         new CheaterScenario(),
+        new TwoSavesScenario(),
         new SoakScenario(),
     ];
 

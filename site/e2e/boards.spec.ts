@@ -32,18 +32,49 @@ const TOP_VALUE = 214;
 const FIXED_BOARDS = [
   "biggest_lithobrake_survived",
   "peak_g_survived",
+  "max_q_survived",
+  "biggest_impact_energy",
   "fastest_surface_speed",
   "fastest_orbital_speed",
+  "fastest_entry",
+  "highest_altitude",
+  "lowest_pass",
+  "highest_apoapsis",
+  "lowest_orbit",
+  "roundest_orbit",
+  "steepest_orbit",
+  "softest_touchdown",
+  "softest_landing",
+  "heaviest_launch",
+  "heaviest_to_orbit",
+  "most_parts",
+  "biggest_stack",
+  "biggest_crew",
+  "biggest_recovery",
+  "most_stages",
+  "longest_eva",
   "kitten_tumbles",
   "rud_total",
   "orbits_achieved",
   "soi_bodies",
+  "landed_bodies",
+  "landings",
   "dockings",
   "stagings",
+  "splashdowns",
+  "evas",
+  "flameouts",
+  "engine_ignitions",
   "kittens_recovered",
   "distance_travelled",
+  "top_kitten_distance",
+  "top_kitten_missions",
   "fastest_to_orbit",
+  "career_playtime",
+  "play_sessions",
 ];
+
+const DYNAMIC_BOARD_FAMILIES = ["fastest_to_", "rud_"] as const;
 
 test.describe("boards", () => {
   test("the home page shows featured boards and the feed panel", async ({ page }) => {
@@ -88,9 +119,14 @@ test.describe("boards", () => {
     // And the demo dataset does exercise the dynamic half, or the check above
     // would be comparing two copies of the fixed list.
     expect(published.length).toBeGreaterThan(FIXED_BOARDS.length);
-    expect(published.some((stat) => stat.startsWith("fastest_to_") && stat !== "fastest_to_orbit"))
-      .toBeTruthy();
-    expect(published.some((stat) => stat.startsWith("rud_") && stat !== "rud_total")).toBeTruthy();
+    expect(
+      published.some(
+        (stat) => stat.startsWith(DYNAMIC_BOARD_FAMILIES[0]) && stat !== "fastest_to_orbit",
+      ),
+    ).toBeTruthy();
+    expect(
+      published.some((stat) => stat.startsWith(DYNAMIC_BOARD_FAMILIES[1]) && stat !== "rud_total"),
+    ).toBeTruthy();
 
     // 3. The threshold that keeps a one-entrant board out of the index is stated
     //    on the page, with the server's own number.
@@ -131,7 +167,10 @@ test.describe("boards", () => {
 
     // And the cells really are rendered as durations, which is the whole reason
     // the assertion above had to move.
-    const rendered = await page.locator("tr.board-row td.value").first().innerText();
+    const rendered = (await page.locator("tr.board-row td.value").first().innerText())
+      .split("\n")[0]
+      .replace("†", "")
+      .trim();
     // Grouping is the reader's locale (intl.js), so the separator here is
     // whatever the browser writes rather than a character this file can name.
     expect(rendered).toMatch(/^\d[\d\p{P}\p{Zs}]*\s?(ms|s)$|^\d+[dhmy]\s\d+[dhms]$/u);
@@ -182,6 +221,54 @@ test.describe("boards", () => {
     expect(json.rows[0].handle).toBe(TOP_HANDLE);
     expect(json.rows[0].value).toBe(TOP_VALUE);
     expect(api.headers()["cache-control"]).toContain("s-maxage=30");
+  });
+
+  test("a per-save board matches the API, links saves and refuses weekly windows", async ({
+    page,
+  }) => {
+    const response = await page.goto("/boards/landings?scope=career");
+    expect(response?.status()).toBe(200);
+    await expect(page.locator('#board-scopes a[data-scope="career"]')).toHaveClass(/selected/);
+    await expect(page.locator('#board-scopes a[data-scope="career"]')).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+    await expect(page.locator("#board-periods")).toHaveCount(0);
+
+    const api = await page.request.get("/v1/leaderboards/landings?scope=career");
+    expect(api.ok()).toBeTruthy();
+    const json = (await api.json()) as {
+      ascending: boolean;
+      rows: Array<{ rank: number; handle: string; save: number; value: number }>;
+    };
+    expect(json.rows.length).toBeGreaterThan(1);
+
+    const rendered = await page.locator("tr.board-row").evaluateAll((rows) =>
+      rows.map((row) => ({
+        rank: Number(row.getAttribute("data-rank")),
+        handle: row.getAttribute("data-handle"),
+        save: Number(row.querySelector("td.save a")?.textContent?.replace(/\D/g, "")),
+        href: row.querySelector("td.save a")?.getAttribute("href"),
+        value: Number((row.querySelector("td.value") as HTMLElement | null)?.dataset.value),
+      })),
+    );
+    expect(rendered.map(({ rank, handle, save, value }) => ({ rank, handle, save, value }))).toEqual(
+      json.rows.map(({ rank, handle, save, value }) => ({ rank, handle, save, value })),
+    );
+    for (const row of rendered) {
+      expect(row.href).toBe(`/p/${row.handle}/saves/${row.save}`);
+    }
+    const values = rendered.map((row) => row.value);
+    const sorted = [...values].sort((a, b) => (json.ascending ? a - b : b - a));
+    expect(values).toEqual(sorted);
+
+    const refused = await page.goto("/boards/landings?scope=career&period=weekly");
+    expect(refused?.status()).toBe(400);
+    await expect(page.locator("#not-found")).toBeVisible();
+    await expect(page.locator("#not-found-detail")).toContainText(
+      "Saves boards have no time windows.",
+    );
+    await expect(page.locator("tr.board-row")).toHaveCount(0);
   });
 
   test("a profile shows the player's records and ranks", async ({ page }) => {

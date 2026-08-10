@@ -1633,6 +1633,25 @@ Badge fields are intentionally absent until the badge projection exists. A zero 
 look authoritative while conveying only implementation order, and would force clients to depend on
 a shape whose meaning had not yet been built.
 
+### PROJ-112 — Demo history and browser tests prove ranking dimensions, not a frozen catalogue size
+
+*Accepted · 2026-08-10 · Task B7.*
+
+The deterministic demo now gives two players two populated saves, with landings in every save and a
+mix of unknown, friendly, changed-system and rewound provenance. A one-save fixture could render the
+new pages while never proving that career scope preserves two rows owned by the same player; a
+fixture with only known systems could likewise hide the required em dash. The seed deliberately
+models both sides so browser assertions are non-vacuous and remain reproducible without invented
+test-only response data. System discovery still precedes the session it describes, matching the
+runtime emission contract even in synthetic history.
+
+The browser suite compares career-board rows, exact values and ordering directly with the JSON API,
+and the simulator adds a two-save scenario through the real detector-to-shipper path. These cover
+different failures: the seed proves public rendering and links, while the simulator proves the mod
+actually changes career identity. Fixed board keys are asserted by inclusion and dynamic families
+separately, never by total catalogue size, because content-defined bodies and RUD causes make an
+exact count inherently stale (PROJ-039).
+
 ## Archive & restore
 
 The filesystem archiver, the manifest, restore verification, and the R2 design that is deliberately not built.

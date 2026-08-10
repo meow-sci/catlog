@@ -304,6 +304,32 @@ public sealed class ReadApiClient : IDisposable
         return null;
     }
 
+    /// <summary>
+    /// Asserts that one player occupies <paramref name="careerRows"/> rows on the career-scoped
+    /// board and exactly one row on the ordinary player-scoped board.
+    /// </summary>
+    /// <param name="handle">The player whose rows to count.</param>
+    /// <param name="stat">The board's stat key.</param>
+    /// <param name="careerRows">The expected number of per-save rows.</param>
+    public void ExpectCareerRows(string handle, string stat, int careerRows)
+    {
+        int actualCareerRows = BoardRowCount(stat, "career", handle);
+        Record(
+            ok: actualCareerRows == careerRows,
+            label: stat + " (save rows)",
+            expected: careerRows.ToString(CultureInfo.InvariantCulture),
+            actual: actualCareerRows.ToString(CultureInfo.InvariantCulture),
+            note: $"GET /v1/leaderboards/{stat}?scope=career; one row per save");
+
+        int actualPlayerRows = BoardRowCount(stat, "player", handle);
+        Record(
+            ok: actualPlayerRows == 1,
+            label: stat + " (player rows)",
+            expected: "1",
+            actual: actualPlayerRows.ToString(CultureInfo.InvariantCulture),
+            note: $"GET /v1/leaderboards/{stat}?scope=player; one row per player");
+    }
+
     /// <summary>Reads the numeric <c>GET /debug/vars</c> counters.</summary>
     /// <returns>Counter name → value, for the numeric entries only.</returns>
     public IReadOnlyDictionary<string, double> Vars()
@@ -488,6 +514,30 @@ public sealed class ReadApiClient : IDisposable
         {
             throw new SimException($"GET {url} did not return JSON: {ex.Message}");
         }
+    }
+
+    private int BoardRowCount(string stat, string scope, string handle)
+    {
+        int matches = 0;
+        for (int page = 0; page < MaxBoardPages; page++)
+        {
+            int offset = page * BoardPageSize;
+            using JsonDocument document = GetJson(
+                $"{_serverUrl}/v1/leaderboards/{stat}?scope={scope}&limit={BoardPageSize}&offset={offset}");
+            JsonElement rows = document.RootElement.GetProperty("rows");
+            int count = 0;
+            foreach (JsonElement row in rows.EnumerateArray())
+            {
+                count++;
+                if (string.Equals(row.GetProperty("handle").GetString(), handle, StringComparison.Ordinal))
+                    matches++;
+            }
+
+            if (count < BoardPageSize)
+                return matches;
+        }
+
+        return matches;
     }
 
     private static long Int64(JsonElement element, string name)

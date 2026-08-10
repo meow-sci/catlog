@@ -47,6 +47,11 @@ const (
 	HandleAce     = "demo_ace"
 	HandleTumbler = "demo_tumbler"
 	HandleCrasher = "demo_crasher"
+	// DemoSystemHash is the shared system identity reported by the seeded
+	// players' second saves. Their first saves deliberately predate discovery,
+	// so the saves page exercises both a friendly system and an unknown one.
+	DemoSystemHash    = "ADRTaA6cER7uqfoM_p880GQ6gEevTrhCycd44NRSQ_I"
+	demoAltSystemHash = "Hav5mtEeCT3_I8RHVAo74PDa8rXAupy55iZ3Rj61r24"
 )
 
 // Handles lists the demo handles in the order they are created.
@@ -170,11 +175,13 @@ func ace() PlayerData {
 	})
 	b.add("vehicle.docked", stats.VehicleDock{OtherFlight: ids.String(seedULID("docking-target", 1))})
 	b.add("telemetry.window", window("mun", 640, 9450, 6.8))
+	b.add("vehicle.landed", landing("mun", 2.4))
+	b.add("vehicle.landed", landing("mun", 1.8))
 	b.endFlight(stats.FlightEnded{Reason: "recovered", CrewCount: 3})
 	// A second save, flown fast and using the stock KSA body names — this is what
 	// puts `demo_ace` on `fastest_to_orbit` and the per-body boards. Its clock
 	// restarts near zero because sim_t is seconds since *this* career began.
-	b.newCareer(2, 0)
+	b.newCareerInSystem(2, 0)
 	b.startFlight(9, stats.FlightStarted{
 		VehicleName: "Direct Ascent", Body: "earth", MassKg: 51000, PartCount: 41, CrewCount: 2,
 	})
@@ -184,7 +191,12 @@ func ace() PlayerData {
 	for _, soi := range StockBodyRun {
 		b.add("vehicle.soi", soi)
 	}
+	b.add("vehicle.landed", landing("mars", 3.1))
 	b.endFlight(stats.FlightEnded{Reason: "recovered", CrewCount: 2})
+	// Loading this save again under different system metadata makes the demo
+	// exercise both provenance qualifications on the public save pages. The
+	// first discovered identity remains the friendly label for the save.
+	b.reloadCareerInSystem(3, 5, demoAltSystemHash, "SolDense", "Sol Dense")
 
 	b.roster(
 		stats.RosterKitten{Kid: "ace0000000000001", Name: "Comet", TravelledM: 1_820_000, FastestMs: 29_812, Missions: 4, MissionTimeS: 41200, KIA: false},
@@ -250,6 +262,7 @@ func crasher() PlayerData {
 	b.add("vehicle.impact", stats.VehicleImpact{
 		SpeedMs: 214, EnergyJ: 4.8e7, Survived: true, LaunchPad: false, Body: "duna", CrewCount: 1,
 	})
+	b.add("vehicle.landed", landing("duna", 4.2))
 	b.endFlight(stats.FlightEnded{Reason: "recovered", CrewCount: 1})
 
 	// One flight per §4.2 RUD cause, so every `rud_<cause>` board has an entry.
@@ -285,13 +298,14 @@ func crasher() PlayerData {
 	// It is what puts two players on `fastest_to_luna`/`_sol`/`_mars`, which is
 	// what makes those boards appear in the index at all (stats.Catalog) — and
 	// `demo_ace` still owns every one of them, because slower is worse here.
-	b.newCareer(2, 500)
+	b.newCareerInSystem(2, 500)
 	b.startFlight(20, stats.FlightStarted{
 		VehicleName: "Slow Boat", Body: "earth", MassKg: 47000, PartCount: 38, CrewCount: 1,
 	})
 	for _, soi := range StockBodyRun {
 		b.add("vehicle.soi", soi)
 	}
+	b.add("vehicle.landed", landing("mars", 8.6))
 	b.endFlight(stats.FlightEnded{Reason: "despawned", CrewCount: 0})
 
 	b.roster(
@@ -313,6 +327,13 @@ func window(body string, surfaceMax, orbitalMax, peakG float64) stats.TelemetryW
 		PeakG:          &g,
 		MaxQPa:         &q,
 		MassKgLast:     18400,
+	}
+}
+
+func landing(body string, verticalSpeed float64) stats.VehicleLanded {
+	return stats.VehicleLanded{
+		Body: body, VerticalSpeedMs: verticalSpeed, HorizontalSpeedMs: verticalSpeed / 2,
+		CrewCount: 1, Survived: true,
 	}
 }
 
@@ -350,10 +371,41 @@ func (b *builder) session() {
 // *that* career began (§4.1). It is what makes the demo dataset exercise the
 // career-time boards honestly rather than by accident.
 func (b *builder) newCareer(n int, simT float64) {
+	b.switchCareer(n, simT)
+	b.session()
+}
+
+// newCareerInSystem preserves the shipped ordering contract: the system
+// identity is known before session.started announces the loaded game.
+func (b *builder) newCareerInSystem(n int, simT float64) {
+	b.switchCareer(n, simT)
+	b.discoverSystem(DemoSystemHash, "Sol", "Sol")
+	b.session()
+}
+
+func (b *builder) reloadCareerInSystem(session int, simT float64, hash, id, name string) {
+	b.sessionID = seedULID(b.handle+":session", session)
+	b.simT = simT
+	b.discoverSystem(hash, id, name)
+	b.session()
+}
+
+func (b *builder) switchCareer(n int, simT float64) {
 	b.sessionID = seedULID(b.handle+":session", n)
 	b.career = seedCareer(b.handle, n)
 	b.simT = simT
-	b.session()
+}
+
+// discoverSystem gives a save its friendly content identity without advancing
+// gameplay time: surveying the loaded XML is metadata work, not flying. The
+// event still has a valid sim_t, then the next gameplay event resumes the same
+// clock reading.
+func (b *builder) discoverSystem(hash, id, name string) {
+	clock := b.simT
+	b.add("system.discovered", stats.SystemDiscovered{
+		System: hash, ID: id, Name: name, Home: "earth", Complete: false,
+	})
+	b.simT = clock
 }
 
 func (b *builder) startFlight(n int, p stats.FlightStarted) {

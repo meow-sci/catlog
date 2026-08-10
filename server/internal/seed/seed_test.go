@@ -1,9 +1,12 @@
 package seed_test
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/meow-sci/catlog/server/internal/directory"
@@ -42,6 +45,21 @@ func TestDatasetIsDeterministic(t *testing.T) {
 					a[i].Handle, j, ids.String(x.ID))
 			}
 			seen[x.ID] = true
+			if x.Type == "system.discovered" {
+				var discovered stats.SystemDiscovered
+				if err := json.Unmarshal(x.Payload, &discovered); err != nil {
+					t.Fatalf("%s system payload: %v", a[i].Handle, err)
+				}
+				digest, err := base64.RawURLEncoding.DecodeString(discovered.System)
+				if err != nil || len(digest) != sha256.Size || len(discovered.System) != 43 ||
+					strings.ContainsAny(discovered.System, "+/=") {
+					t.Errorf("%s system hash %q is not canonical base64url SHA-256", a[i].Handle, discovered.System)
+				}
+				if j+1 >= len(a[i].Events) || a[i].Events[j+1].Type != "session.started" ||
+					a[i].Events[j+1].Career != x.Career || a[i].Events[j+1].SessionID != x.SessionID {
+					t.Errorf("%s system discovery is not immediately before its session.started", a[i].Handle)
+				}
+			}
 		}
 	}
 }
@@ -86,6 +104,7 @@ func TestSeedProducesTheExpectedBoards(t *testing.T) {
 		"demo_crasher/fastest_surface_speed":       782,
 		"demo_crasher/rud_total":                   6,
 		"demo_crasher/kittens_recovered":           1,
+		"demo_crasher/landings":                    2,
 
 		"demo_ace/fastest_surface_speed": 2410,
 		"demo_ace/fastest_orbital_speed": 9450,
@@ -95,6 +114,7 @@ func TestSeedProducesTheExpectedBoards(t *testing.T) {
 		"demo_ace/stagings":              3,
 		"demo_ace/soi_bodies":            4,
 		"demo_ace/kittens_recovered":     5,
+		"demo_ace/landings":              3,
 
 		// demo_ace's second career is the fast one: its clock restarts at 0 and
 		// the builder ticks 12.5 s per event, so orbit lands at 37.5 s into the
@@ -147,6 +167,66 @@ func TestSeedProducesTheExpectedBoards(t *testing.T) {
 			t.Errorf("%s: demo_ace %v is not faster than demo_crasher %v",
 				stat, got[seed.HandleAce+"/"+stat], got[seed.HandleCrasher+"/"+stat])
 		}
+	}
+	// Per-save pages and boards must be non-vacuous in the demo: two players
+	// each have two saves, every one has a landing row, and their first/second
+	// saves deliberately exercise unknown/friendly system display.
+	if err := live.With(func(proj *store.Projections) error {
+		landings, err := proj.CareerLeaderboard(ctx, stats.StatLandings, "", false, 100, 0)
+		if err != nil {
+			return err
+		}
+		if len(landings) != 4 {
+			t.Errorf("career landings rows = %d, want 4 populated demo saves", len(landings))
+		}
+		seen := map[string]float64{}
+		for _, row := range landings {
+			seen[fmt.Sprintf("%d/%d", row.PlayerID, row.Ordinal)] = row.Value
+		}
+		for key, want := range map[string]float64{"1/1": 2, "1/2": 1, "3/1": 1, "3/2": 1} {
+			if seen[key] != want {
+				t.Errorf("career landing %s = %v, want %v", key, seen[key], want)
+			}
+		}
+		for _, playerID := range []int64{1, 3} {
+			careers, err := proj.PlayerCareers(ctx, playerID)
+			if err != nil {
+				return err
+			}
+			if len(careers) != 2 || careers[0].System != "" || careers[1].System != seed.DemoSystemHash {
+				t.Errorf("player %d careers = %+v, want unknown then Sol", playerID, careers)
+			}
+			if playerID == 1 && (!careers[1].SystemChanged || !careers[1].Rewound) {
+				t.Errorf("demo_ace second save = %+v, want system-changed and rewound provenance", careers[1])
+			}
+			if playerID == 3 && (careers[1].SystemChanged || careers[1].Rewound) {
+				t.Errorf("demo_crasher second save = %+v, want no provenance qualifications", careers[1])
+			}
+		}
+		system, ok, err := proj.SystemBySlugOrHash(ctx, "sol")
+		if err != nil {
+			return err
+		}
+		if !ok || system.Hash != seed.DemoSystemHash || system.Name != "Sol" || system.Slug != "sol" {
+			t.Errorf("friendly demo system = %+v, %v", system, ok)
+		}
+		byHash, ok, err := proj.SystemBySlugOrHash(ctx, seed.DemoSystemHash)
+		if err != nil {
+			return err
+		}
+		if !ok || byHash != system {
+			t.Errorf("demo system hash lookup = %+v, %v; slug lookup = %+v", byHash, ok, system)
+		}
+		alternate, ok, err := proj.SystemBySlugOrHash(ctx, "sol-dense")
+		if err != nil {
+			return err
+		}
+		if !ok || alternate.Name != "Sol Dense" || alternate.Slug != "sol-dense" {
+			t.Errorf("alternate demo system = %+v, %v", alternate, ok)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 	// The flagged flight must not have leaked into anything.
 	for _, key := range []string{
@@ -285,7 +365,7 @@ func TestEveryDemoEventCarriesAKnownTypeAndAValidEnvelope(t *testing.T) {
 				t.Errorf("%s: type is not in the §4.2 registry, so /v1/ingest would reject the batch", where)
 			}
 			switch e.Type {
-			case "session.started", "roster.snapshot":
+			case "session.started", "system.discovered", "roster.snapshot":
 				if e.FlightID != ids.Zero {
 					t.Errorf("%s: §4.1 requires a null flight", where)
 				}

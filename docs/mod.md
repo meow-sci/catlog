@@ -341,8 +341,8 @@ make sim SCENARIO=hop-lithobrake CRED=<path> ASSERT=1 SPEED=100
 ```
 
 Scenarios are C# classes producing `SimStep`s — sim-time-stamped snapshot sets and signals — fed
-through the **real** detector, outbox, signer and shipper against a **real** server. Six of them:
-`hop-lithobrake`, `orbit-and-back`, `rud-sampler`, `tumbleweed`, `cheater`, `soak`.
+through the **real** detector, outbox, signer and shipper against a **real** server. Seven of them:
+`hop-lithobrake`, `orbit-and-back`, `rud-sampler`, `tumbleweed`, `cheater`, `two-saves`, `soak`.
 
 `cheater` is the one that earns its place: it flies two flights, one flagged *before* its scoring
 events and one flagged ~60 s *after*. Only the second tests the rebuild backstop — a scenario that
@@ -359,7 +359,7 @@ about pacing.
 ## `catlog.loadgen` — the volume harness
 
 A sibling project, and `catlog.sim` deliberately does not know it exists. The dependency runs one way
-only: adding a `--random` mode to the simulator would have put its six exactly-asserted scenarios one
+only: adding a `--random` mode to the simulator would have put its seven exactly-asserted scenarios one
 refactor away from being a statement about a dice roll.
 
 It does **not** fabricate envelopes. Like the simulator it emits only telemetry snapshots and game
