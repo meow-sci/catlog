@@ -252,10 +252,10 @@ func (r *countingReader) Read(p []byte) (int, error) {
 // TestKnownTypesMatchTheTaxonomy guards the registry against drift: every type
 // docs/events.md lists must be accepted, and nothing else.
 func TestKnownTypesMatchTheTaxonomy(t *testing.T) {
-	if len(KnownTypes()) != 23 {
-		t.Errorf("registry holds %d types, want the 23 of §4.2", len(KnownTypes()))
+	if len(KnownTypes()) != 25 {
+		t.Errorf("registry holds %d types, want 25", len(KnownTypes()))
 	}
-	for _, want := range []string{"vehicle.rud", "vehicle.landed", "telemetry.window", "flight.flagged", "roster.snapshot"} {
+	for _, want := range []string{"system.discovered", "system.body", "vehicle.rud", "vehicle.landed", "telemetry.window", "flight.flagged", "roster.snapshot"} {
 		if !KnownType(want) {
 			t.Errorf("%q is missing from the registry", want)
 		}

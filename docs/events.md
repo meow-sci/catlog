@@ -58,10 +58,11 @@ The mark **excludes nothing and scores nothing**. The row is ranked normally and
 - a career that has never been saved gets a fresh id at every game start, and its events are unlinked from the save it is later written to only for the part before that first save;
 - if the mod cannot read the save name at all, the career stays whatever it was and the mark simply never fires.
 
-## Event taxonomy (23 types, every one at `ver: 1`)
+## Event taxonomy (25 types, every one at `ver: 1`)
 
 Aggregate object `agg` = `{"min": f, "max": f, "mean": f, "last": f}`.
 `body` = lowercase celestial body name string (opaque to server). `situation` = lowercased KSA enum name, opaque to server (known values incl. `landed`, `rolling`, `floating`, `sailing`, `dragging`, `bottomed`, plus airborne states — treat as open set).
+`vec3` = `{"x": f, "y": f, "z": f}`. `quat` = `{"x": f, "y": f, "z": f, "w": f}`.
 
 **"Opaque to server" is load-bearing, and the stats layer honours it.** KSA's celestial systems are hand-authored content that ships as data and that mods extend or replace, so the server holds no list of bodies: the `fastest_to_<body>` boards come into existence because a body appeared in the event stream, and their titles are derived from the name. The same now goes for `vehicle.rud.cause` — the six values in the table below are the ones the game ships today, not an allow-list, and a cause a future build introduces gets its own `rud_<cause>` board rather than disappearing into `rud_total`. The only thing a name has to satisfy is that it can *be* a stat key: lowercase, starting `[a-z0-9]`, then `[a-z0-9._-]`, at most 40 characters — because a stat key is a URL path segment. A name that cannot still counts towards `soi_bodies` / `rud_total` and still keeps its arrival time; it simply gets no board.
 
@@ -73,6 +74,8 @@ Kitten identity: `kid` = lowercase Crockford base32 of the first 10 bytes of `SH
 | type | payload |
 |---|---|
 | `session.started` | `{"mod_ver": "0.1.0", "game_build": "2026.8.5.5168", "install": "<ulid>"}` |
+| `system.discovered` | `{"system": s(hash), "id": s, "name": s(≤64 ascii), "home": s, "bodies": i, "complete": b}` |
+| `system.body` | `{"system": s(hash), "body": s, "name": s, "class": s(open set), "kind": "star"\|"planet"\|"moon"\|"minor"\|"other", "rank": i, "parent": s?, "radius_m": f, "mass_kg": f, "soi_m": f, "atmo_m": f, "ocean_m": f, "angvel": f, "axis": vec3, "ccf_to_cce_t0": quat, "sma_m": f?, "ecc": f?, "inc_deg": f?, "lan_deg": f?, "argp_deg": f?, "t_pe": f?, "period_s": f?}` |
 | `flight.started` | `{"vehicle_name": s(≤64 ascii), "body": s, "mass_kg": f, "part_count": i, "crew_count": i, "kids": [s], "stage_count": i, "lat": f?, "lon": f?}` |
 | `flight.ended` | `{"reason": "recovered"\|"destroyed"\|"despawned", "crew_count": i, "kids": [s], "body": s, "lat": f?, "lon": f?}` — `body` may be the literal `"unknown"` |
 | `vehicle.situation` | `{"from": s, "to": s, "body": s, "altitude_m": f, "surface_speed_ms": f, "orbital_speed_ms": f, "radar_alt_m": f?}` |
@@ -94,6 +97,43 @@ Kitten identity: `kid` = lowercase Crockford base32 of the first 10 bytes of `SH
 | `telemetry.window` | `{"t0_sim": f, "t1_sim": f, "n": i, "body": s, "alt_m": agg, "surface_speed_ms": agg, "orbital_speed_ms": agg, "accel_ms2": agg, "peak_g": f?, "max_q_pa": f?, "mass_kg_last": f, "radar_alt_m": agg?, "warp_max": f}` — one per vehicle per 30 s sim-time of active flight |
 
 ### Payload rules a decoder has to get right
+
+**The system catalogue is complete-or-declared-incomplete.** `system.discovered` is emitted before
+`session.started` at every session boundary and binds the career to the system hash. Its `id` is the
+raw `CelestialSystem.Id`; `name` is the matching system-selection display name, sanitised to at most
+64 printable ASCII characters, or the raw id when no exact ordinal metadata match exists. `home`,
+`body` and `parent` use the same canonical lowercase body-name normalisation as flight events.
+`bodies` is the number of materialised celestial bodies, not a template count.
+
+`complete` is true only when the complete body list accompanies this header: `system.body` reporting
+is enabled, the body count is at most 5,000, every body has valid required physical and orientation
+values, and this career/system is not already durably marked sent. Otherwise the header carries
+`complete: false` and no `system.body` rows are emitted. Disabled, capped and invalid surveys write
+no durable marker, so turning body reporting back on or fixing the content allows a later session to
+retry. A marked survey needs no retry because its catalogue was already appended atomically. The
+header is always reported. Body rows are reported at most once per `(career, system hash)`, but may
+be safely resent after local state loss. A successful first report is appended in this order —
+header, all body rows, then `session.started` — before its marker is committed. A marked report is
+header then `session.started`. The list is never truncated.
+
+**`system.body` describes immutable authored celestial data, not live state.** `class` is the
+concrete runtime class name and is an **open set**; a server must not validate it against today's
+game classes. `kind` is the mod's fixed semantic mapping: `StellarBody` is `star`; planetary,
+terrestrial and atmospheric bodies directly under a star are `planet` and those under any other
+body are `moon`; minor bodies, asteroids and all comet classes are `minor`; an unknown class is
+`other`. `rank` is depth from that body's root, and `parent` is absent on a root. A root body's
+infinite sphere of influence is represented as `soi_m: 0`; every emitted number is otherwise finite.
+`mu` is absent by design because it is derived exactly from `mass_kg` and the game's gravitational
+constant.
+
+The six orbital-shape keys — `sma_m`, `ecc`, `inc_deg`, `lan_deg`, `argp_deg`, `t_pe` — are a group:
+all six are present, or all six are absent. They are absent for roots and whenever any member is not
+finite. Angles are degrees. `t_pe` is the absolute periapsis time in the same career clock as
+`sim_t`, not an offset from the survey. `period_s` is independent and is absent when the game reports
+a non-finite period, including an unbound orbit. Zero remains a real value and is never used for
+absence. `ccf_to_cce_t0` is finite and normalised; because `q` and `-q` are the same rotation, its
+first non-zero component in `w,x,y,z` order is positive, and every negative zero is written as
+positive zero.
 
 **An unreadable value never scores.** Three keys read as a defined fallback rather than being
 omitted, and every board that reads one gates it, because the fallback is indistinguishable from a

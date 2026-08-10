@@ -262,6 +262,8 @@ public sealed class ContractVectorTests
     private static readonly IReadOnlyDictionary<string, Type> PayloadTypes = new Dictionary<string, Type>(StringComparer.Ordinal)
     {
         [EventTypes.SessionStarted] = typeof(SessionStartedPayload),
+        [EventTypes.SystemDiscovered] = typeof(SystemDiscoveredPayload),
+        [EventTypes.SystemBody] = typeof(SystemBodyPayload),
         [EventTypes.FlightStarted] = typeof(FlightStartedPayload),
         [EventTypes.FlightEnded] = typeof(FlightEndedPayload),
         [EventTypes.FlightFlagged] = typeof(FlightFlaggedPayload),

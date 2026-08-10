@@ -307,7 +307,7 @@ public sealed class CatlogRuntime : IDisposable
         double simT = VehicleTelemetry.SimTimeSeconds();
         _bridge.Signal(new SessionLoadedSignal(
             simT, WallMs(), VehicleTelemetry.GameBuild(), ModVersion,
-            VehicleTelemetry.CareerId(InstallId)));
+            VehicleTelemetry.CareerId(InstallId), SystemSurvey.Cached));
     }
 
     /// <summary>
@@ -471,11 +471,6 @@ public sealed class CatlogRuntime : IDisposable
             return;
         }
 
-        // session.started for a session that never loads a save (the game already had a system
-        // loaded, or the player is in the main menu). A subsequent save load raises its own
-        // SessionLoadedSignal, which mints a fresh session id — which is correct, not a duplicate.
-        Append([_pipeline.SessionStarted(VehicleTelemetry.SimTimeSeconds(), WallMs())]);
-
         _workerTask = Task.Run(() => RunWorkerAsync(_cts.Token));
 
         if (_shipper is not null)
@@ -530,7 +525,10 @@ public sealed class CatlogRuntime : IDisposable
             {
                 while (_bridge.Signals.TryRead(out GameSignal? signal))
                 {
-                    Append(_pipeline.ProcessSignal(signal));
+                    if (signal is SessionLoadedSignal loaded)
+                        AppendSessionBoundary(loaded);
+                    else
+                        Append(_pipeline.ProcessSignal(signal));
 
                     // A frame boundary is written after the frame was published, so by the time it
                     // is read the store already holds that frame. Consuming it here — rather than
@@ -570,6 +568,24 @@ public sealed class CatlogRuntime : IDisposable
         catch (Exception ex)
         {
             ModLog.Log.Warn($"catlog: the final pipeline flush failed: {ex.Message}");
+        }
+    }
+
+    private void AppendSessionBoundary(SessionLoadedSignal loaded)
+    {
+        if (_workerOutbox is null || loaded.System is null || _health.IsDead(OutboxSubsystem))
+            return;
+
+        try
+        {
+            int inserted = SystemBoundaryDelivery.Append(_pipeline, _workerOutbox, loaded);
+            Interlocked.Add(ref _eventsAppended, inserted);
+            RefreshPending(_workerOutbox);
+        }
+        catch (Exception ex)
+        {
+            _health.Fault(OutboxSubsystem, ex.Message, ex);
+            ModLog.Log.Error("catlog: could not append the system/session boundary; collection stopped.", ex);
         }
     }
 

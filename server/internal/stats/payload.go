@@ -305,6 +305,57 @@ type SessionStarted struct {
 	Install   string `json:"install"`
 }
 
+// SystemDiscovered binds a session and career to one canonical system hash.
+type SystemDiscovered struct {
+	System   string `json:"system"`
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Home     string `json:"home"`
+	Bodies   int    `json:"bodies"`
+	Complete bool   `json:"complete"`
+}
+
+type Vec3 struct {
+	X float64 `json:"x"`
+	Y float64 `json:"y"`
+	Z float64 `json:"z"`
+}
+
+type Quat struct {
+	X float64 `json:"x"`
+	Y float64 `json:"y"`
+	Z float64 `json:"z"`
+	W float64 `json:"w"`
+}
+
+// SystemBody is one immutable celestial catalogue row. The six shape values
+// are pointers because they are absent as a group on roots or unreadable orbits;
+// PeriodS is independently absent for unbound conics.
+type SystemBody struct {
+	System     string   `json:"system"`
+	Body       string   `json:"body"`
+	Name       string   `json:"name"`
+	Class      string   `json:"class"`
+	Kind       string   `json:"kind"`
+	Rank       int      `json:"rank"`
+	Parent     *string  `json:"parent"`
+	RadiusM    float64  `json:"radius_m"`
+	MassKg     float64  `json:"mass_kg"`
+	SoiM       float64  `json:"soi_m"`
+	AtmoM      float64  `json:"atmo_m"`
+	OceanM     float64  `json:"ocean_m"`
+	AngVel     float64  `json:"angvel"`
+	Axis       Vec3     `json:"axis"`
+	CcfToCceT0 Quat     `json:"ccf_to_cce_t0"`
+	SmaM       *float64 `json:"sma_m"`
+	Ecc        *float64 `json:"ecc"`
+	IncDeg     *float64 `json:"inc_deg"`
+	LanDeg     *float64 `json:"lan_deg"`
+	ArgpDeg    *float64 `json:"argp_deg"`
+	TPe        *float64 `json:"t_pe"`
+	PeriodS    *float64 `json:"period_s"`
+}
+
 // decodePayload turns a verbatim payload into its typed form.
 //
 // A type with no typed form yields (nil, nil): the event is still folded (it
@@ -314,6 +365,10 @@ func decodePayload(typ string, raw json.RawMessage) (any, error) {
 	switch typ {
 	case "session.started":
 		return decodeInto[SessionStarted](raw)
+	case "system.discovered":
+		return decodeInto[SystemDiscovered](raw)
+	case "system.body":
+		return decodeInto[SystemBody](raw)
 	case "flight.started":
 		return decodeInto[FlightStarted](raw)
 	case "flight.ended":

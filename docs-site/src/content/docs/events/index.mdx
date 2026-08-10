@@ -1,7 +1,7 @@
 ---
 title: The event catalog
 description: >-
-  Everything catlog can record — 23 event types, what each one stores, where in
+  Everything catlog can record — 25 event types, what each one stores, where in
   the game it comes from, and which leaderboards it moves.
 sidebar:
   order: 1
@@ -11,12 +11,12 @@ import { Aside, Card, CardGrid, LinkCard } from "@astrojs/starlight/components";
 
 An **event** is one thing catlog wrote down. Every event has a type — a name like
 `vehicle.impact` or `kitten.tumble` — and that name is unique across the whole
-catalog. There are 23 of them.
+catalog. There are 25 of them.
 
 <LinkCard
   title="Browse every event"
   href="/catlog/events/browse/"
-  description="All 23 in one filterable table, searchable by name, field or board."
+  description="All 25 in one filterable table, searchable by name, field or board."
 />
 
 ## How to read an entry
@@ -34,14 +34,15 @@ Every event on these pages carries the same blocks.
 ## You do not have to record all of them
 
 Almost every type here is optional. You can switch any of them off in the mod's
-settings, individually, and the rest of the mod carries on unchanged — the cost is
-that you stop appearing on whatever that type feeds. Five cannot be switched off,
-and they are marked **always on** wherever they appear on this site.
+settings, individually, and the rest of the mod carries on unchanged — the cost
+is that you stop appearing on whatever that type feeds, or lose the catalogue
+features only `system.body` supplies. Six cannot be switched off, and they are
+marked **always on** wherever they appear on this site.
 
 <LinkCard
   title="Turning things off"
   href="/catlog/start/turning-things-off/"
-  description="What each type costs you, and why five of them are refused."
+  description="What each type costs you, and why six of them are refused."
 />
 
 ## The two kinds of event
@@ -83,6 +84,11 @@ that, so skimming a boundary produces one crossing rather than forty.
 ## Groups
 
 <CardGrid>
+  <LinkCard
+    title="Celestial systems"
+    href="/catlog/events/systems/"
+    description="Which system a save belongs to, and the fixed catalogue of worlds inside it."
+  />
   <LinkCard
     title="Sessions and flights"
     href="/catlog/events/sessions-and-flights/"

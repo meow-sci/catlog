@@ -107,7 +107,8 @@ public sealed class EventPipeline
     public PerfStat SignalStats { get; } = new();
 
     /// <summary>
-    /// The <c>session.started</c> event. Emit exactly once per session, before anything else.
+    /// The <c>session.started</c> event. Session-boundary callers normally use
+    /// <see cref="ProcessSignal(GameSignal)"/> so the system catalogue can precede it.
     /// </summary>
     /// <remarks>
     /// The one path that returns an envelope without going through <see cref="Add"/>, and so the
@@ -414,10 +415,50 @@ public sealed class EventPipeline
         _evaVehicles.Clear();
         Tracker.NewSession(loaded.CareerId);
 
+        if (loaded.System is null)
+            return;
+
+        SystemSnapshot system = loaded.System;
+        Add(ref envelopes, EventEnvelope.Create(
+            EventTypes.SystemDiscovered, Tracker.SessionId, Tracker.CareerId, flight: null,
+            loaded.SimT, loaded.WallMs,
+            new SystemDiscoveredPayload(
+                system.SystemId, system.Id, system.Name, system.HomeBody,
+                system.BodyCount, loaded.SystemComplete)));
+
+        if (loaded.IncludeSystemBodies)
+        {
+            foreach (SystemBodySnapshot body in system.Bodies)
+            {
+                bool shape = IsFinite(body.SemiMajorAxisM)
+                    && IsFinite(body.Eccentricity)
+                    && IsFinite(body.InclinationDeg)
+                    && IsFinite(body.LongitudeAscendingNodeDeg)
+                    && IsFinite(body.ArgumentPeriapsisDeg)
+                    && IsFinite(body.TimeAtPeriapsis);
+                Add(ref envelopes, EventEnvelope.Create(
+                    EventTypes.SystemBody, Tracker.SessionId, Tracker.CareerId, flight: null,
+                    loaded.SimT, loaded.WallMs,
+                    new SystemBodyPayload(
+                        system.SystemId, body.Body, body.Name, body.Class, body.Kind, body.Rank,
+                        body.Parent, body.RadiusM, body.MassKg, body.SoiM, body.AtmoM, body.OceanM,
+                        body.AngularVelocityRadS, body.AxisCce, body.CcfToCceT0,
+                        shape ? body.SemiMajorAxisM : null,
+                        shape ? body.Eccentricity : null,
+                        shape ? body.InclinationDeg : null,
+                        shape ? body.LongitudeAscendingNodeDeg : null,
+                        shape ? body.ArgumentPeriapsisDeg : null,
+                        shape ? body.TimeAtPeriapsis : null,
+                        IsFinite(body.PeriodS) ? body.PeriodS : null)));
+            }
+        }
+
         Add(ref envelopes, EventEnvelope.Create(
             EventTypes.SessionStarted, Tracker.SessionId, Tracker.CareerId, flight: null, loaded.SimT, loaded.WallMs,
             new SessionStartedPayload(loaded.ModVersion, loaded.GameBuild, _options.InstallId)));
     }
+
+    private static bool IsFinite(double? value) => value.HasValue && double.IsFinite(value.Value);
 
     private void OnVehicleCreated(VehicleCreatedSignal created, ref List<EventEnvelope>? envelopes)
     {

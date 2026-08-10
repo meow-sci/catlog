@@ -24,7 +24,7 @@ commit. See [ARCHITECTURE.md](ARCHITECTURE.md#7-keeping-the-documentation-true) 
 - **[Storage — Turso, schema & compression](#storage--turso-schema--compression)** — `STORE-*`, 18 entries
 - **[Ingest, auth & the conformance vectors](#ingest-auth--the-conformance-vectors)** — `INGEST-*`, 25 entries
 - **[Identity, handles & moderation](#identity-handles--moderation)** — `IDENT-*`, 18 entries
-- **[Projector, boards & the read API](#projector-boards--the-read-api)** — `PROJ-*`, 103 entries
+- **[Projector, boards & the read API](#projector-boards--the-read-api)** — `PROJ-*`, 108 entries
 - **[Archive & restore](#archive--restore)** — `ARCH-*`, 13 entries
 - **[The frontend](#the-frontend)** — `UI-*`, 44 entries
 - **[The mod and its KSA-free core](#the-mod-and-its-ksa-free-core)** — `MOD-*`, 79 entries
@@ -1473,6 +1473,42 @@ swallows construction failures per root, so the survey hashes what actually regi
 forest therefore gets its own honest id rather than impersonating the intact template. This choice
 serves Constitution §3's frame budget and §6's derived, explainable data without inventing recovery
 state or a server-side celestial allow-list.
+
+### PROJ-108 — System attribution is mandatory; the large immutable catalogue is optional, complete-or-nothing and sent once
+
+*Accepted · 2026-08-10 · celestial-system events.*
+
+`system.discovered` is always reported once per session because a save's system is not decoration:
+it is the join that says which catalogue gives every body name meaning and which system-scoped rows
+may be compared. Making that header configurable would let a one-line setting detach records from
+their scope and leave the server guessing whether two occurrences of “Luna” describe the same
+content. The potentially thousands-of-rows `system.body` catalogue remains configurable because it
+cannot improve a score by disappearing: without every declared body, effective completeness is
+false and catalogue/everywhere functionality awards nothing.
+
+That asymmetry determines the failure contract. Disabled body reporting, more than 5,000 materialised
+bodies, or an invalid required numeric emits one `complete: false` header and no body rows or marker.
+A truncated list was rejected because it looks complete enough to a naïve consumer and can award an
+“everywhere” result in exactly the wrong direction. Optional orbital values are different: a root
+really has no orbit, an unbound body really has no finite period, and omitting those values preserves
+that distinction rather than turning “not applicable” into zero. The root star's infinite sphere of
+influence alone becomes wire zero because JSON cannot carry infinity and a root has no competing
+parent boundary to misstate.
+
+The immutable body rows are sent once per `(career, system hash)` while the small attribution header
+is sent every session. At stock scale this avoids repeatedly shipping the same content; at
+SolDense's 3,215 bodies it is the difference between bounded one-time cost and a rude tax on every
+save load. Runtime appends header, all bodies and `session.started`, then commits
+`survey:<career>:<hash>` in the same transaction. Marking first was rejected because a crash would
+lose the catalogue permanently; failing before commit may resend, and immutable server first-write
+folding makes resend harmless. The 5,000-body cap is a documented refusal aimed at generated or
+adversarial content, not a stock-data allow-list.
+
+The survey remains a game-thread load-boundary operation because KSA collections cannot safely
+escape that thread; workers receive only immutable records. Sol and SolDense timing numbers are not
+recorded here because they have not yet been measured. That manual diagnostics run remains a
+blocking acceptance item: inventing a reassuring number would defeat the reason the frame-budget
+check exists.
 
 ## Archive & restore
 

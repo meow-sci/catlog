@@ -1,0 +1,45 @@
+---
+title: Celestial systems
+description: >-
+  How catlog identifies the system a save belongs to and records its fixed
+  catalogue of worlds.
+sidebar:
+  order: 3
+---
+
+import { Aside } from "@astrojs/starlight/components";
+import EventDetail from "../../../components/EventDetail.astro";
+
+catlog looks at the celestial system your save is in once, when the game loads
+it, and writes down what is in it: the worlds, how big they are, how they spin
+and where they orbit. That is how a leaderboard for “Luna” can know which Luna
+you mean, and how catlog can tell whether you have been everywhere.
+
+The small system header appears every time you start or load the save. The much
+larger body catalogue normally appears only once for that save and exact system,
+even across game restarts. A changed modded system gets a different identity and
+therefore a fresh catalogue.
+
+<Aside type="note" title="A catalogue is complete or it says it is not">
+  catlog never sends the first part of an oversized or unreadable system and calls that the whole
+  thing. If body reporting is off, there are more than 5,000 worlds, or a required value cannot be
+  represented safely, the header says no complete list accompanies it and no body rows are sent. A
+  later load can retry after the cause is fixed. Later loads also use that false value after a
+  successful list was already sent once; in that case the earlier complete catalogue is already safe
+  on the server and does not need repeating.
+</Aside>
+
+<EventDetail type="system.discovered" />
+<EventDetail type="system.body" />
+
+## Why the body rows do not keep changing
+
+These rows describe the authored system — a world's radius, mass, spin and orbit
+— rather than its current position. The game keeps those elements fixed and
+moves the worlds from them as time advances. Sending them once is therefore the
+whole answer, not a sample that will go stale.
+
+Roots carry no parent or orbital-shape fields because they orbit nothing. An
+unbound comet may carry its orbital shape but no period. In both cases the
+missing value is left out rather than written as zero: zero is a real circle, a
+real equatorial orbit and a real time.

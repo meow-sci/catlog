@@ -209,8 +209,9 @@ Keys must be quoted: a bare `telemetry.window = false` is a nested table in TOML
 dot in it, and it fails the parse — which, by rule 2, drops the whole file to defaults and leaves the
 player's edit on disk untouched.
 
-**Five types cannot be switched off**, and a `false` on any of them is dropped with a warning naming
-the key: `session.started`, `flight.started`, `flight.ended`, `flight.flagged` and `kitten.kia`.
+**Six types cannot be switched off**, and a `false` on any of them is dropped with a warning naming
+the key: `system.discovered`, `session.started`, `flight.started`, `flight.ended`, `flight.flagged`
+and `kitten.kia`.
 Switching those off is a cheat rather than a preference — `flight.flagged` is the sharp end, being
 the only thing that marks a run as tainted, so a one-line edit would make teleporting, refuelling,
 resource-editing and console cheating score normally and appear publicly. The threat model is the
@@ -307,6 +308,22 @@ ordering changes; null produces nothing. A root that failed inside KSA's excepti
 constructor is not reconstructed from templates: the registered forest is reported and hashed as a
 distinct partial system. This keeps the cost to one bounded game-thread enumeration per launch and
 keeps failures honest rather than silent.
+
+At each real session boundary Runtime resets the pipeline and mints the new session, then appends
+`system.discovered`, any required `system.body` rows, and `session.started` in that exact order.
+`system.discovered` is always reported. `system.body` is configurable: when disabled, or when the
+survey is invalid or exceeds `Wire.MaxSystemBodies` (5,000), the header says `complete: false`, no
+body rows are appended and no marker is written. A complete unmarked catalogue is appended together
+with `survey:<career>:<system-hash>` in one `OutboxDb.AppendAndSetState` transaction; a marked
+catalogue sends only a `complete: false` header and session; its complete catalogue is already
+durable. The marker is therefore committed only after every undroppable catalogue row exists, and
+a crash can cause a harmless resend rather than permanent loss. Re-enabling `system.body` later
+permits the next session boundary to retry.
+
+The required Sol and SolDense game-thread cost measurements remain **unmeasured**. Automated tests
+pin enumeration, cap, validity and ordering, but they cannot establish the player-visible load-time
+cost in KSA. Measuring both with the status diagnostics open — including SolDense's 3,215 bodies —
+remains a blocking manual acceptance item; no timing is claimed here until that run is performed.
 
 Runtime state lives in the player's KSA user directory — `catlog.toml`, `outbox.db`,
 `install-id.txt`, the credential — **never beside the installed DLLs**, because a mod update replaces

@@ -45,6 +45,36 @@ public sealed class OutboxDbTests
     }
 
     [Fact]
+    public void AppendAndSetState_PersistsBothAcrossReopen()
+    {
+        using var dir = new TempDir();
+        string path = dir.File("outbox.db");
+        IReadOnlyList<EventEnvelope> events = TestData.Envelopes(3);
+        const string marker = "survey:0123456789abcdef:01kittensol";
+
+        using (OutboxDb outbox = OutboxDb.Open(path))
+            Assert.Equal(3, outbox.AppendAndSetState(events, marker, "1"));
+
+        using OutboxDb reopened = OutboxDb.Open(path);
+        Assert.Equal(3, reopened.PendingCount);
+        Assert.Equal("1", reopened.GetState(marker));
+    }
+
+    [Fact]
+    public void AppendAndSetState_FailureRollsBackRowsAndMarker()
+    {
+        using var dir = new TempDir();
+        using OutboxDb outbox = OutboxDb.Open(dir.File("outbox.db"));
+        const string marker = "survey:0123456789abcdef:01kittensol";
+
+        Assert.ThrowsAny<System.Exception>(() =>
+            outbox.AppendAndSetState(TestData.Envelopes(3), marker, null!));
+
+        Assert.Equal(0, outbox.PendingCount);
+        Assert.Null(outbox.GetState(marker));
+    }
+
+    [Fact]
     public void NextBatch_RespectsTheEventCap()
     {
         using var dir = new TempDir();

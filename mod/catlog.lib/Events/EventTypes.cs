@@ -19,6 +19,12 @@ public static class EventTypes
     /// <summary>A session began (mod load or save load).</summary>
     public const string SessionStarted = "session.started";
 
+    /// <summary>The loaded celestial system was identified for this session.</summary>
+    public const string SystemDiscovered = "system.discovered";
+
+    /// <summary>One immutable celestial body catalogue row.</summary>
+    public const string SystemBody = "system.body";
+
     /// <summary>A flight began.</summary>
     public const string FlightStarted = "flight.started";
 
@@ -94,6 +100,8 @@ public static class EventTypes
     private static readonly Dictionary<string, int> Versions = new(StringComparer.Ordinal)
     {
         [SessionStarted] = 1,
+        [SystemDiscovered] = 1,
+        [SystemBody] = 1,
         [FlightStarted] = 1,
         [FlightEnded] = 1,
         [FlightFlagged] = 1,
@@ -121,9 +129,9 @@ public static class EventTypes
         [TelemetryWindow] = 1,
     };
 
-    // The five types a player cannot switch off in catlog.toml. Each one is load-bearing for
-    // something a leaderboard depends on being able to *exclude*, so turning it off is a cheat
-    // rather than a preference:
+    // The six types a player cannot switch off in catlog.toml. Five are load-bearing for a
+    // leaderboard exclusion or lifecycle fact; system.discovered is the mandatory attribution
+    // that makes system scope meaningful. Suppressing any of them is not an ordinary preference:
     //
     //   flight.flagged  — the sole writer of the server's flag bits, and therefore the only
     //                     exclusion gate for every board, the live feed and the public raw-event
@@ -140,11 +148,14 @@ public static class EventTypes
     //                     max_q_survived score nothing on a rebuild, and kittens_recovered and
     //                     biggest_recovery score nothing at all.
     //
+    //   system.discovered — binds each career/session to the canonical celestial system hash.
+    //
     // This is a HashSet rather than a switch so EventTypeFilter, ModConfig and the tests all read
-    // the same list, and so a test can assert it is exactly these five.
+    // the same list, and so a test can assert it is exactly these six.
     private static readonly HashSet<string> AlwaysReportedTypes = new(StringComparer.Ordinal)
     {
         SessionStarted,
+        SystemDiscovered,
         FlightStarted,
         FlightEnded,
         FlightFlagged,

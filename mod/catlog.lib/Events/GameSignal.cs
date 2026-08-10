@@ -148,12 +148,18 @@ public sealed record FrameBoundarySignal(double SimT, long WallMs, long Sequence
 /// is the only moment the career can change, which is why it rides on this signal and nowhere else.
 /// Null is the honest value when the game project could not tell which save was loaded.
 /// </param>
+/// <param name="System">The immutable KSA-free survey cached at system load, or null.</param>
+/// <param name="IncludeSystemBodies">Worker decision to include catalogue rows in this boundary.</param>
+/// <param name="SystemComplete">Whether the accompanying catalogue is complete.</param>
 public sealed record SessionLoadedSignal(
     double SimT,
     long WallMs,
     string GameBuild,
     string ModVersion,
-    string? CareerId = null) : GameSignal(SimT, WallMs);
+    string? CareerId = null,
+    Telemetry.SystemSnapshot? System = null,
+    bool IncludeSystemBodies = false,
+    bool SystemComplete = false) : GameSignal(SimT, WallMs);
 
 /// <summary>A vehicle entered the simulation — the start of a flight.</summary>
 /// <param name="SimT">Universe sim seconds.</param>

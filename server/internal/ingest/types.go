@@ -17,6 +17,8 @@ import "slices"
 // keys are preserved for forward compatibility (§4.1).
 var knownTypes = []string{
 	"session.started",
+	"system.discovered",
+	"system.body",
 	"flight.started",
 	"flight.ended",
 	"flight.flagged",

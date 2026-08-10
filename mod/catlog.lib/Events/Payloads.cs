@@ -25,6 +25,41 @@ public sealed record SessionStartedPayload(
     [property: JsonPropertyName("game_build")] string GameBuild,
     [property: JsonPropertyName("install")] string Install);
 
+/// <summary><c>system.discovered</c>.</summary>
+public sealed record SystemDiscoveredPayload(
+    [property: JsonPropertyName("system")] string System,
+    [property: JsonPropertyName("id")] string Id,
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("home")] string HomeBody,
+    [property: JsonPropertyName("bodies")] int BodyCount,
+    [property: JsonPropertyName("complete")] bool Complete);
+
+/// <summary><c>system.body</c>.</summary>
+public sealed record SystemBodyPayload(
+    [property: JsonPropertyName("system")] string System,
+    [property: JsonPropertyName("body")] string Body,
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("class")] string Class,
+    [property: JsonPropertyName("kind")] string Kind,
+    [property: JsonPropertyName("rank")] int Rank,
+    [property: JsonPropertyName("parent")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Parent,
+    [property: JsonPropertyName("radius_m")] double RadiusM,
+    [property: JsonPropertyName("mass_kg")] double MassKg,
+    [property: JsonPropertyName("soi_m")] double SoiM,
+    [property: JsonPropertyName("atmo_m")] double AtmoM,
+    [property: JsonPropertyName("ocean_m")] double OceanM,
+    [property: JsonPropertyName("angvel")] double AngVelRadS,
+    [property: JsonPropertyName("axis")] Telemetry.Vec3 AxisCce,
+    [property: JsonPropertyName("ccf_to_cce_t0")] Telemetry.Quat CcfToCceT0,
+    [property: JsonPropertyName("sma_m"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? SmaM,
+    [property: JsonPropertyName("ecc"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? Ecc,
+    [property: JsonPropertyName("inc_deg"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? IncDeg,
+    [property: JsonPropertyName("lan_deg"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? LanDeg,
+    [property: JsonPropertyName("argp_deg"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? ArgpDeg,
+    [property: JsonPropertyName("t_pe"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? TPe,
+    [property: JsonPropertyName("period_s"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? PeriodS);
+
 /// <summary><c>flight.started</c>.</summary>
 /// <param name="VehicleName">Display name, ≤64 printable US-ASCII characters.</param>
 /// <param name="Body">Lowercase parent body name.</param>

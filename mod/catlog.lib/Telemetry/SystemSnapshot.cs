@@ -1,10 +1,14 @@
 using System;
 using System.Collections.Generic;
+using System.Text.Json.Serialization;
 
 namespace MeowSci.Catlog.Lib.Telemetry;
 
 /// <summary>A KSA-free three-component vector used by the immutable system catalogue.</summary>
-public sealed record Vec3(double X, double Y, double Z);
+public sealed record Vec3(
+    [property: JsonPropertyName("x")] double X,
+    [property: JsonPropertyName("y")] double Y,
+    [property: JsonPropertyName("z")] double Z);
 
 /// <summary>The fixed semantic classification layered over KSA's opaque runtime class string.</summary>
 public static class SystemBodyKind
@@ -23,7 +27,11 @@ public static class SystemBodyKind
 }
 
 /// <summary>A KSA-free quaternion in explicit x/y/z/w component order.</summary>
-public sealed record Quat(double X, double Y, double Z, double W)
+public sealed record Quat(
+    [property: JsonPropertyName("x")] double X,
+    [property: JsonPropertyName("y")] double Y,
+    [property: JsonPropertyName("z")] double Z,
+    [property: JsonPropertyName("w")] double W)
 {
     /// <summary>
     /// Returns the unit quaternion's unique q/-q representation. Invalid and zero quaternions are
@@ -136,6 +144,43 @@ public sealed record SystemSnapshot(
 {
     /// <summary>The filtered celestial body count, never <c>CelestialSystem.Count</c>.</summary>
     public int BodyCount => Bodies.Count;
+
+    /// <summary>
+    /// True when every required numeric can be represented by JSON without inventing a value.
+    /// Optional orbit values are sanitised independently by the payload mapper.
+    /// </summary>
+    public bool HasValidRequiredNumerics
+    {
+        get
+        {
+            foreach (SystemBodySnapshot body in Bodies)
+            {
+                if (!double.IsFinite(body.RadiusM)
+                    || !double.IsFinite(body.MassKg)
+                    || !double.IsFinite(body.SoiM)
+                    || !double.IsFinite(body.AtmoM)
+                    || !double.IsFinite(body.OceanM)
+                    || !double.IsFinite(body.AngularVelocityRadS)
+                    || !double.IsFinite(body.AxisCce.X)
+                    || !double.IsFinite(body.AxisCce.Y)
+                    || !double.IsFinite(body.AxisCce.Z)
+                    || !double.IsFinite(body.CcfToCceT0.X)
+                    || !double.IsFinite(body.CcfToCceT0.Y)
+                    || !double.IsFinite(body.CcfToCceT0.Z)
+                    || !double.IsFinite(body.CcfToCceT0.W))
+                    return false;
+
+                double q2 = (body.CcfToCceT0.X * body.CcfToCceT0.X)
+                    + (body.CcfToCceT0.Y * body.CcfToCceT0.Y)
+                    + (body.CcfToCceT0.Z * body.CcfToCceT0.Z)
+                    + (body.CcfToCceT0.W * body.CcfToCceT0.W);
+                if (!double.IsFinite(q2) || Math.Abs(q2 - 1.0) > 1e-12)
+                    return false;
+            }
+
+            return true;
+        }
+    }
 
     /// <summary>Every parentless body in canonical body order; a system is a forest.</summary>
     public IReadOnlyList<string> Roots

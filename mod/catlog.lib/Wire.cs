@@ -8,6 +8,8 @@ namespace MeowSci.Catlog.Lib;
 /// </summary>
 public static class Wire
 {
+    /// <summary>Maximum catalogue size accepted from one system survey.</summary>
+    public const int MaxSystemBodies = 5000;
     // ----- Envelope -------------------------------------------------------------------
 
     /// <summary>Payload schema version carried by every launch-set event type (§4.2).</summary>
@@ -266,6 +268,8 @@ public static class Wire
     /// <summary>Key names used in the outbox's <c>shipper_state</c> k/v table.</summary>
     public static class StateKeys
     {
+        /// <summary>The durable once-per-career/system survey marker.</summary>
+        public static string Survey(string career, string system) => $"survey:{career}:{system}";
         /// <summary>Current stream id (a ULID). One outbox instance epoch.</summary>
         public const string StreamId = "sid";
 

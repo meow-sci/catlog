@@ -185,4 +185,14 @@ internal static class TestData
         string? careerId = null,
         EventTypeFilter? types = null)
         => new(PipelineOptions(windowSeconds, careerId: careerId, types: types));
+
+    internal static SystemSnapshot SystemSurvey()
+    {
+        var body = new SystemBodySnapshot(
+            "sol", "Sol", "StellarBody", "star", 0, null,
+            10, 20, 0, 0, 0, 1, new Vec3(0, 1, 0), new Quat(0, 0, 0, 1),
+            null, null, null, null, null, null, null);
+        var hash = new SystemHashInput("Sol", "Sol", "Sol", 1, Array.Empty<SystemBodyHashInput>());
+        return new SystemSnapshot("01kittensol", "Sol", "Sol", "sol", [body], hash);
+    }
 }

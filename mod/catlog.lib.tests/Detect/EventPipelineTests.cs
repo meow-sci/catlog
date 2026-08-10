@@ -411,8 +411,9 @@ public sealed class EventPipelineTests
         pipeline.ProcessFrame(TestData.Frame(1, TestData.Snapshot(simT: 100, situation: "landed")));
         string oldSession = pipeline.SessionId;
 
-        EventEnvelope started = Assert.Single(pipeline.ProcessSignal(
-            new SessionLoadedSignal(0, TestData.WallMs, "2026.8.5.5168", "0.1.0")));
+        EventEnvelope started = pipeline.ProcessSignal(
+            new SessionLoadedSignal(0, TestData.WallMs, "2026.8.5.5168", "0.1.0", System: TestData.SystemSurvey()))
+            .Single(static e => e.Type == EventTypes.SessionStarted);
 
         Assert.Equal(EventTypes.SessionStarted, started.Type);
         Assert.NotEqual(oldSession, pipeline.SessionId);

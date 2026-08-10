@@ -162,13 +162,15 @@ player made months ago is never invisible. If it is ever built, it must go throu
 `ModConfig.Normalize` and `EventTypeFilter.Create` like every other path — the two-layer refusal in
 MOD-072 is not something a UI gets to bypass.
 
-### Locking `vehicle.rud` along with the other five
+### Locking `vehicle.rud` along with the other six
 
-Considered and refused. The five types that cannot be switched off are the ones whose absence makes a
-number *better* than it was; `vehicle.rud` only hides how often a player exploded, and the
+Considered and refused. Five of the six locked types are the score/integrity spine whose absence
+makes a number *better* than it was; `system.discovered` is separately locked because suppressing it
+destroys career-to-system attribution. `vehicle.rud` only hides how often a player exploded, and the
 `vehicle.impact.survived` verdict — the one that actually scores — is computed client-side before the
 filter ever sees the envelope, so it stays honest either way. Vanity-hiding is a preference, and
-Constitution §8's proportionality is the reason the list stops where it does. See MOD-072.
+Constitution §8's proportionality is the reason the score/integrity list stops where it does. See
+MOD-072 and PROJ-108.
 
 ### Propellant, Δv and any efficiency board that judges a claim
 

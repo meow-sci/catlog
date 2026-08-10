@@ -112,13 +112,6 @@ public static class Patcher
 
     private static void InstallAll(Harmony harmony)
     {
-        // Universe.CurrentSystem is assigned only after CelestialSystem construction returns, so
-        // the system survey must be a postfix. LoadSystem runs once per launch; save loads reuse
-        // the immutable cache rather than re-enumerating a swap-removed collection.
-        Install(harmony, "Universe.LoadSystem(string)",
-            AccessTools.Method(typeof(Universe), nameof(Universe.LoadSystem), [typeof(string)]),
-            postfix: nameof(LoadSystemPostfix));
-
         // ── docs/ksa-integration.md §2, "batch boundary" row ────────────────────────────────
         // | — (batch boundary) | Universe.ApplyVehicleSolvers() KSA/Universe.cs:1653 — public
         // | static, called from Program.PrepareFrame KSA/Program.cs:1912 |
@@ -289,7 +282,7 @@ public static class Patcher
         Install(harmony, "Universe.LoadSystem",
             AccessTools.Method(typeof(Universe), nameof(Universe.LoadSystem)),
             prefix: nameof(LoadSystemPrefix),
-            postfix: nameof(SessionBoundaryPostfix));
+            postfix: nameof(LoadSystemPostfix));
 
         // ── career identity (§4.1) ──────────────────────────────────────────────────────────
         // KSA has no save/career/player id anywhere; the save's own folder name is the only
@@ -389,6 +382,7 @@ public static class Patcher
         try
         {
             SystemSurvey.CaptureCurrent();
+            _runtime?.OnSessionBoundary();
         }
         catch (Exception ex)
         {

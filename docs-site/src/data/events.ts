@@ -18,6 +18,7 @@ export type Trigger =
   | "passive";
 
 export type Family =
+  | "system"
   | "session"
   | "flight"
   | "vehicle"
@@ -59,8 +60,9 @@ export interface CatlogEvent {
   droppable?: boolean;
   /**
    * True when this event cannot be switched off in the mod's settings file.
-   * Everything without it can be. The five that carry it are the ones whose
-   * absence would let a run score as something it was not.
+   * Everything without it can be. The six that carry it are the integrity and
+   * attribution spine: without one, a run can score as something it was not or
+   * lose the celestial-system scope that gives its body names meaning.
    */
   alwaysOn?: boolean;
   /** Anchor on the family page. */
@@ -68,6 +70,123 @@ export interface CatlogEvent {
 }
 
 export const EVENTS: CatlogEvent[] = [
+  {
+    type: "system.discovered",
+    alwaysOn: true,
+    family: "system",
+    ver: 1,
+    summary: "This save is in a particular celestial system.",
+    trigger: "event",
+    cause:
+      "When the game starts or you load a save, catlog identifies the celestial system before it starts the new play session.",
+    source:
+      "The system selected by the game, its launcher name and home world, plus the number of worlds that actually loaded. If the launcher has no matching name, catlog uses the system's raw id.",
+    gate: "Always one header per real session. `complete` is false when no body list accompanies this header: the catalogue is switched off, too large, unreadable, or was already sent safely on an earlier load. A missing system produces nothing rather than a made-up identity.",
+    fields: [
+      {
+        key: "system",
+        unit: "",
+        what: "A stable hash of the complete celestial catalogue. The same content gets the same hash for every player.",
+      },
+      { key: "id", unit: "", what: "The system's raw id." },
+      {
+        key: "name",
+        unit: "",
+        what: "The name shown in the game's system chooser, trimmed to 64 printable characters.",
+      },
+      { key: "home", unit: "", what: "The home world for this system." },
+      { key: "bodies", unit: "", what: "How many worlds actually loaded, excluding vehicles." },
+      {
+        key: "complete",
+        unit: "",
+        what: "Whether every one of those worlds accompanies this header. False means no body list in this load — including after it was already sent safely once — never an empty system.",
+      },
+    ],
+    feeds: [],
+    page: "systems",
+  },
+  {
+    type: "system.body",
+    family: "system",
+    ver: 1,
+    summary: "One world in the celestial system's catalogue.",
+    trigger: "event",
+    cause:
+      "The first time catlog sees a complete celestial system for this save, it writes one row for every world. It normally sends that catalogue only once for the save and system, even across restarts.",
+    source:
+      "The solar system your save loaded: each world's size, mass, atmosphere, ocean, spin, parent and orbit. These are the fixed properties the game uses to build the system, not a sample of where the worlds happen to be now.",
+    gate: "All-or-nothing for the catalogue. More than 5,000 worlds, a required unreadable number, or switching this event off produces no body rows and leaves the header incomplete. Turning it back on lets a later load retry.",
+    fields: [
+      { key: "system", unit: "", what: "The stable catalogue hash shared with the system header." },
+      {
+        key: "body",
+        unit: "",
+        what: "The world's canonical join name — the same name flight events use.",
+      },
+      { key: "name", unit: "", what: "The world's raw in-game id, cleaned for display." },
+      {
+        key: "class",
+        unit: "",
+        what: "The game's own kind of object. This is open-ended so modded and future classes remain honest.",
+      },
+      {
+        key: "kind",
+        unit: "",
+        what: "A broad `star`, `planet`, `moon`, `minor`, or `other` grouping.",
+      },
+      { key: "rank", unit: "", what: "How many parent steps the world is from its own root." },
+      {
+        key: "parent",
+        unit: "",
+        optional: true,
+        what: "The world it orbits directly. Left out for a root.",
+      },
+      { key: "radius_m", unit: "m", what: "Mean radius from the world's centre." },
+      { key: "mass_kg", unit: "kg", what: "Mass." },
+      {
+        key: "soi_m",
+        unit: "m",
+        what: "Sphere-of-influence radius. A root star uses zero because its in-game value is infinite.",
+      },
+      { key: "atmo_m", unit: "m", what: "Atmosphere height, zero when there is none." },
+      {
+        key: "ocean_m",
+        unit: "m",
+        what: "Ocean level above mean radius, zero when there is none.",
+      },
+      { key: "angvel", unit: "rad/s", what: "Signed spin rate; negative means retrograde." },
+      { key: "axis", unit: "", what: "The three-dimensional spin axis." },
+      {
+        key: "ccf_to_cce_t0",
+        unit: "",
+        what: "The complete orientation at the start of the save's clock, including the prime-meridian phase.",
+      },
+      {
+        key: "sma_m",
+        unit: "m",
+        optional: true,
+        what: "Semi-major axis. This and the next five orbit-shape fields are all present together or all absent.",
+      },
+      { key: "ecc", unit: "", optional: true, what: "Orbital eccentricity." },
+      { key: "inc_deg", unit: "°", optional: true, what: "Orbital inclination." },
+      { key: "lan_deg", unit: "°", optional: true, what: "Longitude of ascending node." },
+      { key: "argp_deg", unit: "°", optional: true, what: "Argument of periapsis." },
+      {
+        key: "t_pe",
+        unit: "s",
+        optional: true,
+        what: "Absolute periapsis time on the save's own clock.",
+      },
+      {
+        key: "period_s",
+        unit: "s",
+        optional: true,
+        what: "Orbital period, left out independently for an unbound orbit.",
+      },
+    ],
+    feeds: [],
+    page: "systems",
+  },
   {
     type: "session.started",
     alwaysOn: true,
@@ -698,6 +817,7 @@ export const EVENTS: CatlogEvent[] = [
 ];
 
 export const FAMILY_LABEL: Record<Family, string> = {
+  system: "Systems",
   session: "Session",
   flight: "Flight",
   vehicle: "Vehicle",

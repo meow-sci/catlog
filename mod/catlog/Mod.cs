@@ -67,6 +67,7 @@ public sealed class Mod
                 try
                 {
                     SystemSurvey.CaptureCurrent();
+                    _runtime.OnSessionBoundary();
                 }
                 catch (Exception ex)
                 {

@@ -467,6 +467,38 @@ func batch001() []byte {
 	}
 
 	specs := []spec{{
+		label: "ev-system-complete", typ: "system.discovered", ver: 1, flight: nil, simT: 0,
+		payload: map[string]any{
+			"system": "01kittensol", "id": "Sol", "name": "Sol", "home": "earth",
+			"bodies": 2, "complete": true,
+		},
+	}, {
+		label: "ev-system-root", typ: "system.body", ver: 1, flight: nil, simT: 0,
+		payload: map[string]any{
+			"system": "01kittensol", "body": "sol", "name": "Sol", "class": "StellarBody",
+			"kind": "star", "rank": 0, "radius_m": 696340000.0, "mass_kg": 1.98847e30,
+			"soi_m": 0.0, "atmo_m": 0.0, "ocean_m": 0.0, "angvel": 2.865e-6,
+			"axis":          map[string]any{"x": 0.0, "y": 1.0, "z": 0.0},
+			"ccf_to_cce_t0": map[string]any{"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0},
+		},
+	}, {
+		label: "ev-system-orbit", typ: "system.body", ver: 1, flight: nil, simT: 0,
+		payload: map[string]any{
+			"system": "01kittensol", "body": "earth", "name": "Earth", "class": "TerrestrialBody",
+			"kind": "planet", "rank": 1, "parent": "sol", "radius_m": 6371000.0,
+			"mass_kg": 5.9722e24, "soi_m": 924000000.0, "atmo_m": 100000.0, "ocean_m": 0.0,
+			"angvel": 7.2921159e-5, "axis": map[string]any{"x": 0.0, "y": 1.0, "z": 0.0},
+			"ccf_to_cce_t0": map[string]any{"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0},
+			"sma_m":         149597870700.0, "ecc": 0.0167086, "inc_deg": 0.00005,
+			"lan_deg": -11.26064, "argp_deg": 114.20783, "t_pe": -1234.5, "period_s": 31558149.8,
+		},
+	}, {
+		label: "ev-system-incomplete", typ: "system.discovered", ver: 1, flight: nil, simT: 0,
+		payload: map[string]any{
+			"system": "01kittenbad", "id": "Generated", "name": "Generated", "home": "origin",
+			"bodies": 5001, "complete": false,
+		},
+	}, {
 		label: "ev-1", typ: "session.started", ver: 1, flight: nil, simT: 0,
 		payload: map[string]any{
 			"mod_ver": "0.1.0", "game_build": "2026.8.5.5168",

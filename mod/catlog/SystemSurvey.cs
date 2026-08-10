@@ -71,7 +71,7 @@ public static class SystemSurvey
         string systemId = Ids.SystemId(hashInput);
         return new SystemSnapshot(
             systemId,
-            Ids.SanitizeCatalogueName(rawSystemId),
+            rawSystemId,
             Ids.SanitizeSystemName(rawDisplayName),
             VehicleTelemetry.BodyName(system.HomeBody),
             wireBodies.AsReadOnly(),
@@ -96,10 +96,10 @@ public static class SystemSurvey
         SourceFile = "KSA/IParentBody.cs:11-91 / KSA/Astronomical.cs:327-334", Verified = "2026-08-10",
         GameVersion = "2026.8.5.5168", Risk = ChurnRisk.Low,
         Notes = "Atmosphere Physical.Height and ocean Level are metres above mean radius.")]
-    [KsaAnchor("IParentBody.GetCcf2Cce(SimTime.Zero); Brutal.Numerics.doubleQuat.X/Y/Z/W",
-        SourceFile = "KSA/IParentBody.cs:39 / KSA/Celestial.cs:575-578 / Brutal.Numerics/doubleQuat.cs:17-29",
+    [KsaAnchor("IParentBody.GetCcf2Cce(SimTime.Zero); Celestial.GetRotationAxisCce(); Brutal.Numerics.doubleQuat.X/Y/Z/W",
+        SourceFile = "KSA/IParentBody.cs:39 / KSA/Celestial.cs:575-578,622-625 / Brutal.Numerics/doubleQuat.cs:17-29",
         Verified = "2026-08-10", GameVersion = "2026.8.5.5168", Risk = ChurnRisk.Low,
-        Notes = "Composes fixed-to-inertial spin with inertial-to-CCE; StellarBody returns identity.")]
+        Notes = "Orientation is at SimTime.Zero; Celestial supplies its CCE rotation axis and StellarBody uses its fixed UnitZ axis.")]
     [KsaAnchor("Celestial.Parent/Orbit fields",
         SourceFile = "KSA/Celestial.cs:73,99-115 / KSA/Orbit.cs:1144-1174", Verified = "2026-08-10",
         GameVersion = "2026.8.5.5168", Risk = ChurnRisk.Low,
@@ -128,7 +128,7 @@ public static class SystemSurvey
             orientation.X, orientation.Y, orientation.Z, orientation.W);
         // Use Brutal.Numerics directly. KSA.Double3Ex also has a Bepu Symmetric3x3 overload;
         // extension-method resolution would unnecessarily pull BepuUtilities into the mod.
-        double3 axis = double3.Transform(double3.UnitZ, orientation);
+        double3 axis = body is Celestial rotating ? rotating.GetRotationAxisCce() : double3.UnitZ;
         var axisSnapshot = new Vec3(axis.X, axis.Y, axis.Z);
 
         SystemOrbitHashInput? hashOrbit = null;

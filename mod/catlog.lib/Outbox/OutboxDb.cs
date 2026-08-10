@@ -175,6 +175,35 @@ public sealed class OutboxDb : IDisposable
             return 0;
 
         using SqliteTransaction txn = _connection.BeginTransaction();
+        int inserted = Append(envelopes, txn);
+        txn.Commit();
+        return inserted;
+    }
+
+    /// <summary>
+    /// Atomically appends an ordered event batch and advances one durable state value. The state
+    /// write happens after every insert, so any failure rolls both parts back.
+    /// </summary>
+    public int AppendAndSetState(
+        IReadOnlyList<EventEnvelope> envelopes, string key, string value)
+    {
+        using SqliteTransaction txn = _connection.BeginTransaction();
+        int inserted = Append(envelopes, txn);
+
+        using SqliteCommand state = _connection.CreateCommand();
+        state.Transaction = txn;
+        state.CommandText =
+            "INSERT INTO shipper_state(k, v) VALUES ($k, $v) ON CONFLICT(k) DO UPDATE SET v = excluded.v";
+        state.Parameters.AddWithValue("$k", key);
+        state.Parameters.AddWithValue("$v", value);
+        state.ExecuteNonQuery();
+
+        txn.Commit();
+        return inserted;
+    }
+
+    private int Append(IReadOnlyList<EventEnvelope> envelopes, SqliteTransaction txn)
+    {
         using SqliteCommand cmd = _connection.CreateCommand();
         cmd.Transaction = txn;
         cmd.CommandText =
@@ -194,7 +223,6 @@ public sealed class OutboxDb : IDisposable
             inserted += cmd.ExecuteNonQuery();
         }
 
-        txn.Commit();
         return inserted;
     }
 

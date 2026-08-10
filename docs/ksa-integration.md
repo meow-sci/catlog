@@ -484,6 +484,45 @@ does not pretend the missing tree exists: it hashes and reports exactly the regi
 `IParentBody` forest. A partial load consequently receives its own honest identity instead of
 colliding with the intact system.
 
+### Wire emission boundary and durable catalogue marker
+
+The `Universe.LoadSystem` postfix captures and caches only the KSA-derived immutable snapshot. It
+does not emit through its own signal, because `EventPipeline.OnSessionLoaded` is the seam that resets
+the tracker and mints the new session id. Instead `SessionLoadedSignal` carries `SystemSnapshot?`,
+and the one session-boundary path orders the records as:
+
+1. reset the old pipeline state and mint the new session;
+2. emit `system.discovered`;
+3. emit every required `system.body` row;
+4. emit `session.started`.
+
+Startup and `Universe.DeserializeSave` use that same path. The load-system postfix both captures the
+survey and establishes the boundary; the save-deserialisation postfix reuses the cache. If
+`Universe.CurrentSystem` is null there is no fallback hash and no phantom system/session pair — a
+later successful `LoadSystem` establishes it.
+
+`CatlogRuntime`, not `EventPipeline`, owns the durable decision because Runtime owns `OutboxDb`. Its
+state key is `survey:<career>:<system-hash>`. A complete, enabled and unmarked survey appends the
+header, all bodies and session together and advances that key in the same
+`OutboxDb.AppendAndSetState` transaction. A marked survey still appends a small `complete: false`
+header and session, which reasserts career→system attribution every session, but no bodies; its
+earlier complete list is already durable. The body catalogue is thus
+once per `(career, hash)`, not once per launch. A missing marker may resend; C3's specified
+immutable first-write fold makes that replay idempotent. A marker may never exist without all
+catalogue rows already in the outbox.
+
+When `system.body` is disabled, or the count is greater than `Wire.MaxSystemBodies` (5,000), or a
+required scalar/axis/quaternion cannot produce a finite wire value, Runtime emits
+`system.discovered.complete: false`, no bodies and no marker. It never truncates. Re-enabling body
+reporting or correcting the content allows the next boundary to retry. The root's authored
+`SphereOfInfluence = +Inf` is the sole conversion exception and becomes wire `soi_m: 0`; an invalid
+six-element orbital group is omitted as a whole for its body, while a non-finite period independently
+omits `period_s`.
+
+This enumeration occurs on the game thread at the system-load boundary, after which workers see
+only the immutable record. Runtime cost at stock Sol and SolDense has not yet been measured; the
+manual diagnostics run, including SolDense's 3,215 bodies, remains a blocking acceptance check.
+
 ---
 
 ## 5b. Career identity and the career clock — **re-verified 2026-08-07 against 2026.8.5.5168**

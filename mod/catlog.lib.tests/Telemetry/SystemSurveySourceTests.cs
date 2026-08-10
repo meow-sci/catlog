@@ -14,6 +14,9 @@ public sealed class SystemSurveySourceTests
         Assert.Contains("system.All.OfType<IParentBody>()", source, StringComparison.Ordinal);
         Assert.Contains("string.CompareOrdinal(left.Id, right.Id)", source, StringComparison.Ordinal);
         Assert.DoesNotContain("system.Count", source, StringComparison.Ordinal);
+        Assert.Contains("rawSystemId,", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("Ids.SanitizeCatalogueName(rawSystemId)", source, StringComparison.Ordinal);
+        Assert.Contains("rotating.GetRotationAxisCce() : double3.UnitZ", source, StringComparison.Ordinal);
         Assert.Contains(
             "while (current is Celestial celestial && celestial.Parent is { } parent)",
             source,
@@ -31,8 +34,12 @@ public sealed class SystemSurveySourceTests
         string patcher = File.ReadAllText(RepositoryFile("mod", "catlog", "Patcher.cs"));
         string mod = File.ReadAllText(RepositoryFile("mod", "catlog", "Mod.cs"));
         Assert.Contains("postfix: nameof(LoadSystemPostfix)", patcher, StringComparison.Ordinal);
+        int capture = patcher.IndexOf("SystemSurvey.CaptureCurrent();", StringComparison.Ordinal);
+        int boundary = patcher.IndexOf("_runtime?.OnSessionBoundary();", capture, StringComparison.Ordinal);
+        Assert.True(capture >= 0 && boundary > capture, "LoadSystem postfix must capture before establishing the boundary");
         Assert.Contains("if (Universe.CurrentSystem is not null)", mod, StringComparison.Ordinal);
         Assert.Contains("SystemSurvey.CaptureCurrent()", mod, StringComparison.Ordinal);
+        Assert.Contains("_runtime.OnSessionBoundary()", mod, StringComparison.Ordinal);
     }
 
     private static string RepositoryFile(params string[] parts)

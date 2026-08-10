@@ -56,7 +56,7 @@ correct the mirror.
 - [Enum vocabularies](#enum-vocabularies)
 - [Signal → event dispatch](#signal--event-dispatch)
 - [The registry](#the-registry)
-- [The event catalog](#the-event-catalog) — 23 sections
+- [The event catalog](#the-event-catalog) — 25 sections
 - [Projections](#projections)
 - [Boards](#boards)
 - [State projections](#state-projections)
@@ -154,7 +154,7 @@ CREATE TABLE schema_version (version INTEGER PRIMARY KEY);
 
 - `Append` uses `INSERT OR IGNORE` in one transaction (`:172-199`) — a retried append is idempotent.
 - `kind` comes from `EventTypes.KindOf` (`Events/EventTypes.cs:181-182`). **`telemetry.window` is the
-  only kind-0 type**; the other 21 are kind 1, explicitly including `roster.snapshot` because it
+  only kind-0 type**; the other 24 are kind 1, explicitly including `roster.snapshot` because it
   carries totals that move boards (`EventTypes.cs:176-179`).
 - `Prune` deletes oldest kind-0 rows until the cap is met, and stops when only kind-1 rows remain.
   It tracks the running total across the deletes rather than re-measuring the whole table after each
@@ -208,9 +208,9 @@ field on the wire; `kind` exists **only** as a local SQLite column in the mod's 
 | Key | JSON type | Optional | Source | Constraints |
 |---|---|---|---|---|
 | `id` | string | required | `EventEnvelope.cs:14-15`, minted `:93` via `Ids.NewUlid()` (`Util/Ids.cs:21`) | 26-char ULID. Server: `ids.Parse` or `400 malformed_batch` (`ingest/decode.go:219-222`). Dedup key is `(player, event_id)` (D19). |
-| `type` | string | required | `:18-19`, set from the `EventTypes` constant at the call site | Namespaced lowercase `[a-z0-9_.]`. Must be one of the 22 registry names or the **whole batch** is rejected (`decode.go:223-227`, `ingest/types.go:16-39`). |
+| `type` | string | required | `:18-19`, set from the `EventTypes` constant at the call site | Namespaced lowercase `[a-z0-9_.]`. Must be one of the 25 registry names or the **whole batch** is rejected (`decode.go:223-227`, `ingest/types.go`). |
 | `ver` | int | always emitted | `:22-23`, from `EventTypes.VersionOf(type)` at `:95` | **Every registry type is `ver: 1`** (`EventTypes.cs`). Server requires present and ≥ 1 (`decode.go:228-233`); unknown-but-higher is accepted and stored. |
-| `flight` | string \| null | **key always present** | `:29-30`; no `JsonIgnore` (`Util/CatlogJson.cs:16-21`) | ULID when non-null; validated as a ULID when present (`decode.go:239-244`). Always null on `session.started`, `roster.snapshot` and `kitten.eva_end`; **conditionally** null on `kitten.tumble` and `kitten.kia`, which name a flight whenever the mod can resolve one (see those entries). |
+| `flight` | string \| null | **key always present** | `:29-30`; no `JsonIgnore` (`Util/CatlogJson.cs:16-21`) | ULID when non-null; validated as a ULID when present (`decode.go:239-244`). Always null on `system.discovered`, `system.body`, `session.started`, `roster.snapshot` and `kitten.eva_end`; **conditionally** null on `kitten.tumble` and `kitten.kia`, which name a flight whenever the mod can resolve one (see those entries). |
 | `session` | string | required | `:33-34` | ULID. Minted by the `FlightTracker` ctor (`Detect/FlightTracker.cs:45`) and re-minted at every save-load boundary (`FlightTracker.NewSession`, `:71-78`). |
 | `career` | string | required | `:41-42` | Exactly **16 lowercase Crockford base32** chars (`0-9 a-z` minus `i l o u`). Alphabet `Ids.Crockford` (`Ids.cs:14`), validator `Ids.IsHash16` (`:71-82`), server `validCareer` (`decode.go:283+`). |
 | `sim_t` | number | optional server-side, always emitted | `:50-51` | Universe sim seconds since this career began, from `Universe.GetElapsedSeconds()` (`VehicleTelemetry.SimTimeSeconds`, `:478-488`, anchor `KSA/Universe.cs:2103`). Always finite (`Sanitize.Finite`). |
@@ -411,7 +411,7 @@ patch bodies and must never kill the worker (`EventPipeline.cs:311-314`).
 
 `mod/catlog.lib/Events/EventTypes.cs` (names), its `Versions` map (versions). Server mirror
 `server/internal/ingest/types.go`'s `knownTypes` for the names, `projector/upcast.go`'s `CurrentVer` +
-`currentVer` for the versions. **The two lists agree exactly** — 23 names, same spelling, same
+`currentVer` for the versions. **The two lists agree exactly** — 25 names, same spelling, same
 order — and the two version maps must too: a type the mod stamps at a version the server does not
 fold is skipped as a future version, which is silent data loss for that type until the server catches
 up and a rebuild runs.
@@ -422,28 +422,30 @@ and `projector.Upcasters` has nothing registered (PROJ-100).
 | # | `type` | `ver` | outbox kind | Disableable? | Trigger | Feeds |
 |---|---|---|---|---|---|---|
 | 1 | `session.started` | 1 | 1 | **no — locked** | event | `career` (rewind mark) |
-| 2 | `flight.started` | 1 | 1 | **no — locked** | polled-discovery | `flight_state`, `heaviest_launch`, `most_parts`, `biggest_crew`, `biggest_stack` |
-| 3 | `flight.ended` | 1 | 1 | **no — locked** | event (+ passive net) | `flight_state`, `kittens_recovered`, `biggest_recovery`, feed |
-| 4 | `flight.flagged` | 1 | 1 | **no — locked** | event (4 of 5) / passive (`tuning`) | `flight_state` → **excludes everything** |
-| 5 | `vehicle.situation` | 1 | 1 | yes | passive | `softest_touchdown`, `landed_bodies`, `splashdowns`, `player_body`, `career_body` |
-| 6 | `vehicle.atmosphere` | 1 | 1 | yes | passive | `fastest_entry` |
-| 7 | `vehicle.orbit` | 1 | 1 | yes | passive | `orbits_achieved`, `highest_apoapsis`, `lowest_orbit`, `roundest_orbit`, `steepest_orbit`, `heaviest_to_orbit`, `fastest_to_orbit`, feed |
-| 8 | `vehicle.soi` | 1 | 1 | yes | passive | `soi_bodies`, `fastest_to_<body>`, `player_body`, `career_body`, feed |
-| 9 | `vehicle.rud` | 1 | 1 | yes | event | `rud_total`, `rud_<cause>`, feed |
-| 10 | `vehicle.impact` | 1 | 1 | yes | event (1-frame hold) | `biggest_lithobrake_survived`, `biggest_impact_energy`, feed |
-| 11 | `vehicle.landed` | 1 | 1 | yes | passive (1-frame hold) | `softest_landing`, `landings`, feed |
-| 12 | `vehicle.staging` | 1 | 1 | yes | event | `stagings`, `most_stages` |
-| 13 | `vehicle.docked` | 1 | 1 | yes | event | `dockings` |
-| 14 | `vehicle.undocked` | 1 | 1 | yes | event | — (decoded, counts nothing) |
-| 15 | `engine.ignition` | 1 | 1 | yes | passive | `engine_ignitions` |
-| 16 | `engine.shutdown` | 1 | 1 | yes | passive | — (decoded, counts nothing) |
-| 17 | `engine.flameout` | 1 | 1 | yes | passive | `flameouts` |
-| 18 | `kitten.eva_start` | 1 | 1 | yes | event | `evas` |
-| 19 | `kitten.eva_end` | 1 | 1 | yes | event | `longest_eva` |
-| 20 | `kitten.tumble` | 1 | 1 | yes | passive | `kitten_tumbles`, feed |
-| 21 | `kitten.kia` | 1 | 1 | **no — locked** | passive | the impact-board KIA window (rebuild), feed |
-| 22 | `roster.snapshot` | 1 | **1** | yes | passive (+1 event) | `distance_travelled`, `top_kitten_distance`, `top_kitten_missions`, `kitten`, `career_kitten` |
-| 23 | `telemetry.window` | 1 | **0** | yes | passive | `peak_g_survived`, `max_q_survived`, `fastest_surface_speed`, `fastest_orbital_speed`, `highest_altitude`, `lowest_pass` |
+| 2 | `system.discovered` | 1 | **1** | **no — locked** | event (session boundary) | typed only in C2; C3 owns `system` state and career attribution |
+| 3 | `system.body` | 1 | **1** | yes | event (system-load survey) | typed only in C2; C3 owns `system_body` catalogue state |
+| 4 | `flight.started` | 1 | 1 | **no — locked** | polled-discovery | `flight_state`, `heaviest_launch`, `most_parts`, `biggest_crew`, `biggest_stack` |
+| 5 | `flight.ended` | 1 | 1 | **no — locked** | event (+ passive net) | `flight_state`, `kittens_recovered`, `biggest_recovery`, feed |
+| 6 | `flight.flagged` | 1 | 1 | **no — locked** | event (4 of 5) / passive (`tuning`) | `flight_state` → **excludes everything** |
+| 7 | `vehicle.situation` | 1 | 1 | yes | passive | `softest_touchdown`, `landed_bodies`, `splashdowns`, `player_body`, `career_body` |
+| 8 | `vehicle.atmosphere` | 1 | 1 | yes | passive | `fastest_entry` |
+| 9 | `vehicle.orbit` | 1 | 1 | yes | passive | `orbits_achieved`, `highest_apoapsis`, `lowest_orbit`, `roundest_orbit`, `steepest_orbit`, `heaviest_to_orbit`, `fastest_to_orbit`, feed |
+| 10 | `vehicle.soi` | 1 | 1 | yes | passive | `soi_bodies`, `fastest_to_<body>`, `player_body`, `career_body`, feed |
+| 11 | `vehicle.rud` | 1 | 1 | yes | event | `rud_total`, `rud_<cause>`, feed |
+| 12 | `vehicle.impact` | 1 | 1 | yes | event (1-frame hold) | `biggest_lithobrake_survived`, `biggest_impact_energy`, feed |
+| 13 | `vehicle.landed` | 1 | 1 | yes | passive (1-frame hold) | `softest_landing`, `landings`, feed |
+| 14 | `vehicle.staging` | 1 | 1 | yes | event | `stagings`, `most_stages` |
+| 15 | `vehicle.docked` | 1 | 1 | yes | event | `dockings` |
+| 16 | `vehicle.undocked` | 1 | 1 | yes | event | — (decoded, counts nothing) |
+| 17 | `engine.ignition` | 1 | 1 | yes | passive | `engine_ignitions` |
+| 18 | `engine.shutdown` | 1 | 1 | yes | passive | — (decoded, counts nothing) |
+| 19 | `engine.flameout` | 1 | 1 | yes | passive | `flameouts` |
+| 20 | `kitten.eva_start` | 1 | 1 | yes | event | `evas` |
+| 21 | `kitten.eva_end` | 1 | 1 | yes | event | `longest_eva` |
+| 22 | `kitten.tumble` | 1 | 1 | yes | passive | `kitten_tumbles`, feed |
+| 23 | `kitten.kia` | 1 | 1 | **no — locked** | passive | the impact-board KIA window (rebuild), feed |
+| 24 | `roster.snapshot` | 1 | **1** | yes | passive (+1 event) | `distance_travelled`, `top_kitten_distance`, `top_kitten_missions`, `kitten`, `career_kitten` |
+| 25 | `telemetry.window` | 1 | **0** | yes | passive | `peak_g_survived`, `max_q_survived`, `fastest_surface_speed`, `fastest_orbital_speed`, `highest_altitude`, `lowest_pass` |
 
 `vehicle.landed` is **not** in `AlwaysReported` — a player may switch it off like any other
 non-spine type — and it is `KindEvent`, the default for everything except `telemetry.window`.
@@ -460,16 +462,18 @@ the boards each type feeds (`ModConfig.Header`, held in step with `EventTypes.Al
 hand-built `EventPipelineOptions` cannot express it either — and the filter is *applied* at
 `EventPipeline.Add`, which is late on purpose: every detector, tracker, correlator and window
 mutation has already happened, so a suppressed type cannot rewind state and cannot change what the
-other types say. `EventTypes.AlwaysReported` is the five locked types marked above. MOD-072.
+other types say. `EventTypes.AlwaysReported` is the six locked types marked above. MOD-072 and
+PROJ-108.
 
 **Nothing here is a wire change.** A batch may always legally omit any type; only an *unknown* type
 is rejected (`400 malformed_batch`). The server cannot tell a player who flew nothing from a player
 who switched a type off, and does not try.
 
-What a player gives up per type, the eighteen that can be switched off:
+What a player gives up per type, the nineteen that can be switched off:
 
 | Type off | Boards that stop moving | Other consequence |
 |---|---|---|
+| `system.body` | none directly | the mandatory `system.discovered` header reports `complete: false`; no catalogue, everywhere badge or future 3D system view can be complete, no body rows or durable marker are written, and a later enabled session may retry |
 | `vehicle.situation` | `softest_touchdown`, `landed_bodies`, `splashdowns` | `player_body` and `career_body` stop updating from situation changes. **`vehicle.landed` still fires** — the filter is applied at the pipeline funnel, after detection, so suppressing one of the pair does not suppress the other |
 | `vehicle.atmosphere` | `fastest_entry` | — |
 | `vehicle.orbit` | `orbits_achieved`, `fastest_to_orbit`, `highest_apoapsis`, `lowest_orbit`, `roundest_orbit`, `steepest_orbit`, `heaviest_to_orbit` | feed rows |
@@ -503,6 +507,138 @@ Each entry has the same eight blocks: **Wire**, **Payload**, **Detector**, **Gam
 **Classification**, **Dedup / ordering**, **Server**, **Vectors**. "Classification" is the answer to
 *is this event-driven or passive telemetry* — the distinction the player-facing site surfaces as
 "something happened" vs "sampled in the background".
+
+---
+
+### `system.discovered`
+
+**Wire.** `"system.discovered"` (`EventTypes.SystemDiscovered`), `ver` 1, outbox kind 1.
+`flight` = **null**. `session` and `career` are the freshly established identities for the session
+boundary. It is in `AlwaysReported`: without it the server cannot attribute the save to the system
+whose bodies and names give its records meaning.
+
+**Payload** — `SystemDiscoveredPayload`
+
+| Key | JSON | Optional? | Meaning |
+|---|---|---|---|
+| `system` | string | no | Lowercase SHA-256 identity of the canonical raw survey; identical content hashes identically across installs. |
+| `id` | string | no | Raw `CelestialSystem.Id`; not lowercased or sanitised. |
+| `name` | string | no | Matching `SystemInfo.DisplayName.Value`, printable-US-ASCII sanitised and capped at 64 characters; raw system id is the fallback. |
+| `home` | string | no | `HomeBody.Id` through the same canonical lowercase body-name conversion as flight events. |
+| `bodies` | integer | no | Count of the materialised `All.OfType<IParentBody>()` snapshot, excluding template vehicles. |
+| `complete` | boolean | no | True only when every body row in that count accompanies this header. False means no body list in this boundary — disabled, capped, invalid, or already durably sent — never an empty system. |
+
+**Detector.** `SystemSurvey.Capture` runs once from the `Universe.LoadSystem` postfix and caches a
+plain immutable `SystemSnapshot`. There is deliberately no separate survey signal: the snapshot is
+carried by `SessionLoadedSignal`, and the session-boundary path resets/mints identities, creates this
+header and any body events, then creates `session.started`. The startup and save-load paths use that
+same boundary. A null `Universe.CurrentSystem` produces no phantom system/session pair; the later
+system-load postfix establishes the boundary.
+
+`complete` is false and no `system.body` rows are made when body reporting is disabled, the filtered
+count exceeds `Wire.MaxSystemBodies` (5,000), any other required scalar/axis member is non-finite, or
+an orientation quaternion is non-finite or cannot be normalised. There is no truncated or partially
+plausible catalogue.
+
+**Game source.** The loaded system is `Universe.CurrentSystem` (`KSA/Universe.cs:92`); id, home and
+the mixed live collection are `CelestialSystem.Id`, `HomeBody` and `All`
+(`KSA/CelestialSystem.cs:55-61`). Bodies are exactly `All.OfType<IParentBody>()`: `Celestial` and
+`StellarBody` implement that interface while `Vehicle` does not (`KSA/Celestial.cs:23`,
+`KSA/StellarBody.cs:12`, `KSA/Vehicle.cs:27`). Display metadata is the exact ordinal id match in
+`SelectSystem.Systems`, reading `SystemInfo.DisplayName.Value` (`KSA/SelectSystem.cs:18`,
+`KSA/SystemInfo.cs:10-11,29`, `KSA/StringReference.cs:9`), with raw id fallback. The complete source
+inventory and hash encoding are normative in [ksa-integration.md](ksa-integration.md#system-survey-and-stable-identity).
+
+**Classification.** Event-driven at a session boundary, not passive telemetry. The survey reads KSA
+once on the game thread at a load boundary and hands the worker only immutable catlog records; it is
+never in the steady 2 Hz vehicle loop.
+
+**Dedup / ordering.** Exactly one header per session, before every body row and before
+`session.started`. A header is emitted even after that career/system's body catalogue is durably
+marked sent. On a first complete report the outbox transaction appends header → every body →
+session, then sets `survey:<career>:<system_hash>`. On a marked report it appends a
+`complete: false` header → session; the earlier atomic catalogue is already durable.
+Disabled, capped and invalid reports set `complete: false`, append no bodies and never set the
+marker, so a later session can retry.
+
+**Server.** The ingest registry accepts the type and preserves the payload verbatim in the immutable
+log; the projector has a typed `SystemDiscovered` decoder for the required contract above. C2 does
+not yet fold the system state — that belongs to C3 — and it moves no leaderboard directly.
+
+**Vectors.** `batch-001.ndjson` line 1 is a complete header followed by body rows; line 4 is a
+`complete: false` header with no body rows. Registry-coverage tests require this type at its current
+version, and payload round-trip tests pin every required key.
+
+---
+
+### `system.body`
+
+**Wire.** `"system.body"` (`EventTypes.SystemBody`), `ver` 1, outbox kind 1. `flight` = **null**.
+It is configurable, but never droppable once appended: a catalogue is immutable state, not passive
+telemetry.
+
+**Payload** — `SystemBodyPayload`
+
+| Key | JSON | Optional? | Meaning |
+|---|---|---|---|
+| `system` | string | no | Same system hash as the preceding header; makes row order semantically irrelevant. |
+| `body` | string | no | Canonical lowercase body-name join key. |
+| `name` | string | no | Printable-ASCII sanitised raw `Astronomical.Id`; KSA exposes no separate body display-name field. |
+| `class` | string | no | Concrete runtime `Astronomical.Class`; opaque, **open set**, never server-inferred. |
+| `kind` | string | no | One of `star`, `planet`, `moon`, `minor`, `other`; the fixed semantic mapping below. |
+| `rank` | integer | no | Depth from this body's own root. Multiple roots are valid. |
+| `parent` | string | yes | Canonical lowercase direct-parent key; absent for every root. |
+| `radius_m` | number | no | Mean radius from centre, metres. |
+| `mass_kg` | number | no | Mass, kilograms. `mu` is omitted because KSA derives it as mass × `6.6743E-11`. |
+| `soi_m` | number | no | Sphere-of-influence radius, metres; a root star's `+Inf` is the sole representational exception and is sent as `0`. |
+| `atmo_m` | number | no | Atmosphere height, metres; zero for airless bodies. |
+| `ocean_m` | number | no | Ocean level above mean radius, metres; zero when absent. |
+| `angvel` | number | no | Signed angular velocity, radians/second; negative is retrograde. |
+| `axis` | object `{x,y,z}` | no | Finite rotation axis in the body-centred ecliptic frame. |
+| `ccf_to_cce_t0` | object `{x,y,z,w}` | no | Finite normalised body-fixed→body-centred-ecliptic orientation at career time zero. |
+| `sma_m`, `ecc`, `inc_deg`, `lan_deg`, `argp_deg`, `t_pe` | numbers | group | Six-value orbital-shape group: all present or all absent. Always absent for roots and absent as a group if any member is non-finite. Angles are degrees; `t_pe` is absolute career-clock time. |
+| `period_s` | number | yes | Orbital period in seconds; independently absent when non-finite, including unbound conics. |
+
+The quaternion is normalised and sign-canonicalised: the first non-zero component in `w,x,y,z`
+order is positive, and negative zero becomes positive zero. If it cannot be normalised the whole
+survey is incomplete. `body`, `parent` and the header's `home` use precisely the same normaliser.
+
+**Detector.** The body records are the materialised immutable result of the same system-load survey
+as `system.discovered`. They are included only for an unmarked `(career, system hash)` whose survey
+is complete and whose `system.body` setting is enabled. There is no per-frame detector and no
+separate signal.
+
+**Game source.** Each row comes from an `IParentBody` that is also an `Astronomical`. The exact
+field-by-field inventory is in [ksa-integration.md](ksa-integration.md#exact-source-inventory):
+`MeanRadius`, `Mass`, `SphereOfInfluence`, atmosphere/ocean references, angular velocity,
+`GetRotationAxisCce()`, `GetCcf2Cce(SimTime.Zero)`, and non-root `Orbit` elements. The semantic kind
+mapping is exact: `StellarBody` → `star`; `PlanetaryBody`, `TerrestrialBody` or `AtmosphericBody`
+with a direct stellar parent → `planet`, and with a non-stellar parent → `moon`; `MinorBody`,
+`Asteroid`, `Comet`, `PeriodicComet` or `InterstellarComet` → `minor`; every future class → `other`.
+
+**Classification.** Event-driven catalogue capture at system load. It is not sampled telemetry.
+KSA's celestial elements are immutable: `OrbitData` is a readonly struct of readonly fields assigned
+by its constructor, the per-frame worker recomputes state vectors rather than elements, and
+celestials are not serialised into the save. Therefore one body survey per `(career, system hash)`
+is the complete answer for that career, not an approximation that can become stale.
+
+**Dedup / ordering.** The client orders the immutable snapshot by raw body id ordinal for hashing
+and stable emission. Every row follows its `system.discovered` header and precedes
+`session.started`. The durable marker is committed only in the same transaction after every row is
+in the outbox. A crash may cause a resend but may never cause a mark-without-rows loss. A missing
+marker after local state loss also resends safely.
+
+**Server.** The projector's typed `SystemBody` decoder uses pointers for `parent`, all six shape
+members and `period_s`, so absence cannot collapse into zero; ingest preserves the original payload
+verbatim. C2 does not yet fold the immutable first-write `system_body` state — that belongs to C3.
+No leaderboard reads the event directly; the contract exists for system identity,
+catalogue/everywhere state and future 3D placement.
+
+**Vectors.** `batch-001.ndjson` line 2 is a root with absent parent and absent orbital group; line 3
+is an orbiting body with all six orbital values and finite period. Both carry finite normalised
+orientations. Survey unit tests separately pin quaternion identity, `q`/`-q`, 180-degree `w = 0`
+canonicalisation and non-finite period omission; the payload round-trip check pins the optional-key
+sets.
 
 ---
 
@@ -557,7 +693,7 @@ high-water mark, and only when the career already exists and `max_sim_t > sim_t`
 (`batch.go:394-405`). Comparing only at session boundaries is why the rule needs no epsilon
 (`career.go:32-38`). **The mark excludes nothing and scores nothing.**
 
-**Vectors.** `contracts/testdata/batches/batch-001.ndjson` line 1 — the always-null `flight`.
+**Vectors.** `contracts/testdata/batches/batch-001.ndjson` line 5 — the always-null `flight`.
 
 ---
 
@@ -631,7 +767,7 @@ rows of one launch describe the same vehicle rather than four partial views of i
 first fold that reads `kids` must not treat a nil slice as "uncrewed": nil is a `ver` 1 row, `[]` is
 an uncrewed one.
 
-**Vectors.** `batch-001.ndjson` lines 2 (crewed: `kids` populated, `stage_count` 3, `lat` / `lon` present) and 16 (uncrewed probe: `kids` `[]`, `stage_count` 0, `lat` / `lon` absent).
+**Vectors.** `batch-001.ndjson` lines 6 (crewed: `kids` populated, `stage_count` 3, `lat` / `lon` present) and 20 (uncrewed probe: `kids` `[]`, `stage_count` 0, `lat` / `lon` absent).
 
 ---
 
@@ -720,7 +856,7 @@ via `flightFold`, so a flight whose `flight.started` was never folded still has 
 though its `flight.ended` now carries one. Reading it would be a rebuild-only improvement and is out
 of scope; `kids`, `lat` and `lon` are likewise decoded and read by nothing.
 
-**Vectors.** `batch-001.ndjson` lines 21 (`recovered`, crew and position), 22 (the safety net: `despawned`, `crew_count` 0, `kids` `[]`, `body: "unknown"`, no position) and 26 (`destroyed`).
+**Vectors.** `batch-001.ndjson` lines 25 (`recovered`, crew and position), 26 (the safety net: `despawned`, `crew_count` 0, `kids` `[]`, `body: "unknown"`, no position) and 30 (`destroyed`).
 
 ---
 
@@ -787,7 +923,7 @@ open would make every future flag a scoring loophole. `scoreable` (`stats/fold.g
 suppresses **every board**, the feed, and the raw event views for that flight. The one exception is
 `distance_travelled`, whose source event carries no flight at all.
 
-**Vectors.** `batch-001.ndjson` line 23 — a `tuning` flag on a flight that has no `flight.started`.
+**Vectors.** `batch-001.ndjson` line 27 — a `tuning` flag on a flight that has no `flight.started`.
 
 ---
 
@@ -863,7 +999,7 @@ change is not a pass over anything.
 **`landed_bodies` reads this event rather than `vehicle.landed`**, and that is a decision rather
 than an oversight (PROJ-097). See [Boards](#fold-detail-board-by-board).
 
-**Vectors.** `batch-001.ndjson` line 3 — `radar_alt_m` present.
+**Vectors.** `batch-001.ndjson` line 7 — `radar_alt_m` present.
 
 ---
 
@@ -917,7 +1053,7 @@ matters is the air the vehicle is hitting, not the body's inertial motion — an
 directly comparable with the lithobrake and RUD speeds. Context
 `{"body", "flight", "dyn_pressure_pa"}`.
 
-**Vectors.** `batch-001.ndjson` line 7.
+**Vectors.** `batch-001.ndjson` line 11.
 
 ---
 
@@ -1003,7 +1139,7 @@ rather than crowning it. All four share one context `{"body", "flight", "ap_m", 
 "inc_deg"}` — a reader looking at a periapsis wants the apoapsis beside it, and one context shape
 means the four rows of one orbit are the same blob.
 
-**Vectors.** `batch-001.ndjson` line 9 — carries `mass_kg`.
+**Vectors.** `batch-001.ndjson` line 13 — carries `mass_kg`.
 
 ---
 
@@ -1051,7 +1187,7 @@ Sampled at 2 Hz.
 (`batch.go:538-540`). Body names are **never** validated against a list: a `to_body` that cannot be a
 stat key still counts towards `soi_bodies` and still records `first_sim_t`.
 
-**Vectors.** `batch-001.ndjson` line 11.
+**Vectors.** `batch-001.ndjson` line 15.
 
 ---
 
@@ -1101,7 +1237,7 @@ then `addCount(rud_<cause>, 1)` when `RUDStat(cause)` yields a legal key. A caus
 stat key (empty, > 40 chars, bad charset, or colliding with a fixed key) contributes to `rud_total`
 **only**. Feed: `"{h} lost a vehicle to {causePhrase} on {body} at {speed} m/s"`.
 
-**Vectors.** `batch-001.ndjson` line 24 — `lat` / `lon` **absent**, and `peak_g` / `peak_q_pa` written as numbers rather than omitted.
+**Vectors.** `batch-001.ndjson` line 28 — `lat` / `lon` **absent**, and `peak_g` / `peak_q_pa` written as numbers rather than omitted.
 
 ---
 
@@ -1191,7 +1327,7 @@ next to it, and one blob means the two rows of one crash agree.
 
 Feed: `"{h} lithobraked at {speed} m/s on {body} — and survived"`.
 
-**Vectors.** `batch-001.ndjson` line 19 (`survived: true`, `launch_pad: false`, `body: "duna"`, `speed_ms: 214.5`, `lat` / `lon` present).
+**Vectors.** `batch-001.ndjson` line 23 (`survived: true`, `launch_pad: false`, `body: "duna"`, `speed_ms: 214.5`, `lat` / `lon` present).
 
 ---
 
@@ -1293,7 +1429,7 @@ crash, and the `vehicle.rud` emitted beside it already announces it.
 
 `radar_alt_m`, `lat` and `lon` are decoded (`*float64`) and read by no fold.
 
-**Vectors.** `batch-001.ndjson` line 20 — `lat` / `lon` present, `radar_alt_m` **absent**.
+**Vectors.** `batch-001.ndjson` line 24 — `lat` / `lon` present, `radar_alt_m` **absent**.
 
 ---
 
@@ -1322,7 +1458,7 @@ and `+1` is "how many stages have fired", the number a player would say out loud
 `> 0` gate**, for the same reason — firing stage 0 is one staging event and is one stage. `body`
 comes from `flight_state` (`flightBody`), because this payload carries none.
 
-**Vectors.** `batch-001.ndjson` line 4.
+**Vectors.** `batch-001.ndjson` line 8.
 
 ---
 
@@ -1356,7 +1492,7 @@ installed `Patcher.cs:200-202`, body `:586-608`.
 
 **Server.** `countFold{dockings, "vehicle.docked"}` — +1 on an unflagged flight.
 
-**Vectors.** `batch-001.ndjson` line 12 — `"other_flight":null`, the taxonomy's one in-payload null.
+**Vectors.** `batch-001.ndjson` line 16 — `"other_flight":null`, the taxonomy's one in-payload null.
 
 ---
 
@@ -1379,7 +1515,7 @@ The split vehicle is `Track`ed — and so gets a `flight.started` — before the
 
 **Server.** Decoded (`stats/payload.go:126-128`) but **counts nothing**. There is no `undockings` board.
 
-**Vectors.** `batch-001.ndjson` line 17 — `other_flight` a ULID, the counterpart to the docked line's null.
+**Vectors.** `batch-001.ndjson` line 21 — `other_flight` a ULID, the counterpart to the docked line's null.
 
 ---
 
@@ -1430,7 +1566,7 @@ names, because the payload is one type in the mod too. `countFold{engine_ignitio
 keys on the event type, and `engine` / `count` are whole-vehicle readings that would rank a
 two-engine-group vehicle oddly (see the game source above).
 
-**Vectors.** `batch-001.ndjson` line 5 (`shutdown` is line 8, `flameout` line 18 — the three share this payload).
+**Vectors.** `batch-001.ndjson` line 9 (`shutdown` is line 12, `flameout` line 22 — the three share this payload).
 
 ---
 
@@ -1446,7 +1582,7 @@ the **previous** observation, since the engines are now off (`PolledSignals.cs:1
 
 **Server.** Decoded as `stats.Engine`; **no fold reads it**. Deliberate: an ignition is a decision and
 a flameout is a failure, whereas a shutdown is the unremarkable other half of every burn, and
-counting it would be counting `engine_ignitions` twice with a lag. **Vectors.** `batch-001.ndjson` line 8.
+counting it would be counting `engine_ignitions` twice with a lag. **Vectors.** `batch-001.ndjson` line 12.
 
 ---
 
@@ -1481,7 +1617,7 @@ Polled at 2 Hz.
 **Classification.** **PASSIVE** (2 Hz poll, two-boolean edge).
 
 **Server.** `countFold{flameouts, "engine.flameout"}` → `flameouts` ("Ran Dry"), +1 per event on an
-unflagged flight. **Vectors.** `batch-001.ndjson` line 18.
+unflagged flight. **Vectors.** `batch-001.ndjson` line 22.
 
 ---
 
@@ -1523,7 +1659,7 @@ via `AccessTools.Method(typeof(EVADoor), "CreateKittenEva")` at `Patcher.cs:218-
 applies only when the EVA signal carried a vehicle id** — `flight` is
 `Tracker.FlightFor(eva.VehicleId)` when there is one and `null` otherwise, and `scoreable` passes
 every flightless event. That is a property of the source event, not a decision about the board.
-**Vectors.** `batch-001.ndjson` line 13 — the EVA-minted `flight`, distinct from the vehicle's.
+**Vectors.** `batch-001.ndjson` line 17 — the EVA-minted `flight`, distinct from the vehicle's.
 
 ---
 
@@ -1563,7 +1699,7 @@ is `{"kitten"}`. The fold adds a `flight` key when the event carries one, which 
 does; it is there so a future build that fills the key in gets the link rather than a silently
 missing one.
 
-**Vectors.** `batch-001.ndjson` line 15 — `flight` explicitly null.
+**Vectors.** `batch-001.ndjson` line 19 — `flight` explicitly null.
 
 ---
 
@@ -1631,7 +1767,7 @@ lowered the tumble speed gate — the entire definition of a tumble, live-editab
 debug window — would score normally.
 Feed: `"{h}'s kitten {name} took a tumble at {speed} m/s on {body}"`.
 
-**Vectors.** `batch-001.ndjson` line 14 — a tumble with a non-null `flight`.
+**Vectors.** `batch-001.ndjson` line 18 — a tumble with a non-null `flight`.
 
 ---
 
@@ -1721,7 +1857,7 @@ one disqualification that should have happened. See MOD-073.
 names no flight is absent from that map, deliberately: there is no key a null-flight KIA could be
 indexed under that is not a guess (MOD-073). Feed: `"{h} said goodbye to kitten {name}"`.
 
-**Vectors.** `batch-001.ndjson` line 25 — a non-null `flight`, `context: "manual_destroy"`.
+**Vectors.** `batch-001.ndjson` line 29 — a non-null `flight`, `context: "manual_destroy"`.
 
 ---
 
@@ -1804,7 +1940,7 @@ over.
 `fastest_ms` is still read by nothing, deliberately: it is the game's ecliptic-frame `FastestSpeed`
 and must never become a speed board.
 
-**Vectors.** `batch-001.ndjson` line 27 — two kitten rows, one `kia`, and the always-null `flight`.
+**Vectors.** `batch-001.ndjson` line 31 — two kitten rows, one `kia`, and the always-null `flight`.
 
 ---
 
@@ -1920,7 +2056,7 @@ read by no fold.
 it today, so this is currently invisible. If a future reader wants it, **`0` must be treated as
 "absent" at the read site**. PROJ-098.
 
-**Vectors.** `batch-001.ndjson` lines 6 and 10 — the pair that pins the `agg` objects and the
+**Vectors.** `batch-001.ndjson` lines 10 and 14 — the pair that pins the `agg` objects and the
 omit-don't-zero optionals from both sides. Line 6 is an ascent with `peak_g`, `max_q_pa` and
 the `radar_alt_m` aggregate all **present**, `warp_max: 1`, `n: 60`, `t0_sim: 100.5`, `t1_sim: 130.5`
 — exactly a 30 s window at 2 Hz. Line 10 is the same type coasting at `warp_max: 1000` with all three
@@ -2593,7 +2729,7 @@ fold writes. Surfaced as `collection.projected` / `collection.lag` and `projecto
 
 | Suppression | Mechanism | Where |
 |---|---|---|
-| A type the player switched off in `[events]` never leaves the machine — the server sees an absence, not a suppression | `EventTypeFilter.IsEnabled`, applied at the pipeline's single funnel; five types cannot be switched off at all | `Detect/EventPipeline.cs:469-475`; MOD-072 |
+| A type the player switched off in `[events]` never leaves the machine — the server sees an absence, not a suppression | `EventTypeFilter.IsEnabled`, applied at the pipeline's single funnel; six types cannot be switched off at all | `Detect/EventPipeline.cs`; MOD-072, PROJ-108 |
 | A flagged flight scores nothing — every board, including counters | `scoreable` → `flight_state.flags == 0` | `stats/fold.go:205-220`; PROJ-001 |
 | The `roster.snapshot` and flightless-`kitten.*` boards are exempt — `distance_travelled`, `top_kitten_distance`, `top_kitten_missions`, `longest_eva`, and `evas` whenever the EVA signal carried no vehicle id | `!ev.HasFlight()` → true | `stats/fold.go:226-228` |
 | An **unknown** flag value still excludes | `FlagOther`, bit 5 | `stats/flight.go:29,34-48`; PROJ-002 |
@@ -2718,24 +2854,27 @@ rather than on Go map order, so a rebuild reproduces the incremental `context` b
 
 | File | Pins |
 |---|---|
-| `batches/batch-001.ndjson` | 27 envelopes, one line each |
+| `batches/batch-001.ndjson` | 31 envelopes, one line each |
 | `batches/batch-001.br` | the Brotli body as sent |
-| `batches/batch-001.bh.txt` | `9qWlcOUfLwdKlAHKyBSmoYe21h_-F48E-hUqLWC4WQg` — base64url SHA-256 of the compressed body |
+| `batches/batch-001.bh.txt` | `RfxvPElW9k7udd2ewEcKs2KZFbsiK_CXNuqP0D8EsJI` — base64url SHA-256 of the compressed body |
 | `keys/*`, `license/*`, `proofs/*`, `expected/verify-results.json` | the credential / JWS layer, not events |
 
-**Covered by a vector: 23 of 23.** Every registered type appears at least once, at the `ver` the
+**Covered by a vector: 25 of 25.** Every registered type appears at least once, at the `ver` the
 registry stamps for it today, and `Batch001_CoversEveryRegisteredType` fails the moment a type is
 added to `EventTypes` without a line — so this section cannot go stale.
 
-The line count is 27 rather than 23 because reaching 23 was never the point: the set exists to pin
-payload *shapes*, and four types need more than one line to say what they have to say.
+The line count is 31 rather than 25 because reaching the registry count was never the point: the set
+exists to pin payload *shapes*, and six shape families need more than one line to say what they have
+to say.
 
 | type | lines | why more than once |
 |---|---|---|
-| `telemetry.window` | 6, 10 | line 6 carries `peak_g`, `max_q_pa` **and** the `radar_alt_m` aggregate, `n` 60, `warp_max` 1; line 10 is the same type on rails at 1000× warp with all three **absent** and `n` 3. A consumer that reads an absent optional as `0` passes line 6 and fails line 10. |
-| `flight.started` | 2, 16 | line 2 is crewed — `kids` populated, `stage_count` 3, `lat` / `lon` present; line 16 is an uncrewed probe — `kids` `[]`, `stage_count` 0, `lat` / `lon` **absent**. The pair is what separates "omitted because unreadable" from "`0` because that is the reading". |
-| `flight.ended` | 21, 22, 26 | `recovered` with crew and a position; the silent-removal safety net (`despawned`, `crew_count` 0, `kids` `[]`, `body: "unknown"`, no position); and `destroyed`. |
-| `vehicle.docked` / `vehicle.undocked` | 12, 17 | `other_flight` **null** and `other_flight` a ULID — the one in-payload `null` in the taxonomy. |
+| `system.discovered` | 1, 4 | line 1 is complete and precedes its catalogue; line 4 is `complete: false` and has no body rows. |
+| `system.body` | 2, 3 | line 2 is a root with `parent` and all six orbital-shape keys absent; line 3 is an orbiting body with `parent`, all six shape keys and finite period present. Both carry finite normalised orientations. |
+| `telemetry.window` | 10, 14 | line 10 carries `peak_g`, `max_q_pa` **and** the `radar_alt_m` aggregate, `n` 60, `warp_max` 1; line 14 is the same type on rails at 1000× warp with all three **absent** and `n` 3. A consumer that reads an absent optional as `0` passes line 10 and fails line 14. |
+| `flight.started` | 6, 20 | line 6 is crewed — `kids` populated, `stage_count` 3, `lat` / `lon` present; line 20 is an uncrewed probe — `kids` `[]`, `stage_count` 0, `lat` / `lon` **absent**. The pair is what separates "omitted because unreadable" from "`0` because that is the reading". |
+| `flight.ended` | 25, 26, 30 | `recovered` with crew and a position; the silent-removal safety net (`despawned`, `crew_count` 0, `kids` `[]`, `body: "unknown"`, no position); and `destroyed`. |
+| `vehicle.docked` / `vehicle.undocked` | 16, 21 | `other_flight` **null** and `other_flight` a ULID — the one in-payload `null` in the taxonomy. |
 
 Between them the lines pin an array field (`kids`, `roster.snapshot.kittens`), an optional present
 **and** absent for the same field on the same type, a nested object (`agg`), a nested *optional*
@@ -2865,12 +3004,13 @@ that the code is wrong.**
     `scoreable`'s flag gate can act on an event that names one. Both mechanisms passed their tests,
     which constructed the events *with* a flight the mod did not send — **a guard whose test data is
     shaped differently from real data is not a guard.** The fix was on the mod side: both events
-    attribute a flight. `batch-001.ndjson` lines 14 and 25 pin that envelope shape cross-language.
+    attribute a flight. `batch-001.ndjson` lines 18 and 29 pin that envelope shape cross-language.
     See MOD-073.
 
 27. **Fixed (2026-08-09).** The conformance vectors covered five types on five lines, so nothing in
     `contracts/testdata/` pinned the omit-don't-zero rule for `lat` / `lon` / `radar_alt_m` across
-    the two implementations. The fixture set is now 27 lines covering all 23 registered types, and
+    the two implementations. The fixture set grew again with the system events and is now 31 lines
+    covering all 25 registered types, and
     two assertions stop it drifting again: `ver` must equal the registry's current version for the
     type, and every registered type must appear in a line. See
     [Conformance coverage](#conformance-coverage) and INGEST-025.
