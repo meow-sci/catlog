@@ -200,11 +200,13 @@ byte-identical across events. Rows written either way stay readable, so the swit
 | `career_stat` | `(player_id, career, stat) → system, value, context, updated_seq` — the same board keys ranked per save; `system` is denormalised so filtering does not require a join (migration 0006) |
 | `system_stat` | `(player_id, system, stat) → value, context, updated_seq` — board rows ranked within a celestial-system identity (migration 0006) |
 | `flight_state` | Per flight: `flags` bitfield, `ended_reason`, crew, body |
-| `career` | Per save: the sim-time high-water and rewind mark, first/last event seq, eventual public ordinal, and eventual celestial-system identity; `last_seq` advances on every attributed event, including non-scoring and flagged activity |
+| `career` | Per save: sim-time high-water and rewind mark, first/last event seq, public ordinal, first celestial-system identity and non-punitive `system_changed` provenance mark; `last_seq` advances on every attributed event, including non-scoring and flagged activity |
 | `player_body` | Distinct bodies per player and `kind` — `'soi'` (entered) and `'landed'` (touched down) — plus first-arrival times, which only `'soi'` rows carry |
 | `career_body` | Distinct bodies per save and `kind`, with the career's system identity denormalised for union-across-saves system counts; its novelty signal is independent of `player_body` (migration 0007) |
 | `kitten` | Per-kitten totals folded from `roster.snapshot` |
 | `career_kitten` | Per-save kitten totals folded from `roster.snapshot`, with system identity denormalised; unlike `kitten`, it does not merge same-named kittens from different saves (migration 0007) |
+| `system` | One immutable first-seen identity/header per celestial-system hash: raw system id, display name, stable URL slug, home body, declared body count, monotone reported-complete bit and first seq (migration 0008) |
+| `system_body` | One immutable first-seen catalogue row per `(hash, body)`, including opaque game class, semantic kind, forest topology, physical values, orientation and optional orbital elements (migration 0008) |
 | `feed` | The activity feed, capped at 500 rows |
 | `event_census` | One row per `(type, period, bucket)` — what makes `GET /v1/stats` affordable |
 
@@ -220,6 +222,42 @@ are empty until their board folds land; migration 0006 establishes the final sch
 and `'landed'`; `first_sim_t` is populated only for SOI arrivals. `career_kitten` has primary key
 `(player_id, career, kid)`, plus indexes on `(player_id, career)` and `(player_id, system)`. Both
 tables denormalise `system` from the career, and both are rebuildable additions from migration 0007.
+
+`system` is keyed by the content hash, **not** by `system_id` or display name: two mods may both
+call different content `Sol`. Its unique `slug` is ASCII-only and rebuild-stable. Lowercase ASCII
+letters and digits survive; each run of every other byte becomes one hyphen; leading/trailing
+hyphens are removed and the base is capped at 48 bytes. An empty base falls back to the first eight
+hash characters. Distinct hashes with the same base receive `-2`, `-3`, … in ascending `first_seq`
+order. This is deliberately separate from `statSuffix`, whose protocol-key alphabet must not be
+weakened to accommodate human display names such as `Solar System (Dense)`.
+
+`system_body` has primary key `(hash, body)` and index `(hash, kind, body)`. `class` is KSA's own
+opaque string and has **no allow-list**. The six orbital-shape columns are nullable as a group;
+`period_s` is independently nullable; `parent` is null on every root. Orientation is stored as four
+required quaternion columns, not recomputed. Neither table has a foreign key between them: a body
+may arrive in an earlier projector batch than its header, and creating a placeholder system would
+invent a name and slug that later need mutation rules. Orphan body rows remain internal until the
+real header arrives.
+
+Migration 0008 also adds `career_system(system, player_id)`, the covered path for counting players
+and saves attached to a system without consulting score rows. A save that loaded a system but never
+scored still belongs to that system.
+
+Both tables are immutable first-write projections. A repeated matching header may only promote
+`reported_complete` from 0 to 1; a later false cannot erase it. Conflicting identity fields retain
+the first row and emit a structured warning naming the hash, current seq and first seq. Duplicate
+body rows use `ON CONFLICT DO NOTHING`, so a differing replay also retains the first row. This is
+deterministic projection integrity, not a plausibility or anti-cheat check.
+
+The completeness exposed to readers is **effective completeness**:
+
+```text
+reported_complete == 1 AND count(system_body WHERE hash = system.hash) == body_count
+```
+
+The header bit alone is insufficient: an interrupted large catalogue must not award an everywhere
+result before its last row. Conversely, a later false header cannot regress a catalogue that was
+previously received completely.
 
 `flight_state.flags` is bit0 teleport, bit1 refuel, bit2 resource_edit, bit3 console, bit4 tuning,
 bit5 other. **An unrecognised flag value sets bit5** — failing open would make every future flag a
@@ -259,6 +297,19 @@ write-back accumulator, merges repeated writes to the same board, and flushes th
 handful of multi-row statements. That took the fold from ~3,300 to ~29,000 events/s, which is enough
 to keep pace with ingest in real time. `TestBatchSizeDoesNotChangeTheProjection` is the test that
 holds it honest: the projection may not depend on where the batch boundaries fell.
+
+State folds run `systemFold → flightFold → careerFold` before every board. `systemFold` is first
+because `system.discovered` precedes `session.started` in the same client boundary and board folds
+read the career's system through the Batch cache. Recording the system and binding the career before
+the career clock advances makes the buffered incremental path match a rebuild. `system.body` is
+order-independent with its header because every row carries the hash and the schema has no foreign
+key.
+
+On the first `system.discovered` for `(player, career)`, the career is bound to that hash once. A
+later different hash leaves `career.system` unchanged and sets `career.system_changed = 1`. The mark
+excludes nothing and scores nothing; it qualifies system-scoped comparisons exactly as `rewound`
+qualifies a career clock. It is provenance for a system definition that changed under one save, not
+an inference about why it changed.
 
 ### The boards
 

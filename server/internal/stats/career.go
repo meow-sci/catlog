@@ -54,6 +54,10 @@ type CareerState struct {
 	// first-seen order. It is what a public surface shows in place of the career
 	// id, which can never be published raw (PROJ-049).
 	Ordinal int64
+	// System is the first celestial system hash attributed to the save.
+	System string
+	// SystemChanged marks a later discovery of a different hash without moving System.
+	SystemChanged bool
 }
 
 // careerFold maintains `career`. It runs alongside [flightFold], before the

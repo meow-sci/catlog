@@ -422,8 +422,8 @@ and `projector.Upcasters` has nothing registered (PROJ-100).
 | # | `type` | `ver` | outbox kind | Disableable? | Trigger | Feeds |
 |---|---|---|---|---|---|---|
 | 1 | `session.started` | 1 | 1 | **no — locked** | event | `career` (rewind mark) |
-| 2 | `system.discovered` | 1 | **1** | **no — locked** | event (session boundary) | typed only in C2; C3 owns `system` state and career attribution |
-| 3 | `system.body` | 1 | **1** | yes | event (system-load survey) | typed only in C2; C3 owns `system_body` catalogue state |
+| 2 | `system.discovered` | 1 | **1** | **no — locked** | event (session boundary) | `system`; one-time career→system binding |
+| 3 | `system.body` | 1 | **1** | yes | event (system-load survey) | immutable `system_body` catalogue |
 | 4 | `flight.started` | 1 | 1 | **no — locked** | polled-discovery | `flight_state`, `heaviest_launch`, `most_parts`, `biggest_crew`, `biggest_stack` |
 | 5 | `flight.ended` | 1 | 1 | **no — locked** | event (+ passive net) | `flight_state`, `kittens_recovered`, `biggest_recovery`, feed |
 | 6 | `flight.flagged` | 1 | 1 | **no — locked** | event (4 of 5) / passive (`tuning`) | `flight_state` → **excludes everything** |
@@ -561,9 +561,11 @@ session, then sets `survey:<career>:<system_hash>`. On a marked report it append
 Disabled, capped and invalid reports set `complete: false`, append no bodies and never set the
 marker, so a later session can retry.
 
-**Server.** The ingest registry accepts the type and preserves the payload verbatim in the immutable
-log; the projector has a typed `SystemDiscovered` decoder for the required contract above. C2 does
-not yet fold the system state — that belongs to C3 — and it moves no leaderboard directly.
+**Server.** The ingest registry preserves the payload verbatim and `systemFold` first-writes the
+`system` identity/header, assigns its stable slug, and binds the career to the hash once. Repeated
+matching headers may only promote `reported_complete` false→true; identity conflicts retain the
+first row. Effective completeness additionally requires the stored body-row count to equal
+`bodies`. The event moves no leaderboard directly.
 
 **Vectors.** `batch-001.ndjson` line 1 is a complete header followed by body rows; line 4 is a
 `complete: false` header with no body rows. Registry-coverage tests require this type at its current
@@ -628,11 +630,11 @@ and stable emission. Every row follows its `system.discovered` header and preced
 in the outbox. A crash may cause a resend but may never cause a mark-without-rows loss. A missing
 marker after local state loss also resends safely.
 
-**Server.** The projector's typed `SystemBody` decoder uses pointers for `parent`, all six shape
-members and `period_s`, so absence cannot collapse into zero; ingest preserves the original payload
-verbatim. C2 does not yet fold the immutable first-write `system_body` state — that belongs to C3.
-No leaderboard reads the event directly; the contract exists for system identity,
-catalogue/everywhere state and future 3D placement.
+**Server.** The typed decoder uses pointers for `parent`, all six shape members and `period_s`, so
+absence cannot collapse into zero. `systemFold` inserts the row first-write under `(hash, body)` and
+ignores later duplicates, including differing ones; it does not invent a placeholder header when a
+body arrives first. `class` remains opaque with no allow-list. No leaderboard reads the event
+directly; it supplies catalogue/everywhere state and future 3D placement.
 
 **Vectors.** `batch-001.ndjson` line 2 is a root with absent parent and absent orbital group; line 3
 is an orbiting body with all six orbital values and finite period. Both carry finite normalised
@@ -2098,11 +2100,11 @@ directory, and `updated_seq → recv_time` by `store/directory.go:62` (`Events.R
 5. **Undecodable events are skipped and the checkpoint still advances** (`:298-302`, `:395`;
    PROJ-014).
 
-**Fold order** (`stats/fold.go:66-104`) — the state folds, then every board in board-metadata order,
+**Fold order** (`stats/fold.go`) — the state folds, then every board in board-metadata order,
 then the census:
 
 ```
-flight_state → career
+system → flight_state → career
 → biggest_lithobrake_survived → peak_g_survived → max_q_survived → biggest_impact_energy
 → fastest_surface_speed → fastest_orbital_speed → fastest_entry → highest_altitude
 → highest_apoapsis → lowest_orbit → roundest_orbit → steepest_orbit → softest_touchdown
@@ -2113,15 +2115,17 @@ flight_state → career
 → fastest_to_body → census
 ```
 
-Order matters in exactly two places: `flightFold` must precede every board (the flag check), and
-`soiFold` must precede `toBodyFold` (row existence for `LowerBodyTime`). Everything else is listed in
+Order matters in three places: `systemFold` must precede `careerFold` and every board because a
+same-batch discovery binds the career before its session and scores are folded; `flightFold` must
+precede every board (the flag check); and `soiFold` must precede `toBodyFold` (row existence for
+`LowerBodyTime`). Everything else is listed in
 board-metadata order purely so the two lists read the same way; no two board folds write the same
 `(player_id, stat)`.
 
 ### `stats.Batch` — the write-back accumulator
 
-`stats/batch.go:60`. In-memory read-through caches (`flights`, `careers`, `bodies`, `kittens`,
-`values`, career values and career systems) plus per-`statKind` write accumulators for player,
+`stats/batch.go`. In-memory read-through caches (`systems`, system bodies, `flights`, `careers`,
+`bodies`, `kittens`, `values`, career values and career systems) plus per-`statKind` write accumulators for player,
 career, system and period rows, flushed as multi-row statements (`DefaultFlushRows = 500`). Flush
 order is fixed and every widened key is sorted before writing, so a rebuild is byte-comparable to
 the incremental result.
@@ -2589,6 +2593,55 @@ directly, precisely so there is no second place a banned player can reach a publ
 
 ## State projections
 
+### `system`
+
+`system(hash PRIMARY KEY, system_id, name, slug UNIQUE, home_body, body_count,
+reported_complete, first_seq)` (migration 0008). It is created only by `system.discovered`; an
+orphan `system.body` never creates a placeholder whose unknown name would force a mutable slug.
+
+Identity is immutable first-write. On a repeated header, `system_id`, `name`, `home_body` and
+`body_count` are compared. A difference retains the original row and logs a structured warning with
+the hash, current seq and first seq; an exact match may only perform
+`reported_complete = reported_complete OR incoming_complete`. Thus false→true supports a player
+enabling body reporting later, while a routine later false header cannot erase a catalogue already
+received. Neither path rewrites `slug` or `first_seq`. These comparisons protect deterministic
+projection state; they are not client plausibility checks and exclude nobody.
+
+The public/consumer meaning of complete is never the header bit alone:
+
+```text
+effective_complete = reported_complete
+                     AND count(system_body WHERE hash = system.hash) == body_count
+```
+
+That count is what prevents an interrupted 3,215-row catalogue from looking complete before its
+last row. A zero body count can be effectively complete only when it was actually reported complete
+and has zero rows; false always means unknown rather than empty.
+
+`slug` is assigned from the sanitised display name with a dedicated, deterministic ASCII rule:
+lowercase `A-Z`, retain `a-z0-9`, map each run of every other byte to one `-`, trim hyphens and cap
+the base at 48 bytes. Empty falls back to the first eight hash characters. Different hashes that
+collide receive `-2`, `-3`, … in ascending `first_seq` order, so rebuild and every projector batch
+size agree. This does not reuse or weaken `statSuffix`: system display names may contain spaces and parentheses,
+while stat keys remain protocol identifiers.
+
+### `system_body`
+
+`system_body(hash, body, name, class, kind, rank, parent, radius_m, mass_kg, soi_m, atmo_m,
+ocean_m, angvel, axis_x, axis_y, axis_z, sma_m, ecc, inc_deg, lan_deg, argp_deg, t_pe,
+period_s, ccf_to_cce_t0_x, ccf_to_cce_t0_y, ccf_to_cce_t0_z, ccf_to_cce_t0_w, first_seq,
+PRIMARY KEY(hash, body))` (migration 0008), with `(hash, kind, body)` index.
+
+Rows are immutable first-write via `INSERT … ON CONFLICT DO NOTHING`; a differing duplicate keeps
+the original. `class` is the game's opaque word and has **no allow-list**. The six orbital-shape
+columns are null as a group on a root or invalid group; `period_s` is independently nullable;
+`parent` is null for every root. Physical/orientation values are stored exactly as reported and no
+orbital value is derived from another.
+
+There is intentionally no foreign key to `system`. A body carries its own hash and may cross a
+projector batch boundary before its header; `systemFold` stores it without inventing header fields.
+List/detail readers hide such orphan rows until `system.discovered` creates the real system.
+
 ### `flight_state`
 
 `0001_init.sql:34-39`: `flight_state(flight_id BLOB PK, player_id, flags INTEGER DEFAULT 0,
@@ -2609,11 +2662,17 @@ views drop every row belonging to a flagged flight (PROJ-051).
 
 ### `career`
 
-`0002_career.sql:9-21`: `career(player_id, career TEXT, max_sim_t REAL DEFAULT 0,
-rewound INTEGER DEFAULT 0, first_seq, PRIMARY KEY(player_id, career))`. `careerFold`
+`career(player_id, career TEXT, max_sim_t REAL DEFAULT 0, rewound INTEGER DEFAULT 0, first_seq,
+ordinal, last_seq, system, system_changed, PRIMARY KEY(player_id, career))`. `careerFold`
 (`stats/career.go:60-81`) — no `career` key → nothing; `career` but no `sim_t` → `EnsureCareer` only;
 `session.started` → `MarkRewound` **before** advancing, and only when the career already exists and
 `max_sim_t > sim_t`; then `AdvanceCareer` raises the high-water mark.
+
+`systemFold` runs before `careerFold` and binds `career.system` from the first
+`system.discovered`, once. A later discovery for the same career with a different hash leaves that
+first system in place and sets `system_changed = 1`. Like `rewound`, the mark is **non-punitive**:
+it excludes nothing, changes no score and makes no claim about intent. It only qualifies a
+system-scoped comparison when the content definition changed under one save.
 
 ### `player_body`
 

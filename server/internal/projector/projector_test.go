@@ -238,6 +238,9 @@ type snapshot struct {
 	CareerBodies  []string
 	Kittens       []string
 	CareerKittens []string
+	Careers       []string
+	Systems       []string
+	SystemBodies  []string
 	Periods       []string
 	Feed          []string
 	Cursor        int64
@@ -271,6 +274,15 @@ func (r *rig) snapshot() snapshot {
 			return err
 		}
 		if s.CareerKittens, err = dump(ctx, p, `SELECT player_id, career, system, kid, name, travelled_m, fastest_ms, missions, mission_time_s, kia, updated_seq FROM career_kitten ORDER BY player_id, career, kid`); err != nil {
+			return err
+		}
+		if s.Careers, err = dump(ctx, p, `SELECT player_id, career, ordinal, system, system_changed, max_sim_t, rewound, first_seq, last_seq FROM career ORDER BY player_id, career`); err != nil {
+			return err
+		}
+		if s.Systems, err = dump(ctx, p, `SELECT hash, system_id, name, slug, home_body, body_count, reported_complete, first_seq FROM system ORDER BY hash`); err != nil {
+			return err
+		}
+		if s.SystemBodies, err = dump(ctx, p, `SELECT hash, body, name, class, kind, rank, coalesce(parent,''), radius_m, mass_kg, soi_m, atmo_m, ocean_m, angvel, axis_x, axis_y, axis_z, coalesce(sma_m,-1), coalesce(ecc,-1), coalesce(inc_deg,-1), coalesce(lan_deg,-1), coalesce(argp_deg,-1), coalesce(t_pe,-1), coalesce(period_s,-1), ccf_to_cce_t0_x, ccf_to_cce_t0_y, ccf_to_cce_t0_z, ccf_to_cce_t0_w, first_seq FROM system_body ORDER BY hash, body`); err != nil {
 			return err
 		}
 		if s.Periods, err = dump(ctx, p, `SELECT player_id, stat, period, bucket, value, coalesce(context,''), updated_seq FROM player_stat_period ORDER BY player_id, stat, period, bucket`); err != nil {

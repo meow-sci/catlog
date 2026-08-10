@@ -32,6 +32,34 @@ therefore a fresh catalogue.
 <EventDetail type="system.discovered" />
 <EventDetail type="system.body" />
 
+## What the server keeps
+
+The system's content hash is the identity. Its game id and display name are
+labels, not keys: two mods can both call different systems “Sol” without catlog
+mixing their records. Human-readable addresses come from the display name, with
+`-2`, `-3` and so on when different systems share one name; first seen keeps the
+shortest form, and rebuilding the leaderboards reproduces the same result.
+
+The first identity and first copy of each world win permanently. A replay of the
+same catalogue is harmless. If a later report claims a different game ID, name,
+home world or body count for the same content hash, catlog keeps the earlier values
+and writes a warning for maintainers; it does not use that as a cheat signal and
+it changes no score.
+There is no approved-world or approved-class list — modded and future content is
+stored under the same rules as stock content.
+
+<Aside type="note" title="Complete means the last world arrived">
+  The server calls a catalogue complete only when a report says it sent the whole list **and** the
+  number of world rows actually stored matches the declared count. That second check matters if a
+  very large upload is interrupted. A later incomplete header cannot erase an earlier complete
+  catalogue.
+</Aside>
+
+One save is bound to the first system it reports. If its celestial content is
+changed and the same save later reports a different system hash, catlog keeps the
+original binding and marks that the system changed. The mark is descriptive: it
+does not exclude the save, lower a score or accuse the player of anything.
+
 ## Why the body rows do not keep changing
 
 These rows describe the authored system — a world's radius, mass, spin and orbit

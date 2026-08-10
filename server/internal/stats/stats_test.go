@@ -922,14 +922,15 @@ func TestFoldOrderPutsStateFoldsFirst(t *testing.T) {
 	}
 	// Every board fold reads flight_state for the flag exclusion, and the
 	// career-time boards need the career row to exist, so the state folds have
-	// to run first — and flight_state first among them.
+	// to run first. system is first among them so the same batch sees a
+	// system.discovered binding before any scoped board write.
 	for i, f := range state {
 		if all[i].Name() != f.Name() {
 			t.Errorf("fold %d is %q, want %q", i, all[i].Name(), f.Name())
 		}
 	}
-	if state[0].Name() != stats.FlightFold().Name() {
-		t.Errorf("first state fold is %q, want the flight-state fold", state[0].Name())
+	if state[0].Name() != "system" || state[1].Name() != stats.FlightFold().Name() {
+		t.Errorf("state fold prefix = %q, %q; want system, flight", state[0].Name(), state[1].Name())
 	}
 }
 

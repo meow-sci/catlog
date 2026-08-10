@@ -711,6 +711,8 @@ type ProjectionCounts struct {
 	Career       int64 `json:"career"`
 	Kitten       int64 `json:"kitten"`
 	CareerKitten int64 `json:"career_kitten"`
+	System       int64 `json:"system"`
+	SystemBody   int64 `json:"system_body"`
 	Feed         int64 `json:"feed"`
 	// FlaggedFlights is how many flights carry at least one flag bit — the
 	// number that says whether the anti-cheat surface is doing anything.
@@ -746,6 +748,8 @@ func (p *Projections) Counts(ctx context.Context) (ProjectionCounts, error) {
 		{`SELECT count(*) FROM career WHERE rewound <> 0`, &c.RewoundCareers},
 		{`SELECT count(*) FROM kitten`, &c.Kitten},
 		{`SELECT count(*) FROM career_kitten`, &c.CareerKitten},
+		{`SELECT count(*) FROM system`, &c.System},
+		{`SELECT count(*) FROM system_body`, &c.SystemBody},
 		{`SELECT count(*) FROM feed`, &c.Feed},
 		{`SELECT count(*) FROM flight_state WHERE flags <> 0`, &c.FlaggedFlights},
 		{`SELECT count(DISTINCT player_id) FROM player_stat`, &c.ScoringPlayers},
@@ -756,4 +760,109 @@ func (p *Projections) Counts(ctx context.Context) (ProjectionCounts, error) {
 		}
 	}
 	return c, nil
+}
+
+// SystemRow is one immutable celestial-system header. Complete is effective:
+// the mod reported completion and the catalogue contains exactly BodyCount rows.
+type SystemRow struct {
+	Hash      string
+	SystemID  string
+	Name      string
+	Slug      string
+	HomeBody  string
+	BodyCount int64
+	Complete  bool
+	FirstSeq  int64
+}
+
+// Systems reads every visible system header in first-seen order.
+func (p *Projections) Systems(ctx context.Context) ([]SystemRow, error) {
+	rows, err := p.Reader().QueryContext(ctx,
+		`SELECT s.hash, s.system_id, s.name, s.slug, s.home_body, s.body_count,
+		        CASE WHEN s.reported_complete <> 0 AND
+		          (SELECT count(*) FROM system_body b WHERE b.hash = s.hash) = s.body_count
+		        THEN 1 ELSE 0 END, s.first_seq
+		 FROM system s ORDER BY s.first_seq, s.hash`)
+	if err != nil {
+		return nil, fmt.Errorf("store: read systems: %w", err)
+	}
+	return scanSystems(rows)
+}
+
+// SystemBySlugOrHash resolves a public slug or raw content hash.
+func (p *Projections) SystemBySlugOrHash(ctx context.Context, key string) (SystemRow, bool, error) {
+	var r SystemRow
+	var complete int64
+	err := p.Reader().QueryRowContext(ctx,
+		`SELECT s.hash, s.system_id, s.name, s.slug, s.home_body, s.body_count,
+		        CASE WHEN s.reported_complete <> 0 AND
+		          (SELECT count(*) FROM system_body b WHERE b.hash = s.hash) = s.body_count
+		        THEN 1 ELSE 0 END, s.first_seq
+		 FROM system s WHERE s.slug = ? OR s.hash = ? ORDER BY s.hash = ? DESC LIMIT 1`,
+		key, key, key).Scan(&r.Hash, &r.SystemID, &r.Name, &r.Slug, &r.HomeBody,
+		&r.BodyCount, &complete, &r.FirstSeq)
+	if errors.Is(err, sql.ErrNoRows) {
+		return SystemRow{}, false, nil
+	}
+	if err != nil {
+		return SystemRow{}, false, fmt.Errorf("store: read system %q: %w", key, err)
+	}
+	r.Complete = complete != 0
+	return r, true, nil
+}
+
+func scanSystems(rows *sql.Rows) ([]SystemRow, error) {
+	defer rows.Close()
+	var out []SystemRow
+	for rows.Next() {
+		var r SystemRow
+		var complete int64
+		if err := rows.Scan(&r.Hash, &r.SystemID, &r.Name, &r.Slug, &r.HomeBody,
+			&r.BodyCount, &complete, &r.FirstSeq); err != nil {
+			return nil, fmt.Errorf("store: scan system: %w", err)
+		}
+		r.Complete = complete != 0
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// SystemBodyRow is one first-write catalogue row. Class and Kind are stored as
+// reported; neither is checked against a server-side allow-list.
+type SystemBodyRow struct {
+	Hash, Body, Name, Class, Kind                    string
+	Rank                                             int64
+	Parent                                           sql.NullString
+	RadiusM, MassKg, SoiM, AtmoM, OceanM, AngVel     float64
+	AxisX, AxisY, AxisZ                              float64
+	SmaM, Ecc, IncDeg, LanDeg, ArgpDeg, TPe, PeriodS sql.NullFloat64
+	QuatX, QuatY, QuatZ, QuatW                       float64
+	FirstSeq                                         int64
+}
+
+// SystemBodies returns one system's catalogue in canonical body-key order.
+func (p *Projections) SystemBodies(ctx context.Context, hash string) ([]SystemBodyRow, error) {
+	rows, err := p.Reader().QueryContext(ctx,
+		`SELECT hash, body, name, class, kind, rank, parent,
+		 radius_m, mass_kg, soi_m, atmo_m, ocean_m, angvel, axis_x, axis_y, axis_z,
+		 sma_m, ecc, inc_deg, lan_deg, argp_deg, t_pe, period_s,
+		 ccf_to_cce_t0_x, ccf_to_cce_t0_y, ccf_to_cce_t0_z, ccf_to_cce_t0_w, first_seq
+		 FROM system_body WHERE hash = ? ORDER BY body`, hash)
+	if err != nil {
+		return nil, fmt.Errorf("store: read system bodies %q: %w", hash, err)
+	}
+	defer rows.Close()
+	var out []SystemBodyRow
+	for rows.Next() {
+		var r SystemBodyRow
+		if err := rows.Scan(&r.Hash, &r.Body, &r.Name, &r.Class, &r.Kind, &r.Rank, &r.Parent,
+			&r.RadiusM, &r.MassKg, &r.SoiM, &r.AtmoM, &r.OceanM, &r.AngVel,
+			&r.AxisX, &r.AxisY, &r.AxisZ, &r.SmaM, &r.Ecc, &r.IncDeg, &r.LanDeg,
+			&r.ArgpDeg, &r.TPe, &r.PeriodS, &r.QuatX, &r.QuatY, &r.QuatZ, &r.QuatW,
+			&r.FirstSeq); err != nil {
+			return nil, fmt.Errorf("store: scan system body: %w", err)
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
 }

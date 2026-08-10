@@ -1510,6 +1510,44 @@ recorded here because they have not yet been measured. That manual diagnostics r
 blocking acceptance item: inventing a reassuring number would defeat the reason the frame-budget
 check exists.
 
+### PROJ-109 — System catalogues are immutable first-write state, and completeness is intention plus cardinality
+
+*Accepted · 2026-08-10 · celestial-system projections.*
+
+`system` and `system_body` are state projections, not scores. The system header is first-write by
+content hash; each body is first-write by `(hash, body)`. Repeated identical input is idempotent and
+differing input retains the first value; a conflicting header also emits a structured warning.
+Updating to the latest copy was rejected because projector batch size and replay order could then
+change the final catalogue, which would make a rebuild disagree with incremental state. The conflict
+is deterministic projection integrity rather than client plausibility: it excludes nobody, changes no score and
+introduces no celestial allow-list. KSA's `class` string remains opaque.
+
+One header field is deliberately monotone rather than strictly immutable. A matching later
+`complete: true` promotes `reported_complete` false→true so a player may enable body reporting after
+first declining it; a later false cannot erase the completed state. Even true is only intent.
+Effective completeness additionally requires the number of stored body rows to equal the declared
+body count. Trusting the bit alone would let an interrupted large catalogue award an everywhere
+result before its final row; trusting cardinality alone would turn a deliberately declined empty set
+into a claim of completeness. Both predicates are required.
+
+Body rows carry their hash and may be folded before their header, including across projector
+batches. They are stored without a foreign key or placeholder `system`: a placeholder cannot know
+the display name, and therefore cannot receive a stable slug without later mutation and conflict
+rules. Readers hide orphan rows until the real header arrives. `systemFold` runs first among state
+folds so a `system.discovered` that precedes `session.started` binds the career before that same
+buffered batch advances its clock or writes scoped scores.
+
+The career binding itself is also first-write. A later different hash leaves the first system in
+place and sets `system_changed`; the mark is provenance, not punishment, exactly like `rewound`. It
+qualifies comparison context, excludes nothing and claims nothing about why the content changed.
+
+System slugs use a dedicated ASCII algorithm rather than `statSuffix`: display names legitimately
+contain spaces and parentheses, while stat suffixes are protocol keys whose alphabet must remain
+strict. Lowercase letters/digits survive, punctuation runs become one hyphen, empty input falls back
+to eight hash characters, and collisions receive `-2`, `-3`, … in ascending first-seen sequence.
+Sequence order is already the projector's deterministic total order, so the readable address is
+stable across rebuilds and batch sizes without a Unicode library or a mutable slug registry.
+
 ## Archive & restore
 
 The filesystem archiver, the manifest, restore verification, and the R2 design that is deliberately not built.

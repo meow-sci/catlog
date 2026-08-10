@@ -84,10 +84,10 @@ func SecondPassFolds() []Fold { return append(BoardFolds(), LogFolds()...) }
 // exclusion, no handle requirement, no tie-break. See census.go.
 func LogFolds() []Fold { return []Fold{censusFold{}} }
 
-// StateFolds returns the folds that maintain the tables the boards read:
-// `flight_state` (the flag exclusion) and `career` (the time-to-milestone
-// grouping and its rewind mark). A rebuild runs these alone on its first pass.
-func StateFolds() []Fold { return []Fold{flightFold{}, careerFold{}} }
+// StateFolds returns the folds that maintain the tables the boards read.
+// systemFold is first because later folds read the career binding through the
+// same Batch, including when discovery and scoring events share one batch.
+func StateFolds() []Fold { return []Fold{systemFold{}, flightFold{}, careerFold{}} }
 
 // FlightFold returns the flight_state fold, which every board fold depends on.
 func FlightFold() Fold { return flightFold{} }

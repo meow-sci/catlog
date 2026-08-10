@@ -70,8 +70,10 @@ type Batch struct {
 
 	// Read-through caches. An entry is loaded on first touch and survives a
 	// flush, because after one it holds exactly what the database holds.
-	flights map[ids.ID]*flightEntry
-	careers map[careerKey]*careerEntry
+	flights      map[ids.ID]*flightEntry
+	careers      map[careerKey]*careerEntry
+	systems      map[string]*systemEntry
+	systemBodies map[systemBodyKey]*systemBodyEntry
 	// careerOrdinals is the next-save sequence high-water per player. It is
 	// loaded once per player per batch and advanced as new careers are first
 	// seen, so several saves created in one batch receive distinct ordinals.
@@ -114,6 +116,8 @@ type Batch struct {
 	// rather than everything the batch has ever read.
 	dirtyFlights       []ids.ID
 	dirtyCareers       []careerKey
+	dirtySystems       []string
+	dirtySystemBodies  []systemBodyKey
 	dirtyBodies        []playerBodyKey
 	dirtyCareerBodies  []playerCareerBodyKey
 	dirtyKittens       []playerKittenKey
@@ -126,6 +130,8 @@ type Batch struct {
 	statKeys       []statKey
 	careerStatKeys []careerStatKey
 	systemStatKeys []systemStatKey
+	systemKeys     []string
+	systemBodyKeys []systemBodyKey
 	periodKeys     []periodKey
 	censusKeys     []censusKey
 	args           []any
@@ -151,6 +157,8 @@ func NewBatch(tx *sql.Tx, opts BatchOptions) *Batch {
 		flushRows:      opts.FlushRows,
 		flights:        map[ids.ID]*flightEntry{},
 		careers:        map[careerKey]*careerEntry{},
+		systems:        map[string]*systemEntry{},
+		systemBodies:   map[systemBodyKey]*systemBodyEntry{},
 		careerOrdinals: map[int64]int64{},
 		bodies:         map[int64]map[bodyKey]*bodyEntry{},
 		careerBodies:   map[int64]map[careerBodyKey]*careerBodyEntry{},
@@ -359,14 +367,15 @@ type careerKey struct {
 }
 
 type careerEntry struct {
-	maxSimT  float64
-	rewound  bool
-	firstSeq int64
-	lastSeq  int64
-	ordinal  int64
-	system   string
-	exists   bool
-	dirty    bool
+	maxSimT       float64
+	rewound       bool
+	firstSeq      int64
+	lastSeq       int64
+	ordinal       int64
+	system        string
+	systemChanged bool
+	exists        bool
+	dirty         bool
 }
 
 func (b *Batch) careerEntry(ctx context.Context, k careerKey) (*careerEntry, error) {
@@ -374,16 +383,17 @@ func (b *Batch) careerEntry(ctx context.Context, k careerKey) (*careerEntry, err
 		return e, nil
 	}
 	e := &careerEntry{}
-	var rewound int64
+	var rewound, systemChanged int64
 	err := b.tx.QueryRowContext(ctx,
-		`SELECT max_sim_t, rewound, first_seq, last_seq, ordinal, system FROM career WHERE player_id = ? AND career = ?`,
-		k.playerID, k.career).Scan(&e.maxSimT, &rewound, &e.firstSeq, &e.lastSeq, &e.ordinal, &e.system)
+		`SELECT max_sim_t, rewound, first_seq, last_seq, ordinal, system, system_changed
+		 FROM career WHERE player_id = ? AND career = ?`,
+		k.playerID, k.career).Scan(&e.maxSimT, &rewound, &e.firstSeq, &e.lastSeq, &e.ordinal, &e.system, &systemChanged)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 	case err != nil:
 		return nil, fmt.Errorf("stats: read career %q: %w", k.career, err)
 	default:
-		e.exists, e.rewound = true, rewound != 0
+		e.exists, e.rewound, e.systemChanged = true, rewound != 0, systemChanged != 0
 	}
 	b.careers[k] = e
 	return e, nil
@@ -486,15 +496,16 @@ func (b *Batch) flushCareers(ctx context.Context) error {
 		return nil
 	}
 	slices.SortFunc(b.dirtyCareers, compareCareerKey)
-	err := b.write(ctx, len(b.dirtyCareers), 7,
-		`INSERT INTO career (player_id, career, max_sim_t, rewound, first_seq, last_seq, ordinal) VALUES `,
+	err := b.write(ctx, len(b.dirtyCareers), 9,
+		`INSERT INTO career (player_id, career, max_sim_t, rewound, first_seq, last_seq, ordinal, system, system_changed) VALUES `,
 		` ON CONFLICT (player_id, career) DO UPDATE SET
-		   max_sim_t = excluded.max_sim_t, rewound = excluded.rewound, last_seq = excluded.last_seq`,
+		   max_sim_t = excluded.max_sim_t, rewound = excluded.rewound, last_seq = excluded.last_seq,
+		   system = excluded.system, system_changed = excluded.system_changed`,
 		func(i int, args []any) []any {
 			k := b.dirtyCareers[i]
 			e := b.careers[k]
 			e.dirty = false
-			return append(args, k.playerID, k.career, e.maxSimT, boolInt(e.rewound), e.firstSeq, e.lastSeq, e.ordinal)
+			return append(args, k.playerID, k.career, e.maxSimT, boolInt(e.rewound), e.firstSeq, e.lastSeq, e.ordinal, e.system, boolInt(e.systemChanged))
 		})
 	if err != nil {
 		return fmt.Errorf("stats: flush career: %w", err)
@@ -513,7 +524,31 @@ func (b *Batch) Career(ctx context.Context, playerID int64, career string) (Care
 		PlayerID: playerID, Career: career,
 		MaxSimT: e.maxSimT, Rewound: e.rewound, FirstSeq: e.firstSeq, LastSeq: e.lastSeq,
 		Ordinal: e.ordinal,
+		System:  e.system, SystemChanged: e.systemChanged,
 	}, true, nil
+}
+
+// BindCareerSystem records the first system discovered for a save. A later
+// different hash leaves the first binding intact and raises the non-punitive
+// provenance mark.
+func (b *Batch) BindCareerSystem(ctx context.Context, playerID int64, career, system string, seq int64) error {
+	if career == "" {
+		return nil
+	}
+	if err := b.EnsureCareer(ctx, playerID, career, seq); err != nil {
+		return err
+	}
+	k := careerKey{playerID, career}
+	e := b.careers[k]
+	switch {
+	case e.system == "":
+		e.system = system
+		b.touchCareer(k, e)
+	case e.system != system && !e.systemChanged:
+		e.systemChanged = true
+		b.touchCareer(k, e)
+	}
+	return nil
 }
 
 // CareerSystem reads the system a save is playing in, answering from this
@@ -1576,7 +1611,7 @@ func (b *Batch) flushCensus(ctx context.Context) error {
 // database holds, so re-reading would buy nothing.
 func (b *Batch) Flush(ctx context.Context) error {
 	for _, fn := range []func(context.Context) error{
-		b.flushFlights, b.flushCareers, b.flushBodies, b.flushCareerBodies,
+		b.flushSystems, b.flushSystemBodies, b.flushFlights, b.flushCareers, b.flushBodies, b.flushCareerBodies,
 		b.flushKittens, b.flushCareerKittens, b.flushStats, b.flushCareerStats, b.flushSystemStats,
 		b.flushPeriods, b.flushCensus,
 	} {
