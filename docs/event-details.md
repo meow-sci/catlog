@@ -58,8 +58,11 @@ correct the mirror.
 - [The registry](#the-registry)
 - [The event catalog](#the-event-catalog) — 25 sections
 - [Projections](#projections)
+- [Career and celestial-system board scopes](#the-board-projection-tables)
+- [Badges](#the-badge-award-projection-table)
+- [Challenges](#challenge-projection-foundation)
 - [Boards](#boards)
-- [State projections](#state-projections)
+- [State projections](#state-projections), including [celestial systems](#system)
 - [Suppression and eligibility matrix](#suppression-and-eligibility-matrix)
 - [Rebuild ≠ incremental](#rebuild--incremental)
 - [Conformance coverage](#conformance-coverage)
@@ -419,7 +422,7 @@ up and a rebuild runs.
 **Every type is at `ver` 1.** There is one shape of every event, so `projector.currentVer` is empty
 and `projector.Upcasters` has nothing registered (PROJ-100).
 
-| # | `type` | `ver` | outbox kind | Disableable? | Trigger | Feeds |
+| # | `type` | `ver` | outbox kind | Disableable? | Trigger | Ordinary projection feeds |
 |---|---|---|---|---|---|---|
 | 1 | `session.started` | 1 | 1 | **no — locked** | event | `career` (rewind mark) |
 | 2 | `system.discovered` | 1 | **1** | **no — locked** | event (session boundary) | `system`; one-time career→system binding |
@@ -453,6 +456,16 @@ non-spine type — and it is `KindEvent`, the default for everything except `tel
 Every event additionally lands in `event_census` (10 rows: own type + total, × 5 periods).
 Every flight-bearing event also ensures `flight_state` exists and may supply that row's first
 nonempty career, whether or not this table lists a more specific flight-state effect.
+
+The final column names ordinary state, board and feed consumers. Badge and challenge folds run
+after every board and consume the same decoded events without duplicating that already-long column:
+direct badge candidates use `flight.started`, `flight.ended`, `vehicle.atmosphere`,
+`vehicle.orbit`, `vehicle.soi`, `vehicle.rud`, `vehicle.landed`, `vehicle.staging`,
+`vehicle.docked`, `kitten.eva_start` and `kitten.tumble`; threshold badges observe the board values
+after their source folds. The six challenges use `vehicle.orbit`, `kitten.tumble`, `vehicle.soi`,
+`vehicle.landed` and `flight.ended`. Their exact predicates and eligibility are in
+[Badge catalogue registry](#badge-catalogue-registry) and
+[Week 33 starter challenges](#week-33-starter-challenges).
 
 ### Turning a type off — the `[events]` table
 
@@ -2281,7 +2294,8 @@ system → flight_state → career
 → orbits_achieved → soi_bodies → landed_bodies
 → dockings → stagings → splashdowns → evas → flameouts → engine_ignitions → kittens_recovered
 → distance_travelled(+top_kitten_distance, +top_kitten_missions) → fastest_to_orbit
-→ fastest_to_body → career_playtime → play_sessions → kittens_to_orbit_and_back → body_sprints → census
+→ fastest_to_body → career_playtime → play_sessions → kittens_to_orbit_and_back → body_sprints
+→ badges (catalogue order) → challenges (catalogue order) → census
 ```
 
 Order matters in three places: `systemFold` must precede `careerFold` and every board because a
@@ -2294,7 +2308,8 @@ board-metadata order purely so the two lists read the same way; no two board fol
 ### `stats.Batch` — the write-back accumulator
 
 `stats/batch.go`. In-memory read-through caches (`systems`, system bodies, `flights`, `careers`,
-`bodies`, `kittens`, `values`, career values, career systems and badge awards) plus per-`statKind`
+`bodies`, `kittens`, `values`, career values, career systems, badge awards, challenge values and
+challenge members) plus per-`statKind`
 write accumulators for player, career, system and period rows, flushed as multi-row statements
 (`DefaultFlushRows = 500`). Flush order is fixed and every widened key is sorted before writing, so
 a rebuild is byte-comparable to the incremental result.
@@ -2650,10 +2665,11 @@ F5 activates every predicate expressible with F4's four shapes: **33 fixed badge
 dynamic family folds**. F7 activates the remaining fixed subset badges `been_to_every_planet` and
 `been_to_everything`, so all 35 fixed entries and all three families can produce awards.
 `SecondPassFolds` is ordered
-`BoardFolds → BadgeFolds → LogFolds`, so threshold shapes read the post-write player and career board
-values through `Batch`. Event, composite and family shapes offer their first qualifying event to the
-shared two-scope `award` helper. Every concrete fold name contains its fixed badge key or stable
-family name, so adding or removing one changes `BuildID` and reconsiders immutable history.
+`BoardFolds → BadgeFolds → ChallengeFolds → LogFolds`, so threshold shapes read the post-write player
+and career board values through `Batch`, challenge candidates run afterward, and the census remains
+last. Event, composite and family shapes offer their first qualifying event
+to the shared two-scope `award` helper. Every concrete fold name contains its fixed badge key or
+stable family name, so adding or removing one changes `BuildID` and reconsiders immutable history.
 
 Composite predicates read the completed `flight_state` row instead of correlating events inside a
 fold. Launch-fact composites use `HasStartFactAt`. The two orbit-order composites additionally
@@ -2692,7 +2708,10 @@ there is no revocation state.
 
 ## Boards
 
-`stats/boards.go`. `Board` is `{Stat, Title, Unit, Ascending, Career}` (`:52-69`). **`Unit` is a
+`stats/boards.go`. `Board` is `{Stat, Title, Unit, Ascending, Career, BodyDerived}` (`:71-92`).
+`BodyDerived` is true only when the key comes from a celestial-body name; it tells readers that
+player scope may merge like-named bodies from different systems and that system scope is the
+comparable view. **`Unit` is a
 label, never a conversion factor.** `Career` marks a value that is a career-relative time and whose
 row context carries `career`.
 
@@ -2794,11 +2813,11 @@ inside it does not erase the time for which the save was played.
 data. All three families have the same player, career and system scopes as every fixed board; a dynamic
 key receives all three on the event that creates it, with no registration step.
 
-| prefix | listed under | Title | Unit | Asc | Career |
-|---|---|---|---|---|---|
-| `tumbles_on_` | `kitten_tumbles` | `"Tumbles on " + titleize(body)` | `tumbles` | no | no |
-| `rud_` | `rud_total` | `"RUDs — " + titleize(cause)` | `RUDs` | no | no |
-| `fastest_to_` | `fastest_to_orbit` | `"Fastest to " + titleize(body)` | `ms` | **yes** | **yes** |
+| prefix | listed under | Title | Unit | Asc | Career | Body-derived |
+|---|---|---|---|---|---|---|
+| `tumbles_on_` | `kitten_tumbles` | `"Tumbles on " + titleize(body)` | `tumbles` | no | no | **yes** |
+| `rud_` | `rud_total` | `"RUDs — " + titleize(cause)` | `RUDs` | no | no | no |
+| `fastest_to_` | `fastest_to_orbit` | `"Fastest to " + titleize(body)` | `ms` | **yes** | **yes** | **yes** |
 
 Key construction: `TumblesOnStat(body)` (`stats/boards.go:246-248`) / `FastestToStat(body)` /
 `RUDStat(cause)` → `familyStat(prefix, value)`.
@@ -3468,6 +3487,18 @@ fold writes. Surfaced as `collection.projected` / `collection.lag` and `projecto
 | A landing the vehicle did not survive produces **no feed line** — the `vehicle.rud` beside it already says so | `!p.Survived` → no summary | `stats/feed.go:44-49` |
 | A bouncing lander cannot mint a landing every 500 ms | `vehicle.landed` shares the situation rule's 2 s debounce and marks no timer of its own | `EventDetector.CheckSituation`; MOD-076 |
 | **Not** suppressed: a one-metre hop is a landing, and `warp_max` disqualifies nothing | Constitution §8 — neither infers intent from data shape | PROJ-096 / PROJ-098 |
+| A flight-bearing event, composite or body-family badge cannot award from a flagged flight; a threshold badge inherits the source board's eligibility | `scoreable`, or the already-gated post-board value | `stats/badgefolds.go`; PROJ-124 |
+| A crewed-orbit or zero-engine composite cannot borrow a future `flight.started`; unknown engine count is not zero | `HasStartFactAt(candidate.seq, fact.Valid)` and exact `engine_count == 0` | `stats/badgefolds.go`; PROJ-114 / MOD-082 |
+| Orbit-and-back and docked-after-orbit require an achieved orbit strictly before the recovery/docking candidate | `0 < first_orbit_seq < candidate.seq` | `stats/badgefolds.go`; PROJ-123 |
+| An invalid body-derived badge key skips only that family award; its fixed/set/board consequences remain | shared `statSuffix` family-key gate after the event predicate | `stats/badgefolds.go`; PROJ-121 / PROJ-124 |
+| Every World / Nothing Left refuse a missing, incomplete, short or empty selected catalogue; completing the catalogue alone does not retro-award | `reported_complete && actual rows == body_count && selected rows > 0`; rechecked only by a qualifying `vehicle.soi` | `everywhereBadge`, `BodiesNotVisited`; PROJ-126 |
+| A challenge event outside `[opens, closes)`, or with missing/non-positive server receive time, cannot invoke its rule | receive-time gate runs before the concrete value function | `challengeFold.Apply`; PROJ-131 |
+| Every shipped challenge candidate is flight-bearing and refuses a flagged flight | each concrete value function calls `scoreable` explicitly | `stats/challengefolds.go`; PROJ-132 |
+| Heavy Lift refuses non-achieved orbit, non-positive mass, missing system/home, or an orbit away from home | exact payload gates plus `CareerHomeBody` equality | `heavyLiftWeekValue` |
+| From Scratch To Orbit refuses a missing career or career clock; a real `sim_t == 0` remains eligible | `HasCareer && HasSimTime` after achieved-orbit gate | `speedrunOrbitValue` |
+| Coasting Class refuses empty destination, missing/late launch fact, unknown/nonzero engine count or unknown system; repeat bodies do not increment | ordered exact-zero gate, then system-qualified `challenge_member` novelty | `coastingClassValue` |
+| Feather Touch refuses unsurvived/non-positive landings, missing system/home and the home body itself | shared `survivedLanding`, `vertical_speed_ms > 0`, `body != home` | `featherTouchValue` |
+| Full House refuses non-recovery endings and zero crew | `reason == "recovered" && crew_count >= 1` | `fullHouseValue` |
 | Banned players are invisible on every read surface | **absent from the in-memory directory**, so no handle resolves | PROJ-007 |
 | Banned rows are still counted in `count` / `players` | unfiltered row counts, by design | PROJ-008 |
 | Rank compensates for banned rows ahead | `StatAhead - StatsForPlayers(banned)` | `readapi.go:446-471` |
@@ -3486,12 +3517,13 @@ fold writes. Surfaced as `collection.projected` / `collection.lag` and `projecto
 `projector/rebuild.go:71`. A rebuild builds into `projections.rebuild.db` from seq 0, then atomically
 swaps (the old file is kept as `<path>.old` until reopen succeeds — PROJ-012).
 
-- **Pass 1** (`:139`) applies `StateFolds()` only (`flight_state`, `career`) over the whole log and
+- **Pass 1** (`:139`) applies `StateFolds()` only (`system`, `flight_state`, `career`) over the whole log and
   builds `kia map[flightID][]simT` from `kitten.kia` events carrying a flight and a sim time (`:163`).
   A KIA the mod could not attribute carries no flight and is **not** indexed — there is no key for it
   that is not a guess, and a guess voids an innocent flight's impact record.
 - **Pass 2** (`:170`) uses `stats.NewRefinedBatch(tx, kia, …)`, applies `SecondPassFolds()` (boards +
-  census) against a `flight_state` already complete for all history, and re-renders feed rows.
+  badges + challenges + census) against state rows already complete for all history, and re-renders
+  feed rows.
 - Nothing is broadcast from a rebuild.
 
 Refinement is carried on the `FlightStateReader`: `Refined()` is false incrementally, and `KIANear`
@@ -3555,6 +3587,15 @@ payload, `landings` uses `addCount` so its tie-break is "whoever reached N first
 `softest_landing` uses `putBest`, whose strictly-smaller rule is replay-stable. `landed_bodies` uses `AddBody`'s row-novelty report, so it is
 replay-correct the same way `soi_bodies` is; and the two per-kitten record boards break ties on `kid`
 rather than on Go map order, so a rebuild reproduces the incremental `context` byte for byte.
+
+Badges and challenges add no numbered divergence of their own. A late flag or a later decoder/fold
+changes them under cases 1 or 5 above, and a refined rebuild can therefore remove an earlier badge
+award or challenge contribution. Challenge windows remain deterministic because they use immutable
+`recv_time`; career identifiers are event facts; system slugs and save ordinals use first-sequence
+ordering; playtime is a direct maximum of `sim_t`; and system/catalogue events identify their own
+rows. Pending body and challenge-member sets are read-through caches, so their novelty tests give
+the same answer at every batch size. Adding a badge or challenge fold changes `BuildID`, which makes
+the normal rebuild path replay old in-window history rather than inventing a backfill path.
 
 ---
 
@@ -3627,71 +3668,48 @@ that the code is wrong.**
 
 ### Documents that disagree with the code
 
-1. **Fixed (2026-08-09).** `docs/events.md` said `vehicle.impact.survived` meant "no destruction in
-   the **same frame**". The code holds an impact for **one full frame** — frame *N*'s impact resolves
-   at the end of frame *N+1*, and a destruction in either frame flips the verdict — and the taxonomy
-   table now says so, alongside the note that `vehicle.landed.survived` goes through the same hold.
-2. **`docs/events.md:83` — `other_flight` is typed as a ULID.** It is nullable and `"other_flight":null`
+1. **`docs/events.md:83` — `other_flight` is typed as a ULID.** It is nullable and `"other_flight":null`
    is a legal emitted shape. The Go struct is a plain `string`, so null silently decodes to `""`.
-3. **Fixed.** `docs/events.md`'s envelope comment said `flight` is "null for session/roster
-   events"; `kitten.eva_end` also emits null, `kitten.eva_start` emits non-null, and `kitten.tumble`
-   / `kitten.kia` emit null only when the mod cannot resolve a flight (MOD-073). The comment now
-   reads "null when the event names no flight" and the two conditional cases are spelled out in both
-   documents.
-4. **`docs/events.md:89` — `roster.snapshot` "every 10 min of play".** The 600-second interval is
+2. **`docs/events.md:89` — `roster.snapshot` "every 10 min of play".** The 600-second interval is
    compared against **sim** time, so under time warp snapshots come far more often in wall time. And
    "on session end" means **process unload only**; a save-load boundary emits no closing roster.
-5. **`docs/events.md` — `telemetry.window` "one per vehicle per 30 s".** There are four close
+3. **`docs/events.md` — `telemetry.window` "one per vehicle per 30 s".** There are four close
    paths; three of them produce a short window (`n < 60`). **Now compounded**: under time warp a
    window still spans 30 *sim* seconds but is sampled at 2 Hz *wall*, so `n` can be far below 60 with
    no close-path involved at all. `warp_max` is what says so, and nothing on the site or in
    `events.md` connects the two.
-6. **`docs/events.md:64` — the `situation` list is missing `"unknown"`**, which is emittable. The
+4. **`docs/events.md:64` — the `situation` list is missing `"unknown"`**, which is emittable. The
    server now carries its own copy of the eight real names
    (`stats/situation.go`) and treats everything else, `"unknown"` included, as no surface contact.
-7. **`docs/ingest-api.md:277` — the career-board value is "seconds since the career began".** The
-   fold multiplies by 1000 and the unit string is `"ms"` (PROJ-047). The same stale phrase appears in
-   `store/projections.go:76` and `stats/fold.go:133-134`.
-8. **`docs/ingest-api.md:217-218` — response shapes are missing published fields**: `periods` on the
-   board index, and `title` / `unit` / `period` / `bucket` / `limit` / `offset` on the board page.
-9. **`docs/ARCHITECTURE.md:51-52` and `docs/CONSTITUTION.md:70-72` still claim stat keys are
+5. **`docs/ARCHITECTURE.md:51-52` and `docs/CONSTITUTION.md:70-72` still claim stat keys are
    compile-time constants and enums are allow-lists.** Superseded by PROJ-033 / PROJ-037;
    `docs/integrity-audit.md:54` has already been corrected, these two have not.
-10. **`stats/fold.go:185-186` says `setValue` serves `soi_bodies`.** `soiFold` uses `addCount`
-    (PROJ-011); `setValue` has exactly one caller, `distanceFold`.
-11. **Fixed.** `docs/server.md`'s rebuild section listed three sources of divergence; feed-row handle
-    resolution is a fourth and is now named there, as is the newly-live decoder case.
-12. **Fixed.** `docs/server.md` listed the fixed board keys with no titles or units; it now groups
-    them by fold kind and points here for the canonical table, which is the right split — a full
-    board table in two documents is a table that goes stale in one of them.
 
 ### Behaviour no document states
 
-13. **`kitten.eva_start` can precede its own `flight.started`.** `Patcher.CreateKittenEvaPostfix`
+1. **`kitten.eva_start` can precede its own `flight.started`.** `Patcher.CreateKittenEvaPostfix`
     raises the signal directly, bypassing `Patcher.Track`, and `Tracker.FlightFor` mints. The EVA
     vehicle's `flight.started` arrives at the next 2 Hz tick and reuses the same ULID. This is the
     one exception to the ordering invariant `PolledSignals.cs:70-81` exists to guarantee.
-14. **`VehicleRecoveredSignal` is dead code in the shipped mod** — defined and handled, raised only
+2. **`VehicleRecoveredSignal` is dead code in the shipped mod** — defined and handled, raised only
     by `catlog.sim` and the test suites.
-15. **`"unknown"` is an emittable value for `body`, `situation` and `engine`.** For `body` that means
+3. **`"unknown"` is an emittable value for `body`, `situation` and `engine`.** For `body` that means
     a real `fastest_to_unknown` board once two players hit it.
-16. **`vehicle.rud.peak_g` / `peak_q_pa` are never omitted** — a different quantity from
+4. **`vehicle.rud.peak_g` / `peak_q_pa` are never omitted** — a different quantity from
     `telemetry.window`'s `StructuralLoad`-derived values, and easy to conflate with the
     omit-don't-zero rule.
-17. **`vehicle.impact.speed_ms` means two different things** — closing *normal* speed for a ground
+5. **`vehicle.impact.speed_ms` means two different things** — closing *normal* speed for a ground
     impact, a reconstructed `√(2E/m)` scalar for a splash. Indistinguishable on the wire.
-18. **Session-wide `flight.flagged` replays lose their detail text** — a flight started after the
+6. **Session-wide `flight.flagged` replays lose their detail text** — a flight started after the
     flag gets `"session-wide flag"` instead of the original message.
-19. **`flight.flagged` can mint a flight for a vehicle that has no `flight.started`.** The `console`
+7. **`flight.flagged` can mint a flight for a vehicle that has no `flight.started`.** The `console`
     flag is the realistic case: the terminal argument string is passed as the vehicle id without
     confirming it names a tracked vehicle.
-20. **`flight.ended.crew_count` is `0` on the safety-net path** regardless of who was aboard.
-21. **`kitten.eva_end.duration_s` is `0.0` when `LaunchGameTime` is unreadable.**
-22. **`crew_count` for a `KittenEva` is hard-coded to 1** — consistent with `Vehicle.SeatCount`, but
+8. **`flight.ended.crew_count` is `0` on the safety-net path** regardless of who was aboard.
+9. **`kitten.eva_end.duration_s` is `0.0` when `LaunchGameTime` is unreadable.**
+10. **`crew_count` for a `KittenEva` is hard-coded to 1** — consistent with `Vehicle.SeatCount`, but
     worth stating since crew survival is a scoring input (D11).
-23. **Superseded.** The six types that were stored but read by nothing — `vehicle.atmosphere`, all
-    three `engine.*`, both `kitten.eva_*` — are decoded and folded as of the board expansion, as is
-    `vehicle.situation`. What is left is smaller and deliberate: `vehicle.undocked` and
+11. **Some decoded fields deliberately feed no projection.** `vehicle.undocked` and
     `vehicle.docked.other_flight` fold into nothing; `engine.shutdown` decodes and counts nothing;
     `engine.*.engine` / `.count`, `kitten.eva_*.kid`, `vehicle.situation.orbital_speed_ms`,
     `vehicle.rud.peak_g` / `.peak_q_pa` / `.altitude_m` / `.crew_count`, `roster.snapshot`'s
@@ -3707,36 +3725,14 @@ that the code is wrong.**
     `flight.ended.body` is the one with an obvious consumer — `flight_state.body` still comes only
     from `flight.started`, so a flight whose start was never folded has an empty body although its
     end now carries one. Reading it would be a rebuild-only improvement.
-24. **The conformance vector is not byte-representative of mod output.** It is Go-generated and
-    alphabetises payload keys; the C# mod emits declaration order. Harmless for `bh`, which hashes
-    whatever bytes are actually sent, and no longer unstated — [Conformance
-    coverage](#conformance-coverage) says so, and the payload round-trip test deliberately compares
-    key *sets* rather than order. The divergence itself stands: neither order is normative, and
-    making one of them so would buy nothing.
-25. **`Board.Career` carries a `json:"career"` tag but is exposed in no response struct.** Clients
+12. **`Board.Career` carries a `json:"career"` tag but is exposed in no response struct.** Clients
     infer "career board" from `ascending` + `unit == "ms"` + the presence of `rewound`.
-26. **Fixed (2026-08-09).** The ±2 s KIA window and the `tuning` flag were both inert, because
-    `kitten.tumble` and `kitten.kia` named no flight and neither the rebuild's KIA index nor
-    `scoreable`'s flag gate can act on an event that names one. Both mechanisms passed their tests,
-    which constructed the events *with* a flight the mod did not send — **a guard whose test data is
-    shaped differently from real data is not a guard.** The fix was on the mod side: both events
-    attribute a flight. `batch-001.ndjson` lines 19, 20 and 31 pin that envelope shape cross-language.
-    See MOD-073.
-
-27. **Fixed (2026-08-09).** The conformance vectors covered five types on five lines, so nothing in
-    `contracts/testdata/` pinned the omit-don't-zero rule for `lat` / `lon` / `radar_alt_m` across
-    the two implementations. The fixture set grew again with the final-v1 discriminator pairs and is now 33 lines
-    covering all 25 registered types, and
-    two assertions stop it drifting again: `ver` must equal the registry's current version for the
-    type, and every registered type must appear in a line. See
-    [Conformance coverage](#conformance-coverage) and INGEST-025.
-
-28. **`telemetry.window.warp_max` decodes as `0` when a payload omits it, not as `1`.** The intended
+13. **`telemetry.window.warp_max` decodes as `0` when a payload omits it, not as `1`.** The intended
     default is `1` (a stopped clock is not a legal warp) but the Go zero value for the field is `0`.
     Nothing reads it today, so it is invisible; the first reader must treat `0` as "absent" at the
     read site. Recorded in a comment on the field and in PROJ-098.
 
-29. **`vehicle.landed` emits from a frame boundary, not from `ProcessFrame`.** It is detected on the
+14. **`vehicle.landed` emits from a frame boundary, not from `ProcessFrame`.** It is detected on the
     worker like every other frame-derived event, but its envelope is minted by whichever correlator
     drain settles the verdict, which is one frame later than an impact raised inside the same frame.
     No document other than this one's catalog entry states the asymmetry, and it is the only event

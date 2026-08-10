@@ -4053,3 +4053,20 @@ the headings, add nothing to navigation or next-number selection, and require ev
 decision to edit a distant line. The Contents therefore keeps only each area's link and prefix.
 Audits derive counts and maxima from headings when they need them; the document no longer carries a
 second hand-maintained answer that can silently disagree with its own entries.
+
+### DOCS-010 — The joined event reference keeps structural coverage explicit and removes resolved drift
+
+*Accepted · 2026-08-10 · Task J2.*
+
+`docs/event-details.md` is the joined contract between wire events and every projection consumer,
+so a registry table that names only ordinary feeds must say where badge and challenge consumers are
+specified rather than implying they do not exist. The same audit makes `BodyDerived`, second-pass
+ordering, the full state pass, badge/challenge eligibility and replay-stability constraints explicit:
+these are structural properties that determine whether two implementations produce the same rows,
+not incidental implementation notes.
+
+The Known drift section remains a work list, not a changelog. Resolved and superseded items are
+removed once their owning references are correct, while genuine documented implementation quirks
+remain. This keeps an audit from repeatedly treating completed work as open and makes the remaining
+items actionable. The audit also verified the registries and conformance vectors against code rather
+than changing their already-correct counts, order or hashes.
