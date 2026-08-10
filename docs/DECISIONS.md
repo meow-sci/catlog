@@ -2474,14 +2474,15 @@ ranking it represents.
 
 A save has meaning in the context of the player who owns it: its ordinal and public label are
 deliberately per-player, and the raw career identity never leaves the read API boundary (PROJ-111).
-The two save pages therefore hang from the profile and the profile gains a Saves action, while the
-five-link global navigation stays about collection-wide destinations. A top-level Saves link would
-ask for a global save directory catlog neither exposes nor needs.
+The two save pages therefore hang from the profile and the profile gains a Saves action. A
+top-level Saves link would ask for a global save directory catlog neither exposes nor needs. Its
+original five-link description is superseded by UI-061, which adds the collection-wide Badges
+destination without adding a global save directory.
 
 The list presents the distinct facts available for every save: friendly system when known,
 simulation playtime, first and last activity, and board participation. Unknown system is an em dash
-rather than a synthetic value. Badge space is absent until badge data exists; a zero or empty column
-would turn implementation order into a false player-facing measurement.
+rather than a synthetic value. The original deferral of badge space is superseded by UI-061 now
+that exact per-save award counts exist; the column must show the real count, including a real zero.
 
 Save detail reuses the board/profile value and context cells rather than growing a parallel number
 renderer. That preserves exact raw floats, unit formatting, context display policy and the rewound
@@ -2507,6 +2508,28 @@ for collection-wide destinations while keeping the catalogue discoverable withou
 The raw fingerprint remains content identity rather than personal identity, but the player docs call
 out that a unique custom catalogue can still be recognisable; making that trade explicit is safer
 than implying that non-personal data can never identify context.
+
+### UI-061 — Badges use the existing page grammar and save counts use one grouped read
+
+*Accepted · 2026-08-10 · Task G2.*
+
+Merit badges are a collection-wide destination as well as a profile drill-down, so the catalogue
+gets the sixth header link while player and save badge pages keep their ownership breadcrumbs. The
+four pages consume the same non-HTTP readapi methods as the JSON routes; web does not reconstruct
+visibility, system filtering or private save identity. Badge holder pagination clones the current
+query so a system comparison cannot silently turn back into a global one.
+
+The visual treatment spends no new design vocabulary. Catalogue and checklist entries are the
+existing `.tiles`/`.tile` shape. Earned state uses the established accent as a fill with its
+on-accent foreground, while unearned state uses muted foreground. There is no badge animation,
+icon, raw colour or second card primitive. Fixed UTC times and explicit Save/System links make an
+award comparable; em dashes state missing provenance instead of hiding it in blank UI.
+
+Adding a Badges column to the saves index creates an obvious N+1 trap if the page asks for each
+save's checklist separately. The store therefore provides one grouped per-player career census and
+readapi resolves it to public ordinals before web sees it. This adds a narrow read seam rather than
+letting presentation code touch projections, keeping request cost bounded and the raw career
+identity below the same privacy boundary as every other page.
 
 ---
 

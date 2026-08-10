@@ -7,7 +7,8 @@
   <p id="save-summary">
     {{- with $s.System}}<a href="/systems/{{.Slug}}">{{.Name}}</a>
       {{- if $s.SystemChanged}} <abbr class="system-changed" title="The celestial system this save is in changed. Per-system comparisons before and after are not comparing the same worlds.">&#8225;</abbr><span class="sr-only"> (celestial system changed)</span>{{end}} &#183; {{end -}}
-    played {{numUnit $s.PlaytimeMS "ms"}}
+    played {{numUnit $s.PlaytimeMS "ms"}} &#183;
+    <a id="save-badges" data-value="{{$s.Badges}}" href="{{playerPath $s.Handle}}/saves/{{$s.Save}}/badges">{{num $s.Badges}} badges</a>
   </p>
 </div>
 

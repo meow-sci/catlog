@@ -456,6 +456,29 @@ func (p *Projections) BadgeCounts(ctx context.Context) (map[string]int64, error)
 	return out, rows.Err()
 }
 
+// BadgeCountsByCareer returns one player's per-save award counts in one query.
+// Lifetime rows are excluded. The raw career keys stay inside store/readapi and
+// are resolved to public save ordinals before any caller can serialise them.
+func (p *Projections) BadgeCountsByCareer(ctx context.Context, playerID int64) (map[string]int64, error) {
+	rows, err := p.Reader().QueryContext(ctx,
+		`SELECT career, count(*) FROM badge_award
+		 WHERE player_id = ? AND career <> '' GROUP BY career`, playerID)
+	if err != nil {
+		return nil, fmt.Errorf("store: count badge awards by career for player %d: %w", playerID, err)
+	}
+	defer rows.Close()
+	out := map[string]int64{}
+	for rows.Next() {
+		var career string
+		var n int64
+		if err := rows.Scan(&career, &n); err != nil {
+			return nil, fmt.Errorf("store: scan badge count by career: %w", err)
+		}
+		out[career] = n
+	}
+	return out, rows.Err()
+}
+
 // BadgeHolderCount is the denominator matching [Projections.BadgeHolders].
 func (p *Projections) BadgeHolderCount(ctx context.Context, badge, system string) (int64, error) {
 	query := `SELECT count(*) FROM badge_award WHERE badge = ? AND career = ''`

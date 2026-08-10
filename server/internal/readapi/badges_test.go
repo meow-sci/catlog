@@ -221,6 +221,21 @@ func TestPlayerBadgeChecklistsAndSaveCatalogueCompleteness(t *testing.T) {
 			t.Fatalf("incomplete family key = %s", b.Badge)
 		}
 	}
+	srv, err := readapi.New(readapi.Deps{Projections: live{f.proj}, Events: f.events, Directory: f.dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	viaSeam, found, err := srv.SaveBadges(t.Context(), "pilot", 1)
+	if err != nil || !found || len(viaSeam.Earned) != 2 {
+		t.Fatalf("SaveBadges seam = %+v, found %v, err %v", viaSeam, found, err)
+	}
+	counts, found, err := srv.SaveBadgeCounts(t.Context(), "pilot")
+	if err != nil || !found || counts[1] != 2 || counts[2] != 0 || len(counts) != 2 {
+		t.Fatalf("SaveBadgeCounts = %v, found %v, err %v", counts, found, err)
+	}
+	if _, found, err := srv.SaveBadgeCounts(t.Context(), "missing"); err != nil || found {
+		t.Errorf("missing SaveBadgeCounts found=%v err=%v", found, err)
+	}
 }
 
 func TestPlayerBadge404sAndProjectionFailures(t *testing.T) {

@@ -615,11 +615,15 @@ surface and the pages that document it; `/login` and `/dashboard` need a session
 | `/` | ● | **Where am I and what is happening?** Global tiles, three featured boards, the live feed, a search box, and — if a "me" handle is set — a personal card above the fold |
 | `/boards` | ● | The index. Which boards exist, how populated, which way each reads |
 | `/boards/{stat}` | ● | One board ranked by players, saves or systems, paged, with applicable period controls and my row highlighted |
+| `/badges` | ● | Every published merit badge, grouped in catalogue order with its holder count |
+| `/badges/{badge}` | ● | One badge's first-earned holder ranking, optionally filtered to one celestial system |
 | `/systems` | ● | The systems catlog has recorded, with catalogue size and participation counts |
 | `/systems/{slug}` | ● | One system as a reference catalogue: its home world and the physical/orbital facts for every body |
 | `/p/{handle}` | ● | One player: every placement, every rank *and its denominator*, and a way to start comparing |
+| `/p/{handle}/badges` | ● | One player's earned lifetime badges and fixed-badge checklist |
 | `/p/{handle}/saves` | ● | One player's saves: system, played time, activity bounds and number of boards |
 | `/p/{handle}/saves/{ordinal}` | ● | One save: its system and playtime, then every board placement ranked among saves |
+| `/p/{handle}/saves/{ordinal}/badges` | ● | One save's earned badges and its system-local checklist |
 | `/p/{handle}/events` | ● | **New.** The raw event log for that handle, live-tailed on page one |
 | `/events` | ● | **New.** The whole raw log, every player mixed together — same rows, same redaction, `?type=`/`?handle=` filters, live-tailed on page one |
 | `/compare?handles=a,b,c` | ● | **New.** Up to 8 players side by side across every board any of them is on |
@@ -643,22 +647,20 @@ surface and the pages that document it; `/login` and `/dashboard` need a session
   to the page containing them;
 - `/p/{handle}` says "This is you" rather than "This is me".
 
-The profile button row places **Saves** beside **Compare** and **Raw events**. Saves are subordinate
-to a player's public profile, so neither save route gets a top-level navigation entry; the header
-keeps its existing five links.
+The profile button row places **Saves** and **Badges** beside **Compare** and **Raw events**. Saves
+remain subordinate to a player's public profile. Badges are also a collection-wide catalogue, so
+they add the sixth top-level link between Leaderboards and Compare (`#nav-badges`) and use
+`aria-current="page"` on all four badge pages.
 
 `/p/{handle}/saves` is one `.panel` containing a table headed **Save · System · Played · First
-seen · Last seen · Boards**. Each Save link is the player's first-seen ordinal and opens its detail
+seen · Last seen · Boards · Badges**. Each Save link is the player's first-seen ordinal and opens its detail
 page. System is the friendly name linked to `/systems/{slug}`, never the content hash; a save that
 has not reported a system shows the ordinary no-value glyph `—`, not `NaN`, `0`, blank text or an
 empty link. Played passes `playtime_ms` through `units.Format` as `ms`, so the duration ladder may
 render `37.5 s`, `4d 06h` or another appropriate pair. First seen and Last seen are fixed-UTC
-instants under §4.4, not durations. Boards is the save's board-row count. The empty state is exactly
+instants under §4.4, not durations. Boards is the save's board-row count; Badges is the exact
+per-save award count and links to that save's badge page. The empty state is exactly
 *"No saves recorded yet."*
-
-There is no Badges column, zero badge count or reserved badge space on this page. Badges arrive only
-with the projection that derives them; a placeholder would look like a measured zero when catlog
-does not yet know the answer.
 
 `/p/{handle}/saves/{ordinal}` identifies the page as *"Save 2 · Sol · played 4d 06h"* (omitting the
 system segment when it is unknown) and renders that save's stats as the profile table scoped to one
@@ -667,11 +669,31 @@ denominator are save rows, never players. The table reuses the shared `value-cel
 `context-cell` partials, so §4.4's exact `data-value`, title and unit rendering and §6.1's context
 allow-list remain identical to board and profile rows.
 
+The save summary ends with its badge count linked to `/p/{handle}/saves/{ordinal}/badges`. The saves
+index obtains every count through one grouped read keyed by public save ordinal; it never calls the
+per-save checklist once per row. This keeps a player with many saves at a constant number of
+projection reads and keeps raw career keys below the read API.
+
 The existing rewound dagger and its exact tooltip remain unchanged: *"An earlier save of this
 career was loaded, so its clock did not only run forwards."* A true `system_changed` adds a separate
 mark with the exact tooltip *"The celestial system this save is in changed. Per-system comparisons
 before and after are not comparing the same worlds."* Both qualify the save's provenance; neither
 excludes a row, changes its value or changes its rank.
+
+**Merit badges.** `/badges` preserves the registry's group and badge order. Each entry is a `.tile`
+inside `.tiles`, never a second card primitive, and carries `data-badge` plus a tabular holder count
+with `data-value`. `/badges/{badge}` is the earliest-earned holder table with Rank, Player, Save,
+System, Earned and Detail columns. The optional `?system=<slug-or-hash>` filter is resolved through
+the read API before the page query; pagination clones the query, so the system survives Previous
+and Next links. Save and system values are friendly links, never raw careers or hashes, and either
+missing value is an em dash. Earned times are fixed UTC `<time>` elements.
+
+Player and save badge pages use the same template and separate **Earned** from **Unearned**. Earned
+tiles use `--color-accent` as a fill with `--color-accent-fg` on top; unearned tiles use
+`--color-fg-muted`. No badge introduces a colour, animation, icon or container shape. Every earned
+tile shows linked `Save N · System name`; an unknown save or system is an em dash, never a blank
+chip. The empty earned state is exactly *"No badges yet. Fly something."* Numbers and timestamps
+carry `data-value`; earned times render `YYYY-MM-DD HH:MM UTC`.
 
 **B — "see global stats for all."** `/` opens with global tiles, then the featured boards,
 then the feed. The **period selector** on `/boards/{stat}` —

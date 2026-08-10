@@ -14,6 +14,7 @@
         <th scope="col">First seen</th>
         <th scope="col">Last seen</th>
         <th scope="col" class="value">Boards</th>
+        <th scope="col" class="value">Badges</th>
       </tr>
     </thead>
     <tbody>
@@ -25,9 +26,10 @@
         <td class="when"><time datetime="{{iso .First}}">{{datetime .First}}</time></td>
         <td class="when"><time datetime="{{iso .Last}}">{{datetime .Last}}</time></td>
         <td class="value" data-value="{{.Boards}}">{{num .Boards}}</td>
+        <td class="value" data-value="{{.Badges}}"><a href="{{playerPath $s.Handle}}/saves/{{.Save}}/badges">{{num .Badges}}</a></td>
       </tr>
       {{- else}}
-      <tr id="saves-empty"><td colspan="6">No saves recorded yet.</td></tr>
+      <tr id="saves-empty"><td colspan="7">No saves recorded yet.</td></tr>
       {{- end}}
     </tbody>
   </table>

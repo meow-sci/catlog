@@ -22,6 +22,7 @@ func badgeProjections(t *testing.T) *store.Projections {
 		{1, "", "first_flight", "sys-a", "save-a", 5, 1005, nil, nil},
 		{1, "", "orbit", "sys-a", "save-a", 10, 1010, nil, nil},
 		{1, "save-a", "orbit", "sys-a", "", 10, 1010, 10.5, `{"body":"A"}`},
+		{1, "save-a", "first_flight", "sys-a", "", 11, 1011, 11.5, nil},
 		// Player 1 earned the same badge later in sys-b. Equal sequences pin the
 		// raw-career tie-break used to select one deterministic save.
 		{1, "z-save", "orbit", "sys-b", "", 20, 1020, 20.5, `{"body":"late"}`},
@@ -146,6 +147,26 @@ func TestBadgeCountsUsesLifetimeRowsOnly(t *testing.T) {
 	}
 	if _, ok := counts["save_only"]; ok {
 		t.Error("per-save-only badge entered the lifetime census")
+	}
+}
+
+func TestBadgeCountsByCareerIsOnePlayerPerSaveCensus(t *testing.T) {
+	p := badgeProjections(t)
+	counts, err := p.BadgeCountsByCareer(t.Context(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]int64{"save-a": 2, "a-save": 1, "z-save": 1}
+	if len(counts) != len(want) {
+		t.Fatalf("career badge counts = %v, want %v", counts, want)
+	}
+	for career, n := range want {
+		if counts[career] != n {
+			t.Errorf("career %q count = %d, want %d", career, counts[career], n)
+		}
+	}
+	if missing, err := p.BadgeCountsByCareer(t.Context(), 99); err != nil || len(missing) != 0 {
+		t.Errorf("missing player counts = %v, err %v", missing, err)
 	}
 }
 

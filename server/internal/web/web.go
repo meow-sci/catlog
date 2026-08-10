@@ -70,6 +70,8 @@ const BoardRows = 100
 // relabelled in. Widen it deliberately; do not bypass it.
 type Read interface {
 	BoardList(ctx context.Context) (readapi.BoardsResponse, error)
+	BadgeList(ctx context.Context) (readapi.BadgesResponse, error)
+	Badge(ctx context.Context, badge string, system *readapi.SystemRef, limit, offset int) (readapi.BadgeResponse, bool, error)
 	// Board takes the window as well as the page. `/boards/{stat}` now offers a
 	// period selector, so this site passes through whatever `?period=` named
 	// rather than always asking for `alltime`.
@@ -86,6 +88,9 @@ type Read interface {
 	// those pages cannot be tempted to query projections directly.
 	Saves(ctx context.Context, handle string) (readapi.SavesResponse, bool, error)
 	Save(ctx context.Context, handle string, ordinal int64) (readapi.SaveResponse, bool, error)
+	PlayerBadges(ctx context.Context, handle string) (readapi.PlayerBadgesResponse, bool, error)
+	SaveBadges(ctx context.Context, handle string, ordinal int64) (readapi.PlayerBadgesResponse, bool, error)
+	SaveBadgeCounts(ctx context.Context, handle string) (map[int64]int64, bool, error)
 	// PlayerEvents is the raw log behind `/p/{handle}/events`.
 	PlayerEvents(ctx context.Context, handle, typ string, before int64, limit int) (readapi.EventsResponse, bool, error)
 	// GlobalEvents is the whole log's newest page, every player mixed together —
@@ -198,11 +203,15 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /{$}", s.handleHome)
 	mux.HandleFunc("GET /boards", s.handleBoards)
 	mux.HandleFunc("GET /boards/{stat}", s.handleBoard)
+	mux.HandleFunc("GET /badges", s.handleBadges)
+	mux.HandleFunc("GET /badges/{badge}", s.handleBadge)
 	mux.HandleFunc("GET /systems", s.handleSystems)
 	mux.HandleFunc("GET /systems/{slug}", s.handleSystem)
 	mux.HandleFunc("GET /p/{handle}", s.handleProfile)
+	mux.HandleFunc("GET /p/{handle}/badges", s.handlePlayerBadges)
 	mux.HandleFunc("GET /p/{handle}/saves", s.handleSaves)
 	mux.HandleFunc("GET /p/{handle}/saves/{ordinal}", s.handleSave)
+	mux.HandleFunc("GET /p/{handle}/saves/{ordinal}/badges", s.handleSaveBadges)
 	mux.HandleFunc("GET /p/{handle}/events", s.handlePlayerEvents)
 	mux.HandleFunc("GET /events", s.handleEvents)
 	mux.HandleFunc("GET /stats", s.handleStats)

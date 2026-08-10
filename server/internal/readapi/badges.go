@@ -246,6 +246,43 @@ func (s *Server) PlayerBadges(ctx context.Context, handle string) (PlayerBadgesR
 	return s.playerBadges(ctx, entry.PlayerID, entry.Handle, 0)
 }
 
+// SaveBadges is the exact-save checklist seam shared by the JSON and HTML
+// handlers. Resolving the public handle and ordinal here keeps web out of store
+// and preserves the read API's indistinguishable player failures.
+func (s *Server) SaveBadges(ctx context.Context, handle string, ordinal int64) (PlayerBadgesResponse, bool, error) {
+	entry, ok := s.deps.Directory.Lookup(handle)
+	if !ok || ordinal < 1 {
+		return PlayerBadgesResponse{}, false, nil
+	}
+	return s.playerBadges(ctx, entry.PlayerID, entry.Handle, ordinal)
+}
+
+// SaveBadgeCounts resolves all of one player's per-save counts with one
+// grouped badge query. It exists for the HTML saves index: calling SaveBadges
+// once per row would turn a profile with N saves into N projection reads.
+func (s *Server) SaveBadgeCounts(ctx context.Context, handle string) (map[int64]int64, bool, error) {
+	entry, ok := s.deps.Directory.Lookup(handle)
+	if !ok {
+		return nil, false, nil
+	}
+	out := map[int64]int64{}
+	err := s.deps.Projections.With(func(p *store.Projections) error {
+		careers, err := p.PlayerCareers(ctx, entry.PlayerID)
+		if err != nil {
+			return err
+		}
+		counts, err := p.BadgeCountsByCareer(ctx, entry.PlayerID)
+		if err != nil {
+			return err
+		}
+		for _, career := range careers {
+			out[career.Ordinal] = counts[career.Career]
+		}
+		return nil
+	})
+	return out, true, err
+}
+
 func (s *Server) playerBadges(ctx context.Context, playerID int64, handle string, ordinal int64) (PlayerBadgesResponse, bool, error) {
 	var (
 		career store.CareerRow

@@ -31,6 +31,11 @@ import (
 type fakeRead struct {
 	boards        readapi.BoardsResponse
 	board         map[string]readapi.BoardResponse
+	badges        readapi.BadgesResponse
+	badge         map[string]readapi.BadgeResponse
+	playerBadges  map[string]readapi.PlayerBadgesResponse
+	saveBadges    map[string]readapi.PlayerBadgesResponse
+	badgeCounts   map[string]map[int64]int64
 	system        map[string]readapi.SystemRef
 	systems       readapi.SystemsResponse
 	systemDetails map[string]readapi.SystemDetail
@@ -51,10 +56,34 @@ type fakeRead struct {
 	lastPeriod, lastBucket, lastScope, lastSystem string
 	lastLimit, lastOffset                         int
 	lastSystemKey                                 string
+	lastBadgeSystem                               *readapi.SystemRef
+	lastBadgeLimit, lastBadgeOffset               int
 }
 
 func (f *fakeRead) BoardList(context.Context) (readapi.BoardsResponse, error) {
 	return f.boards, f.err
+}
+
+func (f *fakeRead) BadgeList(context.Context) (readapi.BadgesResponse, error) {
+	return f.badges, f.err
+}
+
+func (f *fakeRead) Badge(_ context.Context, badge string, system *readapi.SystemRef, limit, offset int) (readapi.BadgeResponse, bool, error) {
+	f.lastBadgeSystem, f.lastBadgeLimit, f.lastBadgeOffset = system, limit, offset
+	if f.err != nil {
+		return readapi.BadgeResponse{}, true, f.err
+	}
+	out, ok := f.badge[badge]
+	if !ok {
+		return readapi.BadgeResponse{}, false, nil
+	}
+	out.Limit, out.Offset = limit, offset
+	if offset > 0 {
+		out.Rows = nil
+	} else if len(out.Rows) > limit {
+		out.Rows = out.Rows[:limit]
+	}
+	return out, true, nil
 }
 
 func (f *fakeRead) Board(_ context.Context, stat, period, bucket, scope, system string, limit, offset int) (readapi.BoardResponse, bool, error) {
@@ -124,6 +153,30 @@ func (f *fakeRead) Save(_ context.Context, handle string, ordinal int64) (readap
 		return readapi.SaveResponse{}, true, f.err
 	}
 	out, ok := f.save[handle+"/"+strconv.FormatInt(ordinal, 10)]
+	return out, ok, nil
+}
+
+func (f *fakeRead) PlayerBadges(_ context.Context, handle string) (readapi.PlayerBadgesResponse, bool, error) {
+	if f.err != nil {
+		return readapi.PlayerBadgesResponse{}, true, f.err
+	}
+	out, ok := f.playerBadges[handle]
+	return out, ok, nil
+}
+
+func (f *fakeRead) SaveBadges(_ context.Context, handle string, ordinal int64) (readapi.PlayerBadgesResponse, bool, error) {
+	if f.err != nil {
+		return readapi.PlayerBadgesResponse{}, true, f.err
+	}
+	out, ok := f.saveBadges[handle+"/"+strconv.FormatInt(ordinal, 10)]
+	return out, ok, nil
+}
+
+func (f *fakeRead) SaveBadgeCounts(_ context.Context, handle string) (map[int64]int64, bool, error) {
+	if f.err != nil {
+		return nil, true, f.err
+	}
+	out, ok := f.badgeCounts[handle]
 	return out, ok, nil
 }
 
@@ -326,6 +379,15 @@ func newFixture(t *testing.T) *fixture {
 			{Stat: "fastest_to_zephyria", Title: "Fastest to Zephyria", Unit: "s", Ascending: true, Count: 2},
 		}},
 		board: map[string]readapi.BoardResponse{},
+		badges: readapi.BadgesResponse{MinPlayers: 2, Badges: []readapi.BadgeSummary{
+			{Badge: stats.BadgeFirstFlight, Title: "Off The Pad", Blurb: "Your first flight.", Group: "first-steps", Holders: 2},
+			{Badge: stats.BadgeFirstOrbit, Title: "Around We Go", Blurb: "You made orbit.", Group: "first-steps", Holders: 1},
+			{Badge: "orbited_luna", Title: "Orbited Luna", Blurb: "You made orbit around Luna.", Group: "exploration", Holders: 2},
+		}},
+		badge:        map[string]readapi.BadgeResponse{},
+		playerBadges: map[string]readapi.PlayerBadgesResponse{},
+		saveBadges:   map[string]readapi.PlayerBadgesResponse{},
+		badgeCounts:  map[string]map[int64]int64{},
 		system: map[string]readapi.SystemRef{
 			"solar-system": {Hash: "hash-sol", Name: "Solar System", Slug: "solar-system"},
 			"hash-sol":     {Hash: "hash-sol", Name: "Solar System", Slug: "solar-system"},
@@ -458,6 +520,40 @@ func newFixture(t *testing.T) *fixture {
 			Rank: 8, Entrants: 20, Updated: 1767398700000,
 		}},
 	}
+	read.badge[stats.BadgeFirstFlight] = readapi.BadgeResponse{
+		Badge: stats.BadgeFirstFlight, Title: "Off The Pad", Blurb: "Your first flight.", Group: "first-steps", Holders: 2,
+		Rows: []readapi.BadgeHolderRow{
+			{Rank: 1, Handle: "demo_crasher", Save: 1, SaveID: "save-label-one", System: &sol, Earned: 1786113120000,
+				Context: json.RawMessage(`{"body":"duna"}`)},
+			{Rank: 2, Handle: "demo_ace", Save: 2, SaveID: "save-label-ace", Earned: 1786113180000},
+		},
+	}
+	read.playerBadges["demo_crasher"] = readapi.PlayerBadgesResponse{
+		Handle: "demo_crasher",
+		Earned: []readapi.BadgeAward{{
+			Badge: stats.BadgeFirstFlight, Title: "Off The Pad", Blurb: "Your first flight.", Group: "first-steps",
+			Save: 1, SaveID: "save-label-one", System: &sol, Earned: 1786113120000,
+		}},
+		Unearned: []readapi.BadgeSummary{{
+			Badge: stats.BadgeFirstOrbit, Title: "Around We Go", Blurb: "You made orbit.", Group: "first-steps", Holders: 1,
+		}},
+	}
+	read.playerBadges["demo_ace"] = readapi.PlayerBadgesResponse{
+		Handle: "demo_ace", Earned: []readapi.BadgeAward{}, Unearned: []readapi.BadgeSummary{},
+	}
+	read.saveBadges["demo_crasher/1"] = readapi.PlayerBadgesResponse{
+		Handle: "demo_crasher",
+		Earned: []readapi.BadgeAward{
+			{Badge: stats.BadgeFirstFlight, Title: "Off The Pad", Blurb: "Your first flight.", Group: "first-steps", Save: 1, SaveID: "save-label-one", System: &sol, Earned: 1786113120000},
+			{Badge: "reached_duna", Title: "Reached Duna", Blurb: "You reached Duna.", Group: "exploration", Save: 1, SaveID: "save-label-one", System: &sol, Earned: 1786116720000},
+		},
+		Unearned: []readapi.BadgeSummary{{Badge: stats.BadgeFirstOrbit, Title: "Around We Go", Blurb: "You made orbit.", Group: "first-steps", Holders: 1}},
+	}
+	read.saveBadges["demo_crasher/2"] = readapi.PlayerBadgesResponse{
+		Handle: "demo_crasher", Earned: []readapi.BadgeAward{}, Unearned: []readapi.BadgeSummary{},
+	}
+	read.badgeCounts["demo_crasher"] = map[int64]int64{1: 2, 2: 0}
+	read.badgeCounts["demo_ace"] = map[int64]int64{}
 
 	accounts := &fakeAccounts{}
 	broadcaster := projector.NewBroadcaster()
@@ -551,6 +647,11 @@ func TestEveryPageRenders(t *testing.T) {
 		{"/boards/no_such_board", 404, []string{`id="not-found"`}},
 		{"/boards/biggest_lithobrake_survived?period=nope", 400, []string{`id="not-found"`}},
 		{"/p/demo_crasher", 200, []string{`id="profile-handle"`, `data-stat="biggest_lithobrake_survived"`, "#1"}},
+		{"/badges", 200, []string{`id="badges-catalogue"`, `data-badge="first_flight"`, `data-badge="orbited_luna"`}},
+		{"/badges/first_flight", 200, []string{`id="badge-title"`, `id="badge-holders"`, `data-handle="demo_crasher"`}},
+		{"/badges/no_such_badge", 404, []string{`id="not-found"`}},
+		{"/p/demo_crasher/badges", 200, []string{`id="player-badges-title"`, `id="earned-badges"`, `id="unearned-badges"`}},
+		{"/p/demo_crasher/saves/1/badges", 200, []string{`id="player-badges-title"`, `data-save="1"`, `data-badge="reached_duna"`}},
 		{"/p/nobody", 404, []string{`id="not-found"`}},
 		{"/p/demo_crasher/saves", 200, []string{`id="saves-table"`, `data-save="1"`, "Save 2"}},
 		{"/p/demo_crasher/saves/1", 200, []string{`id="save-title"`, `id="save-stats"`, "#3"}},
@@ -949,6 +1050,7 @@ func TestSavesPageRendersExactColumnsRowsAndEmptyState(t *testing.T) {
 		`<th scope="col">First seen</th>`,
 		`<th scope="col">Last seen</th>`,
 		`<th scope="col" class="value">Boards</th>`,
+		`<th scope="col" class="value">Badges</th>`,
 		`href="/p/demo_crasher/saves/1">Save 1</a>`,
 		`href="/systems/solar-system">Solar System</a>`,
 		`data-value="367200000" title="367200000 ms">4d 06h`,
@@ -957,15 +1059,12 @@ func TestSavesPageRendersExactColumnsRowsAndEmptyState(t *testing.T) {
 		`<td class="system">&#8212;</td>`,
 		`data-value="313000" title="313000 ms">5m 13s`,
 		`data-value="7"`,
+		`data-value="2"><a href="/p/demo_crasher/saves/1/badges"`,
 	} {
 		mustContain(t, body, want, "saves list")
 	}
-	if strings.Contains(strings.ToLower(body), "badge") {
-		t.Error("saves list rendered a badge placeholder")
-	}
-
 	empty := f.get(t, "/p/demo_ace/saves").Body.String()
-	mustContain(t, empty, `<tr id="saves-empty"><td colspan="6">No saves recorded yet.</td></tr>`, "empty saves")
+	mustContain(t, empty, `<tr id="saves-empty"><td colspan="7">No saves recorded yet.</td></tr>`, "empty saves")
 }
 
 func TestSavePageRendersScopedStatsAndProvenanceMarks(t *testing.T) {
@@ -975,6 +1074,7 @@ func TestSavePageRendersScopedStatsAndProvenanceMarks(t *testing.T) {
 		`id="save-title" data-handle="demo_crasher" data-save="1">Save 1</h1>`,
 		`href="/systems/solar-system">Solar System</a>`,
 		`played 4d 06h`,
+		`id="save-badges" data-value="2" href="/p/demo_crasher/saves/1/badges"`,
 		`#3 of <span class="n" data-n="41" data-d="0">41</span> saves on <a href="/boards/landings?scope=career">Landings</a>`,
 		`data-stat="landings" data-rank="3" data-ascending="false"`,
 		`data-value="12.5" title="12.5 landings"`,
@@ -1023,11 +1123,164 @@ func TestSaveRoutesCacheSuccessAndReturnHonest404sAnd500s(t *testing.T) {
 	}
 }
 
-func TestProfileLinksToSavesWithoutAddingATopNavigationEntry(t *testing.T) {
+func TestProfileLinksToSavesAndBadgesWithOnlyBadgesInTopNavigation(t *testing.T) {
 	f := newFixture(t)
 	body := f.get(t, "/p/demo_crasher").Body.String()
 	mustContain(t, body, `<a class="button secondary" id="profile-saves" href="/p/demo_crasher/saves">Saves</a>`, "profile saves button")
+	mustContain(t, body, `<a class="button secondary" id="profile-badges" href="/p/demo_crasher/badges">Badges</a>`, "profile badges button")
 	mustNotContain(t, body, `id="nav-saves"`, "top navigation")
+	mustContain(t, body, `id="nav-badges"`, "top navigation")
+}
+
+func TestBadgeCatalogueGroupsTilesAndExactHolderCounts(t *testing.T) {
+	f := newFixture(t)
+	body := f.get(t, "/badges").Body.String()
+	for _, want := range []string{
+		`id="nav-badges" aria-current="page"`,
+		`id="badges-catalogue" data-min-players="2"`,
+		`class="badge-group" data-group="first-steps"`,
+		`class="badge-group" data-group="exploration"`,
+		`class="tile badge-tile" data-badge="first_flight"`,
+		`href="/badges/orbited_luna">Orbited Luna</a>`,
+		`class="badge-count tnum" data-value="2">Held by`,
+	} {
+		mustContain(t, body, want, "badge catalogue")
+	}
+	if first := strings.Index(body, `data-group="first-steps"`); first < 0 || first > strings.Index(body, `data-group="exploration"`) {
+		t.Fatal("badge groups did not preserve catalogue order")
+	}
+	for _, forbidden := range []string{`class="card`, `#2cfa1f`, `raw-sol-hash`, `save-label-one`} {
+		mustNotContain(t, body, forbidden, "badge catalogue")
+	}
+}
+
+func TestBadgeHolderPageRendersRanksSaveSystemDatesAndPreservesFilter(t *testing.T) {
+	f := newFixture(t)
+	body := f.get(t, "/badges/first_flight").Body.String()
+	if f.read.lastBadgeLimit != readapi.DefaultLimit || f.read.lastBadgeOffset != 0 {
+		t.Fatalf("default badge paging = limit %d offset %d", f.read.lastBadgeLimit, f.read.lastBadgeOffset)
+	}
+	for _, want := range []string{
+		`id="badge-title" data-badge="first_flight">Off The Pad</h1>`,
+		`<th scope="col" class="system">System</th>`,
+		`data-rank="1" data-handle="demo_crasher"`,
+		`class="rank tnum" data-value="1">#1</td>`,
+		`data-value="1" href="/p/demo_crasher/saves/1">Save 1</a>`,
+		`href="/systems/solar-system">Solar System</a>`,
+		`data-value="1786113120000"><time datetime="2026-08-07T14:32:00Z">2026-08-07 14:32 UTC</time>`,
+		`data-handle="demo_ace"`,
+		`<td class="system">&#8212;</td>`,
+	} {
+		mustContain(t, body, want, "badge holders")
+	}
+	for _, forbidden := range []string{"hash-sol", "save-label-one"} {
+		mustNotContain(t, body, forbidden, "badge holders")
+	}
+
+	filtered := f.get(t, "/badges/first_flight?system=solar-system&limit=1").Body.String()
+	if f.read.lastBadgeSystem == nil || f.read.lastBadgeSystem.Hash != "hash-sol" || f.read.lastBadgeLimit != 1 {
+		t.Fatalf("badge read filter = system %+v limit %d", f.read.lastBadgeSystem, f.read.lastBadgeLimit)
+	}
+	for _, want := range []string{
+		`id="badge-system-filter">Showing awards in <a href="/systems/solar-system">Solar System</a>.`,
+		`href="/badges/first_flight?limit=1&amp;offset=1&amp;system=solar-system" id="badge-next"`,
+		`href="/badges/first_flight?limit=1">Show every system</a>`,
+	} {
+		mustContain(t, filtered, want, "filtered badge holder page")
+	}
+
+	f.get(t, "/badges/first_flight?system=hash-sol&limit=999&offset=-4")
+	if f.read.lastBadgeSystem == nil || f.read.lastBadgeSystem.Hash != "hash-sol" ||
+		f.read.lastBadgeLimit != readapi.MaxLimit || f.read.lastBadgeOffset != 0 {
+		t.Fatalf("clamped hash badge read = system %+v limit %d offset %d",
+			f.read.lastBadgeSystem, f.read.lastBadgeLimit, f.read.lastBadgeOffset)
+	}
+}
+
+func TestPlayerBadgePagesSeparateEarnedUnearnedAndShowProvenance(t *testing.T) {
+	f := newFixture(t)
+	body := f.get(t, "/p/demo_crasher/badges").Body.String()
+	for _, want := range []string{
+		`class="tile badge-tile badge-earned" data-badge="first_flight"`,
+		`class="tile badge-tile badge-unearned" data-badge="first_orbit"`,
+		`data-value="1" href="/p/demo_crasher/saves/1">Save 1</a>`,
+		`href="/systems/solar-system">Solar System</a>`,
+		`data-value="1786113120000" datetime="2026-08-07T14:32:00Z">2026-08-07 14:32 UTC</time>`,
+	} {
+		mustContain(t, body, want, "player badges")
+	}
+	for _, forbidden := range []string{"hash-sol", "save-label-one"} {
+		mustNotContain(t, body, forbidden, "player badges")
+	}
+
+	save := f.get(t, "/p/demo_crasher/saves/1/badges").Body.String()
+	for _, want := range []string{
+		`id="player-badges-title" data-handle="demo_crasher" data-save="1">Save 1 badges</h1>`,
+		`data-badge="first_flight"`, `data-badge="reached_duna"`,
+		`href="/p/demo_crasher/saves/1">Save 1</a>`,
+	} {
+		mustContain(t, save, want, "save badges")
+	}
+
+	empty := f.get(t, "/p/demo_ace/badges").Body.String()
+	mustContain(t, empty, `<p id="earned-badges-empty">No badges yet. Fly something.</p>`, "empty player badges")
+}
+
+func TestBadgeRoutesValidationCachingErrorsAndNavigation(t *testing.T) {
+	f := newFixture(t)
+	for _, path := range []string{
+		"/badges", "/badges/first_flight", "/p/demo_crasher/badges", "/p/demo_crasher/saves/1/badges",
+	} {
+		rec := f.get(t, path)
+		if rec.Code != http.StatusOK || rec.Header().Get("Cache-Control") != readapi.CacheControl {
+			t.Errorf("GET %s = %d, cache %q", path, rec.Code, rec.Header().Get("Cache-Control"))
+		}
+		body := rec.Body.String()
+		start := strings.Index(body, `<nav id="site-nav"`)
+		if start < 0 {
+			t.Errorf("GET %s did not render site navigation", path)
+			continue
+		}
+		end := strings.Index(body[start:], `</nav>`)
+		if end < 0 {
+			t.Errorf("GET %s did not close site navigation", path)
+			continue
+		}
+		nav := body[start : start+end]
+		if got := strings.Count(nav, `<a href=`); got != 6 {
+			t.Errorf("GET %s navigation links = %d, want 6", path, got)
+		}
+		for _, id := range []string{"nav-boards", "nav-badges", "nav-compare", "nav-events", "nav-stats", "nav-docs"} {
+			if strings.Count(nav, `id="`+id+`"`) != 1 {
+				t.Errorf("GET %s navigation does not contain %s exactly once", path, id)
+			}
+		}
+	}
+	for _, path := range []string{
+		"/badges/missing", "/badges/first_flight?system=missing", "/p/nobody/badges",
+		"/p/nobody/saves/1/badges", "/p/demo_crasher/saves/99/badges", "/p/demo_crasher/saves/no/badges",
+	} {
+		rec := f.get(t, path)
+		if rec.Code != http.StatusNotFound || rec.Header().Get("Cache-Control") != "no-store" {
+			t.Errorf("GET %s = %d, cache %q", path, rec.Code, rec.Header().Get("Cache-Control"))
+		}
+	}
+	for _, path := range []string{"/badges/first_flight?limit=no", "/badges/first_flight?offset=no"} {
+		rec := f.get(t, path)
+		if rec.Code != http.StatusBadRequest || rec.Header().Get("Cache-Control") != "no-store" {
+			t.Errorf("GET %s = %d, cache %q", path, rec.Code, rec.Header().Get("Cache-Control"))
+		}
+	}
+	f.read.err = errors.New("projections are unreadable")
+	for _, path := range []string{
+		"/badges", "/badges/first_flight", "/p/demo_crasher/badges", "/p/demo_crasher/saves/1/badges",
+		"/p/demo_crasher/saves", "/p/demo_crasher/saves/1",
+	} {
+		rec := f.get(t, path)
+		if rec.Code != http.StatusInternalServerError || rec.Header().Get("Cache-Control") != "no-store" {
+			t.Errorf("GET %s error = %d, cache %q", path, rec.Code, rec.Header().Get("Cache-Control"))
+		}
+	}
 }
 
 // The comparison marks the best cell from the board's published direction. It

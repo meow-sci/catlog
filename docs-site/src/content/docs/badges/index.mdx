@@ -11,10 +11,10 @@ Merit badges are once-only recognitions for things that happened in your recorde
 not scores or levels, and earning one does not make a leaderboard value larger. The [full
 catalogue](/catlog/badges/catalog/) gives the event and eligibility rule behind every badge.
 
-<Aside type="note" title="Awards are public as JSON">
-  Anyone can look at anyone else's badge awards, just as they can look at a leaderboard row. The
-  four public badge endpoints are available now; the corresponding player-facing website pages are
-  not built yet.
+<Aside type="note" title="Awards are public">
+  Anyone can look at anyone else's badge awards, just as they can look at a leaderboard row. There
+  are visitor pages for the badge catalogue, each badge's holders, a player's lifetime badges and
+  each save's badges. The same four views are also public as JSON.
 </Aside>
 
 Thirty-five badges have fixed names. Three more are families whose place name comes from the game,
@@ -39,6 +39,13 @@ For a lifetime recognition, catlog also remembers which save and celestial syste
 in the current result. A per-save recognition already belongs to that save and keeps its system
 alongside it. The time attached to either comes from when the catlog server received the event; a
 career-clock time is kept only when the event had one.
+
+## Where to see badge awards
+
+The visitor-facing [badge catalogue](https://catlog.science.fail/badges) links to each badge's holder
+page. A player's profile links to their lifetime badges and to the badges for each numbered save.
+Those pages use `/p/{handle}/badges` and `/p/{handle}/saves/{number}/badges`; they show the public
+save number and system beside each award without exposing the save identity sent by the mod.
 
 ## What the public badge API shows
 

@@ -444,6 +444,173 @@ func boardURL(stat string, values url.Values) string {
 	return path
 }
 
+// --- merit badges ------------------------------------------------------------
+
+const BadgeRows = readapi.DefaultLimit
+
+type badgeGroup struct {
+	Key, Title string
+	Badges     []readapi.BadgeSummary
+}
+
+var badgeGroupTitles = map[string]string{
+	"first-steps": "First steps",
+	"flight":      "Flight",
+	"survival":    "Survival",
+	"exploration": "Exploration",
+	"kittens":     "Kittens",
+}
+
+type badgesData struct {
+	MinPlayers int
+	Groups     []badgeGroup
+}
+
+func (s *Server) handleBadges(w http.ResponseWriter, r *http.Request) {
+	out, err := s.deps.Read.BadgeList(r.Context())
+	if err != nil {
+		s.serverError(w, r, err, "read the badge catalogue")
+		return
+	}
+	data := badgesData{MinPlayers: out.MinPlayers}
+	for _, badge := range out.Badges {
+		if len(data.Groups) == 0 || data.Groups[len(data.Groups)-1].Key != badge.Group {
+			data.Groups = append(data.Groups, badgeGroup{Key: badge.Group, Title: badgeGroupTitles[badge.Group]})
+		}
+		group := &data.Groups[len(data.Groups)-1]
+		group.Badges = append(group.Badges, badge)
+	}
+	s.render(w, r, http.StatusOK, "badges", publicCache, page{
+		Title: "Merit badges — catlog", Nav: "badges", Data: data,
+	})
+}
+
+type badgeData struct {
+	readapi.BadgeResponse
+	System           *readapi.SystemRef
+	HasMore          bool
+	PrevURL, NextURL string
+	AllSystemsURL    string
+	FirstRank        int
+	LastRank         int
+}
+
+func badgeURL(key string, values url.Values) string {
+	path := "/badges/" + key
+	if encoded := values.Encode(); encoded != "" {
+		return path + "?" + encoded
+	}
+	return path
+}
+
+func (s *Server) handleBadge(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query()
+	limit, ok := webIntParam(query, "limit", BadgeRows)
+	if !ok {
+		s.badRequest(w, r, "Limit must be an integer.")
+		return
+	}
+	offset, ok := webIntParam(query, "offset", 0)
+	if !ok {
+		s.badRequest(w, r, "Offset must be an integer.")
+		return
+	}
+	limit, offset = readapi.ClampPaging(limit, offset)
+	var system *readapi.SystemRef
+	if key := query.Get("system"); key != "" {
+		ref, found, err := s.deps.Read.ResolveSystem(r.Context(), key)
+		if err != nil {
+			s.serverError(w, r, err, "resolve the celestial system")
+			return
+		}
+		if !found {
+			s.notFound(w, r, "catlog has never seen a system by that name.")
+			return
+		}
+		system = &ref
+	}
+	badge, known, err := s.deps.Read.Badge(r.Context(), r.PathValue("badge"), system, limit, offset)
+	switch {
+	case err != nil:
+		s.serverError(w, r, err, "read the badge holders")
+		return
+	case !known:
+		s.notFound(w, r, "No such badge.")
+		return
+	}
+
+	base := cloneValues(query)
+	if _, present := query["limit"]; present {
+		base.Set("limit", strconv.Itoa(limit))
+	}
+	if offset == 0 {
+		base.Del("offset")
+	} else {
+		base.Set("offset", strconv.Itoa(offset))
+	}
+	prev := cloneValues(base)
+	if n := max(offset-limit, 0); n == 0 {
+		prev.Del("offset")
+	} else {
+		prev.Set("offset", strconv.Itoa(n))
+	}
+	next := cloneValues(base)
+	next.Set("offset", strconv.Itoa(offset+limit))
+	allSystems := cloneValues(base)
+	allSystems.Del("system")
+	allSystems.Del("offset")
+	data := badgeData{
+		BadgeResponse: badge, System: system, HasMore: len(badge.Rows) >= badge.Limit,
+		PrevURL: badgeURL(badge.Badge, prev), NextURL: badgeURL(badge.Badge, next),
+		AllSystemsURL: badgeURL(badge.Badge, allSystems),
+		FirstRank:     badge.Offset + 1, LastRank: badge.Offset + len(badge.Rows),
+	}
+	s.render(w, r, http.StatusOK, "badge", publicCache, page{
+		Title: badge.Title + " — catlog", Nav: "badges", Data: data,
+	})
+}
+
+type playerBadgesData struct {
+	readapi.PlayerBadgesResponse
+	Save int64
+}
+
+func (s *Server) handlePlayerBadges(w http.ResponseWriter, r *http.Request) {
+	out, known, err := s.deps.Read.PlayerBadges(r.Context(), r.PathValue("handle"))
+	switch {
+	case err != nil:
+		s.serverError(w, r, err, "read the player's badges")
+		return
+	case !known:
+		s.notFound(w, r, "No such player.")
+		return
+	}
+	s.render(w, r, http.StatusOK, "player_badges", publicCache, page{
+		Title: out.Handle + "'s badges — catlog", Nav: "badges", Data: playerBadgesData{PlayerBadgesResponse: out},
+	})
+}
+
+func (s *Server) handleSaveBadges(w http.ResponseWriter, r *http.Request) {
+	ordinal, err := strconv.ParseInt(r.PathValue("ordinal"), 10, 64)
+	if err != nil || ordinal < 1 {
+		s.notFound(w, r, "No such save.")
+		return
+	}
+	out, found, err := s.deps.Read.SaveBadges(r.Context(), r.PathValue("handle"), ordinal)
+	switch {
+	case err != nil:
+		s.serverError(w, r, err, "read the save's badges")
+		return
+	case !found:
+		s.notFound(w, r, "No such save.")
+		return
+	}
+	s.render(w, r, http.StatusOK, "player_badges", publicCache, page{
+		Title: "Save " + strconv.FormatInt(ordinal, 10) + " badges — " + out.Handle + " — catlog",
+		Nav:   "badges", Data: playerBadgesData{PlayerBadgesResponse: out, Save: ordinal},
+	})
+}
+
 // --- GET /p/{handle} ------------------------------------------------------------
 
 func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {
@@ -467,6 +634,16 @@ func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {
 
 // --- GET /p/{handle}/saves ----------------------------------------------------
 
+type saveListRow struct {
+	readapi.SaveSummary
+	Badges int64
+}
+
+type savesData struct {
+	Handle string
+	Saves  []saveListRow
+}
+
 func (s *Server) handleSaves(w http.ResponseWriter, r *http.Request) {
 	saves, known, err := s.deps.Read.Saves(r.Context(), r.PathValue("handle"))
 	switch {
@@ -477,14 +654,32 @@ func (s *Server) handleSaves(w http.ResponseWriter, r *http.Request) {
 		s.notFound(w, r, "No such player.")
 		return
 	}
+	counts, known, err := s.deps.Read.SaveBadgeCounts(r.Context(), saves.Handle)
+	if err != nil {
+		s.serverError(w, r, err, "read the saves' badge counts")
+		return
+	}
+	if !known {
+		s.notFound(w, r, "No such player.")
+		return
+	}
+	data := savesData{Handle: saves.Handle, Saves: make([]saveListRow, 0, len(saves.Saves))}
+	for _, save := range saves.Saves {
+		data.Saves = append(data.Saves, saveListRow{SaveSummary: save, Badges: counts[save.Save]})
+	}
 	s.render(w, r, http.StatusOK, "saves", publicCache, page{
 		Title: saves.Handle + "'s saves — catlog",
 		Nav:   "boards",
-		Data:  saves,
+		Data:  data,
 	})
 }
 
 // --- GET /p/{handle}/saves/{ordinal} -----------------------------------------
+
+type saveData struct {
+	readapi.SaveResponse
+	Badges int
+}
 
 func (s *Server) handleSave(w http.ResponseWriter, r *http.Request) {
 	ordinal, err := strconv.ParseInt(r.PathValue("ordinal"), 10, 64)
@@ -501,10 +696,19 @@ func (s *Server) handleSave(w http.ResponseWriter, r *http.Request) {
 		s.notFound(w, r, "No such save.")
 		return
 	}
+	badges, found, err := s.deps.Read.SaveBadges(r.Context(), save.Handle, save.Save)
+	if err != nil {
+		s.serverError(w, r, err, "read the save's badge count")
+		return
+	}
+	if !found {
+		s.notFound(w, r, "No such save.")
+		return
+	}
 	s.render(w, r, http.StatusOK, "save", publicCache, page{
 		Title: "Save " + strconv.FormatInt(save.Save, 10) + " — " + save.Handle + " — catlog",
 		Nav:   "boards",
-		Data:  save,
+		Data:  saveData{SaveResponse: save, Badges: len(badges.Earned)},
 	})
 }
 

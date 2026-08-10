@@ -1,0 +1,44 @@
+{{define "content" -}}
+{{- $p := .Data -}}
+<nav aria-label="Breadcrumb" class="muted text-sm"><a href="{{playerPath $p.Handle}}">{{$p.Handle}}</a>{{if $p.Save}} / <a href="{{playerPath $p.Handle}}/saves">Saves</a> / <a href="{{playerPath $p.Handle}}/saves/{{$p.Save}}">Save {{$p.Save}}</a>{{end}} / Badges</nav>
+
+<div class="page-head">
+  <h1 id="player-badges-title" data-handle="{{$p.Handle}}"{{if $p.Save}} data-save="{{$p.Save}}"{{end}}>{{if $p.Save}}Save {{$p.Save}} badges{{else}}{{$p.Handle}}&#8217;s badges{{end}}</h1>
+  <p>{{if $p.Save}}Awards earned independently by this save.{{else}}Lifetime awards in the current result.{{end}}</p>
+</div>
+
+<section class="badge-section" aria-labelledby="earned-badges-title">
+  <h2 id="earned-badges-title">Earned</h2>
+  {{- if $p.Earned}}
+  <div class="tiles" id="earned-badges">
+    {{- range $p.Earned}}
+    <article class="tile badge-tile badge-earned" data-badge="{{.Badge}}" data-earned="{{.Earned}}">
+      <h3><a href="{{badgePath .Badge}}">{{.Title}}</a></h3>
+      <p>{{.Blurb}}</p>
+      <p class="badge-provenance">
+        {{if .Save}}<a data-value="{{.Save}}" href="{{playerPath $p.Handle}}/saves/{{.Save}}">Save {{.Save}}</a>{{else}}&#8212;{{end}}
+        &#183; {{with .System}}<a href="/systems/{{.Slug}}">{{.Name}}</a>{{else}}&#8212;{{end}}
+      </p>
+      <p class="badge-earned-at"><time data-value="{{.Earned}}" datetime="{{iso .Earned}}">{{datetime .Earned}}</time></p>
+      {{- with .Context}}<details><summary>Details</summary><pre>{{blob .}}</pre></details>{{end}}
+    </article>
+    {{- end}}
+  </div>
+  {{- else}}
+  <p id="earned-badges-empty">No badges yet. Fly something.</p>
+  {{- end}}
+</section>
+
+<section class="badge-section" aria-labelledby="unearned-badges-title">
+  <h2 id="unearned-badges-title">Unearned</h2>
+  <div class="tiles" id="unearned-badges">
+    {{- range $p.Unearned}}
+    <article class="tile badge-tile badge-unearned" data-badge="{{.Badge}}">
+      <h3><a href="{{badgePath .Badge}}">{{.Title}}</a></h3>
+      <p>{{.Blurb}}</p>
+      <p class="badge-count tnum" data-value="{{.Holders}}">Held by {{num .Holders}}</p>
+    </article>
+    {{- end}}
+  </div>
+</section>
+{{- end}}

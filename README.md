@@ -27,6 +27,11 @@ different players are on it.
 
 **Your profile.** Every placement, every rank, and *its denominator*: "#3 of 41", not a bare "#3".
 
+**Merit badges.** Once-only recognitions for first flights, ambitious stacks, survivable mistakes,
+exploration and kittens. Each appears both across a player's current history and in the save that
+earned it, with the celestial system shown so an achievement in one system is not confused with
+the same title in another.
+
 **The raw log.** Every event catlog recorded, browsable. This is the part that makes "your record is
 214 m/s" checkable rather than asserted — you can read the flight it came from.
 

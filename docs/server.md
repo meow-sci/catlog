@@ -262,6 +262,12 @@ the stable/gated catalogue, lifetime or system-filtered distinct-player holder p
 or exact-save checklists. It resolves raw save provenance to ordinals and per-player labels before
 building any response and passes every context through the shared recursive redactor.
 
+The HTML saves index needs all per-save badge counts at once. `BadgeCountsByCareer` groups one
+player's non-lifetime award rows in one store query; `readapi.SaveBadgeCounts` resolves those private
+career keys against the player's saves and returns only ordinal-to-count pairs. The web package uses
+that narrow non-HTTP seam instead of issuing one checklist read per save, and never receives a raw
+career key (`store/projections.go`, `readapi/badges.go`, `web/pages.go`).
+
 Awards are insert-once inside one projection build: the first qualifying event keeps its
 `earned_seq`, matching server-side `recv_time` in `earned_at`, nullable event career clock in
 `earned_sim_t`, and nullable JSON `context`. `earned_at` never trusts the client's wall clock.

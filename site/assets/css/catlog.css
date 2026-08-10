@@ -688,6 +688,54 @@ main {
   font-variant-numeric: tabular-nums;
 }
 
+/* Merit badges use the site's one tile/container shape. Earned is an accent
+   fill with the on-accent foreground; the raw accent is never text. */
+.badge-group > h2,
+.badge-section > h2 {
+  margin-bottom: var(--space-4);
+}
+
+.badge-section + .badge-section,
+.badge-filter,
+#badges-note {
+  margin-top: var(--space-6);
+}
+
+.badge-tile {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.badge-count,
+.badge-earned-at,
+.badge-provenance {
+  margin-top: auto;
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.badge-earned {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: var(--color-accent-fg);
+}
+
+.badge-earned a,
+.badge-earned summary {
+  color: var(--color-accent-fg);
+}
+
+.badge-unearned {
+  color: var(--color-fg-muted);
+}
+
+.badge-holder .rank,
+.badge-holder .save,
+.badge-holder .when {
+  font-variant-numeric: tabular-nums;
+}
+
 .chip {
   display: inline-flex;
   align-items: center;
