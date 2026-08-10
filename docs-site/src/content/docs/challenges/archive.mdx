@@ -15,4 +15,7 @@ Open now, Coming up and Finished, and every finished challenge keeps its result 
 rows. The [live JSON index](https://catlog.science.fail/v1/challenges) reports the same states as
 `open`, `upcoming` and `closed` according to the server clock.
 
+The entries below are rendered directly from the typed shipped catalogue at build time. There is no
+manually maintained list of past challenges to forget when a definition is added.
+
 {CHALLENGES.map((challenge) => <ChallengeDetail challenge={challenge.challenge} />)}

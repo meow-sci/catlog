@@ -4001,3 +4001,20 @@ award. Keeping a status axis whose only legal value was “active” would imply
 state and invite player prose to disagree with the projection. Activation belongs to the implemented
 catalogue contract; family visibility remains the separate holder-count gate described by the read
 API. `docs/event-details.md` remains authoritative when this derived player-facing mirror disagrees.
+
+### DOCS-008 — Both challenge reference pages render the typed catalogue and link the two live reads
+
+*Accepted · 2026-08-10 · Task I3.*
+
+The challenge overview and archive both render `CHALLENGES` through the same fail-fast
+`ChallengeDetail.astro` component. A prose list of the six current names looked harmless while the
+windows matched, but it was a second catalogue that could omit the seventh definition without any
+build failure. Rendering the typed mirror on both pages makes adding a definition a single derived
+data edit and makes a missing component lookup fail the Astro build. `docs/event-details.md` remains
+authoritative when the mirror disagrees.
+
+Each rendered definition links separately to its server-rendered visitor result and its JSON result.
+Those are different useful surfaces, and hiding one behind a generic “live results” label made the
+reader guess which representation they would get. The pages also state that a challenge is a dated
+leaderboard whose standings do not alter ordinary boards or attach a second score to a profile;
+without that boundary, “temporary challenge” could sound like a modifier applied to every ranking.

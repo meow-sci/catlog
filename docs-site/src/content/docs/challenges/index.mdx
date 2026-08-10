@@ -6,10 +6,14 @@ sidebar:
 ---
 
 import { Aside } from "@astrojs/starlight/components";
+import ChallengeDetail from "../../../components/ChallengeDetail.astro";
+import { CHALLENGES } from "../../../data/challenges";
 
-A challenge is a curated rule over an explicitly dated window. It asks a temporary question of the
-same recorded history that builds the leaderboards: perhaps one best result, a running total or a
-set of distinct things achieved before the window closes.
+A challenge is a dated leaderboard with a curated rule and a deadline. It asks a temporary question
+of the same recorded history that builds the ordinary leaderboards: perhaps one best result, a
+running total or a set of distinct things achieved before the window closes. It does not alter an
+ordinary board or attach a separate score or rank to your profile; its result belongs to that
+challenge's standings.
 
 The rule and its opening and closing dates are part of a catlog server release. They cannot be
 edited while the server is running. That keeps a later rebuild honest: old history is always judged
@@ -22,9 +26,9 @@ archive](/catlog/challenges/archive/) gives each rule, scope and ranking directi
 
 ## The deadline is when catlog receives the flight
 
-Challenge windows use UTC and the time each event reaches the catlog server. They do not use your
-computer's clock or the clock inside the save. An event received exactly when a challenge opens can
-count; one received exactly when it closes cannot.
+Challenge windows are always UTC, so everybody gets the same window, and use the time each event
+reaches the catlog server. They do not use your computer's clock or the clock inside the save. An
+event received exactly when a challenge opens can count; one received exactly when it closes cannot.
 
 <Aside type="caution" title="Offline flights still have to arrive on time">
   Your flights have to reach catlog before the deadline — if you play offline, get back online
@@ -44,7 +48,7 @@ each celestial system. The scope belongs to the challenge rule:
 
 Closed challenge results are designed to remain available rather than expiring like a rolling
 daily or weekly leaderboard. That makes an archive of past challenges possible without treating
-last week's result as disposable.
+last week's result as disposable. Nothing is deleted when the deadline passes.
 
 ## Where to see challenge results
 
@@ -91,9 +95,10 @@ late.
 
 ## Shipped challenges
 
-Six starter challenges are active for the Week 33 window. Heavy Lift Week, Coasting Class and
-Feather Touch compare players only inside matching celestial systems; From Scratch To Orbit keeps
-each save separate; Tumbleweek and Full House combine a player's qualifying history.
+The entries below come directly from the typed challenge catalogue at build time. There is no
+second hand-maintained list of shipped definitions.
+
+{CHALLENGES.map((challenge) => <ChallengeDetail challenge={challenge.challenge} />)}
 
 “Payload” in Heavy Lift Week means the whole vehicle's mass when orbit was achieved, including its
 propellant. catlog cannot separate cargo from rocket and does not pretend it can. Coasting Class
