@@ -8,7 +8,8 @@
 // history of real §4.2 events for three synthetic dev players — `demo_ace`,
 // `demo_tumbler`, `demo_crasher` — chosen so that between them they set a record
 // on every launch board, including the ones nobody hits by accident (a survived
-// lithobrake, all six RUD causes, a flagged flight that must score nothing).
+// lithobrake, all six RUD causes, a flagged flight that must score nothing), and
+// genuinely earn representative fixed, tier and body-family badges.
 //
 // # Why it is deterministic
 //
@@ -77,8 +78,9 @@ var RUDCauses = []string{
 // cruise passes through the star's.
 //
 // Two demo players fly it, on purpose. A `fastest_to_<body>` board is only
-// *listed* once two distinct players are on it (stats.Catalog), so a demo where
-// one player had been everywhere alone would show none of them.
+// *listed* once two distinct players are on it (stats.Catalog), and a body-family
+// badge has the same two-player publication gate. A demo where one player had
+// been everywhere alone would show neither dynamic surface.
 var StockBodyRun = []stats.VehicleSOI{
 	{FromBody: "earth", ToBody: "luna"},
 	{FromBody: "luna", ToBody: "sol"},

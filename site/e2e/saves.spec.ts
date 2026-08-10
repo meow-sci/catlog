@@ -26,6 +26,10 @@ interface SaveDetail {
   }>;
 }
 
+interface SaveBadges {
+  earned: Array<{ badge: string }>;
+}
+
 test.describe("saves", () => {
   test("the seeded player lists populated saves with friendly and unknown systems", async ({
     page,
@@ -62,9 +66,22 @@ test.describe("saves", () => {
         "data-value",
         String(save.playtime_ms),
       );
-      await expect(row.locator("td.value").last()).toHaveAttribute(
+      await expect(row.locator("td.value").nth(1)).toHaveAttribute(
         "data-value",
         String(save.boards),
+      );
+      const badgesResponse = await page.request.get(
+        `/v1/players/demo_ace/saves/${save.save}/badges`,
+      );
+      expect(badgesResponse.ok()).toBeTruthy();
+      const badges = (await badgesResponse.json()) as SaveBadges;
+      await expect(row.locator("td.value").nth(2)).toHaveAttribute(
+        "data-value",
+        String(badges.earned.length),
+      );
+      await expect(row.locator("td.value").nth(2).locator("a")).toHaveAttribute(
+        "href",
+        `/p/demo_ace/saves/${save.save}/badges`,
       );
       await expect(row.locator("time").first()).toHaveAttribute(
         "datetime",
@@ -80,7 +97,9 @@ test.describe("saves", () => {
     await expect(rows.first().locator("td.system a")).toHaveCount(0);
     await expect(rows.nth(1).locator("td.system a")).toHaveText("Sol");
     await expect(rows.nth(1).locator("td.system a")).toHaveAttribute("href", "/systems/sol");
-    await expect(page.getByText("Badges", { exact: true })).toHaveCount(0);
+    await expect(
+      page.locator("#saves-table thead").getByText("Badges", { exact: true }),
+    ).toBeVisible();
   });
 
   test("a player with no telemetry has an honest empty saves page", async ({ page, request }) => {
@@ -89,7 +108,9 @@ test.describe("saves", () => {
     expect(response?.status()).toBe(200);
     await expect(page.locator("#saves-empty")).toHaveText("No saves recorded yet.");
     await expect(page.locator("#saves-table tr.save-row")).toHaveCount(0);
-    await expect(page.getByText("Badges", { exact: true })).toHaveCount(0);
+    await expect(
+      page.locator("#saves-table thead").getByText("Badges", { exact: true }),
+    ).toBeVisible();
   });
 
   test("save detail agrees with the API and carries ranking and provenance", async ({ page }) => {
@@ -100,12 +121,23 @@ test.describe("saves", () => {
     expect(json.system_changed).toBe(true);
     expect(json.rewound).toBe(true);
     expect(json.stats.length).toBeGreaterThan(0);
+    const badgesResponse = await page.request.get("/v1/players/demo_ace/saves/2/badges");
+    expect(badgesResponse.ok()).toBeTruthy();
+    const badges = (await badgesResponse.json()) as SaveBadges;
+    expect(badges.earned.length).toBeGreaterThan(0);
 
     const response = await page.goto("/p/demo_ace/saves/2");
     expect(response?.status()).toBe(200);
     await expect(page.locator("#save-title")).toHaveText("Save 2");
-    await expect(page.locator("#save-summary a")).toHaveText("Sol");
-    await expect(page.locator("#save-summary a")).toHaveAttribute("href", "/systems/sol");
+    await expect(page.locator('#save-summary a[href="/systems/sol"]')).toHaveText("Sol");
+    await expect(page.locator("#save-badges")).toHaveAttribute(
+      "data-value",
+      String(badges.earned.length),
+    );
+    await expect(page.locator("#save-badges")).toHaveAttribute(
+      "href",
+      "/p/demo_ace/saves/2/badges",
+    );
     await expect(page.locator("#save-summary .system-changed")).toHaveAttribute(
       "title",
       "The celestial system this save is in changed. Per-system comparisons before and after are not comparing the same worlds.",
@@ -133,7 +165,6 @@ test.describe("saves", () => {
     await expect(
       rows.filter({ has: page.locator('a[href="/boards/softest_landing?scope=career"]') }),
     ).toContainText("Mars");
-    await expect(page.getByText("Badges", { exact: true })).toHaveCount(0);
 
     await page.goto("/p/demo_ace/saves/1");
     await expect(page.locator("#save-summary a[href^='/systems/']")).toHaveCount(0);

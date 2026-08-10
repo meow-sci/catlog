@@ -63,7 +63,7 @@ server/
     adminapi/   the loopback-only admin mux
     archive/    Store interface + filesystem implementation + chunks and manifests
     units/      the single definition of what a catlog number looks like
-    seed/       the deterministic demo dataset
+    seed/       deterministic event histories for populated demo boards and badges
     testvectors/ the §4.10 generator
     testutil/   throwaway stores, test credentials
     nginxproxy/ the docker-tagged nginx suite (§6.3)
@@ -711,7 +711,7 @@ issuance to the world.
 | `GET /admin/projections/rebuild` | `rebuild -status` | Phase, events scanned, head, and whether the loop is suspended |
 | `POST /admin/archive/run` / `restore` | `archive` / `archive-restore` | §5.10 |
 | `POST /admin/backup` | `backup` | Quiesce the writer, copy `events.db` **and its `-wal`** |
-| `POST /admin/seed` | `seed` | The deterministic demo dataset |
+| `POST /admin/seed` | `seed` | Deterministic demo histories covering boards plus fixed, tier and publishable family badges |
 | `POST /admin/events` | — | Insert events directly. The dev-loop tool: push one, watch the feed. |
 | `POST /admin/clock` | — | Move the server's notion of now. Development only, mounted only when enabled. |
 | `POST /admin/denylist/publish` | `denylist` | Regenerate the signed deny-list |

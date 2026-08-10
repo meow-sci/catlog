@@ -2060,6 +2060,23 @@ All award context crosses the existing recursive redaction boundary, and raw car
 only long enough to resolve a save ordinal and stable per-player label. The four endpoints are part
 of the final pre-launch v1 contract, so adding them does not advance an API version.
 
+### PROJ-128 — The demo pins representative badge behaviour, not a frozen catalogue size
+
+*Accepted · 2026-08-10 · Task G4.*
+
+The existing deterministic histories already contain the right honest events for badge examples:
+all three players start flights, two saves cross the Wanderer threshold, and `demo_ace` plus
+`demo_crasher` both reach Luna in the reported Sol system. G4 therefore adds no fixture-only award
+write and no redundant gameplay event. It asserts the awards after the ordinary projector drains,
+including save and system provenance, so the seed proves the same fold path a real upload uses.
+
+The seed deliberately fixes examples—one event badge, one tier and one two-holder body family—but
+not the number of catalogue entries or total awards. Badge and board registries are compile-time
+catalogues expected to grow; freezing their counts would turn an unrelated addition into fixture
+churn and repeat the mistake PROJ-039 avoids for public catalogue tests. End-to-end checks likewise
+compare the visitor catalogue with the JSON response row for row, while using the two-player Luna
+award only to prove the dynamic publication gate and friendly provenance are genuinely exercised.
+
 ## Archive & restore
 
 The filesystem archiver, the manifest, restore verification, and the R2 design that is deliberately not built.

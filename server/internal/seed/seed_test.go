@@ -2,10 +2,12 @@ package seed_test
 
 import (
 	"crypto/sha256"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -64,7 +66,7 @@ func TestDatasetIsDeterministic(t *testing.T) {
 	}
 }
 
-func TestSeedProducesTheExpectedBoards(t *testing.T) {
+func TestSeedProducesExpectedBoardsAndBadges(t *testing.T) {
 	dir := t.TempDir()
 	events := testutil.EventsAt(t, filepath.Join(dir, "events.db"))
 	projections := testutil.ProjectionsAt(t, filepath.Join(dir, "projections.db"))
@@ -224,6 +226,72 @@ func TestSeedProducesTheExpectedBoards(t *testing.T) {
 		if !ok || alternate.Name != "Sol Dense" || alternate.Slug != "sol-dense" {
 			t.Errorf("alternate demo system = %+v, %v", alternate, ok)
 		}
+
+		// Do not pin the total badge catalogue: adding a fixed badge should not
+		// make the demo brittle (PROJ-039). Pin the representative behaviours G4
+		// needs instead: an ordinary event badge, an exploration tier, and a
+		// dynamic family member held by two players so the default gate publishes
+		// it. These rows came through the ordinary fold above, not a fixture-only
+		// projection write.
+		counts, err := proj.BadgeCounts(ctx)
+		if err != nil {
+			return err
+		}
+		for badge, want := range map[string]int64{
+			stats.BadgeFirstFlight: 3,
+			stats.BadgeWanderer:    2,
+			"reached_luna":         2,
+		} {
+			if counts[badge] != want {
+				t.Errorf("seeded badge %s holders = %d, want %d", badge, counts[badge], want)
+			}
+		}
+		published := false
+		for _, badge := range stats.BadgeCatalog(counts, stats.DefaultMinPlayers) {
+			if badge.Key == "reached_luna" {
+				published = true
+				break
+			}
+		}
+		if !published {
+			t.Error("reached_luna is not published at the default two-player family gate")
+		}
+
+		holders, err := proj.BadgeHolders(ctx, "reached_luna", "", 100, 0)
+		if err != nil {
+			return err
+		}
+		if len(holders) != 2 || holders[0].PlayerID != 1 || holders[1].PlayerID != 3 ||
+			holders[0].EarnedSeq >= holders[1].EarnedSeq ||
+			holders[0].System != seed.DemoSystemHash || holders[1].System != seed.DemoSystemHash {
+			t.Errorf("seeded reached_luna holders = %+v, want demo_ace then demo_crasher in Sol", holders)
+		}
+
+		aceCareers, err := proj.PlayerCareers(ctx, 1)
+		if err != nil {
+			return err
+		}
+		if len(aceCareers) < 2 {
+			t.Errorf("demo_ace careers = %+v, want a second save", aceCareers)
+		} else {
+			awards, err := proj.BadgesForPlayer(ctx, 1, aceCareers[1].Career)
+			if err != nil {
+				return err
+			}
+			seen := map[string]store.BadgeRow{}
+			for _, award := range awards {
+				seen[award.Badge] = award
+			}
+			for _, badge := range []string{stats.BadgeFirstFlight, stats.BadgeWanderer, "reached_luna"} {
+				if _, ok := seen[badge]; !ok {
+					t.Errorf("demo_ace Save 2 did not earn representative badge %s: %+v", badge, awards)
+				}
+			}
+			if family := seen["reached_luna"]; family.System != seed.DemoSystemHash ||
+				string(family.Context) != `{"body":"luna"}` {
+				t.Errorf("demo_ace Save 2 reached_luna provenance = %+v context=%s", family, family.Context)
+			}
+		}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -282,13 +350,17 @@ func TestSeedIsWhatARebuildProduces(t *testing.T) {
 	if _, err := p.Drain(ctx); err != nil {
 		t.Fatal(err)
 	}
-	incremental := boardValues(t, live)
+	incrementalBoards := boardValues(t, live)
+	incrementalBadges := badgeRows(t, live)
 
 	if _, err := p.Rebuild(ctx); err != nil {
 		t.Fatalf("rebuild: %v", err)
 	}
-	if rebuilt := boardValues(t, live); !sameFloats(rebuilt, incremental) {
-		t.Errorf("rebuild differs from the seeded incremental state:\n rebuilt: %v\n seeded:  %v", rebuilt, incremental)
+	if rebuilt := boardValues(t, live); !sameFloats(rebuilt, incrementalBoards) {
+		t.Errorf("rebuilt boards differ from seeded incremental state:\n rebuilt: %v\n seeded:  %v", rebuilt, incrementalBoards)
+	}
+	if rebuilt := badgeRows(t, live); !slices.Equal(rebuilt, incrementalBadges) {
+		t.Errorf("rebuilt badges differ from seeded incremental state:\n rebuilt: %v\n seeded:  %v", rebuilt, incrementalBadges)
 	}
 }
 
@@ -326,6 +398,45 @@ func boardValues(t *testing.T, live *projector.Live) map[string]float64 {
 	})
 	if err != nil {
 		t.Fatalf("read boards: %v", err)
+	}
+	return out
+}
+
+// badgeRows snapshots every badge column in deterministic primary-key order.
+// The seed's rebuild assertion must cover new projection families as they are
+// added; comparing boards alone would let a badge-only divergence hide behind
+// a test name that promised the whole seeded projection was canonical.
+func badgeRows(t *testing.T, live *projector.Live) []string {
+	t.Helper()
+	var out []string
+	err := live.With(func(p *store.Projections) error {
+		rows, err := p.Reader().QueryContext(t.Context(),
+			`SELECT player_id, career, badge, system, first_career,
+			        earned_seq, earned_at, earned_sim_t, context
+			 FROM badge_award ORDER BY player_id, career, badge`)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var (
+				playerID, earnedSeq, earnedAt int64
+				career, badge, system, first  string
+				sim                           sql.NullFloat64
+				context                       []byte
+			)
+			if err := rows.Scan(&playerID, &career, &badge, &system, &first,
+				&earnedSeq, &earnedAt, &sim, &context); err != nil {
+				return err
+			}
+			out = append(out, fmt.Sprintf("%d|%s|%s|%s|%s|%d|%d|%t:%g|%s",
+				playerID, career, badge, system, first, earnedSeq, earnedAt,
+				sim.Valid, sim.Float64, context))
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		t.Fatalf("read badges: %v", err)
 	}
 	return out
 }

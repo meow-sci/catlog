@@ -60,7 +60,9 @@ make sim SCENARIO=hop-lithobrake CRED=$HOME/Downloads/catlog-credential.json
 The site updates while it runs — the feed over server-sent events, with no reload.
 
 **`make seed`** inserts a deterministic demo dataset (`demo_ace`, `demo_tumbler`, `demo_crasher`)
-if you want boards to look at without flying anything. It is idempotent.
+if you want boards and merit badges to look at without flying anything. The histories include
+ordinary, tiered and body-name awards, with two visible players sharing body awards so the dynamic
+catalogue is nonempty at its default publication gate. It is idempotent.
 
 `make dev-server` is an alias for `make dev`, kept because `make loadgen`'s help text and the e2e
 instructions name it.
