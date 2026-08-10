@@ -1097,8 +1097,8 @@ func (orbitsFold) Apply(ctx context.Context, b *Batch, ev Event) error {
 // soiFold implements `soi_bodies` (§5.6): the number of distinct bodies whose
 // sphere of influence the player has entered, materialized in `player_body`.
 //
-// The count is advanced by one only when the INSERT OR IGNORE actually inserts,
-// so the board never needs a `count(*)` and stays correct under replay.
+// Each scope is recomputed only when its own backing set gains a row. Lifetime,
+// career and system unions are separate queries because they are separate sets.
 type soiFold struct{}
 
 func (soiFold) Name() string { return StatSOIBodies }
@@ -1113,20 +1113,44 @@ func (soiFold) Apply(ctx context.Context, b *Batch, ev Event) error {
 		return err
 	}
 	added, err := b.AddBody(ctx, ev.PlayerID, "soi", p.ToBody, ev.Seq)
-	if err != nil || !added {
-		return err // an err, or a body already visited
+	if err != nil {
+		return err
 	}
-	return addCount(ctx, b, ev, StatSOIBodies, 1)
+	if added {
+		n, err := b.BodyCount(ctx, ev.PlayerID, "soi")
+		if err != nil {
+			return err
+		}
+		if err := setValue(ctx, b, ev, StatSOIBodies, float64(n)); err != nil {
+			return err
+		}
+	}
+
+	newForCareer, err := b.AddCareerBody(ctx, ev, "soi", p.ToBody)
+	if err != nil || !newForCareer {
+		return err
+	}
+	n, err := b.CareerBodyCount(ctx, ev.PlayerID, ev.Career, "soi")
+	if err != nil {
+		return err
+	}
+	if err := setCareerValue(ctx, b, ev, StatSOIBodies, float64(n)); err != nil {
+		return err
+	}
+	sn, ok, err := b.SystemBodyCount(ctx, ev, "soi")
+	if err != nil || !ok {
+		return err
+	}
+	return setSystemValue(ctx, b, ev, StatSOIBodies, float64(sn))
 }
 
 // landedBodiesFold implements `landed_bodies`: how many distinct bodies the
 // player has put something down on.
 //
 // The set-backed shape of `soi_bodies`, and for the same reason (PROJ-011):
-// `AddBody` reports whether the `player_body` row was new, so the counter
-// advances only on a new row and the board never needs a `count(*)` and stays
-// correct under replay. It writes `kind = 'landed'` alongside soiFold's
-// `'soi'`, which the table's (player_id, kind, body) key already allows for.
+// `AddBody` and `AddCareerBody` report novelty independently, so the lifetime
+// and save-local totals move only when their own set gains a row. It writes
+// `kind = 'landed'` alongside soiFold's `'soi'` in both sibling tables.
 //
 // "Landed on" is any surface contact — terrain, ocean or both — because
 // splashing down on a body is arriving at it. `splashdowns` is the board that
@@ -1160,10 +1184,35 @@ func (landedBodiesFold) Apply(ctx context.Context, b *Batch, ev Event) error {
 		return err
 	}
 	added, err := b.AddBody(ctx, ev.PlayerID, "landed", p.Body, ev.Seq)
-	if err != nil || !added {
-		return err // an err, or a body already landed on
+	if err != nil {
+		return err
 	}
-	return addCount(ctx, b, ev, StatLandedBodies, 1)
+	if added {
+		n, err := b.BodyCount(ctx, ev.PlayerID, "landed")
+		if err != nil {
+			return err
+		}
+		if err := setValue(ctx, b, ev, StatLandedBodies, float64(n)); err != nil {
+			return err
+		}
+	}
+
+	newForCareer, err := b.AddCareerBody(ctx, ev, "landed", p.Body)
+	if err != nil || !newForCareer {
+		return err
+	}
+	n, err := b.CareerBodyCount(ctx, ev.PlayerID, ev.Career, "landed")
+	if err != nil {
+		return err
+	}
+	if err := setCareerValue(ctx, b, ev, StatLandedBodies, float64(n)); err != nil {
+		return err
+	}
+	sn, ok, err := b.SystemBodyCount(ctx, ev, "landed")
+	if err != nil || !ok {
+		return err
+	}
+	return setSystemValue(ctx, b, ev, StatLandedBodies, float64(sn))
 }
 
 // splashdownFold implements `splashdowns`: arrivals in water.
@@ -1210,8 +1259,8 @@ func (recoveredFold) Apply(ctx context.Context, b *Batch, ev Event) error {
 	return addCount(ctx, b, ev, StatKittensRecovered, float64(p.CrewCount))
 }
 
-// distanceFold implements `distance_travelled` (§5.6): the sum, over a player's
-// kittens, of the furthest each has ever travelled.
+// distanceFold implements `distance_travelled` (§5.6): the sum of the per-save
+// kitten totals in the selected player, career or system scope.
 //
 // roster.snapshot carries running totals rather than deltas, so every column is
 // folded with max() — a snapshot that arrives out of order, or a save reloaded
@@ -1234,6 +1283,9 @@ func (distanceFold) Apply(ctx context.Context, b *Batch, ev Event) error {
 		if err := b.UpsertKitten(ctx, ev.PlayerID, k, ev.Seq); err != nil {
 			return err
 		}
+		if err := b.UpsertCareerKitten(ctx, ev, k); err != nil {
+			return err
+		}
 	}
 
 	// Two per-kitten records off the same roster: the furthest one kitten has
@@ -1254,16 +1306,20 @@ func (distanceFold) Apply(ctx context.Context, b *Batch, ev Event) error {
 		return err
 	}
 	if travelled.Value > 0 {
-		if err := putRecord(ctx, b, ev, StatTopKittenDistance, travelled.Value,
+		if err := putPlayerRecord(ctx, b, ev, StatTopKittenDistance, travelled.Value,
 			map[string]any{"kitten": travelled.Name}); err != nil {
 			return err
 		}
 	}
 	if missions.Value > 0 {
-		if err := putRecord(ctx, b, ev, StatTopKittenMissions, missions.Value,
+		if err := putPlayerRecord(ctx, b, ev, StatTopKittenMissions, missions.Value,
 			map[string]any{"kitten": missions.Name}); err != nil {
 			return err
 		}
+	}
+
+	if err := putScopedKittenTops(ctx, b, ev); err != nil {
+		return err
 	}
 
 	total, err := b.KittenDistance(ctx, ev.PlayerID)
@@ -1273,7 +1329,70 @@ func (distanceFold) Apply(ctx context.Context, b *Batch, ev Event) error {
 	if total <= 0 {
 		return nil
 	}
-	return setValue(ctx, b, ev, StatDistanceTravelled, total)
+	if err := setValue(ctx, b, ev, StatDistanceTravelled, total); err != nil {
+		return err
+	}
+	if ev.Career == "" {
+		return nil
+	}
+	careerTotal, err := b.CareerKittenDistance(ctx, ev.PlayerID, ev.Career)
+	if err != nil || careerTotal <= 0 {
+		return err
+	}
+	if err := setCareerValue(ctx, b, ev, StatDistanceTravelled, careerTotal); err != nil {
+		return err
+	}
+	system, err := b.CareerSystem(ctx, ev.PlayerID, ev.Career)
+	if err != nil || system == "" {
+		return err
+	}
+	systemTotal, err := b.SystemKittenDistance(ctx, ev.PlayerID, system)
+	if err != nil || systemTotal <= 0 {
+		return err
+	}
+	return setSystemValue(ctx, b, ev, StatDistanceTravelled, systemTotal)
+}
+
+func putScopedKittenTops(ctx context.Context, b *Batch, ev Event) error {
+	if ev.Career == "" {
+		return nil
+	}
+	system, err := b.CareerSystem(ctx, ev.PlayerID, ev.Career)
+	if err != nil || system == "" {
+		return err
+	}
+	careerTravelled, careerMissions, err := b.CareerKittenTops(ctx, ev.PlayerID, ev.Career)
+	if err != nil {
+		return err
+	}
+	systemTravelled, systemMissions, err := b.SystemKittenTops(ctx, ev.PlayerID, system)
+	if err != nil {
+		return err
+	}
+	for _, item := range []struct {
+		stat   string
+		career KittenTop
+		system KittenTop
+	}{
+		{StatTopKittenDistance, careerTravelled, systemTravelled},
+		{StatTopKittenMissions, careerMissions, systemMissions},
+	} {
+		if item.career.Value > 0 {
+			cx, err := encodeContext(map[string]any{"kitten": item.career.Name})
+			if err != nil {
+				return err
+			}
+			b.putCareerStat(kindRecord, ev, system, item.stat, item.career.Value, cx)
+		}
+		if item.system.Value > 0 {
+			cx, err := encodeContext(map[string]any{"kitten": item.system.Name})
+			if err != nil {
+				return err
+			}
+			b.putSystemStat(kindRecord, ev, system, item.stat, item.system.Value, cx)
+		}
+	}
+	return nil
 }
 
 // flightBody is the body a flight's `flight.started` reported, for the record
@@ -1390,6 +1509,9 @@ func (toBodyFold) Apply(ctx context.Context, b *Batch, ev Event) error {
 	// coalesce covers a row soiFold inserted on a career-less event, which has
 	// no time yet — min() over NULL is NULL in SQLite.
 	if err := b.LowerBodyTime(ctx, ev.PlayerID, "soi", p.ToBody, t); err != nil {
+		return err
+	}
+	if err := b.LowerCareerBodyTime(ctx, ev, "soi", p.ToBody, t); err != nil {
 		return err
 	}
 

@@ -702,14 +702,16 @@ func scanCensusRows(rows *sql.Rows) ([]CensusRow, error) {
 
 // ProjectionCounts is the row census `GET /admin/stats` reports (§5.9).
 type ProjectionCounts struct {
-	PlayerStat  int64 `json:"player_stat"`
-	CareerStat  int64 `json:"career_stat"`
-	SystemStat  int64 `json:"system_stat"`
-	FlightState int64 `json:"flight_state"`
-	PlayerBody  int64 `json:"player_body"`
-	Career      int64 `json:"career"`
-	Kitten      int64 `json:"kitten"`
-	Feed        int64 `json:"feed"`
+	PlayerStat   int64 `json:"player_stat"`
+	CareerStat   int64 `json:"career_stat"`
+	SystemStat   int64 `json:"system_stat"`
+	FlightState  int64 `json:"flight_state"`
+	PlayerBody   int64 `json:"player_body"`
+	CareerBody   int64 `json:"career_body"`
+	Career       int64 `json:"career"`
+	Kitten       int64 `json:"kitten"`
+	CareerKitten int64 `json:"career_kitten"`
+	Feed         int64 `json:"feed"`
 	// FlaggedFlights is how many flights carry at least one flag bit — the
 	// number that says whether the anti-cheat surface is doing anything.
 	FlaggedFlights int64 `json:"flagged_flights"`
@@ -739,9 +741,11 @@ func (p *Projections) Counts(ctx context.Context) (ProjectionCounts, error) {
 		{`SELECT count(*) FROM system_stat`, &c.SystemStat},
 		{`SELECT count(*) FROM flight_state`, &c.FlightState},
 		{`SELECT count(*) FROM player_body`, &c.PlayerBody},
+		{`SELECT count(*) FROM career_body`, &c.CareerBody},
 		{`SELECT count(*) FROM career`, &c.Career},
 		{`SELECT count(*) FROM career WHERE rewound <> 0`, &c.RewoundCareers},
 		{`SELECT count(*) FROM kitten`, &c.Kitten},
+		{`SELECT count(*) FROM career_kitten`, &c.CareerKitten},
 		{`SELECT count(*) FROM feed`, &c.Feed},
 		{`SELECT count(*) FROM flight_state WHERE flags <> 0`, &c.FlaggedFlights},
 		{`SELECT count(DISTINCT player_id) FROM player_stat`, &c.ScoringPlayers},

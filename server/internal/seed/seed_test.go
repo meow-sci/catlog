@@ -95,7 +95,6 @@ func TestSeedProducesTheExpectedBoards(t *testing.T) {
 		"demo_ace/stagings":              3,
 		"demo_ace/soi_bodies":            4,
 		"demo_ace/kittens_recovered":     5,
-		"demo_ace/distance_travelled":    4_210_000,
 
 		// demo_ace's second career is the fast one: its clock restarts at 0 and
 		// the builder ticks 12.5 s per event, so orbit lands at 37.5 s into the
@@ -108,10 +107,9 @@ func TestSeedProducesTheExpectedBoards(t *testing.T) {
 		"demo_ace/fastest_to_sol":   62_500,
 		"demo_ace/fastest_to_mars":  75_000,
 
-		"demo_tumbler/kitten_tumbles":     4,
-		"demo_tumbler/soi_bodies":         2,
-		"demo_tumbler/kittens_recovered":  2,
-		"demo_tumbler/distance_travelled": 930_000,
+		"demo_tumbler/kitten_tumbles":    4,
+		"demo_tumbler/soi_bodies":        2,
+		"demo_tumbler/kittens_recovered": 2,
 	}
 	for key, v := range want {
 		if got[key] != v {

@@ -202,7 +202,9 @@ byte-identical across events. Rows written either way stay readable, so the swit
 | `flight_state` | Per flight: `flags` bitfield, `ended_reason`, crew, body |
 | `career` | Per save: the sim-time high-water and rewind mark, first/last event seq, eventual public ordinal, and eventual celestial-system identity; `last_seq` advances on every attributed event, including non-scoring and flagged activity |
 | `player_body` | Distinct bodies per player and `kind` — `'soi'` (entered) and `'landed'` (touched down) — plus first-arrival times, which only `'soi'` rows carry |
+| `career_body` | Distinct bodies per save and `kind`, with the career's system identity denormalised for union-across-saves system counts; its novelty signal is independent of `player_body` (migration 0007) |
 | `kitten` | Per-kitten totals folded from `roster.snapshot` |
+| `career_kitten` | Per-save kitten totals folded from `roster.snapshot`, with system identity denormalised; unlike `kitten`, it does not merge same-named kittens from different saves (migration 0007) |
 | `feed` | The activity feed, capped at 500 rows |
 | `event_census` | One row per `(type, period, bucket)` — what makes `GET /v1/stats` affordable |
 
@@ -212,6 +214,12 @@ byte-identical across events. Rows written either way stay readable, so the swit
 `(stat, value, updated_seq)`. Neither table carries a period: a save is already a time scope, and
 crossing careers with rolling buckets would add an unbounded fourth storage dimension. Both tables
 are empty until their board folds land; migration 0006 establishes the final schema first.
+
+`career_body` has primary key `(player_id, career, kind, body)` and an index on
+`(player_id, system, kind, body)` for distinct-body system unions. Its implemented kinds are `'soi'`
+and `'landed'`; `first_sim_t` is populated only for SOI arrivals. `career_kitten` has primary key
+`(player_id, career, kid)`, plus indexes on `(player_id, career)` and `(player_id, system)`. Both
+tables denormalise `system` from the career, and both are rebuildable additions from migration 0007.
 
 `flight_state.flags` is bit0 teleport, bit1 refuel, bit2 resource_edit, bit3 console, bit4 tuning,
 bit5 other. **An unrecognised flag value sets bit5** — failing open would make every future flag a

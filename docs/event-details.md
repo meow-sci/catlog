@@ -425,10 +425,10 @@ and `projector.Upcasters` has nothing registered (PROJ-100).
 | 2 | `flight.started` | 1 | 1 | **no — locked** | polled-discovery | `flight_state`, `heaviest_launch`, `most_parts`, `biggest_crew`, `biggest_stack` |
 | 3 | `flight.ended` | 1 | 1 | **no — locked** | event (+ passive net) | `flight_state`, `kittens_recovered`, `biggest_recovery`, feed |
 | 4 | `flight.flagged` | 1 | 1 | **no — locked** | event (4 of 5) / passive (`tuning`) | `flight_state` → **excludes everything** |
-| 5 | `vehicle.situation` | 1 | 1 | yes | passive | `softest_touchdown`, `landed_bodies`, `splashdowns`, `player_body` |
+| 5 | `vehicle.situation` | 1 | 1 | yes | passive | `softest_touchdown`, `landed_bodies`, `splashdowns`, `player_body`, `career_body` |
 | 6 | `vehicle.atmosphere` | 1 | 1 | yes | passive | `fastest_entry` |
 | 7 | `vehicle.orbit` | 1 | 1 | yes | passive | `orbits_achieved`, `highest_apoapsis`, `lowest_orbit`, `roundest_orbit`, `steepest_orbit`, `heaviest_to_orbit`, `fastest_to_orbit`, feed |
-| 8 | `vehicle.soi` | 1 | 1 | yes | passive | `soi_bodies`, `fastest_to_<body>`, `player_body`, feed |
+| 8 | `vehicle.soi` | 1 | 1 | yes | passive | `soi_bodies`, `fastest_to_<body>`, `player_body`, `career_body`, feed |
 | 9 | `vehicle.rud` | 1 | 1 | yes | event | `rud_total`, `rud_<cause>`, feed |
 | 10 | `vehicle.impact` | 1 | 1 | yes | event (1-frame hold) | `biggest_lithobrake_survived`, `biggest_impact_energy`, feed |
 | 11 | `vehicle.landed` | 1 | 1 | yes | passive (1-frame hold) | `softest_landing`, `landings`, feed |
@@ -442,7 +442,7 @@ and `projector.Upcasters` has nothing registered (PROJ-100).
 | 19 | `kitten.eva_end` | 1 | 1 | yes | event | `longest_eva` |
 | 20 | `kitten.tumble` | 1 | 1 | yes | passive | `kitten_tumbles`, feed |
 | 21 | `kitten.kia` | 1 | 1 | **no — locked** | passive | the impact-board KIA window (rebuild), feed |
-| 22 | `roster.snapshot` | 1 | **1** | yes | passive (+1 event) | `distance_travelled`, `top_kitten_distance`, `top_kitten_missions`, `kitten` |
+| 22 | `roster.snapshot` | 1 | **1** | yes | passive (+1 event) | `distance_travelled`, `top_kitten_distance`, `top_kitten_missions`, `kitten`, `career_kitten` |
 | 23 | `telemetry.window` | 1 | **0** | yes | passive | `peak_g_survived`, `max_q_survived`, `fastest_surface_speed`, `fastest_orbital_speed`, `highest_altitude`, `lowest_pass` |
 
 `vehicle.landed` is **not** in `AlwaysReported` — a player may switch it off like any other
@@ -470,10 +470,10 @@ What a player gives up per type, the eighteen that can be switched off:
 
 | Type off | Boards that stop moving | Other consequence |
 |---|---|---|
-| `vehicle.situation` | `softest_touchdown`, `landed_bodies`, `splashdowns` | `player_body` stops updating from situation changes. **`vehicle.landed` still fires** — the filter is applied at the pipeline funnel, after detection, so suppressing one of the pair does not suppress the other |
+| `vehicle.situation` | `softest_touchdown`, `landed_bodies`, `splashdowns` | `player_body` and `career_body` stop updating from situation changes. **`vehicle.landed` still fires** — the filter is applied at the pipeline funnel, after detection, so suppressing one of the pair does not suppress the other |
 | `vehicle.atmosphere` | `fastest_entry` | — |
 | `vehicle.orbit` | `orbits_achieved`, `fastest_to_orbit`, `highest_apoapsis`, `lowest_orbit`, `roundest_orbit`, `steepest_orbit`, `heaviest_to_orbit` | feed rows |
-| `vehicle.soi` | `soi_bodies`, and the whole `fastest_to_<body>` family | `player_body`, feed rows |
+| `vehicle.soi` | `soi_bodies`, and the whole `fastest_to_<body>` family | `player_body`, `career_body`, feed rows |
 | `vehicle.rud` | `rud_total`, every `rud_<cause>` board | RUD count becomes a self-reported zero. `vehicle.impact.survived` is unaffected — the correlator computes it before `Add` |
 | `vehicle.impact` | `biggest_lithobrake_survived`, `biggest_impact_energy` | feed rows |
 | `vehicle.landed` | `softest_landing`, `landings` | feed rows. **`landed_bodies` is unaffected** — it reads `vehicle.situation`, which is where the same edge is also reported |
@@ -486,7 +486,7 @@ What a player gives up per type, the eighteen that can be switched off:
 | `kitten.eva_start` | `evas` | — |
 | `kitten.eva_end` | `longest_eva` | — |
 | `kitten.tumble` | `kitten_tumbles` | feed rows |
-| `roster.snapshot` | `distance_travelled`, `top_kitten_distance`, `top_kitten_missions` | the `kitten` table stops existing for that player. This is why it is `KindEvent` and never pruned |
+| `roster.snapshot` | `distance_travelled`, `top_kitten_distance`, `top_kitten_missions` | the `kitten` and `career_kitten` tables stop existing for that player. This is why it is `KindEvent` and never pruned |
 | `telemetry.window` | `peak_g_survived`, `max_q_survived`, `highest_altitude`, `lowest_pass`, `fastest_surface_speed`, `fastest_orbital_speed` | The **only** `KindPassive` type, so it is the only thing `OutboxDb.Prune` may drop: switching it off leaves a full outbox nothing droppable. Also the highest-volume type, and therefore the most attractive knob. There is no fallback source — `boards.go` explicitly refuses to substitute `roster.snapshot.fastest_ms` |
 
 Two notes that follow from the folds rather than from this table. `scoreable()` treats an event with
@@ -1769,23 +1769,32 @@ emission at process unload.
 
 **Server.** `distanceFold` (`stats/boards.go:1028-1092`) writes **three** boards, and none of them
 has a flag exclusion — this event carries no flight, so `scoreable` returns true unconditionally, and
-it cannot be otherwise (PROJ-001). Every kitten row with a non-empty `kid` is upserted via
-`b.UpsertKitten`, and **every running total merges with `max()`** (`batch.go:637-642`): a snapshot
-arriving out of order, or an earlier save reloaded, can fail to advance a total but never rewind one.
+it cannot be otherwise (PROJ-001). Every kitten row with a non-empty `kid` is upserted into the
+lifetime `kitten` projection via `b.UpsertKitten`, and into `career_kitten` via
+`b.UpsertCareerKitten` when the event has a career whose celestial system is known. **Every running
+total merges with `max()` within its row**: a snapshot arriving out of order, or an earlier point in
+the same save reloaded, can fail to advance a total but never rewind one.
+
+`kid` is `SHA-256("catlog-kitten:" + install_id + ":" + roster_name)` and deliberately contains no
+career. KSA's roster belongs to `UniverseData` — the save — so two saves can each contain a different
+kitten named Mittens that shares one `kid`. The lifetime `kitten` row consequently answers "what is
+the largest total ever seen for this install-and-name identity", while `career_kitten` keeps the two
+save-local cats separate. The distinction is why the total-distance board reads the career rows.
 
 | board | value |
 |---|---|
-| `distance_travelled` | `Σ max(travelled_m)` over the player's kittens (`setValue`) |
-| `top_kitten_distance` | the largest single `max(travelled_m)` (`putRecord`, gated `> 0`) |
-| `top_kitten_missions` | the largest single `max(missions)` (`putRecord`, gated `> 0`) |
+| `distance_travelled` | `Σ career_kitten.travelled_m` over the saves in the selected scope (`setValue` / scoped set writers) |
+| `top_kitten_distance` | the largest single `max(travelled_m)` in the selected scope (`putRecord`, gated `> 0`) |
+| `top_kitten_missions` | the largest single `max(missions)` in the selected scope (`putRecord`, gated `> 0`) |
 
 The two per-kitten boards are "who is your best cat" where `distance_travelled` is "how good is your
-whole roster", and they are folded here because this is the only fold that has ever written the
-`kitten` table. Both take context `{"kitten"}`, the winner's display name.
+whole roster", and they are folded here because this is the only fold that writes the `kitten` and
+`career_kitten` tables. Both take context `{"kitten"}`, the winner's display name.
 
-`Batch.KittenTops` (`batch.go:679-694`) **breaks ties on `kid`**, and that is not a nicety: the
-winner's name lands in the row's context, Go randomises map iteration order, and a rebuild has to
-reproduce the incremental context byte for byte.
+The lifetime `Batch.KittenTops` **breaks ties on `kid`**. Career ties use `kid`; system ties use
+`(career, kid)`, because the same `kid` can name separate cats in separate saves. These are not
+niceties: the winner's name lands in the row's context, Go randomises map iteration order, and a
+rebuild has to reproduce the incremental context byte for byte.
 
 **Both inherit `distance_travelled`'s exemption from the flag exclusion**, so a kitten who did all
 her travelling on a teleported flight still holds the record. Not fixable server-side — the fix would
@@ -2317,7 +2326,11 @@ first*.
 - `kittens_recovered` (`:1010-1026`): `flight.ended` with `reason == "recovered" && crew_count >= 1`
   → `addCount(+float64(CrewCount))`. **It adds the crew count, not 1.**
 - `soi_bodies` (`:927-950`) and `landed_bodies` (`:952-982`): `b.AddBody(...)` reports whether the
-  `player_body` row was new; only then +1. No `count(*)`, correct under replay (PROJ-011).
+  lifetime `player_body` row was new; `b.AddCareerBody(...)` independently reports whether the
+  save-local `career_body` row was new. Player scope is the lifetime union, career scope is one
+  save's set, and system scope is the union across that player's saves with the same system
+  identity. The separate tables keep the two novelty signals independent and replay-stable
+  (PROJ-011 / PROJ-106).
   `landed_bodies` writes `kind = 'landed'` and counts **any** surface contact — terrain, ocean or
   both — because splashing down on a body is arriving at it. It **stays on `vehicle.situation`** now
   that `vehicle.landed` exists (PROJ-097): the landing fires only on the contact-free → contact edge,
@@ -2332,21 +2345,25 @@ first*.
   `sailing` ↔ `floating` boundary as it goes on and off rails would count a splashdown forever, and
   the 2 s situation debounce only rate-limits that rather than stopping it.
 
-**`distance_travelled`** — `distanceFold`, `:1028-1092`, the only `kindSet` board. Value =
-`Σ max(travelled_m)` over the player's kittens (`batch.go:651 KittenDistance`), written with
-`setValue` when `> 0`. Unit `m`, SI-scaled at render (`1.82 Mm`). `setValue` reads the previous value
-first so the window contribution is the **increase**. The `kindSet` guard
+**`distance_travelled`** — `distanceFold`, `:1028-1092`, the only `kindSet` board. Player value =
+`Σ career_kitten.travelled_m` across all of the player's saves; career value sums one save, and
+system value sums all saves carrying that system identity. This deliberately counts two different
+cats with the same roster name in two saves twice, rather than collapsing them through the
+career-free `kid` and keeping only the larger total. It is written when `> 0`; unit `m`, SI-scaled at
+render (`1.82 Mm`). `setValue` reads the previous value first so the window contribution is the
+**increase**. The `kindSet` guard
 `WHERE excluded.value <> player_stat.value` means a recomputation of the same total leaves
 `updated_seq` alone.
 
 **`top_kitten_distance` / `top_kitten_missions`** — folded by the same `distanceFold`, because it is
-the only fold that has ever written the `kitten` table. `Batch.KittenTops` (`batch.go:679-694`)
-returns the leader of each column; each board is a `putRecord` gated `> 0`, context `{"kitten"}`.
-Ties are broken on `kid` rather than left to Go's randomised map order, because the winner's *name*
-lands in the context and a rebuild has to reproduce the incremental bytes exactly. **All three of
-these boards, and `longest_eva`, have no flag exclusion** — their source events carry no flight. That
-is not fixable here; the fix would be the mod attributing roster totals to the flights that earned
-them.
+the only fold that writes the kitten projections. `Batch.KittenTops` returns the lifetime leader of
+each column; `CareerKittenTops` and `SystemKittenTops` compute their own scoped candidates rather
+than copying that winner. Each board is gated `> 0`, context `{"kitten"}`. Lifetime and career ties
+are broken on `kid`, and system ties on `(career, kid)`, rather than left to Go's randomised map
+order: the winner's *name* lands in the context and a rebuild has to reproduce the incremental bytes
+exactly. **All three of these boards, and `longest_eva`, have no flag exclusion** — their source
+events carry no flight. That is not fixable here; the fix would be the mod attributing roster totals
+to the flights that earned them.
 
 **The career-time boards** — `fastest_to_orbit` and the `fastest_to_<body>` family. The shared rule
 (`:1109-1134`) is *the smallest `sim_t` at which an unflagged flight of this player reached the
@@ -2473,6 +2490,20 @@ there is no per-body endpoint; the `fastest_to_<body>` board is the readable for
 `SELECT count(DISTINCT body) FROM player_body` is unaffected in practice, since landing on a body
 implies having entered its SOI.
 
+### `career_body`
+
+`career_body(player_id, career, system, kind, body, first_seq, first_sim_t,
+PRIMARY KEY(player_id, career, kind, body))`. It is the save-local sibling of `player_body`, written
+from the same qualifying `vehicle.soi` and `vehicle.situation` events. **`kind` has the same two
+implemented values:** `'soi'` and `'landed'`. `system` is denormalised from the career so a system
+scope can count the distinct-body union across that player's saves without a join; when the system
+is not known, no scoped row is inserted.
+
+Its primary key makes novelty local to one save. `soi_bodies` and `landed_bodies` therefore advance
+independently at player and career scope, while system scope counts `DISTINCT body` across all
+matching career rows. `first_sim_t` has the same seconds/NULL meaning as on `player_body`, and is
+lowered only for `'soi'` rows so `fastest_to_<body>` can use the correct per-save arrival.
+
 ### `kitten`
 
 `kitten(player_id, kid, name, travelled_m, fastest_ms, missions, mission_time_s, kia, updated_seq,
@@ -2480,9 +2511,23 @@ PRIMARY KEY(player_id, kid))`. Written only by `distanceFold` → `UpsertKitten`
 merges with `max()`, `name` is overwritten with the latest. `fastest_ms` here is the game's
 **ecliptic-frame** `FastestSpeed` and must never become a speed board.
 
-Read surface: `Batch.KittenDistance` sums `travelled_m` for `distance_travelled`, and
-`Batch.KittenTops` reads `travelled_m` and `missions` for `top_kitten_distance` and
-`top_kitten_missions`. `fastest_ms`, `mission_time_s` and `kia` are stored and read by nothing.
+Read surface: `Batch.KittenTops` reads `travelled_m` and `missions` for the player-scope
+`top_kitten_distance` and `top_kitten_missions`. `fastest_ms`, `mission_time_s` and `kia` are stored
+and read by nothing.
+
+### `career_kitten`
+
+`career_kitten(player_id, career, system, kid, name, travelled_m, fastest_ms, missions,
+mission_time_s, kia, updated_seq, PRIMARY KEY(player_id, career, kid))`. It is written alongside
+`kitten` from `roster.snapshot` when the event's career and system are known. Numeric totals merge
+with `max()` within the save-local row and the latest name wins, matching `kitten` without merging
+separate saves.
+
+This table is the source for `distance_travelled`: player scope sums every career row, career scope
+sums that save, and system scope sums the rows for all saves with that system identity. It also
+supplies the scoped candidates for `top_kitten_distance` and `top_kitten_missions`; system ties are
+ordered by `(career, kid)`. The career dimension is essential because `kid` itself is not
+save-scoped, as described under [`roster.snapshot`](#rostersnapshot).
 
 ### `feed`
 

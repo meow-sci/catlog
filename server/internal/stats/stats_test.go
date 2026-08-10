@@ -369,7 +369,9 @@ func TestPeakGIgnoresAnAbsentReading(t *testing.T) {
 
 func TestSpeedBoardsComeFromTelemetryWindows(t *testing.T) {
 	f := flightN(1)
-	got := fold(t, []input{
+	proj := testutil.MemProjections(t)
+	seedCareerSet(t, proj, defaultCareer, testSystem, 1)
+	apply(t, proj, []input{
 		{flight: f, typ: "telemetry.window", payload: window(2410, 7820, ptr(4.2))},
 		{flight: f, typ: "telemetry.window", payload: window(640, 9450, ptr(6.8))},
 		// roster.snapshot.fastest_ms is ecliptic-frame (~30 km/s standing still
@@ -377,7 +379,8 @@ func TestSpeedBoardsComeFromTelemetryWindows(t *testing.T) {
 		{typ: "roster.snapshot", payload: stats.RosterSnapshot{Kittens: []stats.RosterKitten{
 			{Kid: "k1", Name: "Comet", TravelledM: 1000, FastestMs: 29812},
 		}}},
-	})
+	}, 0, false)
+	got := readStats(t, proj)
 	want(t, got, map[string]float64{
 		"1/fastest_surface_speed": 2410,
 		"1/fastest_orbital_speed": 9450,
@@ -494,6 +497,7 @@ func TestKittensRecoveredSumsOnlyRecoveredFlights(t *testing.T) {
 
 func TestDistanceTravelledSumsPerKittenMaxima(t *testing.T) {
 	proj := testutil.MemProjections(t)
+	seedCareerSet(t, proj, defaultCareer, testSystem, 1)
 	apply(t, proj, []input{
 		{typ: "roster.snapshot", payload: stats.RosterSnapshot{Kittens: []stats.RosterKitten{
 			{Kid: "k1", Name: "Comet", TravelledM: 1000, Missions: 1},

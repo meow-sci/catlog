@@ -1419,6 +1419,26 @@ three labels would be plausible and wrong. Their three helpers therefore accept 
 values. Unknown systems are skipped rather than back-filled: career identity is still enough for the
 save row, while a system row without a system cannot make a comparable claim.
 
+### PROJ-106 — Lifetime and save-local sets are siblings, and roster distance adds the save-local rows
+
+*Accepted · 2026-08-09 · career and system scopes.*
+
+`player_body` and `kitten` retain their lifetime identities, while `career_body` and
+`career_kitten` hold the corresponding save-local sets. Widening either lifetime table with sentinel
+rows was rejected: lifetime novelty and save novelty answer different questions, and putting both
+in one table would make every count depend on remembering which identity a row represents. Separate
+primary keys make the two novelty signals independent by construction, at the bounded cost of one
+additional projection row per save-local body or kitten.
+
+The split is required for kittens, not merely convenient. A kitten's private `kid` is derived from
+the install and roster name and contains no career, while KSA stores the roster in the save. Two
+saves can therefore contain two different kittens named Mittens that collapse into one lifetime
+`kitten` row under `max()`. `career_kitten` keeps them separate, so the final greenfield
+`distance_travelled` value sums those save-local rows: every cat's distance counts across saves,
+rather than only the furthest total ever seen for a reused name. There is no published history to
+preserve, so documenting and building the intended final meaning is safer than carrying a known
+pre-launch quirk.
+
 ## Archive & restore
 
 The filesystem archiver, the manifest, restore verification, and the R2 design that is deliberately not built.

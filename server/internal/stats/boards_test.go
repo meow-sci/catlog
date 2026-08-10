@@ -396,12 +396,15 @@ func TestKittenRecordBoardsBreakTiesDeterministically(t *testing.T) {
 }
 
 func TestKittenRecordBoardsTakeTheBestSingleKitten(t *testing.T) {
-	got := fold(t, []input{
+	proj := testutil.MemProjections(t)
+	seedCareerSet(t, proj, defaultCareer, testSystem, 1)
+	apply(t, proj, []input{
 		{typ: "roster.snapshot", payload: stats.RosterSnapshot{Kittens: []stats.RosterKitten{
 			{Kid: "k1", Name: "Comet", TravelledM: 4200, Missions: 2},
 			{Kid: "k2", Name: "Nimbus", TravelledM: 990, Missions: 11},
 		}}},
-	})
+	}, 0, false)
+	got := readStats(t, proj)
 	want(t, got, map[string]float64{
 		"1/distance_travelled":  5190,
 		"1/top_kitten_distance": 4200,

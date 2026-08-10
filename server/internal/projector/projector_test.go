@@ -230,15 +230,17 @@ func tw(body string, surface, orbital, peakG float64) stats.TelemetryWindow {
 // compared by content rather than by rowid so an id offset cannot make two
 // identical feeds look different.
 type snapshot struct {
-	Stats       []string
-	CareerStats []string
-	SystemStats []string
-	Flights     []string
-	Bodies      []string
-	Kittens     []string
-	Periods     []string
-	Feed        []string
-	Cursor      int64
+	Stats         []string
+	CareerStats   []string
+	SystemStats   []string
+	Flights       []string
+	Bodies        []string
+	CareerBodies  []string
+	Kittens       []string
+	CareerKittens []string
+	Periods       []string
+	Feed          []string
+	Cursor        int64
 }
 
 func (r *rig) snapshot() snapshot {
@@ -262,7 +264,13 @@ func (r *rig) snapshot() snapshot {
 		if s.Bodies, err = dump(ctx, p, `SELECT player_id, kind, body, first_seq FROM player_body ORDER BY player_id, kind, body`); err != nil {
 			return err
 		}
+		if s.CareerBodies, err = dump(ctx, p, `SELECT player_id, career, system, kind, body, first_seq, coalesce(first_sim_t,-1) FROM career_body ORDER BY player_id, career, kind, body`); err != nil {
+			return err
+		}
 		if s.Kittens, err = dump(ctx, p, `SELECT player_id, kid, name, travelled_m, fastest_ms, missions, mission_time_s, kia, updated_seq FROM kitten ORDER BY player_id, kid`); err != nil {
+			return err
+		}
+		if s.CareerKittens, err = dump(ctx, p, `SELECT player_id, career, system, kid, name, travelled_m, fastest_ms, missions, mission_time_s, kia, updated_seq FROM career_kitten ORDER BY player_id, career, kid`); err != nil {
 			return err
 		}
 		if s.Periods, err = dump(ctx, p, `SELECT player_id, stat, period, bucket, value, coalesce(context,''), updated_seq FROM player_stat_period ORDER BY player_id, stat, period, bucket`); err != nil {
@@ -405,6 +413,7 @@ func TestCheckpointResumesMidStreamWithoutDoubleCounting(t *testing.T) {
 	diff(t, "player_stat", got.Stats, want.Stats)
 	diff(t, "flight_state", got.Flights, want.Flights)
 	diff(t, "kitten", got.Kittens, want.Kittens)
+	diff(t, "career_kitten", got.CareerKittens, want.CareerKittens)
 	// The two rigs inserted their events at slightly different wall times, so
 	// the feed's server-assigned `at` legitimately differs; the content must not.
 	diff(t, "feed", withoutAt(got.Feed), withoutAt(want.Feed))
@@ -435,7 +444,9 @@ func TestRebuildEqualsIncrementalForAnUnflaggedHistory(t *testing.T) {
 	diff(t, "player_stat", rebuilt.Stats, incremental.Stats)
 	diff(t, "flight_state", rebuilt.Flights, incremental.Flights)
 	diff(t, "player_body", rebuilt.Bodies, incremental.Bodies)
+	diff(t, "career_body", rebuilt.CareerBodies, incremental.CareerBodies)
 	diff(t, "kitten", rebuilt.Kittens, incremental.Kittens)
+	diff(t, "career_kitten", rebuilt.CareerKittens, incremental.CareerKittens)
 	diff(t, "player_stat_period", rebuilt.Periods, incremental.Periods)
 	diff(t, "feed", rebuilt.Feed, incremental.Feed)
 	if rebuilt.Cursor != incremental.Cursor {
@@ -488,7 +499,9 @@ func TestBatchSizeDoesNotChangeTheProjection(t *testing.T) {
 			diff(t, "player_stat", got.Stats, want.Stats)
 			diff(t, "flight_state", got.Flights, want.Flights)
 			diff(t, "player_body", got.Bodies, want.Bodies)
+			diff(t, "career_body", got.CareerBodies, want.CareerBodies)
 			diff(t, "kitten", got.Kittens, want.Kittens)
+			diff(t, "career_kitten", got.CareerKittens, want.CareerKittens)
 			diff(t, "player_stat_period", got.Periods, want.Periods)
 			diff(t, "feed", got.Feed, want.Feed)
 			if got.Cursor != want.Cursor {

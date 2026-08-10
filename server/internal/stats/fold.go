@@ -189,6 +189,18 @@ func putRecord(ctx context.Context, b *Batch, ev Event, stat string, value float
 	return periodRecord(ctx, b, ev, stat, value, cx)
 }
 
+// putPlayerRecord writes only the lifetime row and its period rows. Set-backed
+// folds use it when each scope has a different winning source row and therefore
+// must not fan one lifetime context into the career and system scopes.
+func putPlayerRecord(ctx context.Context, b *Batch, ev Event, stat string, value float64, context map[string]any) error {
+	cx, err := encodeContext(context)
+	if err != nil {
+		return err
+	}
+	b.putStat(kindRecord, ev.PlayerID, stat, value, cx, ev.Seq)
+	return periodRecord(ctx, b, ev, stat, value, cx)
+}
+
 // addCount advances a counter board. updated_seq becomes the seq at which the
 // counter reached its new value, which is what makes the tie-break "whoever got
 // to N first" rather than "whoever was written last" — and is why the batch

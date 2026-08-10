@@ -403,7 +403,7 @@ const BOARD_DEFINITIONS: Omit<Board, "scopes">[] = [
     career: false,
     from: ["vehicle.soi"],
     what: "How many distinct worlds you have reached.",
-    how: "One per world, the first time you arrive at it. Arriving again changes nothing.",
+    how: "One per world, the first time you arrive at it. Your player total is the union across every save; a career row counts only that save; a system row is the union across your saves using that celestial system. Arriving again within the same scope changes nothing.",
     excluded: ["The flight was flagged."],
   },
   {
@@ -414,7 +414,7 @@ const BOARD_DEFINITIONS: Omit<Board, "scopes">[] = [
     career: false,
     from: ["vehicle.situation"],
     what: "How many different worlds you have put something down on.",
-    how: "One per world, the first time you touch its surface. Touching down there again changes nothing. Water counts: splashing down on a world is still arriving at it, and Splashdowns is the board that tells the two apart. It asks whether you have anything standing on a surface there, which is a wider question than Landings: a vehicle already sitting on the ground when a save loads counts here, and so does a rover that rolls to a stop, and neither of those is a landing.",
+    how: "One per world, the first time you touch its surface. Your player total is the union across every save; a career row counts only that save; a system row is the union across your saves using that celestial system. Water counts: splashing down on a world is still arriving at it, and Splashdowns is the board that tells the two apart. It asks whether you have anything standing on a surface there, which is a wider question than Landings: a vehicle already sitting on the ground when a save loads counts here, and so does a rover that rolls to a stop, and neither of those is a landing.",
     excluded: ["The world's name could not be read.", "The flight was flagged."],
   },
   {
@@ -525,8 +525,8 @@ const BOARD_DEFINITIONS: Omit<Board, "scopes">[] = [
     ascending: false,
     career: false,
     from: ["roster.snapshot"],
-    what: "Total distance travelled across every kitten in your roster.",
-    how: "Each kitten's running total is kept at its highest value ever seen, and the board is the sum of those. A snapshot that arrives out of order, or an older save reloaded, can fail to move the number but can never wind it back.",
+    what: "Total distance travelled by your whole crew across your saves.",
+    how: "Each save keeps its own roster totals. Your player total adds every save; a career row adds that save; a system row adds every save using that celestial system. Kittens with the same roster name in different saves still count separately, because they are different cats. Within one save, an older snapshot can fail to move a total but can never wind it back.",
     excluded: [
       "Nothing. Roster totals are not attached to a flight, so the flag rule has nothing to attach to either. The two per-kitten boards below inherit the same gap.",
     ],
@@ -539,7 +539,7 @@ const BOARD_DEFINITIONS: Omit<Board, "scopes">[] = [
     career: false,
     from: ["roster.snapshot"],
     what: "How far your single most-travelled kitten has gone.",
-    how: "The largest lifetime distance held by any one kitten in your roster. Distance Travelled adds your whole roster together; this one is your best individual cat, and the row names her.",
+    how: "The largest distance held by any one kitten in the selected player, career or celestial-system scope. Distance Travelled adds the whole roster in that scope together; this one is the best individual cat, and the row names her.",
     excluded: [
       "Nothing. Roster totals are not attached to a flight, so the flag rule has nothing to attach to either — a kitten who did all her travelling on a flagged flight still holds the record.",
     ],
@@ -552,7 +552,7 @@ const BOARD_DEFINITIONS: Omit<Board, "scopes">[] = [
     career: false,
     from: ["roster.snapshot"],
     what: "How many missions your most-flown kitten has on record.",
-    how: "The largest mission count held by any one kitten in your roster. The game counts a mission that was called off before launch, so this rewards showing up as well as arriving.",
+    how: "The largest mission count held by any one kitten in the selected player, career or celestial-system scope. The game counts a mission that was called off before launch, so this rewards showing up as well as arriving.",
     excluded: [
       "Nothing, for the same reason as the board above: roster totals carry no flight to flag.",
     ],

@@ -104,7 +104,7 @@ func TestMigrationsCreateTheFullDDL(t *testing.T) {
 	t.Run("projections", func(t *testing.T) {
 		p := testutil.Projections(t)
 		want := []string{
-			"career", "career_stat", "event_census", "feed", "flight_state", "kitten", "player_body",
+			"career", "career_body", "career_kitten", "career_stat", "event_census", "feed", "flight_state", "kitten", "player_body",
 			"player_stat", "player_stat_period", "proj_build", "proj_checkpoint", "schema_version",
 			"system_stat",
 		}
@@ -112,6 +112,7 @@ func TestMigrationsCreateTheFullDDL(t *testing.T) {
 			t.Errorf("tables = %v, want %v", got, want)
 		}
 		wantIdx := []string{
+			"career_body_system", "career_kitten_player", "career_kitten_system",
 			"career_stat_rank", "career_stat_system",
 			"census_busiest", "census_window",
 			"fs_player", "stat_period_age", "stat_period_rank", "stat_rank", "system_stat_rank",
@@ -119,8 +120,8 @@ func TestMigrationsCreateTheFullDDL(t *testing.T) {
 		if got := indexNames(t, p.DB); !equal(got, wantIdx) {
 			t.Errorf("indexes = %v, want %v", got, wantIdx)
 		}
-		if p.Version != 6 {
-			t.Errorf("schema version = %d, want 6", p.Version)
+		if p.Version != 7 {
+			t.Errorf("schema version = %d, want 7", p.Version)
 		}
 	})
 }
@@ -204,6 +205,8 @@ func TestMigrationsRunOnMemoryStores(t *testing.T) {
 func TestProjectionCountsIncludeScopeTables(t *testing.T) {
 	p := testutil.MemProjections(t)
 	for _, stmt := range []string{
+		`INSERT INTO career_body (player_id, career, system, kind, body, first_seq) VALUES (1, 'testcareer000001', 'testsystem000001', 'soi', 'luna', 1)`,
+		`INSERT INTO career_kitten (player_id, career, system, kid, name, updated_seq) VALUES (1, 'testcareer000001', 'testsystem000001', 'kid1', 'Mittens', 1)`,
 		`INSERT INTO career_stat (player_id, career, stat, value, updated_seq) VALUES (1, 'testcareer000001', 'landings', 2, 1)`,
 		`INSERT INTO system_stat (player_id, system, stat, value, updated_seq) VALUES (1, 'testsystem000001', 'landings', 2, 1)`,
 	} {
@@ -215,8 +218,9 @@ func TestProjectionCountsIncludeScopeTables(t *testing.T) {
 	if err != nil {
 		t.Fatalf("counts: %v", err)
 	}
-	if c.CareerStat != 1 || c.SystemStat != 1 {
-		t.Errorf("scope counts = career %d, system %d; want 1, 1", c.CareerStat, c.SystemStat)
+	if c.CareerStat != 1 || c.SystemStat != 1 || c.CareerBody != 1 || c.CareerKitten != 1 {
+		t.Errorf("scope counts = career stat %d, system stat %d, career body %d, career kitten %d; want all 1",
+			c.CareerStat, c.SystemStat, c.CareerBody, c.CareerKitten)
 	}
 }
 
