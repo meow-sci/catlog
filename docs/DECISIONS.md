@@ -2861,3 +2861,34 @@ The site is its own pnpm project with its own lockfile — not a workspace membe
 **React is added over the gatOS baseline.** gatOS carries the React Compiler lint rules but no React integration; here the event catalog wants one genuinely interactive surface — a filterable, cross-linked table over all 22 event types — and reimplementing that in vanilla JS to avoid a dependency would cost more than the dependency. React Compiler is on, so `docs-site/` carries the rule that comes with it: hand-written `useMemo`/`useCallback`/`memo` are forbidden, because a manual memo makes the compiler bail out of the whole component.
 
 **Deployment is path-filtered.** `.github/workflows/docs-site.yml` fires only on pushes touching `docs-site/**` or the workflow itself. This repository had no `.github/` at all before this change, so the workflow is also the first: nothing else is wired to CI yet, and a docs deploy that runs on every commit to a repository this size would be pure waste. The artifact flow (`configure-pages` → `upload-pages-artifact` → `deploy-pages`) is used rather than a `gh-pages` branch, so the built site never enters the repository's history.
+
+### DOCS-005 — Pre-launch implementation plans describe one final contract and fresh schema, not a fictional upgrade history
+
+*Accepted · 2026-08-09 · plan audit.*
+
+catlog has not launched and holds no production event or projection data. `PROJ-100` already records
+the consequence for event contracts: every type stays at `ver: 1` until real stored data makes an
+old shape something that must be preserved. The same reasoning applies to the large incremental
+implementation plan: compatibility upcasters, read-API version bumps, `stats.BuildVersion` bumps,
+backfills and previous-binary deployment gates would test a history that cannot occur, while making
+less capable implementing agents carry two designs—the desired end state and a disposable path to
+it—at once.
+
+So [`LOTS_OF_THINGS_PLAN.md`](../LOTS_OF_THINGS_PLAN.md) specifies the final v1 payloads and a fresh
+database assembled by the normal migration runner. It still requires small, green, vertically
+complete commits, exact DDL fixtures, rebuild equivalence, cross-language vectors and both
+documentation halves. Those are end-state correctness properties, not upgrade machinery. The
+ordinary post-launch version rules remain unchanged and begin once a deployed contract or stored
+data actually exists.
+
+The audit's open design gates were then resolved in favour of one delegation-ready end state:
+system identity hashes every stable surveyed field; the catalogue is a forest and carries the
+orientation-at-zero quaternion; “planet” is an explicit mod-emitted semantic kind;
+`system.discovered` is mandatory while the potentially large body catalogue remains configurable;
+comparison-sensitive challenges rank per system and use catlogd's receive timestamp against literal
+UTC epochs. Badges deliberately follow a different rule from durable credentials: they are current
+projection output, so reprojection may add or remove them when eligibility, refinements or the badge
+catalogue changes. That keeps them compositional with the folds that award them and avoids a second,
+historical eligibility engine whose answer could disagree with the leaderboards it claims to
+recognise. Each implementing task still records the appropriate area decision with its code; this
+entry records why the plan contains no unresolved alternative branches.

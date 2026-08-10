@@ -9,7 +9,9 @@ Author: planning session. Audience: the implementing agents who will execute the
 
 ## 0. How to use this document
 
-This plan is written to be executed by coding agents, one task at a time, in order. Every task
+This plan is written to be executed by coding agents, one task at a time, in the dependency order
+in Appendix G. **Do not use the document's page order as the execution order:** the required first
+slice is A1–A6 → C1–C4 → A7–A9 → B. Every task
 carries: the files it touches, the code it should write (or a close sketch of it), the tests it must
 add, the documents it must update in the **same commit**, and an acceptance check.
 
@@ -26,22 +28,26 @@ add, the documents it must update in the **same commit**, and an acceptance chec
 done, however green the tests are:
 
 1. **`make test` stays green.** Every task adds tests for what it changed.
-2. **Rebuild == incremental.** Any new fold derives its bucket/window/scope from `ev.RecvTime`,
-   `ev.Seq`, `ev.Career` or the payload — **never** from `time.Now()`, never from Go map iteration
-   order, never from anything outside the event. `projector.TestRebuildEqualsIncrementalForAnUnflaggedHistory`
-   must be extended to cover every new table (see Task A8).
+2. **Rebuild == incremental outside the recorded D22 refinements.** Any new fold derives its
+   bucket/window/scope from `ev.RecvTime`, `ev.Seq`, `ev.Career` or the payload — **never** from
+   `time.Now()`, Go map iteration order or anything outside the event. Extend
+   `projector.TestRebuildEqualsIncrementalForAnUnflaggedHistory` to every new table and separately
+   pin each intentionally inherited late-flag/KIA/recovery divergence (see A8, F4 and H3).
 3. **Docs move in the same commit.** `docs/event-details.md` **and** `docs-site/` for anything that
    touches an event, a payload field, a fold, a board, an eligibility rule or a unit. Plus a dated
    `docs/DECISIONS.md` entry in the right area with the next free number, saying **why**.
 4. **Never mint a new `§` number.** New material gets a document and a heading.
-5. **A contract change carries a version bump.** Event/payload → that event's `ver`. Endpoint shape →
-   its `ver`. Credential file → `format`. **And a fold whose *meaning* changed without its name
-   changing → `stats.BuildVersion`** — see §5.1, which explains why and names the one task in this
-   plan that could owe one.
-6. **Projections migrations are additive only.** No `DROP TABLE`, no `DROP COLUMN`, no table
-   recreation under `migrations/projections/` — the live file is migrated in place while it is still
-   serving reads. See §5.2. This one is new since the shadow-ban work and it already forced a
-   redesign of Task A5.
+5. **This plan is greenfield and every event remains `ver: 1`.** There is no launched contract,
+   stored production data, previous-binary deployment, compatibility path or `stats.BuildVersion`
+   bump to preserve. New and changed payloads define their final v1 shape, conformance vectors are
+   regenerated to that shape, and the final deployment starts with fresh databases. This is the
+   owner's explicit direction and the case `PROJ-100` records. The repository's post-launch version
+   rules still apply to later work, not to tasks in this plan.
+6. **Build the final schema, not an upgrade path.** Use the next migration number so the existing
+   migration runner and exact-DDL tests construct the final fresh database, but add no backfills,
+   upcasters, compatibility transforms or previous-schema acceptance tests. The sibling-table
+   design in Task A5 remains because its lifetime/per-save meanings are cleanly distinct, not
+   because a live database forces it.
 7. **No celestial-body allow-list, ever.** Not for boards, not for badges, not for challenges. See
    §3.7 below — this is the single most likely way an implementing agent will get this wrong.
 8. **Career ids are never published raw.** `readapi/privacy.go`'s per-player relabelling is mandatory
@@ -105,18 +111,20 @@ Five things, in dependency order:
 
 | # | Thing | Shape | Phases |
 |---|---|---|---|
-| 1 | **Per-save (career) leaderboards** | A second scope on every existing board, plus 3 career-native boards. Ranks `(player, save)` pairs. | A, B |
+| 1 | **Per-save (career) leaderboards** | A second scope on every existing board, plus 2 career-native boards. Ranks `(player, save)` pairs. | A, B |
 | 2 | **Celestial systems as a first-class dimension** | KSA's system is replaceable XML content. The mod hashes it and reports its bodies; the server ranks *within* a system, names it in the UI, and can answer "have you been everywhere". | C |
-| 3 | **New boards from the community ideas** | Mostly free from data already on the wire; three new payload fields, plus the two element fields §3.20 needs. | D, E |
-| 4 | **Merit badges** | A permanent, once-only award. Three projections: lifetime, per-save, and always labelled with the system. | F, G |
+| 3 | **New boards from the community ideas** | Mostly free from data already on the wire; five existing event types gain their final-v1 fields. | D, E |
+| 4 | **Merit badges** | A once-only award in two independently earned scopes: lifetime and per-save, always labelled with the system. | F, G |
 | 5 | **Weekly challenges** | A curated rule over a named, explicitly-dated window. | H, I |
 
-And a documentation sweep that closes all of it (Phase J).
+And a documentation audit that closes all of it (Phase J). Every implementation task still owns
+its affected docs and next-free decision entry in the same commit; Phase J never creates deferred
+documentation for earlier code.
 
-**Every stat in this plan is a `(handle, save, system)` triple.** A save belongs to exactly one
-system and cannot change systems, so the system is *determined* by the save — but it is carried and
-displayed everywhere anyway, by friendly name, because a reader comparing two rows has to be able to
-see whether they are even comparable. That is §3.15.
+**Every save-scoped stat carries `(handle, save, system)`.** A save belongs to exactly one system, so
+the system is determined by it and displayed by friendly name. A genuinely cross-system
+player-scoped challenge may deliberately have no system label; H1 prevents attaching a
+misleading last-contributor system.
 
 ### 2.1 The community ideas, and what each one actually needs
 
@@ -147,8 +155,8 @@ wrong thing.
 
 `GET /v1/leaderboards` stays **one row per board**. Each row gains
 `scopes: ["player","career"]`. `?scope=career` on a board URL selects the per-save ranking;
-an absent `?scope=` means `player` and every existing URL, cache entry and assertion is
-byte-identical.
+an absent `?scope=` means `player`. The response grows new fields, so semantic default behaviour —
+not byte identity with today's pre-launch response — is the contract.
 
 *Why:* this is PROJ-042's argument, applied a second time, and it applies harder here. Listing
 `landings@career` as its own index entry multiplies the index by two — and because
@@ -219,7 +227,7 @@ it is stable under rebuild because it is assigned in ascending `first_seq`.
 
 *URL form:* `/p/{handle}/saves/{ordinal}` — `/p/whiskers/saves/2`. Ordinals, not tokens, in URLs.
 
-### 3.6 A badge is a permanent, once-only, timestamped award, in two scopes, always labelled with its system
+### 3.6 A badge is once-only within the current projection and rebuild-authoritative
 
 One table, `badge_award`, with `career = ''` meaning **the lifetime (player) award** and
 `career = '<id>'` meaning **the per-save award**. The same badge is awarded independently in both
@@ -234,7 +242,8 @@ value is therefore derivable by a join. Three reasons, and the first is the one 
   every badge, every board row and every save, always.
 - The lifetime row (`career = ''`) has no career to join through, so without the column it could not
   be labelled at all. It records the career **and** system it was **first earned in** — which is the
-  honest answer to "where did you get this", and is stable because a badge is never re-awarded.
+  honest answer to "where did the current projection first award this"; a rebuild may change it
+  when earlier eligibility changes (§3.6).
 - It makes "which badges have I earned in this system" one predicate rather than a join.
 
 There is no *third* row per system. A system's badges are the union of its saves' badges, which is a
@@ -254,17 +263,45 @@ table is new, both scopes have the same columns and the same merge rule, and not
 retrofitted. The test is whether the sentinel *adds* a meaning to a table or *is* the table's
 meaning; `event_census` passes it, `badge_award` passes it, a widened `player_body` did not.
 
-*Why once-only:* a badge is a *milestone*, and its interesting property is **when you first got it**.
-`INSERT … ON CONFLICT DO NOTHING` gives that for free and is replay-stable: a rebuild replays the
-same seqs in the same order and therefore awards at the same event.
+*Why once-only:* a badge is a *milestone*, and its interesting property is **when the current
+projection first says you got it**. `INSERT … ON CONFLICT DO NOTHING` retains that first qualifying
+seq inside one build.
+
+**A rebuild is authoritative.** Badge folds read the same board/state projections the rest of the
+server uses. A later `flight.flagged`, a KIA/recovery refinement, or a changed/removed badge fold can
+therefore make a badge disappear when projections are rebuilt; adding a badge can discover it from
+old events. That is intended. There is no `revoked` column, tombstone, event-time progress table,
+`first_flagged_seq` or special badge eligibility path. The public API reports what the current code
+projects from the immutable log, exactly as a leaderboard does. Adding or removing a badge means
+adding/removing its registry entry **and** fold together; the fold-name change alters `BuildID` and
+queues the rebuild that discovers or removes its rows. Document this plainly: “once-only” means one
+earliest row in the current projection, not an irrevocable entitlement.
 
 ### 3.7 "Visited every planet" is built — and the list comes from the game, never from the server
 
-The badge exists. It reads **"every body of class Planet in the system this save is playing in"**, and
-the set it checks against comes from the `system.body` events the mod sends after reading the game's
-own loaded system (§3.16). Tier badges on the *count* of distinct bodies —
+The badge exists, but its exact meaning has one **owner decision gate** before delegation. The set it
+checks against comes from the `system.body` events the mod sends after reading the game's own loaded
+system (§3.16). Tier badges on the *count* of distinct bodies —
 `wanderer` (3), `voyager` (5), `grand_tour` (8) — ship beside it, because they are a different and
 also-interesting question.
+
+**“Planet/world” has one explicit mod-side meaning.** Runtime `Astronomical.Class` is **not**
+`"Planet"`: stock objects report concrete strings such as `PlanetaryBody`, `TerrestrialBody`,
+`AtmosphericBody`, `MinorBody`, `Asteroid`, `Comet` and `StellarBody`. Emit both the concrete class
+and this exhaustive normalised `kind`:
+
+| `kind` | Rule |
+|---|---|
+| `star` | concrete class `StellarBody` |
+| `planet` | concrete class `PlanetaryBody`, `TerrestrialBody` or `AtmosphericBody` **and its direct parent is any `StellarBody`** |
+| `moon` | one of those same three concrete classes with a non-stellar parent |
+| `minor` | `MinorBody`, `Asteroid`, `Comet`, `PeriodicComet` or `InterstellarComet` |
+| `other` | any future/unknown concrete class |
+
+This works for a modded multiple-star hierarchy; a stellar parent need not itself be a root. “Every
+World” uses only `kind == "planet"`, excluding minor bodies/comets and moons. Preserve `class`
+separately, test every row plus an unknown class, and record the table verbatim in C2, F7,
+`docs/event-details.md` and player-facing copy. The Go server never infers kind from a name.
 
 *Why this does not violate PROJ-033.* That decision deleted the celestial-body **allow-list** — a
 list of body names compiled into the server. This adds no such list. The server learns what bodies
@@ -332,17 +369,18 @@ before it closes."*
 
 ### 3.10 The whole wire change, in one table
 
-Two new event types and five version bumps. Nothing else.
+Two new event types and five existing v1 payloads extended to their final pre-launch shape. **All
+types remain `ver: 1`; there are no upcasters or compatibility payloads in this plan.**
 
 | Type | Change | Serves |
 |---|---|---|
 | `system.discovered` | **new**, `ver 1`, locked on | §3.15–3.17: system identity and its friendly name |
-| `system.body` | **new**, `ver 1`, locked on | the body set — "visited every planet", and the 3D contract |
-| `flight.started` | `ver 2`: `+engine_count` | "reach Jupiter with no engines" |
-| `vehicle.rud` | `ver 2`: `+part_count` | "most parts destroyed" |
-| `kitten.tumble` | `ver 2`: `+from` | "did not land on their feet", as actually asked for |
-| `vehicle.orbit` | `ver 2`: the rest of the Keplerian elements | §3.20 — draw the orbit a milestone happened on |
-| `telemetry.window` | `ver 2`: `+state` (position **and** velocity, optional) | §3.20 — draw where the vessel was |
+| `system.body` | **new**, `ver 1`, configurable | the body set — "visited every planet", and the 3D contract; disabling it makes the catalogue incomplete |
+| `flight.started` | existing `ver 1`: `+engine_count` | "reach Jupiter with no engines" |
+| `vehicle.rud` | existing `ver 1`: `+part_count` | "most parts destroyed" |
+| `kitten.tumble` | existing `ver 1`: `+from` | "did not land on their feet", as actually asked for |
+| `vehicle.orbit` | existing `ver 1`: `+sma_m`, `lan_deg`, `argp_deg`, `t_pe`, `period_s` | §3.20 — draw the orbit a milestone happened on |
+| `telemetry.window` | existing `ver 1`: `+state` (position **and** velocity, optional) | §3.20 — draw where the vessel was |
 
 Everything else the community asked for is derived server-side from data already shipping.
 
@@ -383,17 +421,10 @@ achieved" to it is the same move, and it is what keeps the wire small (§3.10).
 new tables sit beside them: `career_body(player_id, career, kind, body, …)` and
 `career_kitten(player_id, career, kid, …)`, written by the same folds on the same events.
 
-*Why not add `career` to the existing primary keys:* **because projections migrations are now
-additive-only** (§5.2, `PROJ-101`). The live `projections.db` is migrated in place at open so its
-boards keep answering reads while the rebuild runs, and SQLite cannot widen a primary key without
-recreating the table — which would damage the file that is still serving. That rules out the obvious
-design.
+*Why siblings rather than widened lifetime tables:* the lifetime and per-save sets answer different
+questions, use different novelty signals and need different deterministic identities. Keeping them
+separate makes those meanings explicit in the final fresh schema:
 
-*Why the result is better anyway,* and would have been the right answer even without the constraint:
-
-- **No published number moves.** `soi_bodies`, `landed_bodies`, `distance_travelled`,
-  `top_kitten_distance` and `top_kitten_missions` all read the tables they read today, unchanged, so
-  there is nothing to re-explain to a player and **no `stats.BuildVersion` bump owed** (§5.1).
 - **No sentinel.** An earlier draft used `career = ''` rows inside a widened `player_body` to keep the
   lifetime novelty count honest. That works, but it makes one table mean two things and makes every
   future reader ask which rows they are counting. Two tables, two questions, no ambiguity.
@@ -404,7 +435,7 @@ design.
 
 *The cost, stated:* a body reached in two saves stores three rows rather than two, and a kitten who
 appears in two saves stores three rather than one. That is a projection, it is bounded by
-players × saves × bodies, and it is the price of the additive constraint.
+players × saves × bodies, and it buys unambiguous lifetime and per-save semantics.
 
 ### 3.13 `kid` is not save-scoped, and the lifetime `distance_travelled` quirk is documented, not fixed
 
@@ -414,12 +445,10 @@ kitten called Mittens in save B are two different cats that collapse to one `kid
 `kitten` table merges them under `max()`, so `distance_travelled` reports the *furthest that name ever
 got in any one save* rather than the total across saves.
 
-**The per-save boards are correct** — `career_kitten` splits them — and the lifetime board keeps the
-behaviour it has always had. Fixing the lifetime number is a one-line change once `career_kitten`
-exists (sum over it instead), but it moves a published number and therefore owes a `BuildVersion`
-bump, so it is **optional sub-task A5.4** and the owner's call rather than something this plan
-smuggles in. Either way the quirk gets written down in `docs/event-details.md`, because right now it
-is behaviour no document states.
+`career_kitten` splits them, and the final greenfield lifetime board must sum those per-save rows.
+Task A5.4 is therefore **mandatory**: `distance_travelled` becomes the total across saves, even when
+two saves reuse the same roster name. There is no published data and no `BuildVersion` bump or
+compatibility branch. Document the final meaning rather than preserving the pre-launch quirk.
 
 ### 3.14 Badge families reuse `[boards] min_players`, and challenges do not need it
 
@@ -486,10 +515,16 @@ produce the same hash, on different machines, on different runs, forever.** That
 float-precision-sensitive, anything that depends on enumeration order the game does not guarantee,
 and anything mutable at runtime.
 
+**The hash is exact catalogue identity, not a coarse fingerprint.** It includes both raw system id
+and display name and every stable field represented by the final survey, including the complete
+rotation/orientation and orbital set. Two catalogues that would publish different `system.body`
+rows must hash differently. Task C1 pins the complete field order and canonical encoding; C3 still
+retains first-write on an impossible/corrupt same-hash conflict rather than mutating shared data.
+
 ### 3.17 Two event types, not one chunked payload
 
-`system.discovered` carries the header — hash, name, home body, body count, and the sim time it was
-read at. `system.body` carries **one body per event**.
+`system.discovered` carries the header — hash, name, home body and body count; its envelope carries
+the boundary's current `sim_t`. `system.body` carries **one body per event**.
 
 *Why not one event with a `bodies[]` array:* `Wire.MaxEventLineBytes` is 16 KiB and a single line
 over the cap wedges the outbox behind it. **This is not a hypothetical.** Stock KSA ships
@@ -508,9 +543,10 @@ rebuild folding them in any order produces the same table.
 `shipper_state` table, which survives a restart (Task C2.3). The header event still goes every
 session, because that is what binds a career to its system and it is one small event.
 
-A re-send after a fresh outbox is harmless: every `system.body` is an upsert keyed `(hash, body)`, so
-folding the same survey twice is a no-op. **That property is what makes the optimisation safe to
-have**, and it is worth a test rather than a comment.
+A re-send after a fresh outbox is harmless: every `system.body` is an immutable first-write keyed
+`(hash, body)`, so folding the same survey twice is a no-op and a conflicting duplicate cannot
+rewrite shared catalogue data. **That property is what makes the optimisation safe to have**, and
+it is worth identical/conflicting duplicate tests rather than a comment.
 
 ### 3.18 System is the **third board scope**, and body boards say so
 
@@ -537,7 +573,7 @@ and a `400` on `scope=player` with a message naming the scope that can answer �
 |---|---|---|
 | `hash` | The mod's stable identity for the content | Storage key, API key, joins |
 | `name` | What the game calls it | **Every display surface, always** |
-| `slug` | `name` normalised through the existing `statSuffix` rule, with a `-2`, `-3` … suffix when two distinct systems share a name, assigned in first-seen order | URLs: `/boards/fastest_to_luna?system=sol` |
+| `slug` | `name` through C3.4's dedicated ASCII slugger, with a `-2`, `-3` … suffix when two distinct systems share a name, assigned in first-seen order | URLs: `/boards/fastest_to_luna?system=sol` |
 
 **The hash is not a deanonymisation hazard and must not be relabelled.** `career`, `kid` and
 `install` are derived from the mod's install id, which is one *machine* and therefore one *person*,
@@ -562,11 +598,11 @@ vessel's path through it, in a browser, from catlog's own data. **Nothing in thi
 What this plan does is make sure the log will contain enough, because a log cannot be back-filled and
 a decision to record less is the one decision that cannot be undone (Constitution §5).
 
-The contract, therefore, is a **completeness** requirement on three payloads:
+The contract is a completeness requirement on three payloads, subject to one owner decision:
 
 | To draw | Needs | Where it comes from |
 |---|---|---|
-| The system, at any sim time | Per body: parent, the full Keplerian element set, an unambiguous absolute epoch, the physical size, and the rotation axis and rate | `system.body` |
+| The system, at any sim time | Per body: parent, the full Keplerian element set, the physical size, and the rotation axis/rate; exact ground tracks also require rotation phase at a stated epoch | `system.body` |
 | A vessel's orbit at a milestone | The full element set, not just apoapsis and periapsis | `vehicle.orbit` |
 | A vessel's path over time | A state vector — position **and** velocity — at a known sim time, relative to a named parent | `telemetry.window` |
 | Where a thing happened | Body + latitude + longitude + altitude | already on `vehicle.rud`, `vehicle.impact`, `vehicle.landed`, `flight.started`, `flight.ended` |
@@ -597,10 +633,18 @@ Two rules a task must not violate:
    the only thing the outbox may drop under pressure. Visualization data is exactly what *should* be
    shed first when a player's spool is full, and putting it anywhere else would make it undroppable.
 
-What is **not** being recorded, so nobody adds it speculatively: no per-frame positions, no
-attitude or quaternions, no camera state, no terrain or mesh data, no textures or colours, and no
-derived trajectory. If a renderer later wants smoother paths it can interpolate, or a future decision
-can lower the window — a change that costs a `ver` bump and nothing else.
+**Exact body-fixed placement is part of the contract.** Axis plus angular velocity does not define
+prime-meridian phase, so `system.body` also carries a finite, normalised orientation-at-zero
+quaternion read from `IParentBody.GetCcf2Cce(SimTime.Zero)`. Storage and the systems API preserve all
+four components. Together they can place latitude/longitude events and ground tracks exactly in the
+game's body-fixed frame; omission or a non-finite quaternion makes the catalogue incomplete.
+
+What is **not** being recorded, so nobody adds it speculatively: no per-frame vessel positions, no
+vessel attitude, no camera state, no terrain or mesh data, no textures or colours, and no derived
+trajectory. The body-orientation quaternion is included solely because exact surface placement is
+part of the chosen contract.
+If a renderer later wants smoother paths it can interpolate, or a post-launch decision can lower the
+window under the normal contract-version rules.
 
 **Also surveyed, readable, and deliberately not shipped now** — Saturn's ring geometry, per-body
 colours, named surface locations (Earth alone has some forty cities and mountains with latitudes and
@@ -619,13 +663,13 @@ that sounds like fun, and because §9 requires the reasoning to exist before the
 | Principle | This plan |
 |---|---|
 | **§1** no email, handle is the only identity | Untouched. New surfaces publish handle + save ordinal + relabelled save id. §3.5. |
-| **§2** cheap enough to forget about | Eight new tables (`career_stat`, `system_stat`, `career_body`, `career_kitten`, `system`, `system_body`, `badge_award`, `challenge_stat`), all bounded: the four scoped ones by players × saves (or × systems) × boards, the two system ones by *distinct systems* × bodies — which is one row set shared by everyone running stock KSA. **Career and system scopes are explicitly denied a period dimension** (§3.3) precisely to keep the multiplicative one from existing. No new process, no new job, no new service. |
-| **§3** the mod is a guest | Two new event types and five `ver` bumps (§3.10). The system events are **one burst per session**, off the game thread. The three community fields are read at a patch point or a poll the mod is already inside. The two costs that needed arguing are the system read (a one-time enumeration at a session boundary, §3.16) and `telemetry.window.state` (the largest single wire cost here, placed on the **only droppable type** on purpose, §3.20). Everything else is derived server-side. |
+| **§2** cheap enough to forget about | Nine new tables (`career_stat`, `system_stat`, `career_body`, `career_kitten`, `system`, `system_body`, `badge_award`, `challenge_stat`, `challenge_member`), all bounded: the scoped ones by players × saves/systems × boards or challenges, and the system catalogue by *distinct systems* × bodies — one row set shared by everyone running stock KSA. **Career and system scopes are explicitly denied a period dimension** (§3.3) precisely to keep another multiplier from existing. No new process, job or service. |
+| **§3** the mod is a guest | Two new v1 event types and five final-v1 payload extensions (§3.10). The system events are one cached survey emitted at a session boundary; the body rows are once per catalogue identity. The community fields are read at a patch point or poll the mod already uses. The two costs that needed arguing are the system enumeration (§3.16) and `telemetry.window.state` (the largest wire cost here, placed on the **only droppable type** on purpose, §3.20). Everything else is derived server-side. |
 | **§4** everything runs locally | No new external anything. Challenges are compile-time; badges are folds; seed data covers all three (Tasks B7, G5, I5). |
-| **§5** the log is immutable, everything else rebuilds | Every new table is a projection, rebuilt from seq 0. `TestRebuildEqualsIncremental…` is extended to all of them (Task A8) rather than left covering the old ones only. Adding a fold now also changes `stats.BuildID`, so a deploy suspends the fold loop and rebuilds itself (§5.1) — the new boards fill from history with no operator step. |
+| **§5** the log is immutable, everything else rebuilds | Every new table is a projection and the equivalence snapshot covers every table. The final deployment starts from a fresh database, but rebuild-from-log correctness remains mandatory because that is the production recovery model. |
 | **§6** every number is derived, never claimed | Badge keys and challenge keys are compile-time constants; dynamic badge families use the same `statSuffix` protocol-hygiene rule as boards (PROJ-037). Nothing on the wire is a badge, a challenge score or a rank. **The system events are the one place the mod reports something the server cannot check**, and they are reports of *game content*, not of achievement — the same category as `game_build`. A modified client can invent a one-planet system and mint the everywhere badge; §8 already accepts that class of forgery, and the tier badges are no better protected. Stated in §3.16 rather than defended against. |
 | **§7** moderation is trivial and total | Every new table is `player_id`-keyed and rebuilt from the log, so a purge and a shadow ban both clear it by the same route `player_stat` uses. `STORE-018` made the exclusion **structural** — a withheld player's events are not in the log at all — so a projection added later inherits it without knowing the feature exists. **Task A9 proves this rather than assuming it.** Note §7 was amended by that work to cover the shadow-ban verb explicitly. |
-| **§8** anti-cheat is proportionate | **Nothing in this plan is an integrity check.** No badge, board or challenge infers cheating from data shape. Two places were checked and deliberately left alone: a challenge does **not** exclude a rewound career (the mark still excludes nothing and scores nothing), and no badge is ever revoked. §8 was amended by the shadow-ban work to distinguish shadow-banning-as-moderation (a named human decision, built) from shadow-banning-as-anti-cheat (a machine inference, still forbidden); nothing here is either. |
+| **§8** anti-cheat is proportionate | **Nothing in this plan is an integrity check.** No badge, board or challenge infers cheating from data shape. A challenge does **not** exclude a rewound career (the mark still excludes nothing and scores nothing); the resolved §3.6 badge rule governs later corrections without adding a plausibility check. §8 was amended by the shadow-ban work to distinguish shadow-banning-as-moderation (a named human decision, built) from shadow-banning-as-anti-cheat (a machine inference, still forbidden); nothing here is either. |
 | **§9 / §9.1** documentation is part of the system | Phase J is not optional and is not a follow-up. Every phase carries its own doc tasks inline; Phase J is the sweep that proves nothing was missed. |
 
 **What this plan refuses,** recorded in `docs/ROADMAP.md` under *Deliberately not built* (Task J3) so
@@ -638,10 +682,8 @@ booster mass and Δv (the game's own data is UI-gated and untrustworthy); and **
 
 ## 5. The shadow-ban / rebuild work this plan sits on top of
 
-**That work is finished.** It is staged in the working tree this plan will be applied to, across
-~50 files. This section is what it changed *for us* — it is not optional background, because it
-introduces one hard constraint that makes an earlier draft of Task A5 illegal, and one mechanism that
-makes every phase here better.
+**That work is finished.** This section records the seams the implementation uses. It does **not**
+create an upgrade requirement for this greenfield plan; the final run starts with fresh databases.
 
 Four pieces landed:
 
@@ -665,42 +707,24 @@ the projector compares the file's stamp to its own.
 | Stamp differs, file holds history | **The fold loop is suspended** and a rebuild starts (`[projector] auto_rebuild`, default `true`). The old file keeps serving |
 | Stamp differs, in-memory database | Logs loudly and carries on. Tests only |
 
-**Two consequences this plan depends on:**
+**Two consequences implementers must preserve:**
 
-1. **Every board, badge and challenge added here fills from history by itself.** A new fold changes
-   the registry, which changes `BuildID`, which suspends the loop and rebuilds. PROJ-090's "a new
-   fold becomes retroactive by rebuild, and no backfill script is written" — now with the server
-   noticing rather than a human. A board added by a deploy reads **empty** until the rebuild lands,
-   never short-by-history, and that is the point of suspending.
-2. **★ A task that changes what an existing fold *means* without renaming it MUST bump
-   `stats.BuildVersion` in the same commit.** `BuildID` hashes fold *names*, so added / removed /
-   renamed is caught free; a changed threshold, unit, eligibility rule, tie-break or formula is not.
-   Same discipline as an event's `ver` (`PROJ-102`). The cost of forgetting is a board quietly short
-   of history until the next nightly rebuild.
+1. **Fold names are stable and unique.** `BuildID` hashes ordered names, so badge and challenge fold
+   names must include their key; adding a registry entry must change `BuildID`. Validate duplicate
+   names and test this property. It also remains the post-launch mechanism by which a new fold asks
+   for history to be replayed.
+2. **No task in this plan bumps `stats.BuildVersion`.** `distance_travelled` and every other formula
+   are being defined before launch against a fresh projection. The normal post-launch rule in
+   `PROJ-102` remains true for later work, but implementing agents must not add compatibility
+   machinery to this plan.
 
-   **As rewritten, no task in this plan requires a `BuildVersion` bump** — Task A5 was restructured
-   precisely so that it does not (§5.2). The one place it becomes owed is **optional sub-task A5.4**,
-   which is flagged as such. If you deviate from this plan in a way that moves a number an existing
-   fold already produced, bump it.
+### 5.2 ★ The migrations construct one final fresh schema
 
-### 5.2 ★ Projections migrations are now additive-only
-
-> *"The live file is migrated in place at open so its existing boards stay readable while the rebuild
-> runs; a destructive migration would damage the file that is still serving."* — `PROJ-101`,
-> restated in `docs/server.md`.
-
-**No `DROP TABLE`, no `DROP COLUMN`, no table recreation, in `migrations/projections/`.** Only
-`CREATE TABLE`, `CREATE INDEX` and `ALTER TABLE … ADD COLUMN`.
-
-This is a real constraint, not a style note: SQLite cannot widen a primary key in place, so the
-obvious way to make an existing table career-aware — recreate it — is now forbidden. **Task A5 was
-rewritten around this**, and the result is better than the original: new tables alongside the old
-ones, every existing published number untouched, no sentinel-value trickery, and no `BuildVersion`
-bump. Every other migration in this plan (A1, C3, D5, F1, H1) was already additive; **verify yours before
-writing it.**
-
-Nothing is lost by the constraint. A change that genuinely needs the old shape gone gets it from the
-rebuild, which creates a fresh database from every migration.
+Use sequential projection migrations because that is how every test and database constructor builds
+the schema. There is no legacy database to transform and no acceptance criterion involving an older
+binary or schema. The planned migrations happen to be additive (`CREATE TABLE`, `CREATE INDEX`,
+`ALTER TABLE … ADD COLUMN`), and the sibling tables remain the clearest final design, but do not add
+backfills, compatibility copies, destructive-migration workarounds or live-serving rationale.
 
 ### 5.3 Rules for every task in this plan
 
@@ -708,8 +732,10 @@ rebuild, which creates a fresh database from every migration.
 2. **`projections.db`: `0005` is taken.** This plan uses `0006`–`0011`. Run
    `ls server/internal/store/migrations/projections/` before creating one — **verify, do not trust
    this plan**, which was already wrong about this once.
-3. **Decision numbers taken:** `PROJ` to 103, `STORE` to 018, `IDENT` to 018, `OPS` to 035. Task J1
-   starts at **`PROJ-104`**. `MOD` is at 079, `UI` at 044, `DOCS` at 004.
+3. **Never reserve decision numbers in this plan.** At this audit the maxima are `PROJ-103`,
+   `STORE-018`, `IDENT-018`, `OPS-035`, `MOD-080`, `UI-057`, `DOCS-004`, but every implementation
+   task rechecks its area and takes the next free number in that same commit. Phase J audits this;
+   it does not allocate the decisions after the fact.
 4. **`server/internal/stats/` is untouched except for the new `build.go`.** Fold registration is
    exactly what this plan assumes: `Folds()`, `StateFolds()`, `SecondPassFolds()`, `BoardFolds()`,
    the four write helpers, `Batch`, every board. Nothing in Phases A–I has to be re-derived.
@@ -720,7 +746,8 @@ rebuild, which creates a fresh database from every migration.
    `store/store.go`, `store/identity.go`, `store/archive.go`, `store/directory.go`,
    `projector/projector.go`, `projector/rebuild.go`, `adminapi/projections.go`,
    `adminapi/identity.go`, `config/config.go`, `cmd/catlogd/main.go`, `cmd/catlogctl/projections.go`.
-   No task in this plan needs to edit any of them.
+   H2 makes one narrow, explicit edit to `cmd/catlogd/main.go` to wire fail-fast challenge
+   validation; no other task edits these files.
 7. **Do not restructure `projector.Step`, `projector/rebuild.go` or `projector/job.go`.** New folds
    are *additive*: new files in `stats/`, appended entries in `BoardFolds()` or a new fold-list
    function. The one unavoidable edit to `projector/` is adding the new tables to the
@@ -743,16 +770,17 @@ rebuild, which creates a fresh database from every migration.
 
 ### 5.4 ★ Three hand-maintained lists every new projection table must be added to
 
-Nothing in the compiler will remind you, and this plan adds eight tables.
+Nothing in the compiler will remind you, and this plan adds nine tables.
 
 | List | Where | What happens if you forget |
 |---|---|---|
 | The expected-DDL fixture | `server/internal/store/store_test.go` — `TestMigrationsCreateTheFullDDL`'s expected projections **table** list *and* its **index** list | A test failure, immediately. This is the friendly one. |
 | The rebuild-equivalence snapshot | `server/internal/projector/projector_test.go` — the `snapshot` struct and `rig.snapshot()`'s per-table `dump(...)` calls | **Silent.** `TestRebuildEqualsIncrementalForAnUnflaggedHistory` passes while proving nothing about your table. This is the dangerous one, and it is why Task A8 exists as a task rather than a footnote. |
-| The projection census | `server/internal/store/projections.go` — `Counts`, the ten `count(*)` queries behind `RebuildResult` and `GET /admin/stats` | Silent under-reporting in the admin census. Cosmetic, but it is the number an operator uses to confirm a rebuild did what they expected. |
+| The projection census | `server/internal/store/projections.go` — `Counts`; it has ten queries before this plan and gains one table count for each new table behind `RebuildResult` and `GET /admin/stats` | Silent under-reporting in the admin census. Cosmetic, but it is the number an operator uses to confirm a rebuild did what they expected. |
 
-This plan adds **eight** tables: `career_stat`, `system_stat`, `career_body`, `career_kitten`
-(Phase A), `system`, `system_body` (Phase C), `badge_award` (Phase F), `challenge_stat` (Phase H).
+This plan adds **nine** tables: `career_stat`, `system_stat`, `career_body`, `career_kitten`
+(Phase A), `system`, `system_body` (Phase C), `badge_award` (Phase F), and `challenge_stat` plus
+`challenge_member` (Phase H).
 
 `store.AllProjections` is still the single shared checkpoint key `"all"` — **not** a list, and it does
 not need extending.
@@ -767,11 +795,9 @@ not need extending.
    stamps a foreign build must expect it. `newRig(t, opts ...func(*projector.Options))` already takes
    functional options, so `func(o *projector.Options) { o.AutoRebuild = … }` needs no test-helper
    change.
-2. **Bumping the projections schema version is itself a `BuildID` change.** It is hashed input
-   alongside the fold names, so **every migration this plan adds triggers a rebuild on deploy even
-   before its folds do.** That is desirable — it is what makes the new boards fill from history —
-   but it means there is no such thing as a "migration-only, no rebuild" phase here. Say so in each
-   phase's release notes.
+2. **The schema version participates in `BuildID`.** Preserve that fact and its tests. This plan's
+   release gate creates a fresh final database, so it does not stage or verify intermediate
+   migration-only deployments.
 
 ---
 
@@ -780,16 +806,17 @@ not need extending.
 **Goal:** every board is rankable per save. No read surface changes yet; this phase ends with
 `career_stat` correct, rebuildable, and proven equal under rebuild.
 
-**Before starting:** read §5 in full. This phase is applied **on top of the staged shadow-ban /
-rebuild work**, which is where the additive-only migration rule and the `BuildID` mechanism come
-from. Confirm that work is committed (or at least staged and stable) before branching, and re-run
+**Before starting:** read §5 in full. This phase is applied on top of the completed shadow-ban /
+rebuild work. Confirm that work is committed before branching, and re-run
 `ls server/internal/store/migrations/projections/`.
 
 ---
 
 ### Task A1 — the `career_stat` and `system_stat` tables, the career ordinal, and the career's system
 
-**Files:** one new migration.
+**Files:** one new migration; `server/internal/store/store_test.go`;
+`server/internal/projector/projector_test.go`; `server/internal/store/projections.go`;
+`docs/server.md`; `docs/DECISIONS.md`.
 
 1. `ls server/internal/store/migrations/projections/` and take the next free number. This task
    uses `0006`; **if it is taken, use the next one and shift every later migration in this plan.**
@@ -845,6 +872,10 @@ CREATE INDEX career_stat_rank ON career_stat(stat, value, updated_seq);
 --
 -- 0 means "not yet assigned", which no row keeps after its first fold.
 ALTER TABLE career ADD COLUMN ordinal INTEGER NOT NULL DEFAULT 0;
+-- The last event seen for this save, whether or not it scored. Save pages use
+-- this rather than max(board.updated_seq), which misses non-scoring and flagged
+-- activity and fails entirely for a save with no board row.
+ALTER TABLE career ADD COLUMN last_seq INTEGER NOT NULL DEFAULT 0;
 
 -- --- the system scope ------------------------------------------------------
 --
@@ -881,14 +912,24 @@ ALTER TABLE career ADD COLUMN system_changed INTEGER NOT NULL DEFAULT 0;
 
 **`career_stat` carries `system` as a column** so `?system=` is a predicate rather than a join. It is
 denormalised from the `career` row on purpose, and it is written **at fold time from
-`Batch.CareerSystem`** — never back-filled, so a career whose system is not yet known writes `''` and
-a rebuild fills it (that divergence is Task A8's, and it is real).
+`Batch.CareerSystem`** — never back-filled. In the final contract `system.discovered` precedes the
+first session/scoring event, so a normal career never writes `''`; an unknown system is only a
+defensive/out-of-contract case and is skipped consistently by incremental folding and rebuild.
 
-**Acceptance:** `make test` green (migrations are applied by every test that opens a projections DB;
-a syntax error fails immediately). No behaviour change yet.
+`careerFold`/`AdvanceCareer` must set `last_seq = ev.Seq` for **every** event carrying that career,
+including events that do not score and flagged events; first insert sets both `first_seq` and
+`last_seq`. Add ordering/batch-size tests.
 
-**Note the migration is purely additive** — three `CREATE`s and three `ALTER … ADD COLUMN`s, no
-`DROP`, no recreation (§5.2).
+**The three hand-maintained lists move in this task, not A8:** add both tables/indexes and the new
+schema version to the exact-DDL fixture; add empty ordered dumps to the projector snapshot; add both
+tables to `Counts`. A migration that postpones any of these edits cannot keep `make test` green or
+prove rebuild equivalence.
+
+**Docs/decision in this commit:** final DDL and table roles in `docs/server.md`, plus the next-free
+`PROJ` decision explaining career/system scopes and `last_seq` as all-activity provenance.
+
+**Acceptance:** `make test` green; exact DDL/schema version, census and empty-table snapshot all pin
+the final shape. No runtime board behaviour changes yet.
 
 ---
 
@@ -927,8 +968,7 @@ const (
 func Scopes() []string { return []string{ScopePlayer, ScopeCareer, ScopeSystem} }
 
 // ValidScope reports whether s is a scope the API serves. The empty string is
-// `player`, so an absent parameter means what it always meant and every existing
-// URL, cache entry and assertion stays byte-identical.
+// `player`, so an absent parameter keeps the semantic default.
 func ValidScope(s string) (string, bool) {
 	if s == "" {
 		return ScopePlayer, true
@@ -979,10 +1019,9 @@ type systemStatKey struct {
 //
 //	career : keyed (player, career, stat); skipped when the event carries none
 //	system : keyed (player, system, stat);  skipped when the career's system is
-//	         not yet known — which is every career recorded before
-//	         `system.discovered` existed, and every event before that career's
-//	         first discovery event. See Task A8: that second case is a real
-//	         rebuild-versus-incremental divergence, and the rebuild is right.
+//	         not yet known. The final mod emits `system.discovered` before the
+//	         first session/scoring event; this branch is defensive, not a
+//	         pre-launch compatibility path or a documented divergence.
 func (b *Batch) putScoped(ctx context.Context, kind statKind, ev Event, stat string, value float64, cx any) error {
 	if ev.Career == "" {
 		return nil
@@ -1175,6 +1214,10 @@ Add a doc note to `fold.go`'s helper block header naming the asymmetry, so the n
 
 **Acceptance:** `make test` green; `career_stat` populated for every board.
 
+**Docs/decision in this commit:** update every board's scopes in `docs/event-details.md` and
+`docs-site/src/data/boards.ts` together, plus the next-free `PROJ` decision for universal scope and
+the no-opt-out rule. Task B6 adds explanatory pages; it does not postpone this contract update.
+
 ---
 
 ### Task A4 — career ordinals
@@ -1235,30 +1278,20 @@ Add to `CareerState` in `stats/career.go`:
 
 ### Task A5 — the two career sibling tables: `career_body` and `career_kitten`
 
-**Files:** a new migration; `server/internal/stats/batch.go`; `server/internal/stats/boards.go`.
+**Files:** a new migration; `server/internal/stats/batch.go`; `server/internal/stats/boards.go`;
+the exact-DDL fixture, projector snapshot and projection census; `docs/event-details.md`;
+`docs-site/src/data/boards.ts`; `docs/DECISIONS.md`.
 
-This is §3.12 and §3.13. **Read both before starting**, and read §5.2 — this task was rewritten
-because the shadow-ban work made projections migrations additive-only, and the earlier draft
-(recreate `player_body` and `kitten` with a wider primary key) is now illegal.
-
-**No existing table is altered. No existing number moves. No `stats.BuildVersion` bump is owed.**
-`player_body` and `kitten` keep their exact current shape, contents and meaning; the lifetime boards
-that read them are untouched. The per-save scope gets two new tables of its own.
+This is §3.12 and §3.13. **Read both before starting.** The sibling tables are the final-schema
+design because lifetime and per-save sets have different identities and novelty semantics. There is
+no legacy-data preservation or `stats.BuildVersion` work in this task.
 
 **A5.1 — migration `0007_career_sets.sql`.** Purely additive: two `CREATE TABLE`s and two indexes.
 
 ```sql
 -- projections.db 0007 — the per-save halves of the two set-backed projections.
 --
--- ADDITIVE ONLY, and that is a hard constraint rather than a preference: the live
--- projections.db is migrated in place at open so its existing boards keep
--- answering reads while a rebuild runs (PROJ-101), so a migration that dropped or
--- recreated a table would damage the file that is still serving. SQLite cannot
--- widen a primary key in place, so `player_body` and `kitten` cannot learn about
--- careers — they get siblings instead.
---
--- The siblings answer a different question, which is why this is honest rather
--- than a workaround:
+-- The siblings answer different final-schema questions:
 --
 --   player_body  — "which worlds has this PLAYER been to"   (lifetime, unchanged)
 --   career_body  — "which worlds has this SAVE been to"
@@ -1318,19 +1351,23 @@ sibling for each, and a second cache map keyed by `(playerID, career, …)`:
 | `BodyCount(ctx, playerID, kind) (int64, error)` | `CareerBodyCount(ctx, playerID, career, kind) (int64, error)` **and** `SystemBodyCount(ctx, ev, kind) (int64, bool, error)` — `count(DISTINCT body)` over `career_body` for that player and system; `ok` is false when the system is unknown |
 | `UpsertKitten(ctx, playerID, k, seq) error` | `UpsertCareerKitten(ctx, ev, k) error` — writes nothing when `ev.Career == ""`, because a roster reading that cannot be placed in a save belongs to no save |
 | `KittenDistance(ctx, playerID) (float64, error)` | `CareerKittenDistance(ctx, playerID, career) (float64, error)` **and** `SystemKittenDistance(ctx, playerID, system) (float64, error)` |
-| `KittenTops(ctx, playerID) (travelled, missions KittenTop, error)` | `CareerKittenTops(ctx, playerID, career) (…)` — the **system** scope needs none: `top_kitten_*` are `putRecord` boards and fan out through `putScoped` for free |
+| `KittenTops(ctx, playerID) (travelled, missions KittenTop, error)` | `CareerKittenTops(ctx, playerID, career) (…)` **and** `SystemKittenTops(ctx, playerID, system) (…)`; a system candidate is identified/tied by `(career, kid)`, not `kid` alone, because the same `kid` may occur in several saves |
 
 `flushCareerBodies` and `flushCareerKittens` join `Flush`'s fixed order immediately after
 `flushBodies` and `flushKittens` respectively, key-sorted like every other flush so a rebuild is
 byte-comparable to the incremental result.
 
 **Both new tables carry `system`, written from `Batch.CareerSystem` at insert.** They are set tables,
-so a row is written once and never updated — which means a career whose system is learned *after* a
-body was first reached keeps `''` on that row until a rebuild. That is the same divergence Task A8
-records, and the same answer: the rebuild is right.
+so a row is written once and never updated. The final pipeline guarantees discovery before any
+qualifying body/roster event; if the system is unavailable, do not insert the scoped row. Incremental
+and rebuild therefore make the same defensive choice—there is no pre-launch late-system divergence.
 
-**The `KittenTops` tie-break stays on `kid`, never Go map order** (`batch.go:679`). The career
-sibling breaks ties on `(career, kid)` so it is still total.
+**The `KittenTops` tie-break stays total, never Go map order** (`batch.go:679`): lifetime by `kid`,
+career by `kid`, and system by `(career, kid)`. `distanceFold` must compute the player, career and
+system top rows independently and write each from its own query. Do **not** pass a lifetime
+`KittenTop` through generic `putRecord` fan-out: that copies a kitten from another save/system into
+the active scoped row. Add a player-only record helper (or explicitly suppress fan-out) for these
+two boards, then call `putCareerStat`/`putSystemStat` with their own contexts.
 
 **A5.3 — the three set-backed folds** in `boards.go`. Each keeps everything it does today and adds a
 career arm:
@@ -1338,9 +1375,8 @@ career arm:
 ```go
 // soiFold — sketch. The same shape applies to landedBodiesFold and distanceFold.
 //
-// The lifetime half is UNCHANGED, line for line. Do not refactor it while you are
-// here: it is what keeps `soi_bodies` producing the number it produces today, and
-// therefore what keeps this task free of a stats.BuildVersion bump.
+// The lifetime SOI/landing halves keep their existing semantics. Distance is the
+// deliberate greenfield correction in A5.4 and sums career_kitten.
 func (soiFold) Apply(ctx context.Context, b *Batch, ev Event) error {
 	p, ok := payloadOf[VehicleSOI](ev)
 	if !ok || p.ToBody == "" {
@@ -1393,41 +1429,33 @@ func (soiFold) Apply(ctx context.Context, b *Batch, ev Event) error {
 `fastest_to_<body>` career-scoped value has a per-save arrival time to read.
 
 **Tests:**
-- `TestLifetimeSetBoardsAreUnchangedByCareerSiblings` — fold a history with two careers and assert
-  `soi_bodies`, `landed_bodies`, `distance_travelled`, `top_kitten_distance` and
-  `top_kitten_missions` produce **byte-identical** `player_stat` rows (value, `updated_seq` and
-  `context`) to the same history folded before this task. **Write this first.** It is the whole
-  safety property of the additive design, and it is what says no `BuildVersion` bump is owed.
+- `TestLifetimeBodySetsAreUnchangedByCareerSiblings` — fold a history with two careers and assert
+  `soi_bodies` and `landed_bodies` keep their lifetime union semantics. Distance is covered by the
+  corrected final-schema test below, not by a pre-launch compatibility fixture.
 - `TestCareerSetBoardsArePerSave` — the same body reached in two careers counts once per career and
   once lifetime.
 - `TestKittenRowsSplitPerSave` — the same `kid` in two careers keeps two `career_kitten` rows and one
   `kitten` row.
+- `TestKittenTopsComeFromTheirOwnScope` — the lifetime winner, save winner and system winner are
+  three different `(career,kid)` candidates; assert every value and context names the right one.
+- `TestDistanceTravelledSumsAcrossCareersEvenWhenKidRepeats` — two saves reuse a roster name and the
+  lifetime total is the sum of both `career_kitten.travelled_m` rows.
 - `TestARosterSnapshotWithNoCareerWritesNoCareerKittenRow`.
 - `TestRebuildEqualsIncrementalForTheCareerSetTables`.
 
-**A5.4 — OPTIONAL, the owner's call: correct the lifetime `distance_travelled`.**
+**A5.4 — mandatory: define the final lifetime `distance_travelled` correctly.**
 
-**Do not do this without being asked.** It is written out because it is now nearly free and because
-leaving it undocumented would be worse than either choice.
+Query `SELECT COALESCE(SUM(travelled_m),0) FROM career_kitten WHERE player_id = ?`. The old
+pre-launch implementation merged same-named kittens across saves under `max()` and is not a contract
+to preserve. Update the fold, both documentation halves and the next-free decision entry with the
+final total-across-saves meaning. No version or compatibility work.
 
-Today `distance_travelled` sums, over `kitten`, a `travelled_m` that was merged with `max()` across
-saves — so it reports *the furthest any one name ever got in a single save*, not the total across
-saves. With `career_kitten` in place, the correct number is one query change:
-`SELECT COALESCE(SUM(travelled_m),0) FROM career_kitten WHERE player_id = ?`.
+**The three hand-maintained lists move in this task:** exact tables/indexes/schema version,
+equivalence snapshot dumps, and `Counts` for both new tables.
 
-If taken, it is a fold whose **name is unchanged and whose meaning changed**, so it carries:
-1. **a `stats.BuildVersion` bump in the same commit** (§5.1, `PROJ-102`);
-2. a `DECISIONS.md` entry saying the number goes **up** for anyone who reused kitten names, and why
-   that is the right number;
-3. an update to `distance_travelled`'s `how` line in `docs-site/src/data/boards.ts` and its entry in
-   `docs/event-details.md`.
-
-If **not** taken, the quirk still gets written into `docs/event-details.md`'s `kitten` section — it is
-currently behaviour no document states, which is exactly what the *Known drift* section exists for.
-
-**Docs in this task's commit:** `docs/event-details.md` — a **State projections** entry for each new
-table, the `kid`-is-not-save-scoped note in the `kitten` section, and the third `kind` value on
-`career_body` once Task E3 lands.
+**Docs in this task's commit:** `docs/event-details.md` state-projection entries, the
+`kid`-is-not-save-scoped note and corrected distance fold; the matching board data/site prose; and
+the next-free decision entry. Do **not** document `orbit_kid` until Task E3 implements it.
 
 ---
 
@@ -1445,7 +1473,7 @@ so display order for every existing board is unchanged**:
 | key | Title | Unit | Asc | Career | Fold kind | Source |
 |---|---|---|---|---|---|---|
 | `career_playtime` | `Longest Save` | `ms` | no | **yes** | record (max) | any event carrying `career` + `sim_t` |
-| `play_sessions` | `Times Resumed` | `sessions` | no | no | count | `session.started` |
+| `play_sessions` | `Play Sessions` | `sessions` | no | no | count | `session.started` |
 
 **`career_playtime` reads the event, never the `career` table.** This is the single most important
 detail in the task:
@@ -1481,7 +1509,8 @@ func (careerPlaytimeFold) Apply(ctx context.Context, b *Batch, ev Event) error {
 }
 ```
 
-`play_sessions` is one line in `BoardFolds()`:
+`play_sessions` counts the initial session as well as later loads; it is not a resume count. It is
+one line in `BoardFolds()`:
 `countFold{stat: StatPlaySessions, eventType: "session.started"}`.
 
 Append both to `BoardFolds()` in board-metadata order (i.e. at the end).
@@ -1513,6 +1542,8 @@ Add, each mirroring its `player_stat` sibling exactly, including the canonical o
 type CareerStatRow struct {
 	PlayerID   int64
 	Career     string
+	System     string
+	Ordinal    int64
 	Stat       string
 	Value      float64
 	Context    json.RawMessage
@@ -1523,24 +1554,44 @@ type CareerStatRow struct {
 // which is why career_stat carries the column (§3.18).
 func (p *Projections) CareerLeaderboard(ctx context.Context, stat, system string, asc bool, limit, offset int) ([]CareerStatRow, error)
 func (p *Projections) CareerStatsForPlayer(ctx context.Context, playerID int64, career string) ([]CareerStatRow, error)
+// Return EVERY matching save row for each id. One hidden player can own several
+// rows ahead of a visible save; a player-level summary cannot correct the rank.
+func (p *Projections) CareerStatsForPlayers(ctx context.Context, stat, system string, playerIDs []int64) ([]CareerStatRow, error)
 func (p *Projections) CareerStatAhead(ctx context.Context, stat, system string, value float64, seq int64, asc bool) (int64, error)
 func (p *Projections) CareerStatEntrants(ctx context.Context, stat, system string) (int64, error) // SAVES, not players
-func (p *Projections) PlayerCareers(ctx context.Context, playerID int64) ([]CareerState, error)   // ordered by ordinal
-func (p *Projections) CareerByOrdinal(ctx context.Context, playerID int64, ordinal int64) (CareerState, bool, error)
+
+// Store-owned query type. store must never import stats: stats already imports
+// store, so returning stats.CareerState would create an import cycle.
+type CareerRow struct {
+	PlayerID      int64
+	Career        string
+	Ordinal       int64
+	System        string
+	SystemChanged bool
+	MaxSimT       float64
+	Rewound       bool
+	FirstSeq      int64
+	LastSeq       int64
+}
+func (p *Projections) PlayerCareers(ctx context.Context, playerID int64) ([]CareerRow, error) // ordinal order
+func (p *Projections) CareerByOrdinal(ctx context.Context, playerID int64, ordinal int64) (CareerRow, bool, error)
 
 // --- the system scope ---
 func (p *Projections) SystemLeaderboard(ctx context.Context, stat, system string, asc bool, limit, offset int) ([]SystemStatRow, error)
 func (p *Projections) SystemStatsForPlayer(ctx context.Context, playerID int64, system string) ([]SystemStatRow, error)
 func (p *Projections) SystemStatAhead(ctx context.Context, stat, system string, value float64, seq int64, asc bool) (int64, error)
 func (p *Projections) SystemStatEntrants(ctx context.Context, stat, system string) (int64, error) // (player, system) PAIRS
-func (p *Projections) PlayerSystems(ctx context.Context, playerID int64) ([]SystemState, error)
+type SystemRow struct { /* exact system columns from C3; store-owned, never stats.SystemState */ }
+func (p *Projections) PlayerSystems(ctx context.Context, playerID int64) ([]SystemRow, error)
 ```
 
 `SystemStatRow` is `CareerStatRow` with `System` in place of `Career`. Do **not** try to share one
 struct across the two by making the field a union — the read paths are separate and a shared
 "scope key" field would make every call site ask which it is.
 
-`PlayerCareers` returns `stats.CareerState` including `Ordinal`, `MaxSimT`, `Rewound`, `FirstSeq`.
+Spell every `SELECT` column and `Scan` destination in the same order; tests must pin career id,
+ordinal, system, `system_changed`, first/last seq, max sim time, rewound, stat value/context and
+updated seq. The read API maps these store-owned rows into its own response types.
 
 **Note the difference from `StatPlayers`:** `career_stat`'s PK is `(player_id, career, stat)` and
 `system_stat`'s is `(player_id, system, stat)`, so `count(*) GROUP BY stat` counts **saves** and
@@ -1560,8 +1611,7 @@ indistinguishable from a bug.
 
 ### Task A8 — prove rebuild == incremental for every new table
 
-**Files:** `server/internal/projector/projector_test.go`, `server/internal/store/store_test.go`,
-`server/internal/store/projections.go`.
+**Files:** `server/internal/projector/projector_test.go`.
 
 This is §5.4 applied. **The shadow-ban work did not touch `projector_test.go`**, so its current shape
 is exactly what this plan assumes:
@@ -1580,53 +1630,22 @@ type snapshot struct {
 
 with `rig.snapshot()` dumping one ordered `SELECT` per table.
 
-**Do all three, in this task:**
-
-1. **`projector_test.go`** — add `CareerStats`, `SystemStats`, `CareerBodies` and `CareerKittens`
-   fields plus their `dump(...)` calls, and widen the `career` dump to carry `ordinal`, `system` and
-   `system_changed`. Then confirm `TestRebuildEqualsIncrementalForAnUnflaggedHistory` diffs them.
-2. **`store_test.go`** — add `career_stat`, `system_stat`, `career_body`, `career_kitten` to
-   `TestMigrationsCreateTheFullDDL`'s expected projections **table** list, and every new index to its
-   expected **index** list. Bump the expected projections schema version.
-3. **`store/projections.go` → `Counts`** — add the new tables' `count(*)` so the admin census and
-   `RebuildResult` report them.
-
-Only the first is silent when forgotten, and that is precisely why it is first: a new projection
-table absent from the snapshot is a table the equivalence guarantee **skips without failing**. Every
-later phase in this plan adds another one, so leave the snapshot in a state where adding a table is
-obviously three edits rather than one.
+The migration tasks have already added their exact DDL and census entries. Here, finish the broad
+equivalence harness: add `Careers`, `CareerStats`, `SystemStats`, `CareerBodies`, `CareerKittens` and
+the existing-but-currently-omitted `Census` (`event_census`) fields plus ordered `dump(...)` calls.
+The `Careers` dump must carry `ordinal`, `system`, `system_changed`, `first_seq`, `last_seq`,
+`max_sim_t` and `rewound`. Confirm the general equivalence test actually diffs every field.
 
 Add `TestRebuildEqualsIncrementalForCareerScope` with a history that exercises: two careers for one
-player, an interleaved third, a flagged flight in one of them, a career with no `sim_t` on some
-events, and events with no career at all.
+player, an interleaved third, a flight flagged **before** any scoring candidate in one of them (so
+this is not D22's intentional late-flag divergence), a career with no `sim_t` on some events, and
+events with no career at all.
 
-### ★ The seventh rebuild-versus-incremental divergence, and why it is allowed
-
-**A career whose system is learned late diverges, and the rebuild is the more correct answer.**
-
-The system is written onto scoped rows from `Batch.CareerSystem` at fold time. A career that has been
-played before this feature shipped has no `system.discovered` in its history, so:
-
-- **Incrementally**, every event folded before that career's first discovery event writes `''` — no
-  `system_stat` row at all, and `''` in `career_stat.system` / `career_body.system`.
-- **On rebuild**, `systemFold` is a **state fold** and pass 1 completes it for the whole log, so pass
-  2 sees the system on *every* event of that career and writes the rows.
-
-This is D22's shape exactly, and it belongs in the numbered list in `docs/event-details.md` beside
-the six that are already there (Task J2). Three things make it acceptable rather than a bug:
-
-1. **The rebuild's answer is the true one.** The save *was* in that system the whole time; only
-   catlog did not know yet.
-2. **It heals by itself.** `BuildID` changes when this plan's folds land, so the deploy that
-   introduces the divergence also runs the rebuild that resolves it (§5.1).
-3. **It cannot happen going forward.** The mod emits `system.discovered` and its `system.body` events
-   **before** `session.started` at every session boundary (Task C2), and `systemFold` is **first** in
-   `StateFolds()`, so for any career created after this ships the system is known before its first
-   scoreable event. Both halves of that are load-bearing — write the test.
-
-Add `TestSystemLearnedLateDivergesAndRebuildIsRight` pinning the behaviour deliberately, so that a
-future change which *silently* removes the divergence is also a test failure somebody has to think
-about.
+There is **no pre-feature-history divergence to support**: production starts with a fresh database
+and the final mod emits discovery before the first session event. Add
+`TestSystemDiscoveryPrecedesFirstScoreInFinalPipeline` and a rebuild-equivalence history beginning
+with discovery. Do not add a compatibility fixture for histories produced by a binary that never
+launched.
 
 **Acceptance:** `make test` green, including `-run Rebuild`.
 
@@ -1636,32 +1655,34 @@ about.
 
 **Files:** read-only investigation, then a test.
 
-Confirm that a purge and a shadow ban both clear `career_stat`, `career_body`, `career_kitten`,
-`badge_award` and `challenge_stat` by the same route `player_stat` uses.
+Confirm that a purge and a shadow ban clear every new **player-owned** table that exists at this
+point: `career_stat`, `system_stat`, `career_body` and `career_kitten`. Shared `system` and
+`system_body` catalogue rows are intentionally not player-owned and may remain. Tasks F1 and H1
+extend the same structural test when badge/challenge tables are introduced.
 
 **The expected answer is "nothing to do", and the point of the task is to prove it rather than assume
 it.** `STORE-018` made the shadow ban structural: the player's rows are *moved out of* `event` into
 `shadowban_event`, so a rebuild produces projections that never saw them, and `PurgePlayer` deletes
 from both tables. Every table in this plan is a projection rebuilt from seq 0, so all five empty out
 for free — **provided nothing in the shadow-ban or purge path enumerates projection tables by
-name.**
+name.** Do not name future tables in this task's assertion.
 
 **What to actually do:**
 1. `git log --oneline -20`, then read `server/internal/store/shadowban.go`,
    `server/internal/adminapi/shadowban.go` and `server/internal/projector/job.go`.
 2. Grep for any list of projection table names (`player_stat`, `flight_state`, `career`, …). If one
-   exists, add `career_stat`, `career_body`, `career_kitten`, `badge_award` and `challenge_stat` to
-   it.
+   exists, add every table implemented through C3, including `system_stat`.
 3. Extend `server/internal/projector/shadowban_test.go` (it exists) to assert the new tables empty
    out for that player after the rebuild, and do the same for the purge test.
-4. If nothing enumerates tables by name, **write that finding into the Phase J decision entry** —
+4. If nothing enumerates tables by name, write that finding into this task's next-free decision
+   entry —
    "the new tables need no moderation wiring, because the exclusion is structural and every one of
    them is rebuilt from the log" — rather than leaving it unstated. A reader six months from now
    should not have to re-derive it.
 
 ---
 
-## Phase B — career scope on the read API and both frontends
+## Phase B — career scope on the read API, app site, and player docs
 
 **Goal:** a player can open a board and rank saves, and open their own list of saves.
 
@@ -1674,10 +1695,12 @@ name.**
 **B1.1 — `BoardSummary` gains `Scopes []string \`json:"scopes"\`**, filled from `stats.Scopes()`.
 Every board publishes all three, because every board has all three (§3.2).
 
-It also gains **`body_derived bool`** — true for the `fastest_to_` family and any future family whose
+It also gains **`BodyDerived bool \`json:"body_derived,omitempty"\``** — true for the
+`fastest_to_` family and any future family whose
 key is built from a body name. It is not a rule the server enforces; it is a **hint to a client**
 that `?scope=player` merges systems on this board and `?scope=system` is the comparable question
-(§3.18). The site uses it to put that note on the right pages and nowhere else.
+(§3.18). Add this as authoritative metadata on `stats.Board`/the family catalogue and copy it into
+the response; do not duplicate prefix detection in `readapi`.
 
 **B1.2 — `handleBoard` parses `?scope=`** beside `?period=`, in this order, and **refuses the
 combination**:
@@ -1685,7 +1708,7 @@ combination**:
 ```go
 	scope, ok := stats.ValidScope(r.URL.Query().Get("scope"))
 	if !ok {
-		s.fail(w, r, http.StatusBadRequest, "bad_request",
+		s.writeError(w, http.StatusBadRequest, authz.CodeBadRequest,
 			"scope must be one of "+strings.Join(stats.Scopes(), ", "))
 		return
 	}
@@ -1693,7 +1716,7 @@ combination**:
 		// A career already is a time scope. Crossing it with a rolling window
 		// would be a window over a window, and the row count is
 		// players x boards x buckets x careers — see 0006_career_scope.sql.
-		s.fail(w, r, http.StatusBadRequest, "bad_request",
+		s.writeError(w, http.StatusBadRequest, authz.CodeBadRequest,
 			scope+" scope has no time windows")
 		return
 	}
@@ -1705,14 +1728,15 @@ combination**:
 	// scope can answer rather than serving a silently wrong page.
 	system := r.URL.Query().Get("system")
 	if system != "" && scope == stats.ScopePlayer {
-		s.fail(w, r, http.StatusBadRequest, "bad_request",
+		s.writeError(w, http.StatusBadRequest, authz.CodeBadRequest,
 			"system filtering needs scope=system or scope=career")
 		return
 	}
 	if system != "" {
-		hash, ok := s.systemBySlug(ctx, system)   // slug or hash, both accepted
+		hash, ok := s.systemBySlug(r.Context(), system)   // slug or hash, both accepted
 		if !ok {
-			s.notFound(w, r, "catlog has never seen a system by that name")
+			s.writeError(w, http.StatusNotFound, authz.CodeNotFound,
+				"catlog has never seen a system by that name")
 			return
 		}
 		system = hash
@@ -1767,8 +1791,14 @@ filter; if the two functions can share their scan loop with a row-source closure
 `Rewound` on a career row is read from the row's **own** career, so it applies to every board in
 career scope, not only the `Board.Career` ones. Widen `rewound()` accordingly.
 
-**B1.5 — bump the endpoint's `ver`** per Constitution §9 and record the shape in
-`docs/ingest-api.md` §4.8 (both the `/v1/leaderboards` line and the `/v1/leaderboards/{stat}` line).
+Factor the over-fetch/drop/positional-rank loop behind a typed row-source callback while doing this.
+The current `visibleRows` is hard-coded to `player_stat`; badge and challenge holder pages later
+need the identical visibility semantics without copying the algorithm. Keep entrants/holder totals
+consistent with existing boards (the raw denominator remains ban-inclusive; visible positional
+ranks close gaps on rendered/API pages) and pin that policy in tests and docs.
+
+**There is no read-API version bump.** Document the final pre-launch shape in
+`docs/ingest-api.md` §4.8 (both endpoint rows) and take the next-free decision number in this commit.
 
 **Tests:** `readapi_test.go` — scope round-trip, the 400 on `scope=career&period=weekly`, ban
 filtering in career scope, ordering, `save`/`save_id` present in career scope and **absent** in
@@ -1787,7 +1817,7 @@ GET /v1/players/{handle}/saves
                  "system": {"hash": s, "name": s, "slug": s},   // absent if never learned
                  "system_changed"?: true,
                  "playtime_ms": f, "first": unix_ms, "last": unix_ms,
-                 "rewound"?: true, "boards": n, "badges": n}]}
+                 "rewound"?: true, "boards": n}]}
 
 GET /v1/players/{handle}/saves/{ordinal}
   -> {"handle": s, "save": 1, "save_id": s,
@@ -1808,14 +1838,22 @@ Rules, each mirroring an existing one:
   (PROJ-007). Reuse the existing handle resolution in `readapi.go:428-431`.
 - An ordinal with no career → 404 with distinct copy ("catlog has no such save for this player"),
   the same "which of the two is it" discipline `handleBoard` uses for windows.
-- `first` / `last` come from `Events.RecvTimes` on `first_seq` / the max `updated_seq`, the same way
-  board rows resolve `updated` (PROJ-010) — projections.db and events.db **cannot be joined**.
+- `first` / `last` come from `Events.RecvTimes` on `career.first_seq` / `career.last_seq` — never
+  max board `updated_seq`, which misses non-scoring/flagged activity and saves with no board rows.
+  projections.db and events.db **cannot be joined**, so resolve the distinct seqs in one events-db
+  call just as board rows resolve `updated` (PROJ-010).
 - `rank` is `CareerStatAhead(...) - hiddenAhead + 1`, re-applying the `better || (equal && earlier seq)`
-  comparison in Go so a save's page can never contradict the board page.
+  comparison in Go so a save's page can never contradict the board page. Use
+  `CareerStatsForPlayers`: one banned player may own several career rows ahead, and **every** such
+  row must be subtracted with the exact same value/tie comparator. A player-level lookup is wrong.
 - `entrants` is `CareerStatEntrants` — **saves, not players**; label it that way in the response and
   on the page.
 - Every response carries `Cache-Control: public, s-maxage=30, stale-while-revalidate=300`, including
   the 404s. Route through `s.public(mux, ...)` so CORS is attached by the one place that attaches it.
+
+Badge counts do not exist yet and are deliberately absent here. Task G2 adds them to save responses
+and pages in the same commit as the badge projection/read path; Phase B must not ship placeholder
+data sourced from a later phase.
 
 ---
 
@@ -1855,6 +1893,11 @@ known raw career id. Make it generic over responses so Phases G and H inherit it
 1. Widen `Read` with the new `Board(ctx, stat, scope, period, bucket string, limit, offset int)`
    signature and the two saves methods. **Never query `store` from `web`** — `web.go:4-11` says why,
    and the ban filter lives behind that seam.
+   Parse and validate `scope`, `system`, `period`, `at`, `limit` and `offset` in `handleBoard`,
+   rejecting invalid combinations with 400. Precompute every chip and pager URL from a copied
+   `url.Values` so changing one dimension preserves all other applicable parameters. The current
+   templates reconstruct URLs from only period/offset; retaining that code would silently reset a
+   career board to player scope on pagination.
 2. `board.gohtml` gains a **scope chip row** directly above the existing period chips, built exactly
    like them (`.chip`, `.selected`, `aria-current="page"`, an `<a href>` — anything that navigates is
    a link):
@@ -1869,7 +1912,8 @@ known raw career id. Make it generic over responses so Phases G and H inherit it
 </nav>
 ```
 
-   Add `scopeLabel` to `templateFuncs`: `player` → `Players`, `career` → `Saves`, falling back to the
+   Add `scopeLabel` to `templateFuncs`: `player` → `Players`, `career` → `Saves`, `system` →
+   `Systems`, falling back to the
    raw key so a future scope renders its own name (the `periodLabels` pattern, `pages.go:143-158`).
 
 3. **When `scope=career`, the period chips are not rendered** and a one-line note says why:
@@ -1878,8 +1922,9 @@ known raw career id. Make it generic over responses so Phases G and H inherit it
 4. `board-table` gains two optional columns between Handle and the value:
    - **Save**, in career scope: `<a href="/p/{handle}/saves/{save}">Save {{.Save}}</a>`
    - **System**, in career **and** system scope: the friendly **name**, linking to
-     `?system={{.System.Slug}}`. Never the hash — the hash appears in the API and nowhere a person
-     reads (§3.19).
+     `/systems/{{.System.Slug}}` after C7 exists. Never a bare `?system=` link: player scope rejects
+     it and `/boards?system=` is not a route. Never the hash — the hash appears in the API and
+     nowhere a person reads (§3.19).
 
    On a **body-derived** board in player scope (`body_derived` from Task B1.1), render a one-line
    note above the table instead of a column: *"This board ranks a **name**. If two celestial systems
@@ -1908,8 +1953,9 @@ Routes, registered above the `GET /` catch-all:
 ```
 
 `/p/{handle}/saves` — one `.panel` with a table: Save · **System** · Played · First seen · Last seen ·
-Boards · Badges. `Played` is `{{numUnit .PlaytimeMs "ms"}}` so it renders through the duration ladder.
-**System** is the friendly name, linking to `/boards?system={slug}`; a save with no system yet renders
+Boards. Task G2 adds the Badges column when badge data exists. `Played` is
+`{{numUnit .PlaytimeMs "ms"}}` so it renders through the duration ladder.
+**System** is the friendly name, linking to `/systems/{slug}`; a save with no system yet renders
 the em dash `—`, which is the site's existing "no value" glyph, never `NaN`, `0` or blank. Empty
 state: *"No saves recorded yet."*
 
@@ -1940,7 +1986,7 @@ table instead.
 
 **This is not a follow-up commit.** Constitution §9.1 — it lands with the code.
 
-1. **`boards.ts`**: add `scopes: ("player" | "career")[]` to the `Board` interface with a doc
+1. **`boards.ts`**: add `scopes: ("player" | "career" | "system")[]` to the `Board` interface with a doc
    comment distinguishing it from the existing `career: boolean` (which means "the *value* is a
    career-relative time" and is a completely different thing — the report from the frontend survey
    flagged this as the most confusable pair on the site). Add the two new boards
@@ -2018,6 +2064,10 @@ table instead.
      "no such window" style 404/400 copy rather than an empty board;
    - **no assertion on the number of boards** — PROJ-039 (`toHaveCount(30)` was the assertion that
      said a client could assume a fixed board list).
+   Before adding this test, repair the existing `FIXED_BOARDS` fixture: it currently names only a
+   subset of the fixed catalogue. Generate it from an authoritative test export or explicitly list
+   every fixed key from `stats.fixedBoards`; keep dynamic families separate. The assertion remains
+   “every fixed key is exposed”, never “there are exactly N boards”.
 4. **`site/e2e/`** — a new `saves.spec.ts` for the two pages.
 
 **Acceptance:** `make test` green, `make e2e` green, `cd docs-site && pnpm check` green.
@@ -2034,15 +2084,17 @@ friendly name and a URL slug; and the log contains enough about each system's bo
 an implementer is most likely to get wrong are: **the server never holds a list of bodies** (§3.7),
 and **the system hash is published raw while a career id never is** (§3.19).
 
-**Phase C and Phase D are one commit stream in the mod** — both bump `EventTypes.Versions`, both
-regenerate `contracts/testdata`, both edit `ModConfig.Header`. Do C, then D, on one branch.
+**Phase C and Phase D are one commit stream in the mod** — both edit the final-v1 registry/payload
+surface, regenerate `contracts/testdata`, and touch shared configuration/docs. Do C, then D, on one
+branch; no event version changes.
 
 ---
 
 ### Task C1 — the system survey and the hash
 
 **Files:** a new `mod/catlog/SystemSurvey.cs`, `mod/catlog.lib/Util/Ids.cs`,
-`mod/catlog.lib/Telemetry/SystemSnapshot.cs`, `docs/ksa-integration.md`.
+`mod/catlog.lib/Telemetry/SystemSnapshot.cs`, `docs/ksa-integration.md`, `docs/mod.md`, and the
+next-free `docs/DECISIONS.md` entry. Keep raw hash inputs separate from canonical wire values.
 
 **Every symbol below was verified against `ksa-game-assemblies/current/decomp/KSA/` at build
 2026.8.5.5168.** Record each with a `[KsaAnchor]` anyway — the anchors are what make the next build
@@ -2054,7 +2106,8 @@ bump a mechanical re-check rather than an investigation.
 // Universe.CurrentSystem            KSA/Universe.cs:92
 // CelestialSystem.Id                KSA/CelestialSystem.cs:61   → "Sol" | "SolDense" | "SolLite" | "Test" | a mod's
 // CelestialSystem.All               KSA/CelestialSystem.cs:57   → LookupCollection<Astronomical>
-// CelestialSystem.Count             KSA/CelestialSystem.cs:59   → the GROUND TRUTH, see C1.4
+// CelestialSystem.Count             KSA/CelestialSystem.cs:59   → ALL registered Astronomical,
+//                                                               including vehicles; NEVER body count
 // CelestialSystem.HomeBody          KSA/CelestialSystem.cs:55
 foreach (IParentBody body in Universe.CurrentSystem.All.OfType<IParentBody>()) { … }
 ```
@@ -2063,6 +2116,28 @@ foreach (IParentBody body in Universe.CurrentSystem.All.OfType<IParentBody>()) {
 worth understanding rather than copying: `Celestial` and `StellarBody` implement `IParentBody`;
 `Vehicle` does not (`KSA/Vehicle.cs:27`). The five template vehicles that stock content registers
 **live in the same collection**, so any looser filter would put `Gemini7` in the star chart.
+
+Materialise this filtered enumeration into a plain snapshot list on the game thread, sort by raw Id
+ordinal, and use **that list's count** for `BodyCount`, `MaxSystemBodies`, completeness and tests.
+`CelestialSystem.Count` is `_all.Count` and includes registered vehicles, so it is wrong for every
+one of those uses.
+
+`IParentBody` does not expose `Class`; each enumerated instance is also an `Astronomical`, so cast to
+that base and let virtual dispatch return the concrete runtime class (`PlanetaryBody`,
+`TerrestrialBody`, etc.). Preserve it as opaque `class`; the fixed semantic mapping in
+§3.7 is a separate `kind` value.
+
+**Model a forest.** `CelestialSystem` creates a tree for every template body whose parent is null;
+mod systems may have multiple roots, and `GetWorldSun()` merely chooses the first star. Retain every
+parentless body, compute `rank` as depth from that body's own root, and derive ordered `roots[]` from
+body rows. There is no singular `root_body` field, invariant or display-root selection rule. Tests
+cover two roots and a nested body under each.
+
+For the required orientation, call `body.GetCcf2Cce(SimTime.Zero)` on the `IParentBody`; it returns
+`Brutal.Numerics.doubleQuat` with public `X/Y/Z/W` fields. This already composes body-fixed → inertial
+spin phase with inertial → body-centred-ecliptic orientation (`Celestial.cs:575-578`), so a consumer
+does not have to reconstruct the missing azimuth from `axis`. Add anchors for that method and the
+four fields and test the identity quaternion returned by `StellarBody`.
 
 `LookupCollection<T>.TypeFilter<T2>` is a **`ref struct`** (`KSA/LookupCollection.cs:12`) that
 exposes `GetEnumerator`/`MoveNext`/`Current`, so `foreach` compiles with **no LINQ and no
@@ -2084,56 +2159,48 @@ sentence in the code, not just here.
 
 #### C1.3 — the hash input, and why every field earns its place
 
-```
-system_hash = crockford32_lower(SHA-256(
-      "catlog-system:v1\n"
-    + system_id + "\n"                                  // CelestialSystem.Id
-    + for each body, sorted by id ordinal ascending:
-          id + "\t" + class + "\t" + parent_id + "\t"
-        + d(mass_kg) + "\t" + d(mean_radius_m) + "\t"
-        + d(semi_major_axis_m) + "\t" + d(eccentricity) + "\n"
-  )[0..10])                                             // 16 chars, the shape of a career id
+The old tab/newline formula is deleted: ids are content and can contain separators, text formatting
+is locale-sensitive unless specified, and its small field set collides for catalogues whose stored
+3D rows differ.
 
-// d(x): round-trip ("R" / %.17g), with -0.0 normalised to 0.0 and NaN written as the literal "nan".
-```
+Define `SystemHashInput` in this exact logical order:
 
-**Only parse-and-arithmetic values are in the hash, and that is the central decision.** Every field
-above reaches the runtime through XML parsing (`XmlConvert.ToDouble`, correctly rounded and
-invariant) plus multiplication and division — both IEEE-deterministic. Everything derived through a
-**transcendental** is excluded, because `Math.Pow`, `Math.Sin` and `Math.Cos` are **not guaranteed
-bit-identical across .NET runtimes and architectures**, and a hash that could differ between a
-Windows player and a Linux player would split one system in half:
+1. raw `CelestialSystem.Id`, raw `SystemInfo.DisplayName.Value`, raw home-body id and body count;
+2. for every body sorted by raw id ordinal: raw id, optional raw parent id, concrete `class`, §3.7
+   `kind`, and forest depth/rank;
+3. `radius_m`, `mass_kg`, `soi_m`, `atmo_m`, `ocean_m`, `angvel`, all three `axis` components and
+   all four finite normalised `ccf_to_cce_t0` quaternion components;
+4. one presence byte for the six-value orbital group followed, when present, by `sma_m`, `ecc`,
+   `inc_deg`, `lan_deg`, `argp_deg`, `t_pe`; then an independent period-presence byte and
+   `period_s` when present.
 
-| Excluded | Because |
-|---|---|
-| `Inclination`, `LongitudeOfAscendingNode`, `ArgumentOfPeriapsis` | For a `DefinitionFrame="Ecliptic"` orbit — **nine stock bodies** — these are re-derived through a quaternion round-trip using `sin`/`cos` (`KSA/OrbitTemplate.cs:96-102`) |
-| `SphereOfInfluence` | Computed with `Math.Pow` when unauthored (`KSA/Celestial.cs:659-667`) — and stock content *deliberately falsifies* some (Amalthea's is commented `Wrong!` in the XML) |
-| `Period` | `Math.Pow` + `Math.Sqrt` (`KSA/Orbit.cs:41-44`), and a pure function of `(a, mass)` anyway |
-| Angular velocity, tilt | Tidally-locked bodies derive ω from the pow-derived period |
-| `Periapsis`, `Apoapsis`, `SemiMinorAxis` | Pure functions of `(a, e)` — no discriminating power, extra derivation noise |
-| Colours, textures, meshes, terrain scale, biomes | Cosmetic. A texture pack must not invalidate a leaderboard |
-| `MaxTerrainRadius` / the "approx" terrain altitudes | `UpdateApproxTerrainAltitudes` samples 16,384 points across `Environment.ProcessorCount` threads — **machine-dependent**. Never hash these |
-| Anomalies, state vectors, positions | Functions of sim time; they change every tick |
-| `KeyHash` values | CRC32 of the id — redundant, and only 32 bits |
-| Iteration order | C1.2 |
+Do not hash sanitised display/body strings, `complete`, or an envelope time: they are derived
+presentation/health/session values, not content. Encode the sequence with the ASCII domain prefix
+`catlog-system-v1`, canonical UTF-8 **length-prefixed strings**, explicit presence bytes and
+fixed-width integers. Every string is `u32 byte-length + strict UTF-8 bytes`; body count/rank are
+big-endian `i32`; optional parent/orbit/period use a single `0`/`1` byte before any value. Encode
+finite doubles as canonical IEEE-754 binary64 bits in big-endian order,
+normalising `-0` to `+0`. Encode `+Inf`, `-Inf` and all NaNs with three distinct canonical tags so
+identity remains deterministic even when C2 marks the wire catalogue incomplete; never feed
+platform NaN payload bits directly into the hash. Hash the bytes with SHA-256, take the first ten
+bytes, and Crockford-lowercase them to 16 characters. Pin a complete known vector, reordering,
+culture (`fr-FR`), `-0`, NaN/Inf and separator-bearing-id tests.
 
-**No rounding is applied, because none is needed once the transcendentals are out.** That is a better
-answer than rounding: a rounding boundary is itself a source of disagreement, and it would have
-silently merged genuinely different bodies.
-
-**A note on `SemiMajorAxis`.** The runtime value is not bit-identical to the XML's, because
-`OrbitTemplate.OnDataLoad` converts `a → periapsis` and `OrbitData`'s constructor converts it back
-(`KSA/OrbitTemplate.cs:56-70`, `KSA/OrbitData.cs:51-59`). That is fine — it is division, it is
-deterministic, and **the hash is over runtime values, never over the file.** Say so, because somebody
-will eventually try to reproduce the hash from the XML and be confused.
+The source inventory must distinguish authored/template values from runtime-derived values. The
+chosen rule intentionally hashes the canonical surveyed output—even the game-derived axis,
+orientation and period—because a different published row must have a different identity. Pin those
+values on multiple supported runtimes. Machine-dependent terrain sampling, mutable state vectors,
+positions and cosmetic textures/colours remain excluded because `system.body` does not publish
+them. Record every inclusion/exclusion with its source and reason in `docs/ksa-integration.md`; the
+numbered list above is normative.
 
 **No install-id salt**, unlike `Ids.CareerId` and `Ids.KittenId`. The hash must be *identical* for
 every player running the same content — that is the entire feature (§3.19). Put that in the doc
 comment, because it looks like an omission.
 
-`Ids.SystemId(systemId, IReadOnlyList<SystemBodySnapshot>)` lives in **`catlog.lib`**: it takes no KSA
-type, so it is unit-testable without the game. Write three tests — a known input to a known hash,
-proof that reordering the input does not change it, and proof that a `NaN` in any field is stable.
+`Ids.SystemId(SystemHashInput)` lives in **`catlog.lib`** and takes no KSA type, so it is testable
+without the game. `SystemSnapshot` contains canonical wire values and a separate hash input; do not
+force raw identity fields and lowercased join keys into one record.
 
 #### C1.4 — when to read it, and the silent failure to guard
 
@@ -2144,17 +2211,24 @@ and does **not** reload the system — so this is one enumeration per launch, no
 **Cache the survey and re-emit the cached copy at each session boundary** (Task C2.3); the cost
 question in C2.4 then barely exists.
 
+At startup, `StarMap.AllModsLoaded` currently runs before KSA's default `LoadSystem`, so the postfix
+does catch the initial load. Also handle `Universe.CurrentSystem` if startup ordering changes and a
+system is already present; never fabricate a survey from null.
+
 **The silent failure:** `CelestialSystem`'s constructor **swallows per-root exceptions**
 (`KSA/CelestialSystem.cs:139-153`), so a modded body that throws takes its subtree with it, the
 system still loads, and `CurrentSystem` looks complete. **Hash and report what is actually
-registered** — `CelestialSystem.Count` and the enumeration are the truth, the template is not. A
+registered** — the materialised `IParentBody` enumeration is the truth, the template and
+`CelestialSystem.Count` are not. A
 partially-loaded system produces its own honest hash rather than pretending to be the intact one.
 
 #### C1.5 — the snapshot type
 
 `SystemSnapshot` and `SystemBodySnapshot` are plain immutable records in **`catlog.lib`**
 (`Telemetry/`), filled by the game project. `catlog.lib` must never see a KSA type and the assembly
-guard test enforces it. Fields are exactly what Task C2's two payloads carry, plus nothing.
+guard test enforces it. The cache holds raw/hash inputs separately from lowercased wire join keys;
+session/career/sim/wall timestamps are supplied only when events are emitted, never cached in the
+survey.
 
 ---
 
@@ -2162,15 +2236,27 @@ guard test enforces it. Fields are exactly what Task C2's two payloads carry, pl
 
 **Files:** `mod/catlog.lib/Events/EventTypes.cs`, `Payloads.cs`, `GameSignal.cs`,
 `Detect/EventPipeline.cs`, `Config/ModConfig.cs`, `mod/catlog/SystemSurvey.cs`, `Patcher.cs`,
-`CatlogRuntime.cs`. Appendix E is the full end-to-end checklist for a new type — follow it.
+`CatlogRuntime.cs`, `mod/catlog.lib/Events/Wire.cs`, `mod/catlog.lib/Storage/OutboxDb.cs` and their
+tests; `server/internal/ingest/types.go`; typed Go payload/decode cases; conformance generator and
+vectors; `docs/events.md`; both event-detail/site halves; next-free decision entry. Appendix E is the
+full end-to-end checklist for a new type — follow its greenfield branch.
 
-**C2.1 — the registry.** Two constants, two `Versions` entries at `1`, and **both go into
-`AlwaysReportedTypes`**: without them every system-scoped board reads "unknown system" and the
-everywhere badge cannot be evaluated at all, which is squarely "the absence makes a number better
-than it was". That takes the locked set from **five to seven**, so
-`EventGateTests.NoTomlKeyCanTurnOffTheSpine` and the *"Five types cannot be switched off"* sentence in
-`ModConfig.Header` both change — both are asserted verbatim, and the sentence is asserted by string
-match.
+**C2 is one indivisible vertical contract commit.** Registry, locked configuration, mod payload,
+server acceptance/decode, vectors and both documentation halves land together and leave
+`make test` green (`INGEST-025`). Do not delegate “mod event” and “server support” separately: an
+unknown type rejects its entire batch.
+
+**C2.1 — the registry.** Two constants and two `Versions` entries at `1`.
+`system.discovered` joins `AlwaysReportedTypes` because career→system attribution is load-bearing;
+the locked set changes from five to **six**. `system.body` remains configurable: disabling it gives
+up catalogue/everywhere/3D functionality but cannot improve a score because effective completeness
+fails. Update `NoTomlKeyCanTurnOffTheSpine`, its exact-name test and the header sentence together.
+The `[events]` example marks only `system.discovered` `# locked on`.
+
+When `system.body` is disabled, Runtime emits `system.discovered` with `complete: false`, emits no
+body rows and does **not** write the durable survey marker; enabling it later permits the next
+session boundary to send the catalogue. The cap or an invalid required numeric has the same
+header/body outcome for a different documented reason.
 
 **C2.2 — the payloads.**
 
@@ -2180,22 +2266,24 @@ public sealed record SystemDiscoveredPayload(
     [property: JsonPropertyName("system")]   string System,      // the hash
     [property: JsonPropertyName("id")]       string Id,          // CelestialSystem.Id — "Sol", "SolDense", a mod's
     [property: JsonPropertyName("name")]     string Name,        // SystemInfo.DisplayName, sanitised, <= 64 ASCII
-    [property: JsonPropertyName("home")]     string HomeBody,    // CelestialSystem.HomeBody id
-    [property: JsonPropertyName("root")]     string RootBody,    // the StellarBody
-    [property: JsonPropertyName("bodies")]   int    BodyCount,   // CelestialSystem.Count, celestials only
-    // False when the body list was NOT sent — a system above MaxSystemBodies.
-    // The server then knows the set is unknown rather than empty, and the
-    // everywhere badges correctly award nothing (Task F7 rule 1).
+    [property: JsonPropertyName("home")]     string HomeBody,    // canonical lowercase BodyName key
+    [property: JsonPropertyName("bodies")]   int    BodyCount,   // materialised IParentBody snapshot count
+    // False whenever the body list was NOT sent: system.body is disabled, the
+    // count exceeds MaxSystemBodies, or a required numeric is invalid. The set
+    // is unknown rather than empty; everywhere badges award nothing.
     [property: JsonPropertyName("complete")] bool   Complete);
 
 // system.body — one per celestial, in any order.
 public sealed record SystemBodyPayload(
     [property: JsonPropertyName("system")]   string  System,     // the hash, so order does not matter
-    [property: JsonPropertyName("body")]     string  Body,       // the id; matches `body` everywhere else
-    [property: JsonPropertyName("name")]     string  Name,       // display name if it differs from the id
-    [property: JsonPropertyName("class")]    string  Class,      // the GAME's own word: Star | Planet | Moon | …
+    [property: JsonPropertyName("body")]     string  Body,       // canonical lowercase BodyName key
+    [property: JsonPropertyName("name")]     string  Name,       // sanitised raw Id; KSA has no body display-name field
+    [property: JsonPropertyName("class")]    string  Class,      // concrete runtime class, opaque
+    [property: JsonPropertyName("kind")]     string  Kind,       // §3.7's fixed normalised semantic kind
     [property: JsonPropertyName("rank")]     int     Rank,       // depth from the root
-    [property: JsonPropertyName("parent")]   string? Parent,     // null for the root only
+    [property: JsonPropertyName("parent")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? Parent,                                              // canonical key; absent for root
     // --- physical -----------------------------------------------------------
     [property: JsonPropertyName("radius_m")] double  RadiusM,        // mean radius, metres from centre
     [property: JsonPropertyName("mass_kg")]  double  MassKg,
@@ -2208,15 +2296,32 @@ public sealed record SystemBodyPayload(
     // to know the convention.
     [property: JsonPropertyName("angvel")]   double  AngVelRadS,     // signed: negative is retrograde
     [property: JsonPropertyName("axis")]     Vec3    AxisCce,
-    // --- the Keplerian set, at the epoch the envelope's sim_t names -----------
-    [property: JsonPropertyName("sma_m")]    double? SmaM,
-    [property: JsonPropertyName("ecc")]      double? Ecc,
-    [property: JsonPropertyName("inc_deg")]  double? IncDeg,
-    [property: JsonPropertyName("lan_deg")]  double? LanDeg,
-    [property: JsonPropertyName("argp_deg")] double? ArgpDeg,
-    [property: JsonPropertyName("t_pe")]     double? TPe,            // time at periapsis, GAME time seconds
-    [property: JsonPropertyName("period_s")] double? PeriodS);
+    [property: JsonPropertyName("ccf_to_cce_t0")] Quat CcfToCceT0, // finite normalised x/y/z/w
+    // --- six-value orbital-shape group; every key absent on the root ---------
+    [property: JsonPropertyName("sma_m"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? SmaM,
+    [property: JsonPropertyName("ecc"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? Ecc,
+    [property: JsonPropertyName("inc_deg"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? IncDeg,
+    [property: JsonPropertyName("lan_deg"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? LanDeg,
+    [property: JsonPropertyName("argp_deg"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? ArgpDeg,
+    [property: JsonPropertyName("t_pe"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? TPe,
+    // Independently absent for an unbound conic (the game reports NaN).
+    [property: JsonPropertyName("period_s"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? PeriodS);
 ```
+
+`Quat` is a four-double immutable wire record (`x`, `y`, `z`, `w`), with a matching typed Go struct;
+it is not encoded as an anonymous array whose component order a weaker agent could reverse.
+Normalise it, then canonicalise the equivalent `q`/`-q` representations: the first non-zero
+component in `w,x,y,z` order must be positive, and every `-0` becomes `+0`. The hash consumes this
+same canonical quaternion. Pin identity, a normal quaternion, its negation and a 180-degree (`w=0`)
+case.
+
+`SystemInfo.DisplayName` is launcher metadata, not a `CelestialSystem` property. Resolve the loaded
+system id through the public system-selection metadata and fall back to the raw id if no entry is
+found; sanitise once. A body's raw `Id` is its only display name.
+
+**Join-key rule:** `body`, `parent` and `home` go through the exact canonical lowercase
+normalisation used by `VehicleTelemetry.BodyName`. Raw KSA ids remain in `SystemHashInput`, not in
+these join columns. Without this rule stock `Earth` catalogue rows cannot join event body `earth`.
 
 **`mu` is deliberately not sent.** It is `Mass * 6.6743E-11` — a default interface method on
 `IParentBody` (`KSA/IParentBody.cs:15`) — so `mass_kg` carries it exactly and a consumer multiplies by
@@ -2224,7 +2329,7 @@ the same constant. Sending both would be two numbers that can disagree.
 
 Rules that are not negotiable:
 
-- **The seven orbital keys are optional as a group** and are all absent on the root body, which has
+- **The six shape keys are optional as a group** and are all absent on the root body, which has
   no orbit. Absent, never `0` — a zero eccentricity is a real circle and a zero inclination is a real
   equatorial orbit (the omit-don't-zero rule, MOD-078).
 - **`period_s` is `NaN` for an unbound orbit** in the game (`KSA/OrbitData.cs:73`) — three stock
@@ -2243,26 +2348,58 @@ Rules that are not negotiable:
   complete answer for that career's whole life. Put that sentence in `event-details.md`: it is the
   reason this event can be emitted once instead of sampled.
 - **`class` is the game's own string, opaque to the server**, exactly like `body` and `situation`.
-  There is no allow-list, and the everywhere badge tests for equality with whatever the game said.
+  There is no allow-list. `kind` is §3.7's explicit semantic mapping; the server never
+  guesses from `class` or body names.
+- **Every emitted numeric is finite.** Treat the root's documented `soi_m = +Inf` as the sole
+  representational exception and emit `0` for it. If any other required physical scalar or any axis
+  component is non-finite, mark the header `complete: false` and emit **no** body rows; do not publish
+  a partly plausible immutable catalogue. If any of the six orbital-shape values is non-finite,
+  omit that whole group for the body. Omit `period_s` unless finite. Never zero one bad vector
+  component. The whole survey is incomplete unless all four orientation components are finite and
+  the quaternion normalises. Add NaN and ±Inf serialization tests
+  asserting the exact header/body outcome and key absence.
 
 **C2.3 — the emission point, and the once-per-career rule.**
 
-*Survey* once per game launch (the `Universe.LoadSystem` postfix, Task C1.4) and **cache it**.
-*Emit* from a `SystemSurveySignal` raised at each session boundary, **before** `session.started` —
-that ordering is what stops the seventh rebuild divergence (Task A8) applying to any career created
-after this ships.
+*Survey* in the `Universe.LoadSystem` postfix and cache the immutable snapshot. Do **not** add a
+separate `SystemSurveySignal`: the current session seam cannot order it correctly because
+`EventPipeline.OnSessionLoaded` itself calls `Tracker.NewSession()` and immediately creates
+`session.started`.
+
+Instead, add `SystemSnapshot?` to `SessionLoadedSignal`. In one `OnSessionLoaded` order: reset and
+call `Tracker.NewSession()` so the new ids exist; emit `system.discovered` and any body rows; then
+emit `session.started`. Refactor `CatlogRuntime.Start()` to use the same boundary path rather than
+directly appending `session.started`. Split the callbacks: the `LoadSystem` postfix captures the
+survey and establishes a boundary; the `DeserializeSave` postfix reuses the cached survey for the
+loaded save's boundary. If `CurrentSystem` is null, emit no phantom system/session pair; the later
+`LoadSystem` postfix establishes it. Tests assert the new session/career ids and exact
+`system.discovered` → all bodies → `session.started` order on startup and save load.
+
+`EventPipeline` does not own `OutboxDb`; `CatlogRuntime` does. Runtime reads
+`survey:<career>:<hash>`, tells the pipeline whether body envelopes are needed, and always leaves the
+header enabled. When body rows are needed, Runtime appends the complete ordered header/body/session
+batch and advances the marker in the same `AppendAndSetState` transaction; a marked survey emits a
+header/session batch with no bodies. Tests cover marked/header-only, unmarked/body-inclusive, and an
+append failure that leaves the marker unset. A disabled `system.body` test asserts
+`complete:false`, no body rows and no marker; re-enable and cross another session boundary to prove
+the catalogue is then sent.
 
 **Send the body events only once per `(career, system_hash)`.** The header
 (`system.discovered`) goes every session — it is one small event and it is what binds the career to
-the system. The body events do not: `OutboxDb`'s `shipper_state` key/value table is the natural
-place to record "already reported", and it persists across game restarts. At stock `Sol` that turns
+the system. The body events do not: `OutboxDb`'s `shipper_state` stores
+`survey:<career>:<hash>` and persists across game restarts. At stock `Sol` that turns
 54 events per save load into 54 once; at `SolDense` it turns **3,215** per save load into 3,215 once,
 which is the difference between affordable and rude.
 
 If the mod cannot tell (a fresh outbox, a new career), it re-sends — and the server folds it
-idempotently, because every `system.body` is an upsert keyed `(hash, body)`. **Re-sending must always
+idempotently, because every `system.body` is immutable first-write keyed `(hash, body)`. **Re-sending must always
 be correct**, and the test for that is a fold of the same survey twice producing a byte-identical
 table.
+
+**Crash rule:** commit the marker only after every catalogue event is in the outbox. Prefer an
+`OutboxDb.AppendAndSetState` transaction covering the event rows and marker; append-then-mark is an
+acceptable fallback because its crash window merely resends. Mark-then-append is forbidden because
+a crash permanently loses the catalogue. Add reopen and injected-failure tests.
 
 **The cap.** `Wire.MaxSystemBodies = 5000`. Above it, emit the header with `complete: false` and
 **no body events at all** — never a truncated list, because a partial set would make the everywhere
@@ -2274,8 +2411,8 @@ generated system, and it is a documented refusal rather than silent truncation.
 KSA type and the assembly guard test enforces it. If the system reads as null, **emit nothing** — a
 missing system is a known state (`''`) and a hash of nothing is not recoverable.
 
-**C2.4 — cost.** One enumeration per **game launch**, at a load boundary, off the frame path — so
-Constitution §3's frame budget is not in question at all. Measure it once anyway with the status
+**C2.4 — cost.** One enumeration per system load, on the game thread at a load boundary rather than
+inside the steady frame loop. Measure it with the status
 window's diagnostics open, at `Sol` and at `SolDense`, and record both numbers in `docs/mod.md`:
 `SolDense` is 3,215 bodies and is the honest worst case somebody will actually run.
 
@@ -2283,12 +2420,12 @@ window's diagnostics open, at `Sol` and at `SolDense`, and record both numbers i
 
 ### Task C3 — the server: two projections and a state fold
 
-**Files:** `server/internal/ingest/types.go`, `server/internal/stats/payload.go`,
-a new migration `0008_systems.sql`, `server/internal/stats/system.go`, `fold.go`,
-`server/internal/store/projections.go`.
+**Files:** a new migration `0008_systems.sql`, `server/internal/stats/system.go`, `fold.go`,
+`server/internal/store/projections.go`; exact-DDL fixture; projector snapshot; census;
+`docs/server.md`; `docs/event-details.md`; docs-site system/event data; next-free decision entry.
 
-**C3.1 — accept the types.** `knownTypes` gains both names, or **the whole batch is rejected
-`400 malformed_batch`** — this is the single highest-consequence line in the phase.
+**C3.1 — contract precondition.** C2 already added `knownTypes`, typed payloads/decode, vectors and
+wire docs in lockstep. Verify those tests before adding projections; do not duplicate or defer them.
 
 **C3.2 — the migration** (additive: two `CREATE TABLE`s, three indexes):
 
@@ -2312,14 +2449,12 @@ CREATE TABLE system (
   -- first_seq order, so it is stable and a rebuild reproduces it (§3.19).
   slug        TEXT NOT NULL,
   home_body   TEXT NOT NULL,
-  root_body   TEXT NOT NULL,
   body_count  INTEGER NOT NULL DEFAULT 0,   -- as the mod reported it
-  -- 0 when the mod declined to send the body list (a system above
-  -- Wire.MaxSystemBodies). The set is UNKNOWN, not empty — the everywhere
-  -- badges must check this and award nothing, which is Task F7 rule 1.
-  complete    INTEGER NOT NULL DEFAULT 0,
-  first_seq   INTEGER NOT NULL,
-  updated_seq INTEGER NOT NULL
+  -- 0 when the mod did not send the body list (disabled, over
+  -- Wire.MaxSystemBodies, or invalid required numeric). The set is UNKNOWN,
+  -- not empty; everywhere badges award nothing (Task F7 rule 1).
+  reported_complete INTEGER NOT NULL DEFAULT 0,
+  first_seq   INTEGER NOT NULL
 );
 CREATE UNIQUE INDEX system_slug ON system(slug);
 
@@ -2328,6 +2463,7 @@ CREATE TABLE system_body (
   body     TEXT NOT NULL,
   name     TEXT NOT NULL,
   class    TEXT NOT NULL,          -- the game's own word; opaque, no allow-list
+  kind     TEXT NOT NULL,          -- §3.7's normalised semantic kind
   rank     INTEGER NOT NULL,
   parent   TEXT,                   -- NULL for the root
   radius_m REAL NOT NULL DEFAULT 0,   -- mean radius, metres from centre
@@ -2344,11 +2480,15 @@ CREATE TABLE system_body (
   -- orbital, on either side (§3.20 rule 1).
   sma_m    REAL, ecc REAL, inc_deg REAL, lan_deg REAL, argp_deg REAL,
   t_pe     REAL, period_s REAL,
-  epoch_sim_t REAL,                -- the envelope sim_t the reading was taken at
+  ccf_to_cce_t0_x REAL NOT NULL,
+  ccf_to_cce_t0_y REAL NOT NULL,
+  ccf_to_cce_t0_z REAL NOT NULL,
+  ccf_to_cce_t0_w REAL NOT NULL,
   first_seq   INTEGER NOT NULL,
   PRIMARY KEY (hash, body)
 );
-CREATE INDEX system_body_class ON system_body(hash, class);
+CREATE INDEX system_body_kind ON system_body(hash, kind, body);
+CREATE INDEX career_system ON career(system, player_id);
 ```
 
 **C3.3 — `systemFold`, and it is a STATE fold.** Add it to `StateFolds()` **first**, before
@@ -2360,16 +2500,35 @@ CREATE INDEX system_body_class ON system_body(hash, class);
 // systemFold is FIRST. A board fold reads the career's system through
 // Batch.CareerSystem, and the discovery event arrives before session.started in
 // the same batch — so the system has to be recorded before careerFold advances
-// the clock on that very event, or the first event of every career would write
-// no system row incrementally and one on rebuild. See Task A8's divergence note:
-// this ordering is half of what keeps that divergence confined to careers
-// recorded before this shipped.
+// the clock on that very event. The final mod guarantees discovery first; this
+// fold order makes the same guarantee true inside a buffered batch and keeps
+// incremental folding equal to rebuild.
 func StateFolds() []Fold { return []Fold{systemFold{}, flightFold{}, careerFold{}} }
 ```
 
 `systemFold` handles both types and is **order-independent between them**, because `system.body`
-carries its own hash: a body row may be written before its `system` header row exists, so `EnsureSystem`
-creates a placeholder the header later fills in. Write the test.
+carries its own hash and has no foreign key. A body row may be written before its header; do **not**
+create a placeholder `system` row because `name`/unique `slug` are unknown and a placeholder slug
+would need undocumented mutation/conflict rules. Create/slug the system only on
+`system.discovered`; list/detail APIs hide orphan body rows. Write an across-batches body-before-
+header test.
+
+System **identity fields** and body rows are immutable first-write. On a repeated header, compare
+`system_id`, `name`, `home_body` and `body_count`: if any differ, retain the first row and record/log
+the conflict; if they match, the sole allowed update is
+`reported_complete = reported_complete OR incoming_complete`. This monotone false→true promotion is
+required when a player first disables `system.body` and later enables it. It never rewrites identity,
+slug or `first_seq`, and a later false cannot erase a completed catalogue. `system.body` itself uses
+`INSERT ... ON CONFLICT DO NOTHING`; a differing duplicate retains the original. Add identical
+idempotence, differing-retains-first, false→true promotion and true→false non-regression tests across
+batch boundaries. This is deterministic projection integrity, not a client plausibility/anti-cheat
+check.
+
+Header `reported_complete` means only “the mod intended to send all rows.” The effective catalogue
+is complete iff it is true **and** `count(system_body for hash) == body_count`. Expose that effective
+boolean in the API and require it in F7, so an interrupted 3,215-row append cannot award early. Test
+the complete disabled→enabled path: first header false/no rows, later header true/all rows, effective
+complete only after the last row.
 
 It also sets the career's system:
 
@@ -2383,16 +2542,24 @@ It also sets the career's system:
 // `rewound` qualifies a career time (PROJ-023).
 ```
 
-**C3.4 — the slug.** Assigned when a system is first seen: `statSuffix(name)`, then `-2`, `-3` … if
-that slug is taken by a **different hash**. Deterministic under rebuild because it is assigned in
-ascending `first_seq`. A name that cannot form a suffix at all falls back to the first 8 characters
-of the hash — the same "a name that cannot be a key still counts" rule family boards already have
-(PROJ-037).
+**C3.4 — the slug.** Do not reuse `statSuffix`: it validates protocol keys and rejects spaces and
+parentheses, so stock display names such as “Solar System (Dense)” would all fall back to hashes.
+Add a dedicated ASCII `systemSlug`: the mod already sanitises `name` to ASCII, so lowercase `A-Z`,
+retain `a-z0-9`, map each run of every other byte to one hyphen, trim hyphens and cap the base length;
+empty falls back to the first eight hash characters. No Unicode normalisation library or
+version-dependent Unicode table participates. Then append `-2`, `-3` … for a distinct hash collision,
+assigned in ascending `first_seq`. Do not weaken `statSuffix`. Pin actual stock names, punctuation,
+empty/non-ASCII-defensive input, length cap and collision order at three batch sizes.
 
 **Tests:** golden folds for both types; out-of-order bodies; a second discovery for the same career
 with a different hash sets `system_changed` and does not move `career.system`; two distinct systems
-with the same name get `sol` and `sol-2` **in first-seen order** at three different batch sizes;
+with the same display name get the normalised base and `-2` **in first-seen order** at three batch sizes;
 rebuild equality.
+
+This migration task updates all three hand-maintained lists immediately: exact tables/indexes and
+schema version, ordered snapshot dumps, and `Counts`. It also lands the state-projection docs,
+player-facing system explanation and next-free decision entry; C6 is conformance/document audit,
+not deferred primary documentation.
 
 ---
 
@@ -2406,21 +2573,26 @@ GET /v1/systems
                    "bodies": n, "complete": b, "players": n, "careers": n}]}
 
 GET /v1/systems/{slug}
-  -> {"hash": s, "system_id": s, "name": s, "slug": s, "home_body": s, "root_body": s,
+  -> {"hash": s, "system_id": s, "name": s, "slug": s, "home_body": s, "roots": [s, …],
       "players": n, "careers": n,
       "complete": b,
-      "bodies": [{"body": s, "name": s, "class": s, "rank": n, "parent"?: s,
+      "bodies": [{"body": s, "name": s, "class": s, "kind": s, "rank": n, "parent"?: s,
                   "radius_m": f, "mass_kg": f, "soi_m": f, "atmo_m": f, "ocean_m": f,
                   "angvel": f, "axis": {"x": f, "y": f, "z": f},
                   "sma_m"?: f, "ecc"?: f, "inc_deg"?: f, "lan_deg"?: f,
-                  "argp_deg"?: f, "t_pe"?: f, "period_s"?: f, "epoch_sim_t"?: f}]}
+                  "argp_deg"?: f, "t_pe"?: f, "period_s"?: f,
+                  "ccf_to_cce_t0": {"x": f, "y": f, "z": f, "w": f}}]}
 ```
 
 - Accepts a **slug or a hash** in the path segment, so an API consumer holding a hash needs no lookup.
 - `players` / `careers` are counts over the `career` table, not `system_stat`, so a system somebody
   loaded and never scored in still lists.
-- **This is the endpoint a future 3D view reads**, and §3.20's contract is what it has to satisfy: a
-  consumer with this response and nothing else can place every body at any sim time. It is
+- `roots` is every `system_body` with no parent, in canonical body order. Do not assume exactly one;
+  each body's `rank` is depth from its own root.
+- `complete` is the effective value `reported_complete && actual body rows == body_count`, never the
+  header bit alone. All numeric response values are finite because C2/C3 enforce that invariant.
+- **This is the endpoint a future 3D view reads.** Its required orientation-at-zero quaternion plus
+  axis/rate supports exact body-fixed placement and ground tracks (§3.20). It is
   deliberately a **complete dump** rather than a paged one — a system is bounded, a renderer needs all
   of it, and paging a thing that is always fetched whole is machinery for nobody. Say so in
   `docs/ingest-api.md`.
@@ -2450,9 +2622,16 @@ future well-meaning change that adds it to the relabel list fails a test that ex
 
 ### Task C6 — vectors, docs, and the fixtures
 
+**Audit only:** C2 owns the event contracts/vectors/docs and C3 owns projection docs. Re-run the
+checks below and repair omissions in the owning commit before merge; C6 must not be the first place
+the contract becomes coherent.
+
 1. **`server/internal/testvectors/testvectors.go` + `make testvectors`.** The batch gains a
    `system.discovered` line and **at least two** `system.body` lines: one **root** body with the
-   seven orbital keys **absent**, and one orbiting body with all of them **present**. That present/
+   six shape keys **absent**, and one orbiting body with them **present** plus finite period. Every
+   body line carries a finite normalised `ccf_to_cce_t0`. Add an unbound body with period absent and
+   a second `system.discovered complete:false` with no body rows to pin the disabled/declined shape.
+   That present/
    absent pair is what makes `Batch001_PayloadsRoundTripThroughTheirRecords` prove anything about the
    optional group.
 2. `docs/events.md` — two new rows in the taxonomy, the `class` vocabulary marked **open set**, and
@@ -2467,7 +2646,7 @@ future well-meaning change that adds it to the relabel list fails a test that ex
 6. `docs/mod.md` — the survey's cost measurement (Task C2.4).
 
 ---
-### Task C7 — the systems pages, on both frontends
+### Task C7 — the systems pages in the app and player docs
 
 **Files:** `templates/systems.gohtml`, `templates/system.gohtml`, `templates.go`, `pages.go`,
 `web.go`, `layout.gohtml`, `web_test.go`, `docs/ui-design.md`;
@@ -2486,7 +2665,7 @@ reader is when the question occurs to them.
 `/systems` — one `.panel`, a table of Name · Bodies · Players · Saves, ordered by player count
 descending. Empty state: *"No systems recorded yet."*
 
-`/system/{slug}` — the header line (name, home body, N bodies, N players) and **one table of bodies**:
+`/systems/{slug}` — the header line (name, home body, N bodies, N players) and **one table of bodies**:
 Name · Class · Parent · Radius · Sphere of influence · Semi-major axis · Period. All through
 `units.Format`, all `tabular-nums`, all with `data-value` carrying the exact float. Sort by `rank`
 then `sma_m` so the tree reads outward from the star. The orbital angles are **not** shown — they are
@@ -2515,21 +2694,27 @@ covering:
 
 ---
 
-## Phase D — wire v2: the community fields, the orbital elements, and what `flight_state` learns
+## Phase D — final v1 wire shape: community fields, orbital elements, and `flight_state`
 
 **Goal:** the three readings the community ideas need that cannot be derived, the element fields
 §3.20's data contract requires, and the `flight_state` columns that stop us needing any more.
 
 | Task | Type | Change |
 |---|---|---|
-| D1 | `vehicle.rud` | `ver 2`: `+part_count` |
-| D2 | `flight.started` | `ver 2`: `+engine_count` |
-| D3 | `kitten.tumble` | `ver 2`: `+from` |
-| **D3b** | `vehicle.orbit` | `ver 2`: `+lan_deg`, `+argp_deg`, `+t_pe`, `+period_s` |
-| **D3c** | `telemetry.window` | `ver 2`: `+state` — position **and** velocity, optional |
-| D4 | server | the five bumps: `currentVer`, upcasters, payload structs |
+| D1 | `vehicle.rud` | final `ver 1`: `+part_count` |
+| D2 | `flight.started` | final `ver 1`: `+engine_count` |
+| D3 | `kitten.tumble` | final `ver 1`: `+from` |
+| **D3b** | `vehicle.orbit` | final `ver 1`: `+sma_m`, `+lan_deg`, `+argp_deg`, `+t_pe`, `+period_s` |
+| **D3c** | `telemetry.window` | final `ver 1`: `+state` — position **and** velocity, optional |
+| D4 | server | five final-v1 payload structs/decode paths; no upcasters |
 | D5 | `flight_state` | the milestone bitfield and the four fact columns |
 | D6 | vectors + docs | |
+
+**Delegation/commit boundary:** D1, D2, D3, D3b and D3c are each an indivisible vertical contract
+slice. Each task includes its mod field/read, matching Go payload/decode, vector present/absent
+cases, mod/server tests, `docs/events.md`, `docs/event-details.md`, docs-site event data/family prose
+and next-free decision entry. D4 and D6 are audits over those five completed slices, not later
+commits that make an earlier broken contract whole. Every slice leaves `make test` green.
 
 **Payload means "what the vehicle weighed", loosely.** The owner has settled that: KSA has no payload
 concept and cannot be given one (below), so wherever this plan says "payload" it means the vehicle's
@@ -2550,13 +2735,13 @@ KSA build `2026.8.5.5168` before this plan was written. The findings that shaped
 
 ---
 
-### Task D1 — `vehicle.rud` → `ver 2`, gains `part_count`
+### Task D1 — final-v1 `vehicle.rud` gains `part_count`
 
 **Community idea #4.** The only honest reading of "most parts destroyed" that KSA supports.
 
 **Mod files, in order** (the full end-to-end checklist for a payload field is Appendix E):
 
-1. `mod/catlog.lib/Events/EventTypes.cs` — `[VehicleRud] = 2` in the `Versions` dictionary.
+1. `mod/catlog.lib/Events/EventTypes.cs` — keep `[VehicleRud] = 1`; update the v1 payload shape only.
 2. `mod/catlog.lib/Events/Payloads.cs` — add to `VehicleRudPayload`, **after `CrewCount` and before
    the optional `Lat`/`Lon`** so the optionals stay last:
    `[property: JsonPropertyName("part_count")] int PartCount,`
@@ -2573,18 +2758,20 @@ KSA build `2026.8.5.5168` before this plan was written. The findings that shaped
    comment: *"read in the prefix because `Universe.DestroyVehicle` → `EndAllCrewMissions` zeroes the
    seats and `Dispose` follows in the same frame; the vehicle is only intact here."*
 
-**Server files:** see Task D4.
+**Server/vector/docs:** complete this field's D4/D6 slice in this same task and commit.
 
 ---
 
-### Task D2 — `flight.started` → `ver 2`, gains `engine_count`
+### Task D2 — final-v1 `flight.started` gains `engine_count`
 
 **Community idea #5** ("get to jupiter with no engines").
 
-1. `EventTypes.cs` — `[FlightStarted] = 2`.
-2. `Payloads.cs` — `[property: JsonPropertyName("engine_count")] int EngineCount,` placed after
-   `StageCount` and before `Lat`/`Lon`.
-3. `GameSignal.cs` — `VehicleCreatedSignal` gains `int EngineCount`.
+1. `EventTypes.cs` — keep `[FlightStarted] = 1`.
+2. `Payloads.cs` —
+   `[property: JsonPropertyName("engine_count"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? EngineCount,`
+   placed after `StageCount` and before `Lat`/`Lon`. The Go payload uses `*int`; absent is unknown,
+   while present `0` is the meaningful “no engines” fact.
+3. `GameSignal.cs` — `VehicleCreatedSignal` gains `int? EngineCount`.
 4. `EventPipeline.cs` — the `VehicleCreatedSignal` arm passes it through.
 5. `mod/catlog/VehicleTelemetry.cs` — **new** read, with a `[KsaAnchor]`:
 
@@ -2600,19 +2787,24 @@ KSA build `2026.8.5.5168` before this plan was written. The findings that shaped
     /// engines.
     /// </remarks>
     [KsaAnchor(
-        Member = "Vehicle.Parts.Modules.Get<EngineController>()",
+        "Vehicle.Parts.Modules.Get<EngineController>()",
         SourceFile = "KSA/ModuleList.cs:164",
         Verified = "2026-08-09", GameVersion = "2026.8.5.5168", Risk = ChurnRisk.Medium,
         Notes = "Modules.HasAny<EngineController>() is the cheaper predicate; we want the count.")]
-    public static int EngineCount(Vehicle vehicle)
+    public static int? EngineCount(Vehicle vehicle)
     {
         try { return vehicle.Parts.Modules.Get<EngineController>().Length; }
-        catch (Exception ex) { Faults.Note(ex); return 0; }
+        catch (Exception ex) { Faults.Note(ex); return null; }
     }
 ```
 
 6. `mod/catlog/PolledSignals.cs` — `Track` fills `EngineCount: VehicleTelemetry.EngineCount(vehicle)`
    when it builds `VehicleCreatedSignal`.
+
+**Never turn a failed read into `0`.** Both `coaster` and `coasting_class` require
+`engine_count != nil && *engine_count == 0`; unknown earns nothing. This task's vectors carry one
+explicit zero and one absent key, and its tests cover a real zero, a positive count and an injected
+read failure/absent JSON value through C#, Go decode and `flight_state`.
 
 **The honest limitation, which the site must state (Task G3/H3):** *"no engines" means no engine was
 installed when the flight began.* RCS thrusters, decoupler springs and docking-port pushoff all
@@ -2623,7 +2815,7 @@ forbids.
 
 ---
 
-### Task D3 — `kitten.tumble` → `ver 2`, gains `from`
+### Task D3 — final-v1 `kitten.tumble` gains `from`
 
 **Community idea #2**, and this is the field that makes it the stat that was actually asked for.
 
@@ -2643,7 +2835,7 @@ interesting thing. The game distinguishes them and catlog is already holding the
 already compares it (`now.Locomotion == Tumbling && state.Locomotion != Tumbling`). **The previous
 value is in hand and is being thrown away.**
 
-1. `EventTypes.cs` — `[KittenTumble] = 2`.
+1. `EventTypes.cs` — keep `[KittenTumble] = 1`.
 2. `Payloads.cs` — `[property: JsonPropertyName("from")] string From,` on `KittenTumblePayload`.
 3. `GameSignal.cs` — `TumbleSignal` gains `string From`.
 4. `PolledSignals.cs` — pass `state.Locomotion`, lowercased, through a **total** mapper; an
@@ -2664,12 +2856,14 @@ it.
 
 ---
 
-### Task D3b — `vehicle.orbit` → `ver 2`, gains the rest of the Keplerian set
+### Task D3b — final-v1 `vehicle.orbit` gains the rest of the Keplerian set
 
 **§3.20's data contract.** `vehicle.orbit` already carries apoapsis, periapsis, eccentricity and
-inclination — enough to *describe* an orbit, not enough to *draw* one. Four more fields close it:
+inclination — enough to *describe* an orbit, not enough to *draw* one. Five more fields close it;
+record `sma_m` rather than asking a consumer to derive it:
 
 ```csharp
+    [property: JsonPropertyName("sma_m")]    double SmaM,
     [property: JsonPropertyName("lan_deg")]  double LanDeg,    // longitude of the ascending node
     [property: JsonPropertyName("argp_deg")] double ArgpDeg,   // argument of periapsis
     [property: JsonPropertyName("t_pe")]     double TPe,       // time at periapsis, game seconds
@@ -2685,12 +2879,19 @@ Degrees, converted in the mod like `inc_deg` already is. `period_s` is `0` for a
 parabolic trajectory, which `OrbitClass` already distinguishes; a consumer reads `0` as "not a closed
 orbit" and the existing `IsBoundOrbit` logic is where that is decided.
 
+**Exact implementation route:** add init-only `SmaM`, `LanDeg`, `ArgpDeg`, `TPe` and `PeriodS`
+properties to `TelemetrySnapshot`; fill them in `VehicleTelemetry.Sample` from
+`orbit.SemiMajorAxis`, `LongitudeOfAscendingNode`, `ArgumentOfPeriapsis`,
+`TimeAtPeriapsis.Seconds()` and `Period`, with radians→degrees and the finite/unbound policy above;
+then pass them through `EventDetector` into `VehicleOrbitPayload`. Update `TestData`, `SimVehicle`,
+detector tests and vectors. A payload-only edit with no Snapshot→Sample→Detector path is incomplete.
+
 **No board reads these.** They are recorded, not scored — say so in `docs/event-details.md`'s entry
 and in `boards.ts`'s prose, so nobody looks for the leaderboard.
 
 ---
 
-### Task D3c — `telemetry.window` → `ver 2`, gains `state`
+### Task D3c — final-v1 `telemetry.window` gains `state`
 
 **The largest single wire cost in this plan, and the one place §3.20 rule 2 has to be read before
 writing code.**
@@ -2733,11 +2934,21 @@ it already keeps `_massKgLast` and `_body`, and `Close()` emits it. It is not an
 position is meaningless. The value is read into `TelemetrySnapshot` as a new **init-only** nullable
 property, filled in `VehicleTelemetry.Sample`, absent when the read fails.
 
-**The frame is the one thing to get right.** It must be **body-centred inertial, relative to the
-window's own `body`**, so a consumer knows what the numbers are relative to without a second lookup.
-★ Confirm the exact accessor, frame and units in Task C1's survey and record the `[KsaAnchor]`; if
-the game's natural accessor is in a different frame, convert in the mod and say so in the anchor
-rather than shipping an ambiguous vector.
+**The accessor/frame is resolved:**
+
+```csharp
+ref readonly StateVectors sv = ref vehicle.Orbit.StateVectors;
+double3 pos = sv.PositionCci;
+double3 vel = sv.VelocityCci;
+```
+
+`Orbit.GetStateVectorsAt` transforms orbital vectors through `Orb2ParentCci`; these are metres and
+metres/second in the parent-body-centred inertial frame, relative to `vehicle.Orbit.Parent`. Record
+those exact symbols and source lines in `[KsaAnchor]`/`docs/ksa-integration.md`. Populate a nullable
+whole `StateVec` only when all six components are finite and the snapshot `Body` names that same
+parent; otherwise omit `state`. Never zero one failed component or emit an origin vector. Pin the
+TelemetrySnapshot → VehicleTelemetry.Sample → WindowAccumulator(last sample) → payload path with
+present/absent and body-change tests.
 
 **Size, measured not guessed.** Before merging, generate a realistic batch with `catlog.loadgen` and
 compare the compressed body size against the same batch without `state`. Record the number in
@@ -2746,47 +2957,30 @@ measurement is what makes that a decision rather than a regret.
 
 ---
 
-### Task D4 — the server half of the five bumps
+### Task D4 — audit the server halves of the five final-v1 payloads
 
-**This task is what stops the three bumps being silent data loss.** A `ver` the mod stamps and the
-server does not know is skipped by the projector as a future version, with one log line.
+**Files:** read/repair `server/internal/stats/payload.go` and payload/decode tests from D1–D3c.
 
-**Files:**
+Add the fields to `VehicleRUD`, `FlightStarted`, `KittenTumble`, `VehicleOrbit` and
+`TelemetryWindow` with exact `json:` tags and decode cases. `state` is a `*StateVec` so absence stays
+distinct from a legitimate origin vector. Add finite/presence tests for all five payloads.
 
-1. `server/internal/projector/upcast.go` — `currentVer` gains
-   `{"vehicle.rud": 2, "flight.started": 2, "kitten.tumble": 2, "vehicle.orbit": 2,
-   "telemetry.window": 2}`, and `CurrentVer` follows.
-2. `server/internal/projector/upcast.go` — **register five upcasters, `(type, 1) → 2`.** Every one
-   is the identity plus a default:
-   - `vehicle.rud` v1 → v2: `part_count` absent → decodes as `0`, and every board reading it gates
-     on `> 0`. **Write the upcaster anyway, as a no-op with a comment**, so the registry is a
-     complete record of every shape that has existed. `projector.Upcasters` has shipped empty since
-     day one (PROJ-015) precisely so that the first bump is a registration rather than a migration —
-     this is that moment.
-   - Same for the other two.
-3. `server/internal/stats/payload.go` — add the fields to `VehicleRUD`, `FlightStarted`,
-   `KittenTumble`, `VehicleOrbit` and `TelemetryWindow` with their `json:` tags. `state` decodes into
-   a `*StateVec` — a **pointer**, because absent must stay distinguishable from a vector at the
-   origin, which is a legitimate reading directly at a body's centre of mass.
-4. `server/internal/ingest/types.go` — **no change**; no new type names.
-
-**Tests:**
-- `projector.TestGoldenBatchIsAtTheCurrentVersions` will fail until the vectors are regenerated
-  (Task D6) — that is the drift check working.
-- Add `TestAVersionOneRudDecodesWithNoPartCount` and its two siblings: a stored `ver: 1` payload
-  still folds, and the boards that read the new field decline it.
+**Do not edit `projector/upcast.go`, `currentVer`, `Upcasters` or event versions.** There is no old
+v1 production shape to accept. `EventTypesTests.RegistryHasExactlyTheLaunchSet` continues asserting
+every type is version 1; regenerated final-shape vectors are the cross-language contract.
 
 ---
 
 ### Task D5 — `flight_state` learns what the vehicle was and what it achieved
 
 **Files:** a new projections migration (`0009_flight_facts.sql` — **re-check the number**),
-`server/internal/stats/flight.go`, `server/internal/stats/batch.go`.
+`server/internal/stats/flight.go`, `server/internal/stats/batch.go`, exact-DDL/schema fixture,
+projector snapshot, `docs/server.md`, both event/projection doc halves and next-free decision entry.
 
-This is §3.11: the join key that keeps the wire small. Four columns and a bitfield.
+This is §3.11: the join key that keeps the wire small. The migration spells every final column.
 
 ```sql
--- projections.db 0007 — what a flight was, and what it got done.
+-- projections.db 0009 — what a flight was, and what it got done.
 --
 -- flight_state is already written by flightFold for EVERY flight-bearing event
 -- and is already read by four boards whose own payloads carry no body
@@ -2798,7 +2992,7 @@ This is §3.11: the join key that keeps the wire small. Four columns and a bitfi
 -- `engine_count` and `vehicle.orbit` does NOT gain `kids`, because both are
 -- answerable from here.
 ALTER TABLE flight_state ADD COLUMN milestones     INTEGER NOT NULL DEFAULT 0;
-ALTER TABLE flight_state ADD COLUMN engine_count   INTEGER;   -- NULL: flight.started not seen, or ver 1
+ALTER TABLE flight_state ADD COLUMN engine_count   INTEGER;   -- NULL: flight.started not seen/unreadable
 ALTER TABLE flight_state ADD COLUMN part_count     INTEGER;
 ALTER TABLE flight_state ADD COLUMN launch_mass_kg REAL;
 ALTER TABLE flight_state ADD COLUMN career         TEXT NOT NULL DEFAULT '';
@@ -2825,41 +3019,63 @@ const (
 
 `flightFold` sets them; nothing clears them. Set-only bits are replay-stable by construction.
 
-**Tests:** `TestFlightMilestonesAccumulate`, `TestFlightFactsSurviveAnOutOfOrderBatch` (a
+This is not only a migration edit. Update every hand-maintained flight-cache seam in one task:
+`FlightState`; the in-memory `flightEntry`; its `SELECT`/scan order; `EnsureFlight`/`StartFlight`;
+and the flush `INSERT`, placeholder count and conflict update. `flight.started` supplies
+`engine_count`, `part_count` and `launch_mass_kg`; the first flight-bearing event supplies `career`,
+which is never overwritten by empty. Each milestone uses the exact positive predicate shown above.
+Badge folds use the existing final-state `scoreable` path, like boards. Do not add
+`first_flagged_seq` or `scoreableAt`: §3.6 deliberately makes rebuild correction authoritative.
+
+**Fact-order rule:** a composite predicate may use start facts only when the existing
+`FlightState.StartedSeq` names an actual `flight.started` and `StartedSeq <= candidate.Seq` (the
+required nullable fact is also valid). If `vehicle.orbit`/`vehicle.soi` arrived first, deliberately
+decline that composite candidate; do not let rebuild's completed first pass award something the
+incremental path could not know. This conservative case is an out-of-order/incomplete log, not the
+normal final mod order. `MilestoneOtherSOI` likewise requires the launch body already known and
+`to_body != launch_body`; never mark “other” while launch is unknown and never retro-award it later.
+
+**Tests:** each bit's positive and negative predicate; flush/reload of every new column;
+`TestFlightMilestonesAccumulate`, `TestFlightFactsSurviveAnOutOfOrderBatch` (a
 `vehicle.orbit` folded before its `flight.started` — the batch may legitimately do that, and
-`EnsureFlight` already creates the row for any flight-bearing event), and rebuild equivalence.
+`EnsureFlight` already creates the row for any flight-bearing event), three batch sizes and rebuild
+equivalence. Add an out-of-order composite-badge test proving both paths decline the early candidate.
+Update exact DDL/schema in this migration task; the snapshot already dumps the widened flight row
+and must include every new column.
 
 ---
 
-### Task D6 — conformance vectors, and the documents the bumps touch
+### Task D6 — audit conformance vectors and final-v1 documentation
+
+Every D1–D3c slice already updated these. This task verifies the combined catalogue and repairs an
+omission in the owning slice before merge.
 
 **Files:** `server/internal/testvectors/testvectors.go`, `contracts/testdata/**`, `docs/events.md`,
 `docs/event-details.md`, `docs-site/src/data/events.ts`, `docs-site/src/content/docs/events/*.mdx`.
 
 1. **Regenerate:** `make testvectors` (`catlogctl testvectors generate contracts/testdata`). Before
    that, edit `testvectors.go` so the batch:
-   - stamps the three new versions (it hard-codes `ver` per line);
-   - carries the three new fields;
+   - keeps **all five types at `ver: 1`**;
+   - carries RUD `part_count`, `flight.started.engine_count` present as explicit `0` on one line and
+     absent on another, all five orbit additions, and telemetry state present on one line and absent
+     on another;
    - **carries `kitten.tumble` twice** — once `from: "airborne"` (a botched landing) and once
      `from: "grounded"` (a trip). The vector set's whole job is to pin payload *shapes*, and a
      value-discriminated board needs both sides pinned. This mirrors why `flight.started` and
      `telemetry.window` each already appear twice.
-2. `docs/events.md` — the taxonomy table's three rows, the `ver` column, and the "23 types, every one
-   at `ver: 1`" heading, which is now false. Add the `from` vocabulary note beside the existing
-   `situation` one, marked **open set**.
-3. `docs/event-details.md` — the three event sections (Wire, Payload, Detector, Game source,
-   Classification blocks), the registry table's `ver` column, and the sentence *"Every type is at
-   `ver` 1"* under **The registry**, which must be rewritten rather than left.
-4. `docs-site/src/data/events.ts` — `ver: 2` on the three entries and one `EventField` each, in
-   player language. For `from`: *"What the kitten was doing immediately before: `airborne` means they
-   were in the air, so this was a landing that did not go well."*
-5. `docs-site/src/content/docs/events/kittens.mdx` — the prose for the new distinction. This is the
-   page a player reads to understand the board in Task E1, and it is the more important half.
+2. `docs/events.md` — document all five final-v1 payload shapes; the “every one at `ver: 1`” sentence
+   remains true. Add the `from` vocabulary note beside `situation`, marked **open set**.
+3. `docs/event-details.md` — update all five event sections (Wire, Payload, Detector, Game source,
+   Classification), including exact KSA source/accessor and finite/absence rules.
+4. `docs-site/src/data/events.ts` — keep `ver: 1` on all five entries and add every field in player
+   language. For `from`: *"What the kitten was doing immediately before: `airborne` means they were
+   in the air, so this was a landing that did not go well."*
+5. Update the kittens, vehicle and telemetry/orbit player pages in the same task. No payload change
+   is complete with only the kitten prose updated.
 
 **Mod tests that will fail until updated** (they are supposed to):
-- `EventTypesTests.RegistryHasExactlyTheLaunchSet` — `Assert.All(… Assert.Equal(1, VersionOf(type)))`.
-  Change it to assert **the registry's declared version per type**, from a table in the test, so it
-  keeps catching an *accidental* bump.
+- `EventTypesTests.RegistryHasExactlyTheLaunchSet` stays an all-v1 assertion and therefore catches
+  any accidental bump.
 - `ContractVectorTests.Batch001_StampsTheRegistrysCurrentVersion` and
   `Batch001_PayloadsRoundTripThroughTheirRecords`.
 - `TestData.Snapshot` / the signal factories gain defaulted parameters.
@@ -2868,8 +3084,9 @@ const (
 
 ## Phase E — the boards the community asked for
 
-Every board here is `putRecord` / `putBest` / `addCount` / set-backed, so **each one gets its career
-scope for free** from Phase A. None needs a registry entry beyond `fixedBoards` and `BoardFolds()`.
+Every board here is `putRecord` / `putBest` / `addCount` / set-backed. The first three helpers fan
+out to all three scopes; set-backed boards must compute player, career and system values explicitly.
+None needs a registry entry beyond `fixedBoards` and `BoardFolds()`.
 
 The full catalog with units, directions and exclusions is **Appendix A**; the tasks below are the
 implementation notes that are not obvious from it.
@@ -2910,11 +3127,17 @@ implementation notes that are not obvious from it.
 	},
 ```
 
+Metadata alone does not write a stat. Add `TumblesOnStat(body)` and replace the generic
+`countFold{StatKittenTumbles}` with a tumble fold that writes the unchanged total plus the valid
+family key through `addCount`, giving all three scopes. Mirror `rudFold`'s total+family shape.
+
    `familyStat` already refuses a suffix that collides with a fixed key and already validates the
    alphabet. **A body whose name cannot form a key still counts towards `kitten_tumbles`** — that
    invariant is `familyStat`'s, not yours, and it must not be re-implemented.
 
-**Test:** `TestABodyNamedAfterAFixedBoardGetsNoTumbleBoardButStillCounts`.
+**Tests:** valid body writes total and family in all scopes; an **unkeyable** body still writes the
+total and no family. Do not use body `landings` as the negative case:
+`tumbles_on_landings` is a valid non-colliding full key.
 
 ---
 
@@ -2925,15 +3148,15 @@ implementation notes that are not obvious from it.
 From `vehicle.rud.part_count` (Task D1). Two boards from one reading, the `rud_total`/`rud_<cause>`
 shape:
 
-- **`parts_lost`** — count, unit `parts`, adds `part_count` per RUD. "How many parts you have lost,
-  in total, to explosions."
+- **`parts_lost`** — title **"Parts In Lost Vehicles"**, count, unit `parts`, adds `part_count` per
+  RUD. A RUD is not necessarily an explosion, so neither title nor copy claims it is.
 - **`biggest_parts_lost`** — record (max). "The largest vehicle you have lost in one go."
 
 Both gate `part_count > 0` (PROJ-088: a zero is an unread value and on a counter it is a silent
 no-op, on a record it is meaningless) and both go through `scoreable`.
 
 **The title must not overclaim.** KSA has no per-part destruction; this is *the size of the vehicle
-that was destroyed*, not a count of parts that individually exploded. `docs/event-details.md` says
+that was lost*, not a count of parts that individually exploded. `docs/event-details.md` says
 the technical version, `docs-site` says the player version: *"KSA does not blow parts off one at a
 time — a vehicle either survives or it does not. This is how big the thing was when it stopped
 existing."*
@@ -2969,22 +3192,30 @@ func (kittensToOrbitFold) Apply(ctx context.Context, b *Batch, ev Event) error {
 	if err != nil || !found || st.Milestones&MilestoneOrbit == 0 {
 		return err
 	}
-	// One row per kitten, both scopes, novelty-reported — the AddBody shape.
+	// One row per kitten in player/career sets; derive all three board scopes.
 	// Iterate p.Kids IN ORDER, never a map, so a rebuild reproduces the context
 	// byte for byte.
 	...
 }
 ```
 
-**Storage.** Reuse the existing set shape rather than adding a fifth table: `player_body` and
-`career_body` are both `(…, kind, body, …)` and `kind` is already a discriminator. Add
-`kind = 'orbit_kid'`, with the `kid` in the `body` column, to **both** — `player_body` for the
-lifetime board and `career_body` for its per-save scope, exactly as `soiFold` does after Task A5.
-**No migration is needed**, since neither table's shape changes.
+**Storage.** Reuse `career_body`'s set shape: add `kind = 'orbit_kid'`, with the `kid` in the `body`
+column. Do **not** write this kind to `player_body`. `kid` omits career (§3.13), so the same roster
+name in two saves denotes two different cats but would collapse in the lifetime table. Count
+`career_body` rows by `(career, kid)`: all careers for the lifetime board, one career for save scope,
+and all careers with the resolved system for system scope. **No migration is needed** because the
+table's shape does not change.
+
+On each new member, compute three independent totals from `career_body`: all `(career,kid)` rows for
+the player; this save's rows; and all rows across this player's saves in the resolved system.
+Write them with `setValue`, `setCareerValue` and `setSystemValue`. Never mirror one count with
+`putRecord`. Test repeated kitten ids across two saves and two systems and assert the lifetime count
+is two, not one.
 
 **Rename nothing.** `body` holding a `kid` reads oddly, and renaming the column would touch four
 documents and buy nothing — the column is "the set member" and always was. Say so in a comment and in
-`docs/event-details.md`'s `player_body` / `career_body` sections, where `kind` now has three values.
+`docs/event-details.md`'s `career_body` section, where `kind` now has three values; `player_body`
+remains unchanged.
 
 **Two caveats, both stated and neither engineered around:**
 - **"Back" means recovered.** KSA only offers recovery on the system's home body, at rest, in
@@ -3002,20 +3233,19 @@ documents and buy nothing — the column is "the set member" and always was. Say
 
 **Community idea #7**, delivered under a title that is true.
 
-D11 is re-confirmed at source in build 5168: `Universe.DestroyVehicle` calls `EndAllCrewMissions()`,
-which calls `EndMission()`; `Kia = true` is written in exactly one place, reachable only from the
-player-initiated destroy path. **A physics RUD returns the whole crew alive.** So there is no such
-thing as "kittens KIA in a crash", and a board with that title would be a lie catlog told about its
-own data.
+D11 is re-confirmed at source in build 5168: a **physics** RUD ends crew missions without killing
+them, while the player-initiated destroy path can mark crew KIA. `vehicle.rud` covers lost vehicles,
+not only physics crashes, so these boards state only the fact the payload actually proves: how many
+kittens were aboard.
 
 - **`biggest_crew_wreck`** — record (max) on `crew_count`, gated `>= 1` and `scoreable`.
   Title: **"Most Kittens Aboard A Lost Vehicle"**.
-- **`kittens_wrecked`** — count, adds `crew_count` per RUD. Title: **"Kittens Walked Away From A
-  Wreck"** — because that is literally what happened to them.
+- **`kittens_wrecked`** — count, adds `crew_count` per RUD. Title: **"Kittens Aboard Lost
+  Vehicles"**. It makes no unsupported claim about their fate.
 
-The site copy must carry the joke *and* the fact: *"Kitten Space Agency's kittens are indestructible
-in a crash — the game ends their mission and sends them home. So this is not a body count. It is how
-many of them were aboard when the vehicle stopped existing, and they all walked away from it."*
+The site copy states: *"This is not a body count. It is how many kittens were aboard when a vehicle
+was lost. Physics accidents normally send them home; a player-initiated scuttle is a different game
+path, so catlog does not claim what happened to them here."*
 
 A separate `kittens_scuttled` counter from `kitten.kia` is **not** built. `kitten.kia` signals a
 deliberate scuttle with crew aboard, and a public board ranking that is a durable public consequence
@@ -3030,9 +3260,12 @@ refusal in `docs/ROADMAP.md` (Task J3).
 
 **Community idea #6** ("most SOIs within 10 years"). Career-native by nature and free from Phase A.
 
-- Value: the number of **distinct** bodies whose SOI the player entered at a `sim_t` below the
-  threshold. Set-backed like `soi_bodies`, reading `first_sim_t` from `player_body` (lifetime) and
-  `career_body` (per save).
+- Value: the number of **distinct** bodies whose SOI was first entered within the threshold in one
+  save. Add batch-aware `BodyCountBefore`, `CareerBodyCountBefore` and `SystemBodyCountBefore`
+  accessors over `first_sim_t`. Career scope is the current save's count; player scope is the
+  **maximum complete save result**, not a union of early arrivals across different saves; system
+  scope is the maximum save result among that player's saves in the system. `player_body` cannot
+  answer this: it collapses saves and retains only a lifetime first encounter.
 - Thresholds: `SprintYearSeconds = 365 * 24 * 3600` — **a flat 365-day year, matching
   `server/internal/units`' duration ladder**, which is already what a catlog `ms` value renders as.
   `bodies_by_1y` = 31 536 000 s, `bodies_by_10y` = 315 360 000 s.
@@ -3042,9 +3275,11 @@ number formatting, **not** a body's orbital period. Reading Earth's period out o
 a year would put a celestial-body fact into the server, which is precisely what PROJ-033 removed.
 Put that sentence in the fold's doc comment.
 
-Both boards are `kindRecord` on the count (so they only ever go up), gated on
-`ev.HasCareer() && ev.HasSimTime`, and both are much more interesting at `?scope=career` than at
-player scope — which the site should say rather than the code enforcing.
+These are scope-specific derived totals, not generic `kindRecord` fan-out. After `toBodyFold` lowers
+the current save's `career_body.first_sim_t`, recompute the affected career result and the player/
+system maxima and write through `setCareerValue`, `setValue` and `setSystemValue`. Run on every
+qualifying SOI, not only a new body: a rewind can lower an existing row across the threshold. Tests
+cover that rewind, multiple saves/systems, repeated body names and batch sizes 1/large.
 
 ---
 
@@ -3053,8 +3288,8 @@ player scope — which the site should say rather than the code enforcing.
 **In the same commits as the code above, not after.**
 
 - `docs/event-details.md` — a **Boards** table row per new board (the count moves again; state the
-  new total), a **Fold detail** entry each, rows in the **Suppression and eligibility matrix** for
-  every new gate, and the third `kind` on `player_body` / `career_body`.
+  final total: **50 fixed boards**), a **Fold detail** entry each, rows in the **Suppression and eligibility matrix** for
+  every new gate, and `career_body`'s third `kind` (`player_body` is unchanged).
 - `docs-site/src/data/boards.ts` — one entry per board with `what` / `how` / `excluded` written for a
   player, plus the new `tumbles_on_<body>` family in `BOARD_FAMILIES`.
 - `docs-site/src/content/docs/leaderboards/catalog.mdx` — `<BoardDetail>` blocks in the right
@@ -3066,27 +3301,30 @@ player scope — which the site should say rather than the code enforcing.
 
 ## Phase F — merit badges, server side
 
-**Goal:** a permanent, timestamped, once-only award, projected independently at **player** scope and
-at **per-save** scope, from the events already in the log.
+**Goal:** a timestamped, once-only award in the **current projection**, independently at **player**
+scope and **per-save** scope, from the events already in the log. Rebuild correction is
+authoritative (§3.6).
 
 **The model, in one paragraph.** A badge is a named predicate over the event stream. When an event
-first satisfies it, a row is written with the seq, the wall time and the career clock at which it
-happened, and nothing ever changes that row. There is no revocation, no expiry and no downgrade —
-a badge records that a thing happened, and it did.
+first satisfies it in one projection build, a row records the seq, server receive time and career
+clock. It never expires or downgrades inside that build. A rebuild can omit the row when current
+folds/final state no longer award it, and can discover a newly added badge from old history.
 
 ---
 
 ### Task F1 — the `badge_award` table
 
-**Files:** a new projections migration (`0010_badges.sql` — **re-check the number**).
+**Files:** a new projections migration (`0010_badges.sql` — **re-check the number**), exact-DDL
+fixture, projector snapshot, projection census, `docs/server.md`, `docs/event-details.md`, new
+`docs-site/src/content/docs/badges/index.mdx`, moderation test and next-free decision entry.
 
 ```sql
--- projections.db 0008 — merit badges.
+-- projections.db 0010 — merit badges.
 --
 -- A badge is a milestone: the interesting property is WHEN YOU FIRST GOT IT, so
--- the write is INSERT ... ON CONFLICT DO NOTHING and the row never changes. That
--- is also what makes it replay-stable — a rebuild replays the same seqs in the
--- same order and therefore awards at the same event.
+-- the write is INSERT ... ON CONFLICT DO NOTHING and the row never changes
+-- inside a projection build. A rebuild is authoritative and may omit it under
+-- the current folds/final flight state (§3.6).
 --
 -- ONE TABLE, TWO SCOPES. career = '' is the LIFETIME award; career = '<id>' is the
 -- per-save award, and the same badge is earned independently in both. The two
@@ -3096,18 +3334,18 @@ a badge records that a thing happened, and it did.
 -- 16 Crockford characters — the same trick event_census uses for `type = ''` and
 -- `bucket = ''`.
 --
--- No `revoked` column, and there must not be one. A badge is not a rank and not a
--- claim about a player; it is a record that an event happened. Constitution §8's
--- consequence test also applies: nothing here may ever treat a player differently
--- because of accumulated history.
+-- No `revoked` column, and there must not be one. A badge row is current
+-- projection output, so removal happens only by rebuilding without the row—not
+-- by accumulating punitive state. Constitution §8's consequence test also
+-- applies: nothing here may ever treat a player differently because of history.
 CREATE TABLE badge_award (
   player_id    INTEGER NOT NULL,
   career       TEXT NOT NULL,        -- '' = lifetime; otherwise the save it was earned in
   badge        TEXT NOT NULL,        -- a fixed key, or a family key built from event data
   -- The celestial system it was earned in, denormalised (§3.6). On a per-save
   -- row this is that save's system. On the LIFETIME row ('' career) it is the
-  -- system of the save it was FIRST earned in, which is the only honest answer
-  -- and is stable because a badge is never re-awarded.
+  -- system of the save the CURRENT PROJECTION first awards it in. A rebuild may
+  -- change this when earlier eligibility changes (§3.6).
   system       TEXT NOT NULL DEFAULT '',
   -- Which save the lifetime row was first earned in. '' on a per-save row,
   -- where `career` already says it.
@@ -3129,11 +3367,17 @@ CREATE INDEX badge_holders ON badge_award(badge, earned_seq);
 CREATE INDEX badge_by_career ON badge_award(player_id, career, earned_seq);
 ```
 
+In this same task add the table/indexes/schema version to the DDL fixture, its ordered dump to the
+equivalence snapshot, its count to `Counts`, and its player-owned rows to purge/shadowban coverage.
+Document the projection and rebuild-authoritative/two-scope semantics now; G adds read surfaces, not deferred
+fold documentation.
+
 ---
 
 ### Task F2 — the badge registry
 
-**Files:** new `server/internal/stats/badges.go`.
+**Files:** new `server/internal/stats/badges.go`; `docs/event-details.md`; the badge index prose;
+next-free decision entry.
 
 Model it **exactly** on `boards.go`: compile-time constants, a fixed table, dynamic families built
 from event data, a `Describe` that is a pure function of the key, and a `Catalog` gated on
@@ -3190,9 +3434,9 @@ always listed.
 // boards use, spelled the simplest way it can be spelled.
 //
 // It does NOT go through scoreable() itself — a badge fold decides its own
-// eligibility, because a few of them (the ones sourced from flightless events)
-// have nothing to gate on. Every badge fold that reads a flight-bearing event
-// MUST call scoreable() first; the checklist in Appendix B says which.
+// eligibility, because flightless events have nothing to gate on. Every
+// flight-bearing badge uses the existing final-state scoreable() path; rebuild
+// correction is authoritative (§3.6).
 func award(ctx context.Context, b *Batch, ev Event, badge string, context map[string]any) error {
 	cx, err := encodeContext(context)
 	if err != nil {
@@ -3211,14 +3455,19 @@ func award(ctx context.Context, b *Batch, ev Event, badge string, context map[st
 ```
 
 `flushBadges` goes into `Flush`'s fixed order after `flushCareerStats`, key-sorted like every other
-flush. Add `Batch.HasBadge(ctx, playerID, career, badge)` as a read-through for the composite badges
+flush. `putBadge` is a first-write merge inside the pending map too: if the same composite key is
+offered several times before one flush, retain the candidate with the lowest `earned_seq` and its
+matching timestamps/context. SQL `ON CONFLICT DO NOTHING` cannot recover the earliest candidate if
+the map already overwrote it. Test three candidates in one unflushed batch and at several flush
+sizes. Add `Batch.HasBadge(ctx, playerID, career, badge)` as a read-through for the composite badges
 that need to know.
 
 ---
 
 ### Task F4 — the four badge fold shapes
 
-**Files:** new `server/internal/stats/badgefolds.go`; one line in `fold.go`.
+**Files:** new `server/internal/stats/badgefolds.go`; one line in `fold.go`;
+`docs/event-details.md`; the badge index's calculation/eligibility prose; next-free decision entry.
 
 Add `BadgeFolds() []Fold` and append it inside `SecondPassFolds()` **after** `BoardFolds()` and
 **before** `LogFolds()`:
@@ -3229,8 +3478,15 @@ func SecondPassFolds() []Fold {
 }
 ```
 
-**The order is load-bearing.** Threshold badges read a counter's *post-write* value from the batch,
-so every board fold must have run for that event first.
+**The order is load-bearing.** Threshold badges read a counter's post-write board value, so every
+board fold must have run first. They intentionally inherit that board's final-state eligibility and
+rebuild refinements (§3.6); do not add independent badge progress.
+
+Every concrete fold has a stable unique name containing the badge key, for example
+`badge:first_orbit` or `badge-family:orbited`. Validate `SecondPassFolds()` names for duplicates.
+Adding a fixed badge/family fold must change `BuildID`; add a test because retroactive rebuild
+discovery hashes names, not registry data. Test removal too: deleting a registry+fold entry changes
+`BuildID`, and rebuilding omits its former awards.
 
 Four shapes, and every badge in Appendix B is one of them:
 
@@ -3254,8 +3510,8 @@ type eventBadge struct {
 // It reads the value AFTER the board folds have written it, which is why
 // BadgeFolds runs after BoardFolds. It reads through the Batch, so it sees this
 // batch's own pending writes exactly as a one-statement-at-a-time path would —
-// and therefore a rebuild, replaying the same events in the same seq order, reads
-// the same value and awards at the same event.
+// A rebuild may read a corrected value and therefore remove the award; that is
+// the documented rebuild-authoritative semantic (§3.6).
 //
 // It reads the CAREER-scoped value for the career award and the PLAYER-scoped
 // value for the lifetime one. Those are genuinely different questions ("ten
@@ -3295,20 +3551,30 @@ correlate two events by holding state in the fold, which a rebuild is not guaran
    the eleventh.
 5. `TestAThresholdBadgeIsPerScope` — six landings in save A and six in save B awards the lifetime
    ten-badge but neither save's.
-6. `TestAFlaggedFlightEarnsNoBadge`.
+6. `TestAFlaggedBeforeCandidateEarnsNoBadge` and
+   `TestAFlagAfterCandidateIsRemovedByRebuild`, plus KIA/recovery threshold cases pinning the
+   documented rebuild-authoritative correction.
 7. `TestABadgeForAnUnkeyableBodyIsSkippedButStillCountsTowardsTiers`.
-8. `TestRebuildEqualsIncrementalForBadges` — **including at three different batch sizes**, because
-   the threshold shape is the one that could depend on batch boundaries and must not (PROJ-060).
+8. `TestUnrefinedBadgeHistoryRebuildsIdentically` — at three different batch sizes, because the
+   threshold shape must not acquire a batch-boundary divergence (PROJ-060). The late
+   flag/KIA/recovery cases in test 6 intentionally assert the existing D22 divergence instead.
+
+Each catalogue/predicate commit updates `docs/event-details.md`, badge data/player prose and the
+next-free decision entry with the fold. Do not defer eligibility documentation to G or J.
 
 ---
 
 ### Task F5 — the starter badge catalogue
 
-**Files:** `server/internal/stats/badges.go`, `badgefolds.go`.
+**Files:** `server/internal/stats/badges.go`, `badgefolds.go`;
+`docs/event-details.md`; new `docs-site/src/data/badges.ts`,
+`docs-site/src/components/BadgeDetail.astro`, and
+`docs-site/src/content/docs/badges/catalog.mdx`; badge index prose; next-free decision entry.
 
-**The full catalogue is Appendix B.** It is 32 badges across five groups, and every one is derivable
-from events already on the wire plus Phase C's system catalogue and Phase D's fields. Implement it
-verbatim; the appendix gives key, title, blurb, group, tier, shape and predicate for each.
+**The full catalogue is Appendix B.** It is **35 fixed badges** across five groups plus three dynamic
+family patterns, and every one is derivable from events already on the wire plus Phase C's system
+catalogue, Phase D's fields and Phase E's boards. Implement it verbatim after resolving §3.7; the
+appendix gives key, title, blurb, group, tier, shape and predicate for each.
 
 **The exploration group has two halves and they answer different questions**, so ship both:
 
@@ -3342,6 +3608,8 @@ type BadgeRow struct {
 	PlayerID   int64
 	Career     string
 	Badge      string
+	System     string
+	FirstCareer string
 	EarnedSeq  int64
 	EarnedAt   int64
 	EarnedSimT sql.NullFloat64
@@ -3349,14 +3617,21 @@ type BadgeRow struct {
 }
 
 func (p *Projections) BadgesForPlayer(ctx context.Context, playerID int64, career string) ([]BadgeRow, error)
-func (p *Projections) BadgeHolders(ctx context.Context, badge string, limit, offset int) ([]BadgeRow, error) // career='' only, earned_seq ASC
+func (p *Projections) BadgeHolders(ctx context.Context, badge, system string, limit, offset int) ([]BadgeRow, error)
 func (p *Projections) BadgeCounts(ctx context.Context) (map[string]int64, error)                             // career='' only
-func (p *Projections) BadgeHolderCount(ctx context.Context, badge string) (int64, error)
+func (p *Projections) BadgeHolderCount(ctx context.Context, badge, system string) (int64, error)
 ```
 
-**Every count is over `career = ''` rows only.** A count over all rows would count a player once per
-save that earned it, and "how many people have this" is the question being asked. Say so in the doc
-comments; it is the single easiest thing to get wrong here.
+With `system == ""`, holders/count use `career=''` lifetime rows: one current first-award row per player. With
+a system filter, query per-save rows in that system and select **one deterministic earliest row per
+player** (`earned_seq`, then career tie-break), counting distinct players. The lifetime PK can retain
+only the current first-award system, so filtering lifetime rows would omit players who later earned the badge
+elsewhere. Never count every save as a holder.
+
+Select/scan `system` and `first_career` on every applicable query. The read API resolves
+`first_career` to ordinal and per-player relabel and never publishes the raw value. Resolve badge
+endpoint slug→hash before passing the optional system filter into both holders and count so the
+reported denominator matches the rows.
 
 Add `badges` and `badge_awards` to `GET /v1/stats`'s `collection` census, memoised on
 `(WriteGen, 10 s TTL)` like the rest (PROJ-083).
@@ -3367,30 +3642,27 @@ Add `badges` and `badge_awards` to `GET /v1/stats`'s `collection` census, memois
 
 **Community idea #9, built.** Phase C did the hard part; this is the fold.
 
-`system_body` says which bodies exist in a system and what the **game** calls each one's class.
+`system_body` says which bodies exist in a system, its concrete class and §3.7's
+normalised kind.
 `career_body` says which of them a save has reached. The badge is the subset test, and catlog holds
 no list of bodies at any point in it (§3.7).
 
-Two badges, both **family** shape keyed on the class so a system with body classes catlog has never
-heard of gets them for free:
+Two **fixed subset badges** (not dynamic families):
 
 | key | Title | Awarded when |
 |---|---|---|
-| `been_to_every_planet` | Every World | every `system_body` of class `Planet` in this save's system has a `career_body` `'soi'` row |
-| `been_to_everything` | Nothing Left | the same for **every** body of every class, the root star included |
+| `been_to_every_planet` | Every World | every `system_body` whose normalised `kind == "planet"` has a `career_body` `'soi'` row |
+| `been_to_everything` | Nothing Left | the same for **every** body of every class, including every parentless root |
 
 ```go
 // everywhereFold — sketch.
 //
-// Runs on vehicle.soi, after soiFold has written the arrival, and only when that
-// arrival was NEW for the career: the set can only have grown at that moment, so
-// checking on any other event is work that cannot change the answer.
+// Runs on every qualifying vehicle.soi after soiFold has written the arrival.
+// `soiFold`'s local `newForCareer` is not shared across folds; the indexed
+// anti-join and once-only award make a repeated check safe and deterministic.
 //
-// THERE IS NO LIST OF BODIES HERE. `class` is compared to the string the game
-// itself reported in `system.body`. `"Planet"` appears as a constant only because
-// that is the word the badge is named after; a system whose bodies are all class
-// `"Widget"` awards `been_to_everything` and not `been_to_every_planet`, which is
-// the correct answer rather than a gap.
+// THERE IS NO LIST OF BODY NAMES HERE. `kind` is the explicit semantic mapping
+// selected in §3.7 and emitted by the mod; concrete `class` remains opaque.
 func (everywhereFold) Apply(ctx context.Context, b *Batch, ev Event) error {
 	// ... resolve the career's system; bail if unknown
 	// missing := b.BodiesNotVisited(ctx, ev, class)   // one indexed anti-join
@@ -3398,37 +3670,42 @@ func (everywhereFold) Apply(ctx context.Context, b *Batch, ev Event) error {
 }
 ```
 
-**`Batch.BodiesNotVisited(ctx, ev, class)`** is
-`SELECT count(*) FROM system_body sb WHERE sb.hash = ? AND (? = '' OR sb.class = ?) AND NOT EXISTS (SELECT 1 FROM career_body cb WHERE cb.player_id = ? AND cb.career = ? AND cb.kind = 'soi' AND cb.body = sb.body)`
-— one indexed anti-join over a table bounded by the size of one system, evaluated only on a
-career-new arrival. It is read-through-cached like every other `Batch` read.
+**`Batch.BodiesNotVisited(ctx, ev, kind)` must be read-through aware.** A plain SQL anti-join cannot
+see the current batch's buffered `career_body` insertion, so the final body would award one event
+late or never. Merge pending `careerBodies` into the stored membership view (or expose a batch-aware
+member/count primitive), then evaluate the indexed subset over one system. Test the last missing
+body at batch size 1 and a large batch.
 
 **Four rules this fold must obey, each of which is a way to get it subtly wrong:**
 
-1. **A system with no `system_body` rows awards nothing.** A career recorded before Phase C, or one
-   whose discovery events were lost, has an *unknown* body set — and "you have visited all zero known
-   bodies" is the wrong answer to give somebody. Guard on `count(*) > 0` first.
+1. **Only an effectively complete catalogue can award:** header `reported_complete` is true,
+   actual row count equals `body_count`, and the selected subset has at least one row. This prevents
+   early award while thousands of body events are still arriving and prevents a vacuous Every World
+   on a system with no selected planets. `been_to_everything` likewise requires a non-empty complete
+   catalogue.
 2. **The award is per save and lifetime, like every badge** (§3.6), and both rows carry the system.
    "Every World" in stock Sol and "Every World" in a twelve-planet conversion are different
    achievements and the badge page must say which.
-3. **It is never revoked.** If a content patch later adds Neptune, the badge earned before it stays
-   earned — a badge records that a thing happened, and it did (§3.6). The player can earn it again in
-   a new save under the new system, which will have a different hash and is therefore a different
-   badge row.
-4. **`scoreable` first**, like every flight-bearing fold.
+3. A content patch that adds Neptune creates a different system hash, so the old event history and
+   its old-system award remain a separate question. As with every badge, a rebuild may still omit
+   that award under current folds/final eligibility (§3.6); there is no explicit revocation path.
+4. Apply final-state `scoreable` first, like every flight-bearing board. A later flag may remove the
+   badge on rebuild (§3.6).
 
 **The forgery, stated rather than defended against:** a modified client can report a one-planet system
 and mint the badge. Constitution §8 accepts that class of thing explicitly, and the tier ladder is no
 better protected — an invented SOI transition is just as cheap. It goes in the `DECISIONS.md` entry,
 not into a check.
 
-**Tests:** award on the last missing body and not the second-to-last; no award when the system has no
-body rows; a body of an unknown class counts for `been_to_everything` and not for
-`been_to_every_planet`; both scopes written; rebuild equality.
+**Tests:** award on the last missing body and not the second-to-last at multiple batch sizes; no
+award for missing header, `reported_complete=false`, row count short of `body_count`, or an empty
+selected kind; an unknown concrete class still follows its explicit `kind`; both scopes written;
+unrefined-history rebuild equality plus the §3.6 late-flag removal case, including §3.7's exact
+class/parent-to-kind mapping.
 
 ---
 
-## Phase G — badges on the read API and both frontends
+## Phase G — badges on the read API, app site, and player docs
 
 ### Task G1 — the badge endpoints
 
@@ -3461,15 +3738,17 @@ Rules, all inherited:
 - `Cache-Control: public, s-maxage=30, stale-while-revalidate=300`, including the 404s.
 - `context` goes through `Redact` before it is published, and any career in it is relabelled
   (§3.5). **A badge row's `career` field is never published raw**, in either scope.
-- `unearned` lists only **fixed** badges. Listing every unearned family badge would be a list of
-  every place anyone has ever been, per player, and it grows without bound. **The exception worth
-  making** is `orbited_<body>` / `landed_on_<body>` / `reached_<body>` for the bodies in *that save's
-  own system*, which is a bounded, known set and is the single most useful thing the badge page can
-  show: it is the checklist. Take it from `system_body`, not from every family key ever seen.
+- Lifetime `/players/{handle}/badges` lists only unearned **fixed** badges; a player may have several
+  systems and there is no single bounded “their system” checklist. The save endpoint additionally
+  lists unearned `orbited_` / `landed_on_` / `reached_` keys for that save's own **effectively
+  complete** system catalogue. Take them from `system_body`, not from every family key ever seen.
 - `?system=<slug>` filters a badge's holders to one system, which is the only way to compare holders
-  of `been_to_every_planet` meaningfully.
+  of `been_to_every_planet` meaningfully. This view is derived from per-save awards, distinct by
+  player with the earliest earning save as representative; the single lifetime row remains
+  the current first award and cannot represent later-system achievements.
 
-**Bump the read API `ver`** and record the four shapes in `docs/ingest-api.md` §4.8.
+There is no read-API version bump. Record the four final pre-launch shapes and visibility/denominator
+semantics in `docs/ingest-api.md` §4.8.
 
 ---
 
@@ -3516,15 +3795,15 @@ links; add the rows to `docs/ui-design.md` §5.1's page inventory in the same co
   everything we write; no exclamation marks; never invent a fact for a joke.
 
 Add a `Badges` link to `profile.gohtml`'s button row, and a badge count to the save page from
-Task B5.
+Task B5; this is also where its Badges column appears, because the data source now exists.
 
 ---
 
 ### Task G3 — the docs-site half
 
-**Files:** new `docs-site/src/data/badges.ts`; new `docs-site/src/components/BadgeDetail.astro`;
-new `docs-site/src/content/docs/badges/index.mdx` and `docs-site/src/content/docs/badges/catalog.mdx`;
-`docs-site/astro.config.mjs`.
+**Audit/files:** the badge data, component, index and catalogue created in F1/F5;
+`docs-site/astro.config.mjs`. G3 adds the navigation/read-surface links and audits player copy
+against the implemented endpoint; it does not defer creation of the behavior documentation.
 
 1. **`badges.ts`** — mirror `boards.ts` exactly: a doc comment saying **DERIVED DATA** and that
    `docs/event-details.md` wins any disagreement; an exported interface; a `BADGES` array; a
@@ -3552,6 +3831,8 @@ export interface MeritBadge {
    `if (!badge) throw new Error(...)`, which is what makes a badge named in a page but missing from
    the data module a **build failure**. Import `./detail.css`; **name no hex value** — every colour
    goes through a Starlight token (`custom.css` maps them onto the app palette).
+   `catalog.mdx` imports `BADGES`/`BADGE_FAMILIES` and renders every fixed entry and family pattern
+   through the component at build time; no hand-maintained second list and no React island.
 
 3. **New sidebar section** in `astro.config.mjs`, after `Leaderboards`:
 
@@ -3566,15 +3847,17 @@ export interface MeritBadge {
 ```
 
 4. **`badges/index.mdx`** must say, in player terms:
-   - A badge is permanent. **It is never taken away**, and there is no level or score attached to it.
-   - You earn each badge **twice**: once for good, and once in the save you did it in. A new save
-     starts with none of the per-save ones and all of your lifetime ones intact.
+   - A badge is once-only in the current projection. A rebuild can remove one after a later
+     disqualifying fact or a catalogue/rule change, and can discover a newly added badge from old
+     history. There is no level or score.
+   - A qualifying history projects each badge **twice**: once at lifetime scope and once in the save
+     where it first qualified. A new save starts with no per-save rows of its own; the lifetime row
+     remains while the current projection still awards it.
    - Anyone can look at anyone's badges — they are as public as a leaderboard row.
-   - **Why there is no "visited every planet" badge**, in the player's own terms: *"catlog has no
-     list of worlds anywhere in it. Leaderboards for places exist because somebody went there, and
-     badges work the same way — which means catlog genuinely does not know how many planets there are
-     supposed to be, and would be wrong the moment the game added one or you installed a mod that
-     did. So the exploration badges count worlds instead of naming them."*
+   - **How Every World avoids a hardcoded list**, in the player's own terms: the save reports the
+     complete catalogue its game loaded; the badge compares its visits with that catalogue. catlog
+     compiles no list of body names, so a game update or system mod supplies its own denominator.
+     Use the resolved §3.7 wording and say that incomplete catalogues award nothing.
    - A flagged flight earns nothing, linking to `leaderboards/eligibility`.
 
 ---
@@ -3599,12 +3882,14 @@ that a challenge is **compile-time** and that its window is measured on **`ev.Re
 
 ---
 
-### Task H1 — the `challenge_stat` table
+### Task H1 — `challenge_stat` and the distinct-member set
 
-**Files:** a new projections migration (`0011_challenges.sql` — **re-check the number**).
+**Files:** a new projections migration (`0011_challenges.sql` — **re-check the number**), exact-DDL
+fixture, projector snapshot, census, moderation test, `docs/server.md`, `docs/event-details.md`, new
+`docs-site/src/content/docs/challenges/index.mdx`, and next-free decision entry.
 
 ```sql
--- projections.db 0009 — time-boxed challenges.
+-- projections.db 0011 — time-boxed challenges.
 --
 -- A challenge is a board with a curated rule and an explicit start and end date.
 -- Its definition lives in server/internal/stats/challenges.go — in the deployed
@@ -3619,35 +3904,61 @@ that a challenge is **compile-time** and that its window is measured on **`ev.Re
 -- have to outlive their week — the archive of past challenges is the point.
 -- Overloading it would make the retention delete a landmine.
 --
--- career = '' is a player-scoped challenge; career = '<id>' scopes one to a single
--- save, the same sentinel badge_award uses.
+-- Scope sentinels:
+--   player: career='', system=''
+--   career: career='<id>', system='<hash>'
+--   system: career='', system='<hash>'
 CREATE TABLE challenge_stat (
   player_id   INTEGER NOT NULL,
   career      TEXT NOT NULL,
   challenge   TEXT NOT NULL,
-  -- Carried for the same reason badge_award carries it (§3.6): a reader has to
-  -- see which system a row came from without asking. On a player-scoped
-  -- challenge ('' career) it is the system of the save that set the value, and
-  -- it is REWRITTEN whenever the value is replaced — unlike a badge, a challenge
-  -- score moves, and the label has to move with it.
+  -- Empty for a genuinely cross-system player aggregate. Non-empty for career
+  -- and system scope; never label a mixed aggregate with its last contributor.
   system      TEXT NOT NULL DEFAULT '',
   value       REAL NOT NULL,
   context     TEXT,
   updated_seq INTEGER NOT NULL,
-  PRIMARY KEY (player_id, career, challenge)
+  PRIMARY KEY (player_id, career, system, challenge)
 );
 
-CREATE INDEX challenge_rank ON challenge_stat(challenge, value, updated_seq);
+CREATE INDEX challenge_rank ON challenge_stat(challenge, system, value, updated_seq);
+
+-- Batch-aware distinct members for set-valued challenge rules such as
+-- coasting_class. career/system use the same sentinels as challenge_stat.
+CREATE TABLE challenge_member (
+  player_id INTEGER NOT NULL,
+  career    TEXT NOT NULL,
+  system    TEXT NOT NULL,
+  challenge TEXT NOT NULL,
+  member    TEXT NOT NULL,
+  first_seq INTEGER NOT NULL,
+  PRIMARY KEY (player_id, career, system, challenge, member)
+);
+CREATE INDEX challenge_member_count
+  ON challenge_member(challenge, player_id, career, system);
 ```
 
 **No retention.** A closed challenge keeps its rows forever; the archive of past weeks is a feature.
-Row count is players × challenges, which grows at the rate the owner writes challenges.
+Row count is entrants × challenges plus qualifying distinct members, growing at the rate the owner
+writes challenges and the bounded members their rules admit.
+
+Both tables are added to all three hand-maintained lists and structural moderation coverage in this
+task. `challenge_member` must have pending-row read-through operations so results do not depend on
+flush/batch boundaries.
+
+**Comparison-sensitive challenges use system scope.** `heavy_lift_week`, `coasting_class` and
+`feather_touch` are `ScopeSystem`, ranking `(player, system)` rows. `speedrun_orbit` is
+`ScopeCareer`. Genuine global `tumbleweek`/`full_house` rows are `ScopePlayer` with `system=''` and
+publish no system label. Never label a mixed player aggregate with its latest contributor.
 
 ---
 
 ### Task H2 — the challenge registry
 
-**Files:** new `server/internal/stats/challenges.go`.
+**Files:** new `server/internal/stats/challenges.go`; `server/cmd/catlogd/main.go` (startup
+validation wiring); unit and exact startup-failure tests; `docs/event-details.md`; new
+`docs-site/src/data/challenges.ts` and `docs-site/src/components/ChallengeDetail.astro`; challenge
+index prose; next-free decision entry.
 
 ```go
 // A challenge is a board with a curated rule and a start and end date.
@@ -3676,7 +3987,7 @@ type Challenge struct {
 	// Unit and Ascending mean exactly what they mean on a Board.
 	Unit      string `json:"unit"`
 	Ascending bool   `json:"ascending"`
-	// Scope is stats.ScopePlayer or stats.ScopeCareer.
+	// Scope is stats.ScopePlayer, ScopeCareer or ScopeSystem (§H1).
 	Scope string `json:"scope"`
 }
 
@@ -3690,15 +4001,17 @@ func (c Challenge) InWindow(recvMS int64) bool { return recvMS >= c.Opens && rec
 ```
 
 **Validation at startup, not at fold time.** Add `ValidateChallenges() error`, called from
-`catlogd`'s wiring, refusing: a duplicate key, a key that fails `statSuffix`, `Closes <= Opens`, an
-unknown `Scope`, and a key that collides with a board key. A bad challenge should stop the server
-starting, not produce a quietly wrong board. Add `TestEveryShippedChallengeIsValid`.
+`catlogd`'s wiring, refusing: a duplicate key, a key that fails `statSuffix`, `Opens <= 0`,
+`Closes <= Opens`, an unknown `Scope`, duplicate fold names, and a key that collides with a board
+key. A bad challenge should stop the server starting, not produce a quietly wrong board. Add
+`TestEveryShippedChallengeIsValid`.
 
 ---
 
 ### Task H3 — the fold shape
 
-**Files:** new `server/internal/stats/challengefolds.go`; one line in `fold.go`.
+**Files:** new `server/internal/stats/challengefolds.go`; one line in `fold.go`;
+`docs/event-details.md`; challenge eligibility/window prose; next-free decision entry.
 
 Add `ChallengeFolds() []Fold` and append it inside `SecondPassFolds()` after `BadgeFolds()`.
 
@@ -3708,7 +4021,7 @@ Add `ChallengeFolds() []Fold` and append it inside `SecondPassFolds()` after `Ba
 // The window gate comes first and is the same in every one of them, so it lives
 // here rather than in each `value` func:
 //
-//	if !c.InWindow(ev.RecvTime) { return nil }
+//	if ev.RecvTime <= 0 || !c.InWindow(ev.RecvTime) { return nil }
 //
 // An event with RecvTime <= 0 is in no challenge, which is the same answer
 // periods give: a row whose window nobody can determine belongs in no window.
@@ -3728,8 +4041,13 @@ strict-inequality tie rule:
 func putChallenge(ctx context.Context, b *Batch, ev Event, c Challenge, kind statKind, value float64, cx map[string]any) error
 ```
 
-`Scope` decides the row's `career`: `ScopePlayer` writes `career = ''`, `ScopeCareer` writes
-`ev.Career` and is a no-op when the event carries none.
+`Scope` decides the composite row key: player writes `career=''`, `system=''`; career writes the
+event career and its resolved system; system writes `career=''` and the resolved system. Career/
+system scope is a no-op if its identity is unavailable.
+
+Every concrete fold name is `challenge:<key>`, stable and unique. `ChallengeFolds()` contains one
+name per registry definition, validation rejects duplicates, and a test proves adding a definition
+changes `BuildID`; retroactive past challenges depend on that fact.
 
 **Every challenge fold that reads a flight-bearing event calls `scoreable` first.** A flagged flight
 scores nothing, on a challenge exactly as on a board.
@@ -3739,26 +4057,31 @@ scores nothing, on a challenge exactly as on a board.
   / `...OnTheClosingInstant...` (exclusive).
 - `TestAnEventWithNoRecvTimeIsInNoChallenge`.
 - `TestChallengeTieKeepsTheEarlierSeq`.
-- `TestRebuildEqualsIncrementalForChallenges` — the important one. Fold a history spanning a
-  challenge window, rebuild, diff.
+- `TestUnrefinedChallengeHistoryRebuildsIdentically` — fold a history spanning a challenge window
+  at several batch sizes, rebuild and diff.
+- `TestLateFlagRemovesAChallengeContributionOnRebuild` — pins the inherited D22 correction rather
+  than falsely claiming universal equivalence.
 - `TestAChallengeAddedAfterTheFactFillsFromHistoryOnRebuild` — pins §3.8's retroactivity claim.
 
 ---
 
 ### Task H4 — six starter challenges
 
-**Files:** `challenges.go`, `challengefolds.go`.
+**Files:** `challenges.go`, `challengefolds.go`; `docs/event-details.md`;
+`docs-site/src/data/challenges.ts`; new
+`docs-site/src/content/docs/challenges/archive.mdx`; challenge index prose; next-free decision entry.
 
-**The full definitions are Appendix C.** They exist to prove the mechanics across every fold kind and
-both scopes, and to be the worked examples the owner copies when writing week seven:
+**The full rules are Appendix C.** Each shipped literal also sets its own explicit UTC Unix-ms
+`Opens`/`Closes`; there is no global challenge calendar or runtime-relative window. They prove the
+mechanics across every fold kind and all scopes and are worked examples for later challenges:
 
 | key | Title | Kind | Scope | Reads |
 |---|---|---|---|---|
-| `heavy_lift_week` | Heavy Lift Week | record | player | `vehicle.orbit` `mass_kg` on the home body |
+| `heavy_lift_week` | Heavy Lift Week | record | **system** | `vehicle.orbit` `mass_kg` on that event career's system home body |
 | `speedrun_orbit` | From Scratch To Orbit | best (asc) | career | `vehicle.orbit` `sim_t` |
 | `tumbleweek` | Tumbleweek | count | player | `kitten.tumble` |
-| `coasting_class` | Coasting Class | record | player | `vehicle.soi` joined to `flight_state.engine_count == 0` |
-| `feather_touch` | Feather Touch | best (asc) | player | `vehicle.landed` `vertical_speed_ms > 0`, away from the home body |
+| `coasting_class` | Coasting Class | record | **system** | `vehicle.soi` joined to known `flight_state.engine_count == 0`, distinct `(system, body)` members in-window |
+| `feather_touch` | Feather Touch | best (asc) | **system** | `vehicle.landed` `vertical_speed_ms > 0`, away from that system's home body |
 | `full_house` | Full House | record | player | `flight.ended` `reason=recovered`, `crew_count` |
 
 **Two naming rules that are load-bearing:**
@@ -3774,11 +4097,16 @@ both scopes, and to be the worked examples the owner copies when writing week se
   flight began. RCS thrusters, decoupler springs and docking-port pushoff all impart velocity, and
   the site says so (Task D2).
 
-**Do not hardcode `"earth"`.** Where a challenge means "the home body", the honest server-side form
-is a challenge-level `Body string` field on the definition, set by whoever writes the challenge, with
-a comment that KSA's home body is `CelestialSystem.HomeBody` and is a property of the loaded system
-rather than a constant. A challenge naming a body is a **curated key**, not a server allow-list —
-that distinction is the whole of §3.7 and is worth a sentence in the file.
+**Do not hardcode `"earth"` or add a challenge-level home-body literal.** Where a rule says home,
+resolve `ev.Career → career.system → system.home_body` and compare the event's canonical body key.
+That is the only rule valid across replaceable systems. The worked heavy-lift predicate must include
+this gate, and Feather Touch uses the inverse. Missing system/home means no contribution.
+
+`coasting_class` must not reuse `career_body`: that table includes events outside the challenge and
+engine-powered visits, and an old row can suppress a later qualifying visit. Insert a canonical
+member such as `<system>\x00<body>` into `challenge_member` only after the recv-time, scoreable and
+known-`engine_count == 0` gates; use its read-through novelty/count to update the score. Test an earlier
+powered visit, later qualifying visit, two systems with the same body name, batch sizes and rebuild.
 
 ---
 
@@ -3787,18 +4115,20 @@ that distinction is the whole of §3.7 and is worth a sentence in the file.
 **Files:** `server/internal/store/projections.go`.
 
 ```go
-func (p *Projections) ChallengeLeaderboard(ctx context.Context, challenge string, asc bool, limit, offset int) ([]CareerStatRow, error)
-func (p *Projections) ChallengeAhead(ctx context.Context, challenge string, value float64, seq int64, asc bool) (int64, error)
-func (p *Projections) ChallengeEntrants(ctx context.Context, challenge string) (int64, error)
-func (p *Projections) ChallengesForPlayer(ctx context.Context, playerID int64) ([]CareerStatRow, error)
+type ChallengeRow struct { PlayerID int64; Career, System, Challenge string; Value float64; Context json.RawMessage; UpdatedSeq int64 }
+func (p *Projections) ChallengeLeaderboard(ctx context.Context, challenge, system string, asc bool, limit, offset int) ([]ChallengeRow, error)
+func (p *Projections) ChallengeAhead(ctx context.Context, challenge, system string, value float64, seq int64, asc bool) (int64, error)
+func (p *Projections) ChallengeEntrants(ctx context.Context, challenge, system string) (int64, error)
+func (p *Projections) ChallengesForPlayer(ctx context.Context, playerID int64) ([]ChallengeRow, error)
 ```
 
-Reuse `CareerStatRow` — the columns are identical and inventing a second identical struct is two
-places to change a tag. Canonical ordering, same as every board.
+Use a store-owned challenge row: career and system sentinels encode three scopes and are not
+identical to `CareerStatRow`'s save ordinal/join shape. Canonical ordering and optional system filter
+match every board.
 
 ---
 
-## Phase I — challenges on the read API and both frontends
+## Phase I — challenges on the read API, app site, and player docs
 
 ### Task I1 — the challenge endpoints
 
@@ -3821,8 +4151,9 @@ GET /v1/challenges/{challenge}
 - `state` is derived from **the server clock** (`s.deps.Now()`), never the browser's — the same rule
   `?period=` without `?at=` already follows.
 - Ordered newest-window-first in the index, with open challenges before upcoming before closed.
-- Rows go through the same ban filter and the same `Redact`; `save`/`save_id` appear only on
-  career-scoped challenges.
+- Rows go through B1's factored row-source visibility helper and the same `Redact`; do not copy the
+  player-stat-specific `visibleRows`. `save`/`save_id` appear only on career scope; system scope
+  carries `SystemRef`; player scope carries neither unless its definition is constrained to one.
 - **A closed challenge is served exactly as an open one.** Its rows are the archive, and the archive
   is a feature.
 - Cache headers as everywhere else. Note the index's `state` flips at a known instant and
@@ -3860,9 +4191,9 @@ GET /v1/challenges/{challenge}
 
 ### Task I3 — the docs-site half
 
-**Files:** new `docs-site/src/data/challenges.ts`; new `docs-site/src/components/ChallengeDetail.astro`;
-new `docs-site/src/content/docs/challenges/index.mdx` and `.../challenges/archive.mdx`;
-`docs-site/astro.config.mjs`.
+**Audit/files:** the challenge data, component, index and archive created in H1/H2/H4;
+`docs-site/astro.config.mjs`. I3 adds navigation/read-surface links and audits the copy against the
+implemented endpoint; it does not defer the behavioral documentation.
 
 `challenges/index.mdx` must cover:
 - What a challenge is: a leaderboard with a rule and a deadline. It does not affect the ordinary
@@ -3877,15 +4208,19 @@ the live index. **Do not hand-maintain a list of past challenges in MDX** — it
 immediately. `challenges.ts` mirrors the shipped registry, and the rule from `boards.ts` applies
 unchanged: it is DERIVED DATA and `docs/event-details.md` wins.
 
+Define a typed `Challenge` interface mirroring the Go fields, a `CHALLENGES` array, lookup helpers,
+and a fail-fast `ChallengeDetail.astro` modelled on `BoardDetail.astro`. The index/archive MDX imports
+and maps the typed data at build time; no React island is needed. Every task runs `pnpm check`.
+
 ---
 
 ### Task I4 — seed and e2e for challenges
 
 - **Seed:** define one challenge in the seed's own window whose demo events fall inside it, and one
   already closed, so `/challenges` renders two of its three groups and the archive is exercised.
-  Because a challenge window is measured on `recv_time`, and the seed controls the injected clock
-  (WP-CLOCK, PROJ-030), this is deterministic — **do not** define a seed challenge relative to
-  `time.Now()`.
+  Before `/admin/seed`, post a fixed `at_ms` to `/admin/clock`; choose fixed challenge windows that
+  contain that instant. `/admin/seed` uses `s.deps.Now()` and the current test environment does not
+  move it automatically. Never define a seed challenge relative to `time.Now()`.
 - **e2e:** `site/e2e/challenges.spec.ts` — the index groups by state, an open challenge ranks, a
   closed one still serves its rows, the home-page panel matches `/v1/challenges`, and values are read
   from `data-value`.
@@ -3902,47 +4237,17 @@ the place the reasoning gets written down once rather than eight times.
 
 ### Task J1 — `docs/DECISIONS.md`
 
-**The shadow-ban work took `PROJ-101`–`103`, `STORE-017`–`018`, `IDENT-016`–`018` and `OPS-035`, so
-this plan starts at `PROJ-104`.** Look up the current highest number in each area before writing —
-the numbers below are the intent, not a reservation. Each entry is dated, and each says **why**, not
-only what; a decision without its reasoning gets re-litigated within the year, which is the entire
-purpose of the file.
+**Audit only.** Every implementation task already took the next free number in the right area and
+landed its reasoning with its code/docs. Re-scan `docs/DECISIONS.md` and verify coverage for:
+career/system scopes and privacy; sibling set meanings and corrected lifetime distance; system
+survey/hash/identity and the resolved owner choices; final-v1 payload reads; new board semantics;
+badge permanence/catalogue/everywhere rule; challenge compile-time windows/scopes/distinct sets;
+structural moderation; visibility denominators; and navigation/system-display rules.
 
-| Entry | Subject | Area |
-|---|---|---|
-| `PROJ-104` | A career is a scope — a dimension of a board, not a set of boards (§3.1) | PROJ |
-| `PROJ-105` | Every board gets career scope, with no opt-out list (§3.2) | PROJ |
-| `PROJ-106` | Career boards have no period dimension, and that is a refusal (§3.3) | PROJ |
-| `PROJ-107` | A career board ranks (player, save) pairs; one player may hold several rows (§3.4) | PROJ |
-| `PROJ-108` | A save publishes as an ordinal for humans and a relabelled id for machines (§3.5) | PROJ |
-| `PROJ-109` | `career_body` / `career_kitten` are **siblings** rather than a widened primary key — forced by `PROJ-101`'s additive-only rule, and better for three reasons that would have applied anyway (§3.12) | PROJ |
-| `PROJ-119` | A celestial system is the third board scope, because KSA's system is replaceable content and two `luna`s are not the same object (§3.15, §3.18) | PROJ |
-| `PROJ-120` | The system hash is computed by the mod, over the name plus ordered bodies plus a rounded semi-major axis — and what was deliberately excluded from it, and why (§3.16, Task C1) | PROJ |
-| `PROJ-121` | The system hash is published **raw** while a career id never is, because it is derived from public game content rather than the install id — plus the bespoke-system residual (§3.19) | PROJ |
-| `PROJ-122` | A career's system is bound once and a later change is a **mark**, not a correction — the PROJ-023 shape reused (§3.15) | PROJ |
-| `PROJ-123` | "Visited every planet" is built, and the list lives in the log because the game reported it — reversing this plan's own earlier refusal, with the reason it was wrong (§3.7, Task F7) | PROJ |
-| `PROJ-124` | The seventh rebuild-versus-incremental divergence: a career whose system was learned late, why it is allowed, and the two things that stop it recurring (Task A8) | PROJ |
-| `MOD-084` | Two event types rather than one chunked payload, and the 16 KiB line cap that decided it (§3.17) | MOD |
-| `MOD-085` | `telemetry.window.state` carries position **and** velocity, and lives on the only droppable type on purpose (§3.20, Task D3c) | MOD |
-| `MOD-086` | catlog records orbital elements and derives nothing from them, on either side (§3.20 rule 1) | MOD |
-| `PROJ-110` | `career_playtime` folds `sim_t` and never reads `career.max_sim_t`, because a state fold is already complete on a rebuild's second pass and the `updated_seq` would diverge (Task A6) | PROJ |
-| `PROJ-111` | A badge is permanent, once-only, and projected at two scopes from one table (§3.6) | PROJ |
-| `PROJ-112` | There is no "visited every planet" badge; tiers instead, and the build-5168 evidence (§3.7) | PROJ |
-| `PROJ-113` | Badge families reuse `[boards] min_players` rather than gaining a knob (§3.14) | PROJ |
-| `PROJ-114` | A challenge is a compile-time rule over an explicit window; not an admin API, not a DSL (§3.8) | PROJ |
-| `PROJ-115` | A challenge window is `recv_time`, and the offline limitation is stated not engineered around (§3.9) | PROJ |
-| `PROJ-116` | `challenge_stat` is its own table rather than a `player_stat_period` overload, because that table's retention **deletes** and a challenge's rows must outlive their week (Task H1) | PROJ |
-| `PROJ-117` | Moderation needed no wiring for the five new tables, and exactly why — `STORE-018` made the exclusion structural (Task A9's finding) | PROJ |
-| `PROJ-118` | *(only if A5.4 is taken)* The lifetime `distance_travelled` correction, and the `stats.BuildVersion` bump it carried | PROJ |
-| `MOD-080` | Three payload fields and no more; what was derivable from `flight_state` instead (§3.10, §3.11) | MOD |
-| `MOD-081` | `kitten.tumble.from` — the game's own state machine distinguishes a botched landing from a trip (Task D3) | MOD |
-| `MOD-082` | Parts destroyed is not readable in KSA; `Parts.Count` at the RUD prefix is the honest proxy (Task E2) | MOD |
-| `MOD-083` | D11 re-confirmed at source in 5168; the board is named for what actually happens (Task E4) | MOD |
-| `UI-045` | Nav budget: seven header links, and what that costs the next feature (Task I2) | UI |
-| `UI-046` | A system is shown by name everywhere and by hash nowhere a person reads (§3.19) | UI |
-| `DOCS-005` | `badges.ts` and `challenges.ts` join `events.ts` and `boards.ts` under the DERIVED DATA rule | DOCS |
-
-Look up the current highest number in each area before writing.
+Never copy numbers from this plan. At audit time the old draft already collided with `MOD-080` and
+`UI-045`/`UI-046`; current maxima must be re-read immediately before each implementation commit.
+Missing reasoning is fixed in the **owning task's commit before merge**, not assigned retroactively
+in Phase J.
 
 ---
 
@@ -3952,30 +4257,26 @@ The single largest doc change, and the one the next reader will trust over the c
 
 - **Contents** — new sections for **Career scope**, **Celestial systems**, **Badges** and
   **Challenges**.
-- **The registry table** — three `ver` bumps, and the sentence *"Every type is at `ver` 1"* under
-  **The registry** must be **rewritten, not left**. Same for `docs/events.md`'s heading
-  *"23 types, every one at `ver: 1`"*.
-- **Boards** — every new board's row, the new dynamic family, and an updated count in the section
-  title (it says "The 40 fixed boards" today).
+- **The registry table** — two new type rows; every type remains `ver: 1`, so preserve and verify
+  that sentence in both reference documents.
+- **Boards** — every new board's row, the new dynamic family, and the final section title
+  **“The 50 fixed boards”** (40 today + 2 in A6 + 8 in E).
 - **Fold detail, board by board** — an entry per new board.
-- **The two projection tables** — becomes five. Document `career_stat`, `badge_award` and
-  `challenge_stat` with their merge rules and their guards, in the same table shape.
+- **Projection tables** — verify all nine new tables, including `challenge_member`, with merge
+  rules and guards. Do not retain the old “becomes five” count.
 - **State projections** — `career` gains `ordinal`, `system` and `system_changed`; `career_body`,
   `career_kitten`, `system` and `system_body` are new and get entries of their own;
-  `player_body` / `career_body` gain a third `kind`; `flight_state` gains `milestones` and the four
-  fact columns. `player_body` and `kitten` are otherwise **unchanged** — say so, since a reader will
+  `career_body` gains a third `kind`; `flight_state` gains `milestones` and the final fact columns.
+  `player_body` and `kitten` are **unchanged** — say so, since a reader will
   expect them to have moved.
 - **Suppression and eligibility matrix** — a row per new gate. This table is how a reader answers
   "why did my thing not count", and an ungated new board is a support question.
-- **Rebuild ≠ incremental** — the shadow-ban work already added a sixth divergence. This plan adds a
-  **seventh** and no more: *a career whose system was learned late* (Task A8). Write it into the
-  numbered list with its two mitigations. Then state explicitly why the rest do **not** diverge:
-  badges are once-only inserts keyed on first occurrence; challenge windows derive from
-  `ev.RecvTime`; career scope derives from `ev.Career`; ordinals and system slugs derive from
-  `first_seq` order; `career_playtime` folds `sim_t` rather than reading a state table (Task A6);
-  `system.body` events are order-independent because each carries its own hash. **If any of them
-  turns out to diverge, it goes in the numbered list too — an honest eighth divergence beats a false
-  claim.**
+- **Rebuild ≠ incremental** — do not invent a pre-launch late-system class. Challenges and badges
+  inherit applicable existing late-flag/refinement divergences; a badge may disappear when the
+  authoritative rebuild no longer awards it (§3.6). Verify deterministic cases: recv-time windows,
+  career ids, first-seq ordinals/slugs, direct sim-time playtime, self-identifying catalogue events,
+  and batch-aware pending sets. Add a numbered divergence only if implementation evidence finds a
+  genuinely new class.
 - **Conformance coverage** — the new vector lines and what each pins.
 - **Known drift** — clear anything this work fixed; add anything it knowingly left.
 
@@ -4011,14 +4312,15 @@ Under *Deliberately not built*, with reasoning:
 Under *Open, unblocked* — and in the §1 "the mod has never run inside KSA" checklist, in the same
 style as the existing rows — add the in-game verification items this plan creates:
 
-- `engine_count` is not 0 on a rocket with engines, and **is** 0 on a probe with only RCS;
+- `engine_count` is positive on a rocket with engines, **is** explicit 0 on a probe with only RCS,
+  and is absent rather than 0 when the KSA read fails;
 - `part_count` on a RUD matches what the vehicle actually had;
 - `kitten.tumble.from` reads `airborne` on a botched landing and `grounded` on a trip;
-- **the system survey fires once per session, before `session.started`**, and reports the stock body
+- **the cached system survey emits at each session boundary before `session.started`**, and reports the stock body
   count with no missing bodies and no duplicates;
 - **the same save loaded twice produces the same system hash**, and a hand-edited `Astronomicals.xml`
   produces a different one and sets `system_changed`;
-- `vehicle.orbit`'s four new elements are non-zero on a real orbit and `period_s` is 0 on an escape;
+- `vehicle.orbit`'s five new elements are finite on a real orbit and `period_s` is 0 on an escape;
 - `telemetry.window.state` is present in flight and **absent** where the read fails, never `{0,0,0}`;
 - the measured cost of the survey and of the `state` read, against Constitution §3 (Tasks C2.4,
   D3c).
@@ -4029,12 +4331,12 @@ style as the existing rows — add the in-game verification items this plan crea
 
 | Document | Change |
 |---|---|
-| `docs/events.md` | Two new type rows, five `ver` bumps, the `from` and `class` vocabularies as **open sets**, the type count (23 → 25) and the "every one at `ver: 1`" heading |
-| `docs/ingest-api.md` | §4.8: `?scope=` and `?system=`, `scopes` + `body_derived` on the index, `SystemRef` on every row that carries one, the two saves endpoints, the two systems endpoints, four badge endpoints, two challenge endpoints, and the read API `ver` bump |
-| `docs/server.md` | Its **§5.6**: the new folds and the five new projection tables, added to the projections-table list there; its **§5.4**: the new DDL; its **§5.3** if any config key was added. (Those are `server.md`'s own section numbers, not this plan's.) |
+| `docs/events.md` | Two new v1 type rows, five final-v1 payload additions, `from`/`class` as open sets, `kind` as the resolved semantic mapping, and type count 23 → 25; all remain `ver: 1` |
+| `docs/ingest-api.md` | §4.8 final pre-launch shapes: `?scope=`/`?system=`, scopes/body-derived metadata, `SystemRef`, two saves, two systems, four badge and two challenge endpoints; no API version bump |
+| `docs/server.md` | Its §5.6 folds and all **nine** new projection tables; §5.4 final DDL; §5.3 only if config changed. These are `server.md`'s headings, not new frozen `§` citations. |
 | `docs/mod.md` | §7.2 detection rules for `kitten.tumble.from`; §7.4 for the two new reads |
 | `docs/ksa-integration.md` | Sections for `EngineController` enumeration, `LocomotionMode`, **the celestial-system survey** (enumeration, the element set, the safe read point) and **the vehicle state vector** (frame, units, accessor) — each with `file:line` against build 2026.8.5.5168 and a `[KsaAnchor]` risk rating. This is the largest addition to that document since it was written |
-| `docs/ui-design.md` | Its §5.1 page inventory (eight new pages), its §11 do-not-break DOM ids, the nav budget note, and **the system-name rule**: a system appears by name everywhere and by hash nowhere a person reads (§3.19) |
+| `docs/ui-design.md` | Its §5.1 inventory for **ten route patterns** (2 saves + 2 systems + 4 badges + 2 challenges), §11 DOM ids, nav budget and the system-name rule |
 | `docs/ARCHITECTURE.md` | Only if a new top-level directory appears. **Never mint a new `§` number.** |
 | `DEVELOPMENT.md` | Any new Make target or test mode |
 | `README.md` | Badges and challenges are things a visitor to the website notices |
@@ -4049,25 +4351,24 @@ summary of it:
 
 ```
 make test              # Go + C#, everything
+make test-integration  # real mod/server cross-language contract path
 make e2e               # the Playwright suite against a real server
+make e2e-full          # mod payloads through the full end-to-end surface
 cd docs-site && pnpm check     # oxlint + oxfmt + astro build
 make testvectors && git diff --exit-code contracts/testdata   # vectors are current
 ```
 
 Then, by hand:
 
-1. **Force a rebuild and diff it.** `catlogctl rebuild` (it watches; `-detach` returns immediately,
-   `-status` reports phase and progress) on a database with a representative history, then diff the
-   rebuilt projections against the incremental ones. `TestRebuildEqualsIncremental…` covers this in
-   miniature; do it once for real. **Note the verb changed** — `POST /admin/projections/rebuild` now
+1. **Create a fresh final database, ingest representative history, then force a rebuild and diff
+   it.** `catlogctl rebuild` (it watches; `-detach` returns immediately, `-status` reports phase and
+   progress) then compare rebuilt projections with the captured incremental state. The test covers
+   this in miniature; do it once for real. `POST /admin/projections/rebuild` now
    answers `202` with a job rather than blocking, and `{"wait": true}` is the blocking form for
    scripts (`PROJ-103`).
-2. **Prove the build stamp did its job.** Deploy this work onto a database built by the *previous*
-   binary and confirm, without touching anything: `catlogctl stats` reports
-   `projector.build.stale` and `projector.rebuild.suspended`; the old boards keep answering reads;
-   the new boards read **empty** rather than short-of-history; and once `auto_rebuild` finishes,
-   every new board is full and `stale` is false. This is the mechanism `PROJ-101` exists for and
-   this plan leans on it in every phase — verify it once rather than assuming it.
+2. **Prove the fresh schema is exact.** Inspect the migration DDL test/census/snapshot output for all
+   nine tables and every new index/column. There is deliberately no previous-binary or old-database
+   deployment test.
 3. Open every new page at a viewport of 1280×900 **and** at 380 px, and confirm no page scrolls
    horizontally — wide tables scroll inside their `.table-wrap`, never the body (UI-042).
 4. Open `/boards/landings?scope=career` with **no data** and confirm the empty state, not a broken
@@ -4075,10 +4376,10 @@ Then, by hand:
 5. Confirm no public JSON response anywhere contains a raw 16-character career id (Task B3's test
    does this; look at one response by eye as well) — **and confirm the system hash *is* there**,
    unrelabelled, which is the opposite requirement on a value of the same shape (§3.19).
-6. **Fetch `GET /v1/systems/{slug}` and check it is sufficient on its own** to place every body:
-   every non-root body has the seven orbital keys and an epoch, every body has a parent that resolves,
-   and exactly one body has none. This is the §3.20 contract, and the only moment anybody will check
-   it before somebody tries to build the renderer.
+6. **Fetch `GET /v1/systems/{slug}` and check the resolved §3.20 contract:** effective completeness
+   is true; every non-root body has the six orbital-shape keys; unbound period is absent; parents
+   resolve; every parentless root is listed in `roots` and every body belongs to one tree. Under
+   verify the required orientation-at-zero quaternion and an exact ground marker.
 7. Re-read `AGENTS.md`'s update table and tick every row this work touched.
 
 ---
@@ -4093,15 +4394,15 @@ time* — not the new scope, which every board has.
 | key | Title | Unit | Asc | Career | Fold | Source | Gate |
 |---|---|---|---|---|---|---|---|
 | `career_playtime` | Longest Save | `ms` | no | **yes** | record | any event with `career` + `sim_t` | `sim_t > 0`. **No flag gate** — a duration is not a feat |
-| `play_sessions` | Times Resumed | `sessions` | no | no | count | `session.started` | — |
+| `play_sessions` | Play Sessions | `sessions` | no | no | count | `session.started` | — |
 | `botched_landings` | Did Not Land On Their Feet | `tumbles` | no | no | count | `kitten.tumble` | `from == "airborne"`, `scoreable` |
-| `parts_lost` | Parts Lost To Explosions | `parts` | no | no | count (+`part_count`) | `vehicle.rud` | `part_count > 0`, `scoreable` |
+| `parts_lost` | Parts In Lost Vehicles | `parts` | no | no | count (+`part_count`) | `vehicle.rud` | `part_count > 0`, `scoreable` |
 | `biggest_parts_lost` | Biggest Vehicle Lost | `parts` | no | no | record | `vehicle.rud` | `part_count > 0`, `scoreable` |
 | `kittens_to_orbit_and_back` | Kittens To Orbit And Home | `kittens` | no | no | count (set-backed) | `flight.ended` | `reason == "recovered"`, `milestones & orbit`, `scoreable` |
 | `biggest_crew_wreck` | Most Kittens Aboard A Lost Vehicle | `kittens` | no | no | record | `vehicle.rud` | `crew_count >= 1`, `scoreable` |
-| `kittens_wrecked` | Kittens Walked Away From A Wreck | `kittens` | no | no | count (+`crew_count`) | `vehicle.rud` | `crew_count >= 1`, `scoreable` |
-| `bodies_by_1y` | Worlds In The First Year | `bodies` | no | no | record (of a count) | `vehicle.soi` | `sim_t < 31 536 000`, career + clock, `scoreable` |
-| `bodies_by_10y` | Worlds In Ten Years | `bodies` | no | no | record (of a count) | `vehicle.soi` | `sim_t < 315 360 000`, career + clock, `scoreable` |
+| `kittens_wrecked` | Kittens Aboard Lost Vehicles | `kittens` | no | no | count (+`crew_count`) | `vehicle.rud` | `crew_count >= 1`, `scoreable` |
+| `bodies_by_1y` | Worlds In The First Year | `bodies` | no | no | set-derived best save per scope | `vehicle.soi` | `career_body.first_sim_t < 31 536 000`, career + clock, `scoreable` |
+| `bodies_by_10y` | Worlds In Ten Years | `bodies` | no | no | set-derived best save per scope | `vehicle.soi` | `career_body.first_sim_t < 315 360 000`, career + clock, `scoreable` |
 
 **New dynamic family**, registered in `families` under `kitten_tumbles`:
 
@@ -4121,10 +4422,13 @@ pins it.
 
 ## Appendix B — the badge catalogue, in full
 
-Thirty-two badges. **Shape** is one of the four in Task F4, plus the **subset** shape Task F7 adds. Every predicate below is satisfiable from
-events already on the wire plus Phase D's three fields.
+**Thirty-five fixed badges plus three dynamic family patterns.** Shape is one of the four in Task F4,
+plus the fixed subset shape Task F7 adds. Every predicate is satisfiable from final-v1 events plus
+the system catalogue and Phase E projections.
 
-Every flight-bearing badge calls `scoreable` first — that is not repeated per row.
+Every flight-bearing badge uses the existing final-state `scoreable` rule. The catalogue does not
+repeat that gate per row; §3.6 documents why a later disqualifying fact can remove an award on
+rebuild.
 
 ### Group `first-steps` — event badges
 
@@ -4144,10 +4448,10 @@ Every flight-bearing badge calls `scoreable` first — that is not repeated per 
 
 | key | Title | Shape | Predicate |
 |---|---|---|---|
-| `crewed_orbit` | Passengers | composite | `vehicle.orbit achieved` on a flight whose `flight_state.crew >= 1` |
+| `crewed_orbit` | Passengers | composite | `vehicle.orbit achieved` on a flight that **began** with `flight_state.crew >= 1` |
 | `orbit_and_back` | Round Trip | composite | `flight.ended reason=recovered` on a flight with `milestones & MilestoneOrbit` |
-| `docked_in_orbit` | Rendezvous | composite | `vehicle.docked` on a flight with `milestones & MilestoneOrbit` |
-| `coaster` | Along For The Ride | composite | `vehicle.soi` on a flight whose `flight_state.engine_count == 0` |
+| `docked_after_orbit` | Rendezvous | composite | `vehicle.docked` after that flight had previously set `MilestoneOrbit`; does not claim the docking itself occurred in orbit |
+| `coaster` | Along For The Ride | composite | `vehicle.soi` on a flight whose `flight_state.engine_count` is known and equals 0 |
 | `heavy_lifter` | Heavy Lifter | threshold | `heaviest_to_orbit >= 20 000` |
 | `big_stack` | Tall Order | threshold | `biggest_stack >= 5` |
 | `many_parts` | Kit Bash | threshold | `most_parts >= 100` |
@@ -4179,7 +4483,7 @@ be an unbeatable record and would hand the badge to everyone.
 | `voyager` | Voyager (tier 2) | threshold | `soi_bodies >= 5` |
 | `grand_tour` | Grand Tour (tier 3) | threshold | `soi_bodies >= 8` |
 | `groundskeeper` | Groundskeeper | threshold | `landed_bodies >= 3` |
-| `been_to_every_planet` | Every World | **subset** (Task F7) | every body of class `Planet` in this save's system has been entered |
+| `been_to_every_planet` | Every World | **subset** (Task F7) | every `kind == "planet"` body in this save's effectively complete system has been entered |
 | `been_to_everything` | Nothing Left | **subset** (Task F7) | the same for every body of every class |
 | `reached_<body>` | `"Reached " + titleize(body)` | **family** | `vehicle.soi` `to_body` |
 | `orbited_<body>` | `"Orbited " + titleize(body)` | **family** | `vehicle.orbit` `phase == "achieved"`, `body` |
@@ -4209,25 +4513,28 @@ and never a number played for a joke.
 
 ## Appendix C — the six starter challenges, in full
 
-Dates below are placeholders — **the owner sets the real ones**. They are written as UTC instants and
-committed as unix-millisecond literals with the human date in a trailing comment, so a reader can
-check them:
+Every challenge sets an explicit UTC half-open `[Opens, Closes)` window in its own Go literal. The
+fold compares those epochs with `ev.RecvTime`, the catlogd server's receive timestamp assigned when
+the event arrived—never client `wall_t`, simulation time or `time.Now()` during replay. There is no
+shared calendar and no owner gate on dates: setting/changing the literal is part of defining that
+challenge. The constants below are a fixture/example of the required representation, with human UTC
+dates in comments so a reader can check the milliseconds:
 
 ```go
 const (
 	// 2026-08-10T00:00:00Z .. 2026-08-17T00:00:00Z
-	week33Opens  int64 = 1_786_579_200_000
-	week33Closes int64 = 1_787_184_000_000
+	week33Opens  int64 = 1_786_320_000_000
+	week33Closes int64 = 1_786_924_800_000
 )
 ```
 
 | key | Title | Kind | Scope | Unit | Asc | The rule |
 |---|---|---|---|---|---|---|
-| `heavy_lift_week` | Heavy Lift Week | record | player | `kg` | no | The heaviest payload to orbit — the whole vehicle's mass at the moment orbit was achieved |
+| `heavy_lift_week` | Heavy Lift Week | record | **system** | `kg` | no | The heaviest payload to orbit over that system's home body — whole-vehicle mass at achievement |
 | `speedrun_orbit` | From Scratch To Orbit | best | **career** | `ms` | **yes** | The shortest career time at which a save reached orbit |
 | `tumbleweek` | Tumbleweek | count | player | `tumbles` | no | The most kitten tumbles |
-| `coasting_class` | Coasting Class | record | player | `bodies` | no | The most worlds reached on flights that launched with no engine installed |
-| `feather_touch` | Feather Touch | best | player | `m/s` | **yes** | The gentlest surviving landing away from home |
+| `coasting_class` | Coasting Class | record | **system** | `bodies` | no | The most distinct worlds reached in-window on flights that launched with no engine installed |
+| `feather_touch` | Feather Touch | best | **system** | `m/s` | **yes** | The gentlest surviving landing away from that system's home body |
 | `full_house` | Full House | record | player | `kittens` | no | The most kittens brought home in one piece at once |
 
 A worked example, complete enough to copy:
@@ -4247,7 +4554,7 @@ A worked example, complete enough to copy:
 		"vehicle weighed the moment it got there, propellant included — catlog cannot " +
 		"tell the cargo from the rocket, and does not try.",
 	Opens: week33Opens, Closes: week33Closes,
-	Unit: "kg", Ascending: false, Scope: ScopePlayer,
+	Unit: "kg", Ascending: false, Scope: ScopeSystem,
 }
 ```
 
@@ -4264,6 +4571,10 @@ challengeFold{
 		if err != nil || !ok {
 			return 0, nil, false, err
 		}
+		home, known, err := b.CareerHomeBody(ctx, ev.PlayerID, ev.Career)
+		if err != nil || !known || p.Body != home {
+			return 0, nil, false, err
+		}
 		return p.MassKg, map[string]any{
 			"body":   p.Body,
 			"flight": ids.String(ev.FlightID),
@@ -4278,10 +4589,10 @@ rows carry `save` and `save_id`. Its blurb has to say what it rewards without pr
 *"Start a save and get to orbit. The clock is the game clock, counted from the beginning of that
 save."*
 
-`coasting_class` is the one that needs `flight_state`: read the flight, require
-`engine_count != nil && *engine_count == 0`, then count distinct `to_body` values inside the window
-using the `career_body` set shape — **not** a Go set held in the fold, which a rebuild is not
-obliged to reproduce in the same order.
+`coasting_class` is the one that needs `flight_state`: require
+`engine_count != nil && *engine_count == 0`, then insert the qualifying canonical `(system,body)`
+member into `challenge_member` and count that read-through set. It must not use `career_body` or a Go
+set held in the fold.
 
 ---
 
@@ -4302,7 +4613,6 @@ re-derivation, and so nobody has to argue about what KSA does and does not expos
 | Vehicle region | `Vehicle.VehicleRegion` (`Surface`/`LowOrbit`/`HighOrbit`) | A free, game-blessed altitude classification, serialized into the save |
 | Part-module inventory | `Modules.HasAny<T>()`, `PartTree.{DockingPorts,Decouplers,SolarPanels,Batteries,Tanks}` | "Most docking ports on one stack" |
 | Battery charge | `BatteryState.Charge` | "Survived the eclipse" |
-| Orbital period | `Orbit.Period`, `SemiMajorAxis`, `LongitudeOfAscendingNode`, `ArgumentOfPeriapsis` | `Period` is unread today — "longest orbital period" |
 | Δv actually expended | `KinematicMeasurements.DeltaVelocityCci`, integrated | The **honest** Δv metric, unlike `NavBallData.DeltaV` |
 | Target / rendezvous | `Vehicle.Target`, `TargetPart` | "Closest approach" |
 | Control point | `Vehicle.ControlPart`, `Ctrl2Body` | New in 5168 and **mandatory** to normalise any attitude metric, since the player can move the control frame |
@@ -4320,7 +4630,6 @@ Surveyed while designing Phase C. All verified at build 2026.8.5.5168.
 | **Body and star colours** | `CelestialTemplate.ColorRgb`, `StellarBodyTemplate.ColorRgb` / `LightColorRgb`, `Celestial.OrbitColor`, `SoiColor` | The game's own palette, so a rendered view matches |
 | **Terrain height envelope** | `Astronomical.MaxTerrainRadius` / `MinTerrainRadius` (authored, safe) | Relief. **Never** the `…Approx` variants — they sample 16,384 points across `Environment.ProcessorCount` threads and are machine-dependent |
 | **Galactic plane** | `CelestialSystem.GalacticPlane` (`float4x4`) | Star-field orientation; would make a rendered sky match the game's |
-| **Rotation phase at t=0** | `Celestial.InitialRotation` is **private**; recover it as the Z-angle of `GetCcf2Cci(SimTime.Zero)` | Without it a body-fixed frame is offset by a constant angle — the one gap in the current `system.body` payload, and it only matters for exact ground tracks |
 | **The system id in a save** | `universeData.CelestialSystems[0].Id.Id`, readable in a `Universe.DeserializeSave` prefix; the game itself ignores it | Would let the mod detect "this save was made in a different system" before loading |
 
 ### Real Harmony patch points, unused
@@ -4358,7 +4667,11 @@ omission fails silently rather than loudly.
 
 ### A new payload field on an existing type
 
-1. `mod/catlog.lib/Events/EventTypes.cs` — **bump `Versions[type]`** ★ (Constitution §9).
+**Greenfield branch for this plan:** edit the final `ver: 1` shape in place. Do not add version
+bumps, upcasters, compatibility fixtures or previous-shape tests. The normal post-launch contract
+rule applies only after real data exists.
+
+1. `mod/catlog.lib/Events/EventTypes.cs` — keep `Versions[type] == 1` and pin it in tests.
 2. `mod/catlog.lib/Events/Payloads.cs` — add the member. Optional fields need **both** `T?` **and**
    `[property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]` ★ — the shared
    `JsonSerializerOptions` deliberately has no global null-ignore, so nullability alone does nothing.
@@ -4374,9 +4687,8 @@ omission fails silently rather than loudly.
 10. `mod/catlog.sim/SimVehicle.cs` — set it in `Sample`, if a scenario should exercise it. Note
     `RadarAltM`, `Lat`, `Lon`, `VerticalSpeedMs`, `HorizontalSpeedMs` and `WarpFactor` are **not** set
     there today, so scenarios never exercise them.
-11. ★ `server/internal/projector/upcast.go` — `currentVer` **and** an upcaster for every intermediate
-    version. **A `ver` the server does not know is skipped as a future version — silent data loss for
-    that type until the server catches up and a rebuild runs.**
+11. `server/internal/projector/upcast.go` — **no change in this plan**; `currentVer` stays 1 and the
+    upcaster registry stays empty.
 12. `server/internal/stats/payload.go` — the Go struct field and its `json:` tag.
 13. `server/internal/testvectors/testvectors.go` + `make testvectors` — and for an **optional** field,
     carry it **present on one line and absent on another** ★, which is what makes
@@ -4386,17 +4698,17 @@ omission fails silently rather than loudly.
 
 ### A new event type — everything above, plus
 
-15. `EventTypes.cs` — the `public const string`, the `Versions` entry, and `AlwaysReported` **only**
-    if its absence would make a number *better* than it was.
+15. `EventTypes.cs` — the `public const string`, the `Versions` entry, and `AlwaysReported` only when
+    omission defeats an exclusion **or a recorded decision makes the event mandatory attribution**.
+    This plan adds only `system.discovered` under the second rule; `system.body` stays configurable.
 16. `EventTypes.KindOf` — a new type is `KindEvent` and therefore **never pruned from the outbox**.
     Only `telemetry.window` is `KindPassive`. Consider the outbox pressure before adding a chatty
     type.
 17. `mod/catlog.lib/Config/ModConfig.cs` — a line in the commented `[events]` block in the `Header`
     const, with the boards it feeds, and `# locked on` iff it is always-reported. ★ **Test-enforced**
     by `TheHeaderDocumentsEveryRegisteredEventType`.
-18. `mod/catlog.lib.tests/Config/EventGateTests.cs` — only if `AlwaysReported` changed; it pins the
-    list to five names and the header sentence *"Five types cannot be switched off"* is asserted
-    verbatim.
+18. `mod/catlog.lib.tests/Config/EventGateTests.cs` — `AlwaysReported` changes five → six: update
+    the exact locked-name set and its header sentence together; only `system.discovered` is added.
 19. `mod/catlog.lib.tests/Conformance/ContractVectorTests.cs` — the `PayloadTypes` row ★, or
     `Batch001_PayloadsRoundTripThroughTheirRecords` throws `KeyNotFoundException`.
 20. `EventTypesTests.RegistryHasExactlyTheLaunchSet` — the count (23 today).
@@ -4413,10 +4725,9 @@ behind it. `Wire.MaxEventsPerBatch` is 2000.
 
 ## Appendix F — checklist: adding a board
 
-0. **Is it a new fold, or a changed one?** A new fold changes `stats.BuildID` for free and the
-   projection rebuilds itself on deploy. **A change to an existing fold's *meaning* under an
-   unchanged name does not** — that one owes a `stats.BuildVersion` bump in the same commit
-   (`PROJ-102`, §5.1).
+0. **Give every new fold a stable unique name.** In this greenfield plan, changed formulas define the
+   fresh final projection and do not bump `stats.BuildVersion`. After launch, the normal `PROJ-102`
+   rule applies to meaning changes under an unchanged name.
 1. `server/internal/stats/boards.go` — a `StatXxx` constant, a `Board` row in `fixedBoards`
    (**append**, so existing display order is untouched), and the fold type.
 2. `server/internal/stats/fold.go` — one entry in `BoardFolds()`, in board-metadata order.
@@ -4443,8 +4754,8 @@ behind it. `Wire.MaxEventsPerBatch` is 2000.
    already renders as `three-sig-figs + " " + unit`. If `units.go` changes, the row in
    `units.Conformance` changes **in the same commit**.
 10. **Never assert a board count** in a test or a spec (PROJ-039).
-11. **If the board needs a new projection table**: its migration must be **additive only** — no
-    `DROP`, no recreation (§5.2, `PROJ-101`) — and the table must be added to **all three**
+11. **If the board needs a new projection table**: construct the final fresh schema in the next
+    migration and add the table to **all three**
     hand-maintained lists in §5.4 (`projector_test.go`'s `snapshot`, `store_test.go`'s expected DDL,
     and `store/projections.go`'s `Counts`). The first is silent when forgotten.
 
@@ -4453,50 +4764,37 @@ behind it. `Wire.MaxEventsPerBatch` is 2000.
 ## Appendix G — sequencing, and what can run in parallel
 
 ```
-A (scope core: career + system tables) ──┬──> B (career & system surfaces)
-                                         │
-   C (systems: 2 new event types, ───────┤
-      system/system_body projections)    │
-                                         ├──> F (badges server) ──> G (badge surfaces)
-   D (wire: 3 community fields ──────────┤
-      + the 3D element fields)           │
-              │                          └──> H (challenges server) ──> I (challenge surfaces)
-              ▼
-   E (the new boards) ────────────────────────────────────────────┘
-
-                                              everything ──> J (docs sweep + release gate)
+A1–A6 ──> C1–C4 ──> A7–A9 ──> B
+                │
+                └──> D ──> E ──> F ──> G
+                       │          └──────┐
+                       └──> H ──> I      │
+                                        ▼
+                              everything ──> J
 ```
 
-- **A is the hard prerequisite for every scope.** It defines `career_stat`, `system_stat`, the
-  three-scope vocabulary and `putScoped`. Nothing that ranks anything works before it.
-- **C is what makes the system scope mean something.** A runs fine without it — every system column
-  is just `''` — so A and C can be built in either order, but **C must land before any
-  system-scoped surface is published in B**, or every board reads "unknown system".
-- **The "visited every planet" badge needs C**, and the tier badges do not.
-- **Every phase's deploy rebuilds itself.** Each one adds folds, which changes `stats.BuildID`, which
-  suspends the fold loop and runs a rebuild (`auto_rebuild`, on by default). So a phase can ship
-  without an operator step — but expect the boards to be **stale for the length of the rebuild** and
-  the phase's own new boards to read **empty** until it lands. That is the designed behaviour
-  (`PROJ-101`), not a bug, and it is worth saying in the release notes for each phase.
-- **C and D are both mod-side and independent of A** — they touch `mod/` plus
-  `projector/upcast.go` and `stats/payload.go`, none of which Phase A edits. They can start
-  immediately, in parallel with A, and **they should**: they are the long pole, because every wire
-  change needs a `ver` bump, regenerated conformance vectors and both documentation halves.
-- **C and D are one commit stream in the mod.** Both bump `EventTypes.Versions`, both regenerate
-  `contracts/testdata`, and both touch `ModConfig.Header`. Doing them as separate branches means
-  regenerating the vectors twice and resolving the same three merge conflicts. Do C then D, in order,
-  on one branch.
-- **E needs D** (two of its boards read the new fields) and **should land after A** so its boards get
-  their scopes without a second pass.
-- **F/H are independent of each other** and both need A; F additionally needs C for the
-  everywhere badge. G/I likewise.
+- **All owner gates are resolved in the contract above.** Implement exact system identity, a forest,
+  required orientation, §3.7's planet mapping, configurable `system.body`, system-scoped comparison
+  challenges and rebuild-authoritative badges. Challenge definitions carry explicit UTC epochs.
+  Do not reintroduce the rejected alternatives in implementation tasks.
+- **The document's first executable slice is A1–A6 → C1–C4 → A7–A9 → B.** A7/B name system
+  store/read types that C creates; running page order would not compile. A8's final ordering test
+  likewise requires C's event/fold.
+- **C then D are one serial mod/contract stream.** Both touch event registries, config header,
+  payloads and vectors. All changed/new types remain v1; each contract task is a vertical commit.
+- **E needs A, C and D.** Its derived scopes need system binding and its fields/flight facts come
+  from D.
+- **F needs A + C + D + E.** Everywhere needs the catalogue/normalised kind; coaster needs engine
+  facts; Ferry Service needs E's board. **H needs A + C + D** for scopes, dynamic home bodies and
+  engine facts. F and H may run in parallel only after those prerequisites.
+- **G needs F and the B/C surfaces; I needs H and the B/C surfaces.**
 - **B, G and I all edit `layout.gohtml`, `templates.go`, `web.go` and `docs/ui-design.md`.** Run them
   in series, or expect conflicts in exactly those four files.
-- **J is last**, and it is a real phase with real work, not a formality.
+- **J is last and is an audit/release gate.** It does not supply deferred docs or decisions.
 
 **Before every phase:** rebase on `main`, re-read §5, and re-check
 `ls server/internal/store/migrations/projections/` for the next free migration number.
 
-**One commit per task** is the right granularity, each with its doc updates in it. A task that
+**One vertical commit per task** is the right granularity, each with its docs/decision in it. A task that
 touches an event, a payload field, a fold, a board, an eligibility rule or a unit and updates only
 `docs/event-details.md` **or** only `docs-site/` is an incomplete change and should not be committed.
