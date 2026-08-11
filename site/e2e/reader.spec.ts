@@ -391,9 +391,9 @@ test.describe("the raw event log", () => {
     // client's own clock. This is the one assertion here that is a privacy
     // property rather than a UI property.
     //
-    // Scoped to the log rather than the page: the copy above the table explains
-    // that the installation identifier is never published, and a substring match
-    // over the prose would fail on the sentence that states the guarantee.
+    // Scoped to the log rather than the page: the guarantee itself is stated on
+    // /docs/privacy rather than above this table, but keeping the assertion on
+    // the tbody means it still holds if a future line of prose names a field.
     for (const row of await page.locator("#events-log tbody").all()) {
       const text = (await row.innerText()).toLowerCase();
       expect(text).not.toContain("install");

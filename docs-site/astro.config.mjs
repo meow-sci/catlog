@@ -41,6 +41,9 @@ export default defineConfig({
             { label: "How a flight becomes a score", slug: "start/flight-to-score" },
             { label: "Your identity and your handle", slug: "start/identity" },
             { label: "Turning things off", slug: "start/turning-things-off" },
+            // The one home for the privacy narrative. Every other page links
+            // here rather than restating it. See docs/DECISIONS.md DOCS-013.
+            { label: "Privacy", slug: "start/privacy" },
           ],
         },
         {

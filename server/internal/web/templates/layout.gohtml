@@ -102,10 +102,17 @@ SSE get the same treatment as the ones the page shipped with.
 
 <footer id="site-footer">
   <div class="container">
-    catlog logs Kitten Space Agency flights. It never receives your email —
-    <a href="/docs/privacy">how that works</a>.
-    · <a href="/docs/install">Install</a>
+    {{- /*
+    The footer names privacy once, as a destination beside the other two docs
+    pages. It used to carry the email guarantee inline on every page; the
+    guarantee is unchanged and stated in full on /docs/privacy, which is where a
+    reader goes when they want it rather than something a stats browser reads a
+    hundred times. See docs/DECISIONS.md UI-063.
+    */}}
+    catlog logs Kitten Space Agency flights.
+    <a href="/docs/install">Install</a>
     · <a href="/docs/api">API</a>
+    · <a href="/docs/privacy">Privacy</a>
   </div>
 </footer>
 </body>

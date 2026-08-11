@@ -1298,6 +1298,21 @@ the intention. A model, matching the existing voice:
 > relabelled per player for the same reason: they still group your own records together, and
 > they cannot be matched against anybody else's.
 
+**This rule governs the wording of a statement, not the number of pages that carry one.**
+The register above is mandatory *where the claim is made*; it is not a licence to restate
+the claim on every page. **`/docs/privacy` is the single place the privacy narrative is
+told**, in full and in this register, and every other surface links to it instead of
+paraphrasing it. Two carve-outs, and only two:
+
+- **`/login`** states in one sentence that no email address is requested, because the reader
+  is about to authorise an identity provider and the scope is the decision in front of them.
+- **`/docs/api`** states which fields never appear in a response, because that is the shape
+  of the API and a client author needs it in the reference.
+
+Everything else — the footer, the raw-event pages, `/docs/install` — carries a link and a
+factual pointer, never the argument. The main use of this site is browsing stats; a reader
+who wants the guarantee goes and reads it once. See [DECISIONS.md](DECISIONS.md) UI-063.
+
 **Destructive confirmations.** *"This deletes every event, batch and credential, and retires
 your handles permanently — neither you nor anybody else can ever claim them again. It cannot
 be undone."* Consequences, in order, no jokes.

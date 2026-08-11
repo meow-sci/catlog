@@ -2761,6 +2761,38 @@ server clock; this is bounded cached presentation, not a projection gate. The ex
 deadline sentence is preferable to machinery that pretends a client can report after close, and
 finished pages remain readable because a closed challenge is an archive state, not deletion.
 
+### UI-063 — The privacy narrative is told once, on `/docs/privacy`, and every other surface links to it
+
+*Accepted · 2026-08-10.*
+
+The email guarantee was in the footer of every page, in a panel on `/login`, twice on
+`/docs/install`, and the redaction rules were restated in full above both raw-event tables. The
+guarantee is worth stating; stating it on every page a reader loads is not. The dominant use of the
+site is browsing stats, and a person browsing a leaderboard is not making a decision about their
+identity provider — they read the privacy page once, if at all, and then they want to look at
+boards. Copy that repeats also decays unevenly: five paraphrases of one guarantee are five things
+that can drift apart, and `docs/ui-design.md` §9.3's rule that the wording must never be softened
+made every one of them expensive to touch.
+
+So: **`/docs/privacy` is the single home for the narrative**, unchanged and still in §9.3's plain
+register, and it gains the IP-location line that only `/docs/install` had carried. The footer names
+it as a destination beside Install and API. The raw-event pages keep one clause about units and link
+*What this log leaves out*. `/docs/install` keeps the factual not-sent list and drops the argument
+after it.
+
+Two surfaces keep an inline statement, because on those two the claim is the thing the reader is
+about to act on rather than background: **`/login`** says in one sentence that no email address is
+requested — the reader is a click away from authorising an identity provider, and the scope is the
+decision in front of them — and **`/docs/api`** keeps its paragraph on the three fields that never
+appear in a response, because that is the response shape and a client author needs it in the
+reference, not in a privacy page.
+
+§9.3 is amended rather than overridden: it governs *how* a load-bearing claim is worded wherever it
+is made, not *how many pages* make it. Nothing about what catlog stores, receives or publishes
+changed here; only how often a reader is told. `#login-privacy` and `#privacy-no-email` /
+`#privacy-scopes` survive as DOM hooks, so the e2e assertions still hold the guarantees to the
+pages that own them.
+
 ---
 
 ## The mod and its KSA-free core
@@ -4137,3 +4169,30 @@ describes its durable boundary—one capture per loaded system, cached across or
 boundaries—rather than treating the current once-per-launch call graph as the abstraction. These
 choices keep the references stable when tests are added or KSA gains another legitimate system-load
 path without weakening the exact behavior that implementations and end-to-end tests depend on.
+
+### DOCS-013 — `docs-site` gets a Privacy page, and it is the only page that tells that story
+
+*Accepted · 2026-08-10.*
+
+The player-facing site said the same things the datastar site did, and said them in three places:
+a "No email, ever" card on the splash page, a bullet list under *What catlog is*, and two sections
+plus a three-outcome table under *Your identity and your handle*. A reader who came to look up
+which events feed Softest Landing met the privacy argument three times before reaching an event.
+
+`start/privacy.mdx` now carries all of it — the email guarantee, what is and is not recorded, the
+`install` / `career` / `kid` table with the re-labelling rule, what is public, the
+ban/withheld/deleted table, and deletion — and it is fifth in *Start here*, after the pages that
+explain what catlog does. The others shed their copies and link: *What catlog is* keeps two
+sentences and a card, *Your identity and your handle* keeps the handle's public role, what a ban
+does to visibility and the career rewind mark, and *Sessions and flights* keeps a parenthetical
+where a kitten identifier is described. `src/data/events.ts` keeps its per-field note that an
+identifier is re-labelled, because that is the field's published shape and the event browser is
+where a reader asks about it.
+
+The ban/withheld/deleted table moved rather than being duplicated, which is the point: it answers
+"what happens to my flights", and having it on two pages is exactly how the two would come to
+disagree. `start/identity.mdx` links to it in a sentence.
+
+This mirrors [UI-063](#ui-063) on the datastar site, deliberately: the two sites are the same
+information for the same people, and a rule about where a claim lives is worth nothing if it holds
+on only one of them.

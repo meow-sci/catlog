@@ -7,7 +7,7 @@ sidebar:
   order: 1
 ---
 
-import { Aside, Steps, LinkCard } from "@astrojs/starlight/components";
+import { Steps, LinkCard } from "@astrojs/starlight/components";
 
 catlog is a mod for Kitten Space Agency. It watches what happens while you fly,
 writes it down, and periodically sends the record to a small server that folds it
@@ -45,25 +45,15 @@ accordingly.
 
 ## What it does not record
 
-- **Your email address.** catlog never asks any identity provider for it, never
-  receives one and never stores one. What is never received cannot leak.
-- **Your save's name**, or anything that identifies it. A career is identified by
-  a hash that is salted per installation, so the server cannot work backwards to a
-  save.
-- **Your machine.** The installation identifier is used locally to salt those
-  hashes, and is stripped from anything published.
-- **Anything you type.** There is no chat, no notes, no free text from you
-  anywhere in the system except the handle you choose.
-- **Anything you told it not to.** Every kind of event on this site can be
-  switched off individually in the mod's settings, bar six that decide whether a
-  run scored honestly or which celestial system it belongs to. Each optional type
-  costs the boards or catalogue features that only it can supply.
+Nothing about you personally, and nothing you type. The one thing it records that
+did not come out of the flight is the handle you chose, and every kind of event
+except six can be switched off individually in the mod's settings.
 
-<Aside type="note" title="Kitten names are yours">
-  Kitten names are recorded — they are part of what makes a feed line readable. Nothing else about
-  them is: the per-kitten identifier is re-labelled per player before it is ever published, so two
-  players' rosters cannot be cross-referenced.
-</Aside>
+<LinkCard
+  title="Privacy"
+  href="/catlog/start/privacy/"
+  description="The full list of what is and is not recorded, what is published, and how to have it all deleted."
+/>
 
 ## How it behaves in your game
 

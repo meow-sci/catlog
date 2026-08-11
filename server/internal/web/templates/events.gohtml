@@ -5,7 +5,10 @@
 <div class="page-head">
   <h1 id="events-title" data-handle="{{$e.Handle}}">{{$e.Handle}}&#8217;s events</h1>
   <p>The log the boards are computed from, newest first. Everything else on catlog is a fold&#8217;s opinion about a history you cannot see; this is the history, which is what makes &#8220;your record is 214&#160;m/s&#8221; checkable rather than merely asserted.</p>
-  <p class="muted"><small>Numbers here are raw, in the unit the event carried &#8212; hover one for how catlog would write it. Flights flagged as cheated are not in this log; the installation identifier is never published, and career and kitten identifiers are relabelled per player. <a href="/docs/privacy">Why</a>.</small></p>
+  {{- /* What this log leaves out — flagged flights, the install id, the
+         relabelled career and kitten ids — is stated in full on /docs/privacy,
+         not restated on both event pages. See docs/DECISIONS.md UI-063. */}}
+  <p class="muted"><small>Numbers here are raw, in the unit the event carried &#8212; hover one for how catlog would write it. <a href="/docs/privacy">What this log leaves out</a>.</small></p>
 </div>
 
 {{template "events-types" $e}}

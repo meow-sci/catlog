@@ -36,9 +36,9 @@ import { Card, CardGrid, LinkCard } from "@astrojs/starlight/components";
     catlog never takes a score from a client. Every number on every board is derived on the server
     from the recorded events, and this site is what that derivation actually is.
   </Card>
-  <Card title="No email, ever" icon="seti:lock">
-    catlog never asks an identity provider for your email, never stores one, and never shows
-    anything but the handle you chose.
+  <Card title="One public identity" icon="seti:lock">
+    The handle you chose, and nothing else. What catlog does and does not know about you is on one
+    page rather than repeated across the site.
   </Card>
 </CardGrid>
 
@@ -46,4 +46,10 @@ import { Card, CardGrid, LinkCard } from "@astrojs/starlight/components";
   title="How a flight becomes a score"
   href="/catlog/start/flight-to-score/"
   description="The whole path, from your game to a leaderboard row, in one page."
+/>
+
+<LinkCard
+  title="Privacy"
+  href="/catlog/start/privacy/"
+  description="No email address, three identifiers that never survive publication, and how to have it all deleted."
 />

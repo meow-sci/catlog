@@ -25,7 +25,7 @@ player can check.
 ```
 src/
   content/docs/          the pages
-    start/               what catlog is, how a flight becomes a score, identity
+    start/               what catlog is, how a flight becomes a score, identity, privacy
     events/              the event catalog, one page per group + a filterable index
     leaderboards/        how boards work, every board, every exclusion rule
     reference/           glossary, units, this rule restated for maintainers
@@ -60,6 +60,10 @@ pnpm only — never npm, npx or yarn.
 
 - **`base` is `/catlog/`.** Every internal link carries it: `/catlog/events/browse/`,
   with a trailing slash.
+- **`start/privacy.mdx` is the only page that tells the privacy story.** Every other
+  page links to it rather than restating what catlog does and does not know — a
+  reader who came for the boards should not read the guarantee on every page. See
+  `DOCS-013` in `docs/DECISIONS.md`.
 - **React Compiler is on.** Hand-written `useMemo` / `useCallback` / `memo` are
   forbidden — a manual memo makes the compiler bail out of the whole component.
 - Deployed by `.github/workflows/docs-site.yml`, which only fires on pushes

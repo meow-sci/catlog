@@ -1,7 +1,7 @@
 {{define "content" -}}
 <div class="page-head">
   <h1 id="login-title">Sign in</h1>
-  <p>You need an account to claim a handle and download a credential. Signing in is also the only thing catlog ever asks an identity provider for.</p>
+  <p>You need an account to claim a handle and download a credential.</p>
 </div>
 
 <div id="login-choices">
@@ -13,12 +13,13 @@
   {{- end}}
 </div>
 
-<article id="login-privacy" class="panel prose" style="margin-top: 1.5rem">
-  <header><strong>What catlog learns about you</strong></header>
-  <p>
-    A single opaque identifier, hashed before it is stored. <strong>catlog never asks for your email address</strong>
-    and never receives one — not from Discord, not from Google, not from GitHub.
-    <a href="/docs/privacy">The privacy page</a> explains exactly how.
-  </p>
-</article>
+{{- /*
+The one page where this belongs inline: the reader is about to authorise an
+identity provider and the scope is the decision in front of them. One sentence,
+and the mechanism lives on /docs/privacy. See docs/DECISIONS.md UI-063.
+*/}}
+<p id="login-privacy" class="muted" style="margin-top: 1.5rem">
+  <small>catlog never asks for your email address — it receives an opaque account id and nothing else.
+  <a href="/docs/privacy">Privacy</a>.</small>
+</p>
 {{- end}}

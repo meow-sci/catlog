@@ -1,0 +1,132 @@
+---
+title: Privacy
+description: >-
+  Everything catlog knows about you, in one place: no email address, an opaque
+  player key, three identifiers that never survive publication, and how to have
+  it all deleted.
+sidebar:
+  order: 5
+---
+
+import { Aside, LinkCard } from "@astrojs/starlight/components";
+
+This is the whole privacy story, and it is only told here. The rest of the site
+gets on with explaining events and boards, and links back to this page when a
+detail matters.
+
+## catlog never receives an email address
+
+Not "stores it encrypted", not "deletes it after signup" — **never asks for it**.
+The sign-in flow requests the narrowest scope each identity provider offers that
+still yields a stable account id, and none of those scopes grants an email
+address. There is no email in the database, none in a backup, and none in a dump,
+because none ever arrived.
+
+Your player key is a keyed hash of that provider's stable subject id. That also
+makes bans stick: an email is something you can change, a provider subject is not.
+
+## What catlog records about you
+
+- **Your handle**, and when you claimed it.
+- **Credential metadata** — the public half of your key, and when the license was
+  issued and expires. Never the private half; that is generated in your browser
+  and catlog is never sent it.
+- **Flight events from the mod** — what happened, when in game time, and the
+  measurements the leaderboards are computed from. Kitten names ride along,
+  because they are what makes a feed line readable.
+- **When each batch arrived**, by the server's own clock.
+
+## What it does not record
+
+- **Your email address**, as above.
+- **Your save's name**, or anything that identifies it. A career is identified by
+  a hash salted per installation, so the server cannot work backwards to a save.
+- **Your machine.** The installation identifier is used locally to salt those
+  hashes, and never leaves the mod in publishable form.
+- **Your location**, from your IP address or from anything else.
+- **Your real name, avatar, profile URL or friend list.** No provider is asked
+  for them.
+- **Your save files, craft files or screenshots.**
+- **Anything you type.** There is no chat, no notes, and no free text from you
+  anywhere in the system except the handle you chose.
+- **Anything you told it not to.** Every kind of event can be switched off
+  individually, bar six.
+
+<LinkCard
+  title="Turning things off"
+  href="/catlog/start/turning-things-off/"
+  description="How to stop catlog recording any kind of event, and exactly what each one costs you."
+/>
+
+## Three identifiers, and what happens to them
+
+Three identifiers ride along with events, and none of them survives to a public
+response in the form the mod produced.
+
+| In the recorded event | What it is                                         | What you see published  |
+| --------------------- | -------------------------------------------------- | ----------------------- |
+| `install`             | A random id generated once on your machine         | **Removed entirely.**   |
+| `career`              | A hash of your installation id and your save       | Re-labelled per player. |
+| `kid`                 | A hash of your installation id and a kitten's name | Re-labelled per player. |
+
+"Re-labelled per player" means the published label is derived from the player it
+belongs to as well as the value, so the same career or the same kitten name
+produces different labels for different players. Nothing can be cross-referenced
+between two people's rows.
+
+This is what lets one person hold two handles with no way for anyone outside to
+tell. Two things it does not fix, stated rather than hidden: kitten and vehicle
+_names_ are the same across a person's two accounts if they name things the same
+way, and arrival times correlate anything shipped at the same moment.
+
+<Aside type="note" title="Kitten names are shown">
+  The name itself appears — "brought Hunter home safely" is the whole point of the feed. It is
+  trimmed to 32 printable characters. The identifier beside it is not what you see.
+</Aside>
+
+## What is public
+
+Your handle, your leaderboard values and their context, your rank, the feed lines
+your flights generate, and your raw event log — which is what makes a leaderboard
+checkable rather than merely asserted. Everything else is yours alone.
+
+Flights marked as assisted — a teleport, a refuel, a resource edit, the terminal's
+destroy command, a tuning change — score nothing and appear nowhere public: not on
+a board, not in the feed, and not in an event log, including your own. catlog
+would rather record what happened than pretend it did not, but a browsable list of
+whose flights were marked would be a permanent public mark on a person, and a
+mark's only effect here is that a flight does not count.
+
+## Being removed does not mean your data was deleted
+
+There are three separate things that can happen to an account, and they are
+different on purpose. Two of them are reversible.
+
+|              | What happens to the account                                                                                                            | What happens to your flights                                                                                                             |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| **Ban**      | Your credential stops working and your handles are retired for good. You find out immediately, because the mod starts getting refused. | They stay recorded. They stop counting towards anything the moment the ban lands.                                                        |
+| **Withheld** | Nothing changes for you. The mod keeps working and keeps sending.                                                                      | They are moved out of the leaderboard log into a separate table, and everything you send afterwards goes there too. Nobody can see them. |
+| **Deleted**  | The account is gone, and a marker stays behind so it cannot be remade.                                                                 | Everything is deleted — flights, the archive copy, all of it. This one cannot be undone.                                                 |
+
+The middle one exists so that a moderation decision made in a hurry does not have
+to be permanent. Somebody who is withheld can be put back exactly as they were —
+same flights, same records, in the same order, so a record you set first is still
+yours. Or, after a look at what actually happened, their data can be deleted for
+good. Both choices stay open.
+
+<Aside type="note" title="It is a person's decision, never an automatic one">
+  Nothing about this is triggered by your numbers. catlog does not look at the shape of your data
+  and decide something is suspicious — it never has and it is not going to. Withholding an account
+  is something the person running catlog does deliberately, about behaviour, and it is the same tool
+  used for harassment and abuse rather than for anything to do with scores.
+</Aside>
+
+## Deleting everything
+
+Your dashboard has it: **Delete everything catlog holds about me**. That removes
+every event, batch and credential, and the archived copies.
+
+Two things survive on purpose. A marker, so a deleted account cannot be silently
+recreated, and the _retirement_ of your handles — a handle is never recycled, so
+nobody can take a name you were known by and be mistaken for you. Neither carries
+any information about who you are.

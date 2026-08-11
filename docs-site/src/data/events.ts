@@ -235,7 +235,7 @@ export const EVENTS: CatlogEvent[] = [
       {
         key: "kids",
         unit: "",
-        what: "One per-kitten identifier for every kitten aboard, in seat order. Always present: an uncrewed flight carries an empty list rather than nothing at all, so nobody has to tell 'nobody was aboard' apart from 'the mod did not say'. Re-labelled per player before publication, like every other kitten identifier.",
+        what: "One per-kitten identifier for every kitten aboard, in seat order. Always present: an uncrewed flight carries an empty list rather than nothing at all, so nobody has to tell 'nobody was aboard' apart from 'the mod did not say'. Re-labelled per player before publication.",
       },
       {
         key: "stage_count",
