@@ -4,7 +4,7 @@ description: >-
   How catlog frames what you do — sessions, flights, and the five flags that
   disqualify a flight from every leaderboard.
 sidebar:
-  order: 3
+  order: 4
 ---
 
 import { Aside } from "@astrojs/starlight/components";
@@ -41,14 +41,41 @@ they carry the details that place the rest of it.
 kitten in the vehicle, in seat order, and an uncrewed flight lists an empty set
 rather than nothing at all — so "nobody was aboard" and "catlog did not say" are
 never the same answer. Those identifiers are re-labelled per player before
-anything is published, exactly like every other kitten identifier on this site,
-so two players' rosters can never be joined up.
+publication ([privacy](/catlog/start/privacy/)).
 
 **How tall the stack was.** The start of a flight records how many stages the
 vehicle was built with — the whole staging list, whether or not you ever fire it
 all. That is a different number from the highest stage you actually reach, and
 there is a board for each: a five-stage rocket that comes apart on stage two
 scores five on **Most Stages Built** and two on **Most Stages**.
+
+**Whether it began without engines.** The count is the rocket engines installed
+when that flight began, whether they were lit or not. Zero really means none;
+when catlog could not read the count, it leaves the answer out instead.
+
+<Aside type="note" title="No engines does not mean no way to move">
+  RCS thrusters, decoupler springs and docking-port pushoff can all impart velocity, and none is a
+  rocket engine for this count. A vehicle can also shed its engines in transit; the piece that
+  continues is a new flight with its own count. Catlog records those boundaries instead of trying to
+  infer whether a flight “really coasted.”
+</Aside>
+
+### What stays attached to the flight
+
+Catlog keeps the starting world, mass, part count and engine count together with
+the flight and the numbered save it belongs to. Later events can therefore be
+understood as part of the same vehicle story, and future per-save challenges can
+use the facts recorded at the beginning without asking the mod to repeat them on
+every milestone.
+
+An unreadable engine count stays unknown rather than turning into zero. The same
+principle applies when history arrives out of order: a later beginning does not
+pretend an earlier milestone already knew facts that had not yet reached catlog.
+
+<Aside type="note" title="Stored for future rules, not a reward today">
+  These retained facts do not create a new badge or leaderboard. Existing boards keep the rules
+  documented in the leaderboard catalog.
+</Aside>
 
 **Where it happened.** Both ends record the world and, when the game can say, the
 latitude and longitude. The ending carries a world in its own right now; before
@@ -65,11 +92,16 @@ changed worlds since.
 
 ## The three endings
 
-| `reason`    | When                                                                                                                                    |
-| ----------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `recovered` | You recovered it. This is the only ending that adds to **Kittens Recovered**, and the only one a peak-g record survives a rebuild with. |
-| `destroyed` | It was destroyed — by physics, or because you asked for it.                                                                             |
-| `despawned` | Neither: it merged into another vehicle when docking, a kitten boarded, or the save was torn down.                                      |
+| `reason`    | When                                                                                                                                                                     |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `recovered` | You recovered it. This is the only ending that adds to **Kittens Recovered** or **Kittens To Orbit And Home**, and the only one a peak-g record survives a rebuild with. |
+| `destroyed` | It was destroyed — by physics, or because you asked for it.                                                                                                              |
+| `despawned` | Neither: it merged into another vehicle when docking, a kitten boarded, or the save was torn down.                                                                       |
+
+For **Kittens To Orbit And Home**, “home” means this recovered ending. KSA offers recovery only on
+the system's home world, while the vehicle is at rest and in contact. The kittens aboard at this
+ending are the ones who count: a kitten who boarded after orbit counts, while one who reached orbit
+but transferred away before recovery does not.
 
 <EventDetail type="flight.flagged" />
 

@@ -1,0 +1,40 @@
+{{define "content" -}}
+{{- $s := .Data -}}
+<nav aria-label="Breadcrumb" class="muted text-sm"><a href="{{playerPath $s.Handle}}">{{$s.Handle}}</a> / <a href="{{playerPath $s.Handle}}/saves">Saves</a> / Save {{$s.Save}}</nav>
+
+<div class="page-head">
+  <h1 id="save-title" data-handle="{{$s.Handle}}" data-save="{{$s.Save}}">Save {{$s.Save}}</h1>
+  <p id="save-summary">
+    {{- with $s.System}}<a href="/systems/{{.Slug}}">{{.Name}}</a>
+      {{- if $s.SystemChanged}} <abbr class="system-changed" title="The celestial system this save is in changed. Per-system comparisons before and after are not comparing the same worlds.">&#8225;</abbr><span class="sr-only"> (celestial system changed)</span>{{end}} &#183; {{end -}}
+    played {{numUnit $s.PlaytimeMS "ms"}} &#183;
+    <a id="save-badges" data-value="{{$s.Badges}}" href="{{playerPath $s.Handle}}/saves/{{$s.Save}}/badges">{{num $s.Badges}} badges</a>
+  </p>
+</div>
+
+<div class="table-wrap" role="region" tabindex="0" aria-label="Save {{$s.Save}} placements">
+<table id="save-stats">
+  <thead>
+    <tr>
+      <th scope="col">Placement</th>
+      <th scope="col" class="value">Value</th>
+      <th scope="col">Detail</th>
+      <th scope="col">When</th>
+    </tr>
+  </thead>
+  <tbody>
+    {{- range $s.Stats}}
+    <tr class="profile-row {{rankClass .Rank .Entrants}}" data-stat="{{.Stat}}" data-rank="{{.Rank}}" data-ascending="{{.Ascending}}">
+      <td class="save-placement">#{{.Rank}} of {{num .Entrants}} saves on <a href="{{statPath .Stat}}?scope=career">{{.Title}}</a>
+        <small class="muted">{{if .Ascending}}&#8595;{{else}}&#8593;{{end}}<span class="sr-only">{{if .Ascending}}lowest wins{{else}}highest wins{{end}}</span></small></td>
+      {{template "value-cell" (dict "Value" .Value "Unit" .Unit "Rewound" $s.Rewound)}}
+      {{template "context-cell" .}}
+      <td class="when">{{datetime .Updated}}</td>
+    </tr>
+    {{- else}}
+    <tr id="save-stats-empty"><td colspan="4">This save is not on any board yet.</td></tr>
+    {{- end}}
+  </tbody>
+</table>
+</div>
+{{- end}}

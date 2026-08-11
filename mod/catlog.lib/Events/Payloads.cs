@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Text.Json.Serialization;
+using MeowSci.Catlog.Lib.Telemetry;
 
 namespace MeowSci.Catlog.Lib.Events;
 
@@ -25,6 +26,41 @@ public sealed record SessionStartedPayload(
     [property: JsonPropertyName("game_build")] string GameBuild,
     [property: JsonPropertyName("install")] string Install);
 
+/// <summary><c>system.discovered</c>.</summary>
+public sealed record SystemDiscoveredPayload(
+    [property: JsonPropertyName("system")] string System,
+    [property: JsonPropertyName("id")] string Id,
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("home")] string HomeBody,
+    [property: JsonPropertyName("bodies")] int BodyCount,
+    [property: JsonPropertyName("complete")] bool Complete);
+
+/// <summary><c>system.body</c>.</summary>
+public sealed record SystemBodyPayload(
+    [property: JsonPropertyName("system")] string System,
+    [property: JsonPropertyName("body")] string Body,
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("class")] string Class,
+    [property: JsonPropertyName("kind")] string Kind,
+    [property: JsonPropertyName("rank")] int Rank,
+    [property: JsonPropertyName("parent")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Parent,
+    [property: JsonPropertyName("radius_m")] double RadiusM,
+    [property: JsonPropertyName("mass_kg")] double MassKg,
+    [property: JsonPropertyName("soi_m")] double SoiM,
+    [property: JsonPropertyName("atmo_m")] double AtmoM,
+    [property: JsonPropertyName("ocean_m")] double OceanM,
+    [property: JsonPropertyName("angvel")] double AngVelRadS,
+    [property: JsonPropertyName("axis")] Telemetry.Vec3 AxisCce,
+    [property: JsonPropertyName("ccf_to_cce_t0")] Telemetry.Quat CcfToCceT0,
+    [property: JsonPropertyName("sma_m"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? SmaM,
+    [property: JsonPropertyName("ecc"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? Ecc,
+    [property: JsonPropertyName("inc_deg"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? IncDeg,
+    [property: JsonPropertyName("lan_deg"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? LanDeg,
+    [property: JsonPropertyName("argp_deg"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? ArgpDeg,
+    [property: JsonPropertyName("t_pe"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? TPe,
+    [property: JsonPropertyName("period_s"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? PeriodS);
+
 /// <summary><c>flight.started</c>.</summary>
 /// <param name="VehicleName">Display name, ≤64 printable US-ASCII characters.</param>
 /// <param name="Body">Lowercase parent body name.</param>
@@ -40,6 +76,10 @@ public sealed record SessionStartedPayload(
 /// How many stages the vehicle has. <c>0</c> when the read failed, which is a real value here
 /// rather than a lie: a vehicle genuinely can have no sequences, and the count is descriptive only.
 /// </param>
+/// <param name="EngineCount">
+/// Installed rocket engines, including inactive engines. Omitted when the game read failed; a
+/// present <c>0</c> means the vehicle genuinely launched without an engine.
+/// </param>
 /// <param name="Lat">Latitude in degrees, <b>omitted</b> when unreadable. See <see cref="Telemetry.TelemetrySnapshot.Lat"/>.</param>
 /// <param name="Lon">Longitude in degrees, omitted under the same rule.</param>
 public sealed record FlightStartedPayload(
@@ -50,6 +90,9 @@ public sealed record FlightStartedPayload(
     [property: JsonPropertyName("crew_count")] int CrewCount,
     [property: JsonPropertyName("kids")] IReadOnlyList<string> Kids,
     [property: JsonPropertyName("stage_count")] int StageCount,
+    [property: JsonPropertyName("engine_count")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    int? EngineCount,
     [property: JsonPropertyName("lat")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     double? Lat,
@@ -129,6 +172,11 @@ public sealed record VehicleAtmospherePayload(
 /// <param name="PeM">Periapsis <b>altitude</b> above the parent's mean radius, in metres.</param>
 /// <param name="Ecc">Eccentricity.</param>
 /// <param name="IncDeg">Inclination in degrees (the game stores radians — convert).</param>
+/// <param name="SmaM">Semi-major axis in metres.</param>
+/// <param name="LanDeg">Longitude of the ascending node in degrees.</param>
+/// <param name="ArgpDeg">Argument of periapsis in degrees.</param>
+/// <param name="TPe">Time at periapsis, in game seconds.</param>
+/// <param name="PeriodS">Orbital period in seconds, or 0 for an unbound trajectory.</param>
 /// <param name="MassKg">
 /// Total mass at the instant the milestone fired, in kilograms. Paired with
 /// <c>flight.started.mass_kg</c> it is the only honest efficiency-shaped number reachable without
@@ -141,6 +189,11 @@ public sealed record VehicleOrbitPayload(
     [property: JsonPropertyName("pe_m")] double PeM,
     [property: JsonPropertyName("ecc")] double Ecc,
     [property: JsonPropertyName("inc_deg")] double IncDeg,
+    [property: JsonPropertyName("sma_m")] double SmaM,
+    [property: JsonPropertyName("lan_deg")] double LanDeg,
+    [property: JsonPropertyName("argp_deg")] double ArgpDeg,
+    [property: JsonPropertyName("t_pe")] double TPe,
+    [property: JsonPropertyName("period_s")] double PeriodS,
     [property: JsonPropertyName("mass_kg")] double MassKg);
 
 /// <summary><c>vehicle.soi</c>.</summary>
@@ -158,6 +211,7 @@ public sealed record VehicleSoiPayload(
 /// <param name="AltitudeM">Altitude at destruction, in metres.</param>
 /// <param name="Body">Lowercase parent body name.</param>
 /// <param name="CrewCount">Occupied seats (all of whom survive — D11).</param>
+/// <param name="PartCount">Parts on the intact vehicle at destruction.</param>
 /// <param name="Lat">Latitude in degrees, omitted when unreadable.</param>
 /// <param name="Lon">Longitude in degrees, omitted when unreadable.</param>
 public sealed record VehicleRudPayload(
@@ -168,6 +222,7 @@ public sealed record VehicleRudPayload(
     [property: JsonPropertyName("altitude_m")] double AltitudeM,
     [property: JsonPropertyName("body")] string Body,
     [property: JsonPropertyName("crew_count")] int CrewCount,
+    [property: JsonPropertyName("part_count")] int PartCount,
     [property: JsonPropertyName("lat")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     double? Lat,
@@ -275,11 +330,13 @@ public sealed record KittenEvaEndPayload(
 /// <summary><c>kitten.tumble</c>.</summary>
 /// <param name="Kid">Pseudonymous kitten id.</param>
 /// <param name="Name">Sanitized roster display name.</param>
+/// <param name="From">Lowercase locomotion mode immediately before tumbling.</param>
 /// <param name="SpeedMs">Tangential speed at the transition, in m/s.</param>
 /// <param name="Body">Lowercase parent body name.</param>
 public sealed record KittenTumblePayload(
     [property: JsonPropertyName("kid")] string Kid,
     [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("from")] string From,
     [property: JsonPropertyName("speed_ms")] double SpeedMs,
     [property: JsonPropertyName("body")] string Body);
 
@@ -343,6 +400,10 @@ public sealed record RosterSnapshotPayload(
 /// a reader can tell a 60-sample window from the handful of samples a 10 000× warp leaves behind,
 /// not so anything can be rejected on it.
 /// </param>
+/// <param name="State">
+/// Last sample's body-centred inertial position and velocity, or null when the complete reading
+/// was unavailable or did not belong to <paramref name="Body"/>.
+/// </param>
 public sealed record TelemetryWindowPayload(
     [property: JsonPropertyName("t0_sim")] double T0Sim,
     [property: JsonPropertyName("t1_sim")] double T1Sim,
@@ -362,4 +423,7 @@ public sealed record TelemetryWindowPayload(
     [property: JsonPropertyName("radar_alt_m")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     Agg? RadarAltM,
-    [property: JsonPropertyName("warp_max")] double WarpMax);
+    [property: JsonPropertyName("warp_max")] double WarpMax,
+    [property: JsonPropertyName("state")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    StateVec? State);

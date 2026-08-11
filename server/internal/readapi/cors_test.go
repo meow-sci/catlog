@@ -51,10 +51,20 @@ func do(t *testing.T, mux *http.ServeMux, method, path, origin string) *httptest
 // readPaths is every route the read API mounts — the exact set that may be read
 // cross-origin, and the list a future route has to be added to deliberately.
 var readPaths = []string{
+	"/v1/systems",
+	"/v1/systems/sol",
 	"/v1/leaderboards",
 	"/v1/leaderboards/kitten_tumbles",
+	"/v1/badges",
+	"/v1/badges/first_flight",
+	"/v1/challenges",
+	"/v1/challenges/tumbleweek",
 	"/v1/players?q=whis",
 	"/v1/players/whiskers",
+	"/v1/players/whiskers/badges",
+	"/v1/players/whiskers/saves",
+	"/v1/players/whiskers/saves/1",
+	"/v1/players/whiskers/saves/1/badges",
 	"/v1/players/whiskers/events",
 	"/v1/compare?handles=whiskers,mittens",
 	"/v1/feed",

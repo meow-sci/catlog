@@ -18,6 +18,7 @@ export type Trigger =
   | "passive";
 
 export type Family =
+  | "system"
   | "session"
   | "flight"
   | "vehicle"
@@ -59,8 +60,9 @@ export interface CatlogEvent {
   droppable?: boolean;
   /**
    * True when this event cannot be switched off in the mod's settings file.
-   * Everything without it can be. The five that carry it are the ones whose
-   * absence would let a run score as something it was not.
+   * Everything without it can be. The six that carry it are the integrity and
+   * attribution spine: without one, a run can score as something it was not or
+   * lose the celestial-system scope that gives its body names meaning.
    */
   alwaysOn?: boolean;
   /** Anchor on the family page. */
@@ -92,6 +94,123 @@ export const EVENTS: CatlogEvent[] = [
     page: "sessions-and-flights",
   },
   {
+    type: "system.discovered",
+    alwaysOn: true,
+    family: "system",
+    ver: 1,
+    summary: "This save is in a particular celestial system.",
+    trigger: "event",
+    cause:
+      "When the game starts or you load a save, catlog identifies the celestial system before it starts the new play session.",
+    source:
+      "The system selected by the game, its launcher name and home world, plus the number of worlds that actually loaded. If the launcher has no matching name, catlog uses the system's raw id.",
+    gate: "Always one header per real session. `complete` is false when no body list accompanies this header: the catalogue is switched off, too large, unreadable, or was already sent safely on an earlier load. A missing system produces nothing rather than a made-up identity.",
+    fields: [
+      {
+        key: "system",
+        unit: "",
+        what: "A stable hash of the complete celestial catalogue. The same content gets the same hash for every player.",
+      },
+      { key: "id", unit: "", what: "The system's raw id." },
+      {
+        key: "name",
+        unit: "",
+        what: "The name shown in the game's system chooser, trimmed to 64 printable characters.",
+      },
+      { key: "home", unit: "", what: "The home world for this system." },
+      { key: "bodies", unit: "", what: "How many worlds actually loaded, excluding vehicles." },
+      {
+        key: "complete",
+        unit: "",
+        what: "Whether every one of those worlds accompanies this header. False means no body list in this load — including after it was already sent safely once — never an empty system.",
+      },
+    ],
+    feeds: [],
+    page: "systems",
+  },
+  {
+    type: "system.body",
+    family: "system",
+    ver: 1,
+    summary: "One world in the celestial system's catalogue.",
+    trigger: "event",
+    cause:
+      "The first time catlog sees a complete celestial system for this save, it writes one row for every world. It normally sends that catalogue only once for the save and system, even across restarts.",
+    source:
+      "The solar system your save loaded: each world's size, mass, atmosphere, ocean, spin, parent and orbit. These are the fixed properties the game uses to build the system, not a sample of where the worlds happen to be now.",
+    gate: "All-or-nothing for the catalogue. More than 5,000 worlds, a required unreadable number, or switching this event off produces no body rows and leaves the header incomplete. Turning it back on lets a later load retry.",
+    fields: [
+      { key: "system", unit: "", what: "The stable catalogue hash shared with the system header." },
+      {
+        key: "body",
+        unit: "",
+        what: "The world's canonical join name — the same name flight events use.",
+      },
+      { key: "name", unit: "", what: "The world's raw in-game id, cleaned for display." },
+      {
+        key: "class",
+        unit: "",
+        what: "The game's own kind of object. This is open-ended so modded and future classes remain honest.",
+      },
+      {
+        key: "kind",
+        unit: "",
+        what: "A broad `star`, `planet`, `moon`, `minor`, or `other` grouping.",
+      },
+      { key: "rank", unit: "", what: "How many parent steps the world is from its own root." },
+      {
+        key: "parent",
+        unit: "",
+        optional: true,
+        what: "The world it orbits directly. Left out for a root.",
+      },
+      { key: "radius_m", unit: "m", what: "Mean radius from the world's centre." },
+      { key: "mass_kg", unit: "kg", what: "Mass." },
+      {
+        key: "soi_m",
+        unit: "m",
+        what: "Sphere-of-influence radius. A root star uses zero because its in-game value is infinite.",
+      },
+      { key: "atmo_m", unit: "m", what: "Atmosphere height, zero when there is none." },
+      {
+        key: "ocean_m",
+        unit: "m",
+        what: "Ocean level above mean radius, zero when there is none.",
+      },
+      { key: "angvel", unit: "rad/s", what: "Signed spin rate; negative means retrograde." },
+      { key: "axis", unit: "", what: "The three-dimensional spin axis." },
+      {
+        key: "ccf_to_cce_t0",
+        unit: "",
+        what: "The complete orientation at the start of the save's clock, including the prime-meridian phase.",
+      },
+      {
+        key: "sma_m",
+        unit: "m",
+        optional: true,
+        what: "Semi-major axis. This and the next five orbit-shape fields are all present together or all absent.",
+      },
+      { key: "ecc", unit: "", optional: true, what: "Orbital eccentricity." },
+      { key: "inc_deg", unit: "°", optional: true, what: "Orbital inclination." },
+      { key: "lan_deg", unit: "°", optional: true, what: "Longitude of ascending node." },
+      { key: "argp_deg", unit: "°", optional: true, what: "Argument of periapsis." },
+      {
+        key: "t_pe",
+        unit: "s",
+        optional: true,
+        what: "Absolute periapsis time on the save's own clock.",
+      },
+      {
+        key: "period_s",
+        unit: "s",
+        optional: true,
+        what: "Orbital period, left out independently for an unbound orbit.",
+      },
+    ],
+    feeds: [],
+    page: "systems",
+  },
+  {
     type: "flight.started",
     alwaysOn: true,
     family: "flight",
@@ -101,7 +220,7 @@ export const EVENTS: CatlogEvent[] = [
     cause:
       "Catlog looks over the vehicles in the world twice a second. The first time it sees one, that vehicle's flight begins. A vehicle that splits off another — a decoupled stage, a kitten stepping outside — gets its own flight the same way.",
     source:
-      "The vehicle's name, the body it is at, its total mass, how many parts it has, how many stages it was built with, how many seats actually have a kitten in them, who those kittens are, and where on the world it is standing.",
+      "The vehicle's name, the body it is at, its total mass, how many parts and installed rocket engines it has, how many stages it was built with, how many seats actually have a kitten in them, who those kittens are, and where on the world it is standing.",
     gate: "Once per vehicle. A save reload resumes the same flight rather than starting a second one.",
     fields: [
       { key: "vehicle_name", unit: "", what: "The vehicle's name, trimmed to 64 characters." },
@@ -116,12 +235,18 @@ export const EVENTS: CatlogEvent[] = [
       {
         key: "kids",
         unit: "",
-        what: "One per-kitten identifier for every kitten aboard, in seat order. Always present: an uncrewed flight carries an empty list rather than nothing at all, so nobody has to tell 'nobody was aboard' apart from 'the mod did not say'. Re-labelled per player before publication, like every other kitten identifier.",
+        what: "One per-kitten identifier for every kitten aboard, in seat order. Always present: an uncrewed flight carries an empty list rather than nothing at all, so nobody has to tell 'nobody was aboard' apart from 'the mod did not say'. Re-labelled per player before publication.",
       },
       {
         key: "stage_count",
         unit: "",
         what: "How many stages the vehicle was built with — what the staging list shows in the editor, whether or not you ever fire them all. Zero when it could not be read.",
+      },
+      {
+        key: "engine_count",
+        unit: "",
+        optional: true,
+        what: "How many rocket engines were installed when this flight began, whether lit or not. Zero means none; left out means catlog could not read the count.",
       },
       {
         key: "lat",
@@ -175,7 +300,7 @@ export const EVENTS: CatlogEvent[] = [
       },
       { key: "lon", unit: "°", optional: true, what: "The east-west half of the same position." },
     ],
-    feeds: ["kittens_recovered", "biggest_recovery"],
+    feeds: ["kittens_recovered", "biggest_recovery", "kittens_to_orbit_and_back"],
     page: "sessions-and-flights",
   },
   {
@@ -270,6 +395,23 @@ export const EVENTS: CatlogEvent[] = [
       { key: "ecc", unit: "", what: "Eccentricity." },
       { key: "inc_deg", unit: "°", what: "Inclination, in degrees." },
       {
+        key: "sma_m",
+        unit: "m",
+        what: "Semi-major axis: the size parameter of the orbital path.",
+      },
+      { key: "lan_deg", unit: "°", what: "Longitude of the ascending node." },
+      { key: "argp_deg", unit: "°", what: "Argument of periapsis." },
+      {
+        key: "t_pe",
+        unit: "s",
+        what: "The game-clock time at periapsis, not time remaining until periapsis.",
+      },
+      {
+        key: "period_s",
+        unit: "s",
+        what: "Time for one full orbit. Zero for an escape path, which never repeats.",
+      },
+      {
         key: "mass_kg",
         unit: "kg",
         what: "What the vehicle weighed at the instant the milestone fired. Beside the mass it started with, this is what is left once the propellant that got you there has been burned.",
@@ -300,7 +442,7 @@ export const EVENTS: CatlogEvent[] = [
       { key: "from_body", unit: "", what: "The world you left." },
       { key: "to_body", unit: "", what: "The world you arrived at." },
     ],
-    feeds: ["soi_bodies", "fastest_to_<body>"],
+    feeds: ["soi_bodies", "fastest_to_<body>", "bodies_by_1y", "bodies_by_10y"],
     page: "vehicle",
   },
   {
@@ -310,9 +452,9 @@ export const EVENTS: CatlogEvent[] = [
     summary: "A vehicle came apart — a Rapid Unscheduled Disassembly.",
     trigger: "event",
     cause:
-      "The game destroys the vehicle. Catlog is told at the moment of destruction, while the vehicle is still whole, so the speed and altitude it records are the real ones.",
+      "The game destroys the whole vehicle. Catlog is told at that boundary, while the vehicle is still intact, so the speed, altitude and part count it records describe that final moment.",
     source:
-      "The destruction event itself carries the cause, the peak g and the peak dynamic pressure the vehicle saw. Speed, altitude and the crew count are read off the vehicle a fraction before it goes.",
+      "The destruction event itself carries the cause, the peak g and the peak dynamic pressure the vehicle saw. Speed, altitude, crew and part counts are read from the intact vehicle a fraction before it goes.",
     fields: [
       {
         key: "cause",
@@ -327,7 +469,12 @@ export const EVENTS: CatlogEvent[] = [
       {
         key: "crew_count",
         unit: "",
-        what: "How many kittens were aboard. They all survive this — the game ends their missions rather than killing them.",
+        what: "How many kittens were aboard the whole vehicle at the physics RUD. This says nothing about deaths; the normal RUD path ends their missions without killing them.",
+      },
+      {
+        key: "part_count",
+        unit: "",
+        what: "How many parts the whole vehicle had at the moment it was destroyed. This is not a count of individual parts breaking off.",
       },
       {
         key: "lat",
@@ -337,7 +484,14 @@ export const EVENTS: CatlogEvent[] = [
       },
       { key: "lon", unit: "°", optional: true, what: "The east-west half of the same position." },
     ],
-    feeds: ["rud_total", "rud_<cause>"],
+    feeds: [
+      "rud_total",
+      "rud_<cause>",
+      "parts_lost",
+      "biggest_parts_lost",
+      "biggest_crew_wreck",
+      "kittens_wrecked",
+    ],
     page: "vehicle",
   },
   {
@@ -540,7 +694,7 @@ export const EVENTS: CatlogEvent[] = [
         unit: "",
         what: "A per-kitten identifier. It is re-labelled per player before publication.",
       },
-      { key: "name", unit: "", what: "The kitten's name, trimmed to 32 characters." },
+      { key: "name", unit: "", what: "The kitten's name, trimmed to 128 characters." },
     ],
     feeds: ["evas"],
     page: "kittens",
@@ -568,17 +722,22 @@ export const EVENTS: CatlogEvent[] = [
     summary: "A kitten went over.",
     trigger: "passive",
     cause:
-      "Sampled twice a second. Recorded when a kitten's movement state changes into tumbling. Only transitions *into* tumbling count — a tumble ends by righting itself, and counting that too would double every fall.",
+      "Sampled twice a second. Recorded when a kitten's movement state changes into tumbling, together with the state it came from. Only transitions *into* tumbling count — recovery passes through righting itself, and counting that too would double every fall.",
     source:
       "The game decides a kitten is tumbling when it is touching the ground and moving faster than a tuning value that is 6.5 m/s in a stock game. Changing that value marks the flight — and a tumble belongs to the kitten's own spacewalk flight, so a marked flight's tumbles do not count.",
-    gate: "One event per fall. The speed reported is the kitten's ground speed at the moment it went over. If catlog cannot tell which flight the kitten was on, the tumble is recorded without one and counts as it always did.",
+    gate: "One event per transition into tumbling. A rough cartwheel can contain several: after more than half a second off the ground, the game calls the kitten airborne, and a later bounce can start tumbling again. The speed is ground speed at each transition. If catlog cannot tell which flight the kitten was on, the tumble is recorded without one and counts as it always did.",
     fields: [
       { key: "kid", unit: "", what: "The per-kitten identifier." },
       { key: "name", unit: "", what: "The kitten's name." },
+      {
+        key: "from",
+        unit: "",
+        what: "The movement state immediately before tumbling: airborne for a failed landing, grounded for a trip, or another game state. Unknown is recorded when it cannot be named honestly.",
+      },
       { key: "speed_ms", unit: "m/s", what: "Ground speed when it went over." },
       { key: "body", unit: "", what: "Where it happened." },
     ],
-    feeds: ["kitten_tumbles"],
+    feeds: ["kitten_tumbles", "botched_landings", "tumbles_on_<body>"],
     page: "kittens",
   },
   {
@@ -648,7 +807,7 @@ export const EVENTS: CatlogEvent[] = [
     cause:
       "This is the background telemetry. Catlog samples each live vehicle twice a second and folds 30 game-seconds of samples into one summary — 60 samples in a full window.",
     source:
-      "Altitude above mean radius, surface speed, orbital speed and acceleration, each as a minimum, maximum, mean and last value. Height above the ground is folded the same way, over only the samples that had a ground reading. Peak g and peak dynamic pressure are included only when the game actually computed them.",
+      "Altitude above mean radius, surface speed, orbital speed and acceleration, each as a minimum, maximum, mean and last value. Height above the ground is folded the same way, over only the samples that had a ground reading. Peak g and peak dynamic pressure are included only when the game actually computed them. When the complete reading is available, the final sample also carries position and velocity relative to the world named by the window.",
     gate: "A window also closes early when the flight ends, when a vehicle disappears, or when the game shuts down — those windows are short. Loading a save discards the partial window rather than folding two timelines together.",
     fields: [
       { key: "t0_sim", unit: "s", what: "Game time of the first sample." },
@@ -683,6 +842,12 @@ export const EVENTS: CatlogEvent[] = [
         unit: "",
         what: "The highest time-warp speed during the window; `1` is real time. It says how much game happened per sample, so a reader can tell a full 60-sample window from the handful a deep warp leaves behind. Descriptive only — it disqualifies nothing and is not a cheat signal.",
       },
+      {
+        key: "state",
+        unit: "m and m/s",
+        optional: true,
+        what: "Position and velocity at the final sample, measured relative to the world named by `body` in a non-rotating frame. All six coordinates are kept together; the whole reading is left out if any part is unavailable or no longer belongs to that world.",
+      },
     ],
     feeds: [
       "peak_g_survived",
@@ -698,6 +863,7 @@ export const EVENTS: CatlogEvent[] = [
 ];
 
 export const FAMILY_LABEL: Record<Family, string> = {
+  system: "Systems",
   session: "Session",
   flight: "Flight",
   vehicle: "Vehicle",

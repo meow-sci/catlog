@@ -1,0 +1,48 @@
+{{define "content" -}}
+{{- $b := .Data -}}
+<nav aria-label="Breadcrumb" class="muted text-sm"><a href="/badges">Merit badges</a> / {{$b.Title}}</nav>
+
+<div class="page-head">
+  <h1 id="badge-title" data-badge="{{$b.Badge}}">{{$b.Title}}</h1>
+  <p>{{$b.Blurb}} Held by <span class="tnum" data-value="{{$b.Holders}}">{{num $b.Holders}}</span> players.</p>
+</div>
+
+{{- with $b.System}}
+<p class="badge-filter" id="badge-system-filter">Showing awards in <a href="/systems/{{.Slug}}">{{.Name}}</a>. <a href="{{$b.AllSystemsURL}}">Show every system</a>.</p>
+{{- end}}
+
+<div class="table-wrap" role="region" tabindex="0" aria-label="{{$b.Title}} holders">
+<table id="badge-holders">
+  <thead>
+    <tr>
+      <th scope="col" class="rank">Rank</th>
+      <th scope="col">Player</th>
+      <th scope="col" class="save">Save</th>
+      <th scope="col" class="system">System</th>
+      <th scope="col">Earned</th>
+      <th scope="col">Detail</th>
+    </tr>
+  </thead>
+  <tbody>
+    {{- range $b.Rows}}
+    <tr class="badge-holder" data-rank="{{.Rank}}" data-handle="{{.Handle}}">
+      <td class="rank tnum" data-value="{{.Rank}}">#{{.Rank}}</td>
+      <td><a href="{{playerPath .Handle}}/badges">{{.Handle}}</a></td>
+      <td class="save">{{if .Save}}<a data-value="{{.Save}}" href="{{playerPath .Handle}}/saves/{{.Save}}">Save {{.Save}}</a>{{else}}&#8212;{{end}}</td>
+      <td class="system">{{with .System}}<a href="/systems/{{.Slug}}">{{.Name}}</a>{{else}}&#8212;{{end}}</td>
+      <td class="when" data-value="{{.Earned}}"><time datetime="{{iso .Earned}}">{{datetime .Earned}}</time></td>
+      <td>{{with .Context}}<details><summary>Details</summary><pre>{{blob .}}</pre></details>{{else}}&#8212;{{end}}</td>
+    </tr>
+    {{- else}}
+    <tr id="badge-holders-empty"><td colspan="6">No badges yet. Fly something.</td></tr>
+    {{- end}}
+  </tbody>
+</table>
+</div>
+
+<nav class="pager" aria-label="Pagination">
+  {{- if gt $b.Offset 0}}<a href="{{$b.PrevURL}}" id="badge-prev">Previous</a>{{else}}<span id="badge-prev" aria-disabled="true">Previous</span>{{end}}
+  {{- if $b.Rows}}<span class="count" id="badge-range">Ranks {{$b.FirstRank}}&#8211;{{$b.LastRank}}</span>{{else}}<span class="count" id="badge-range">No ranks on this page</span>{{end}}
+  {{- if $b.HasMore}}<a href="{{$b.NextURL}}" id="badge-next">Next</a>{{else}}<span id="badge-next" aria-disabled="true">Next</span>{{end}}
+</nav>
+{{- end}}

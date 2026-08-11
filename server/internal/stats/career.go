@@ -47,6 +47,17 @@ type CareerState struct {
 	// Rewound reports that an earlier save of this career has been loaded.
 	Rewound  bool
 	FirstSeq int64
+	// LastSeq is the latest event attributed to this save, whether or not it
+	// carried a clock reading, scored, or belonged to a flagged flight.
+	LastSeq int64
+	// Ordinal is this save's per-player sequence number, 1-based, assigned in
+	// first-seen order. It is what a public surface shows in place of the career
+	// id, which can never be published raw (PROJ-049).
+	Ordinal int64
+	// System is the first celestial system hash attributed to the save.
+	System string
+	// SystemChanged marks a later discovery of a different hash without moving System.
+	SystemChanged bool
 }
 
 // careerFold maintains `career`. It runs alongside [flightFold], before the

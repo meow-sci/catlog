@@ -91,6 +91,15 @@ changes and phantom orbit-achieved edges, and those score.
 - **Telemetry windows are half-open in sim time** — a window opened at `t0` covers `t0 ≤ t < t0+30`,
   and a flight ending flushes its partial window before `flight.ended`, so the seconds before a RUD
   are not discarded.
+- **A telemetry state vector is the last sample, not an aggregate.** Position is metres and velocity
+  is metres/second in the named body's centred inertial frame. Every sample replaces the prior
+  nullable state, including with null, so a failed read or SOI change at the end cannot leave an
+  older body's coordinates under a newer `body`. All six components travel together or the whole
+  object is omitted; no component is zero-filled and no origin is fabricated.
+- **RUD facts are captured in the existing `Universe.DestroyVehicleFromEvent` prefix**, while the
+  whole vehicle is still intact. `part_count` is `Vehicle.Parts.Count` at that boundary and falls
+  back to 0 if the read fails. KSA reports the whole-vehicle destruction; it does not supply an
+  individual event for every part that explodes or breaks away.
 - **`peak_g` and `max_q_pa` are omitted, never zeroed**, when the frame carried no reading. The game
   writes that struct only under full physics, so an all-zero reading means "no data this step" — and
   reporting zero would corrupt the board with fake minima. **`lat`, `lon` and `radar_alt_m` follow
@@ -209,8 +218,9 @@ Keys must be quoted: a bare `telemetry.window = false` is a nested table in TOML
 dot in it, and it fails the parse — which, by rule 2, drops the whole file to defaults and leaves the
 player's edit on disk untouched.
 
-**Five types cannot be switched off**, and a `false` on any of them is dropped with a warning naming
-the key: `session.started`, `flight.started`, `flight.ended`, `flight.flagged` and `kitten.kia`.
+**Six types cannot be switched off**, and a `false` on any of them is dropped with a warning naming
+the key: `system.discovered`, `session.started`, `flight.started`, `flight.ended`, `flight.flagged`
+and `kitten.kia`.
 Switching those off is a cheat rather than a preference — `flight.flagged` is the sharp end, being
 the only thing that marks a run as tainted, so a one-line edit would make teleporting, refuelling,
 resource-editing and console cheating score normally and appear publicly. The threat model is the
@@ -248,8 +258,9 @@ The only code that touches KSA, and deliberately thin: everything else is a call
 | `Mod.cs` | Lifecycle, config load, the status window (F10) |
 | `StatusWindow.cs` | Read-only ImGui rows: patches, vehicles, session, install, **event types**, recorded/queued counts, last ship, health. The *Event types* row reads `all reported`, or `N off in catlog.toml: <names>` in the warning colour — a player who switched something off months ago and forgot is otherwise looking at an empty board with no visible cause. It reports; it does not edit ([ROADMAP.md](ROADMAP.md)) |
 | `Patcher.cs` | The Harmony patches, each carrying its `ksa-integration.md` table row as a comment |
-| `VehicleTelemetry.cs` | **Every** KSA read, each with a `[KsaAnchor]` |
-| `PolledSignals.cs` | The 2 Hz poll, vehicle tracking, and the roster read at **two cadences** — an allocation-free KIA scan every tick, the `roster.snapshot` payload only when one is due. It raises the tumble signal on the kitten's own EVA vehicle, which is what gives `kitten.tumble` its flight; the `KillCrew` patch in `Patcher.cs` raises the crew-kill signal that gives `kitten.kia` its own |
+| `VehicleTelemetry.cs` | **Every** KSA read, each with a `[KsaAnchor]`. Its 2 Hz orbit snapshot reads the complete milestone element set once, plus an atomic parent-body-centred inertial position/velocity state. The state is accepted only when all six components are finite and its re-read parent still matches the snapshot body |
+| `SystemSurvey.cs` | The once-per-loaded-system celestial forest survey, canonical system hash inputs and immutable cache; every KSA read carries a `[KsaAnchor]` |
+| `PolledSignals.cs` | The 2 Hz poll, vehicle tracking, and the roster read at **two cadences** — an allocation-free KIA scan every tick, the `roster.snapshot` payload only when one is due. It retains each kitten's previous locomotion mode and reports that mode through a total lowercase mapper when the state enters tumbling; an unseen value becomes `"unknown"`. It raises the tumble signal on the kitten's own EVA vehicle, which is what gives `kitten.tumble` its flight; the `KillCrew` patch in `Patcher.cs` raises the crew-kill signal that gives `kitten.kia` its own |
 | `CatlogRuntime.cs`, `ModPaths.cs`, `KsaAnchor.cs` | Wiring, paths, the anchor attribute |
 
 **Every KSA read carries a `[KsaAnchor]`** naming the `file:line` it was verified against and the
@@ -268,6 +279,23 @@ Patch points that were chosen carefully, because the obvious target was wrong:
   half-built and every read throws. A vehicle is registered the first time catlog *sees* it, which
   also closes the hole where a vehicle created and destroyed inside one sample interval would emit
   events against a flight the server can never join.
+- **The flight-start engine count is installed rocket engines at first sight**, active or not. It
+  counts `EngineController` modules once in `PolledSignals.Track`; read failure is `null` and the key
+  is omitted, while an explicit 0 means none were installed. RCS thrusters, decoupler springs and
+  docking pushoff are not engines, and a shed piece is a new vehicle with a new flight/count.
+- **A tumble preserves the previous game mode, not a guessed cause.** `Airborne → Tumbling` records
+  `from: "airborne"` (a failed landing), while `Grounded → Tumbling` records `from: "grounded"` (a
+  trip). The value is open-ended and an unreadable or future mode becomes `"unknown"`. Catlog does
+  not coalesce the game's edges: after stock KSA has kept a tumbling kitten airborne for 0.5 s it
+  changes the mode back to `Airborne`, so a later bounce can make the same visible cartwheel emit
+  another tumble.
+- **Orbit elements use one non-optional fallback convention.** `SemiMajorAxis`,
+  `LongitudeOfAscendingNode`, `ArgumentOfPeriapsis`, `TimeAtPeriapsis.Seconds()` and `Period` are
+  captured in the same snapshot that drives `vehicle.orbit`. Angles are converted from KSA's
+  radians to degrees. Every non-finite scalar becomes 0; `period_s` is explicitly 0 for a
+  hyperbolic or parabolic trajectory because an open path has no period. An exception rejects the
+  whole vehicle sample rather than emitting a partly filled event. These five values are recorded,
+  not scored by a current fold.
 - **`flight.ended` has one emitter**, the true removal choke point, with the *reason* decided by
   intent flags the earlier patches set. A silent-removal safety net closes any tracked vehicle that
   vanished without one, so a flight never leaks open.
@@ -283,6 +311,46 @@ Patch points that were chosen carefully, because the obvious target was wrong:
 - **Engine events are whole-vehicle, not per-engine**, using the two globals the game already
   publishes. The consequence is recorded rather than hidden: a vehicle that shuts down one of two
   engine groups reports nothing until the last one stops.
+
+### System survey, identity and cache
+
+`SystemSurvey` is another deliberately thin game-thread adapter. A postfix on
+`Universe.LoadSystem(string)` materialises `CurrentSystem.All.OfType<IParentBody>()`, sorts the plain
+snapshot by raw body id using ordinal comparison, models every parentless body as a root, and passes
+KSA-free immutable records into `catlog.lib`. It never uses `CelestialSystem.Count`, because that
+collection also contains vehicles and uses swap-remove; the same loaded content can otherwise hash
+differently before and after a save load.
+
+The system id is SHA-256 over the versioned binary `SystemHashInput` described normatively in
+[ksa-integration.md](ksa-integration.md#normative-hash-encoding), truncated to ten bytes and rendered
+as 16 lowercase Crockford characters. It hashes raw authored values and canonical runtime-derived
+values separately from the sanitised/lowercased wire fields. It has no install-id salt: identical
+content must join across players, unlike private career and kitten identities.
+
+The survey is cached until the next system load. Save loads do not reload a celestial system, so each
+later session boundary reuses the immutable snapshot and only supplies fresh session/career/sim/wall
+context when events are emitted. Startup also surveys an already-present `CurrentSystem` if lifecycle
+ordering changes; null produces nothing. A root that failed inside KSA's exception-swallowing system
+constructor is not reconstructed from templates: the registered forest is reported and hashed as a
+distinct partial system. In the current game flow that is one bounded game-thread enumeration per
+launch; a later `LoadSystem` call replaces the cache with one new enumeration. This keeps failures
+honest rather than silent.
+
+At each real session boundary Runtime resets the pipeline and mints the new session, then appends
+`system.discovered`, any required `system.body` rows, and `session.started` in that exact order.
+`system.discovered` is always reported. `system.body` is configurable: when disabled, or when the
+survey is invalid or exceeds `Wire.MaxSystemBodies` (5,000), the header says `complete: false`, no
+body rows are appended and no marker is written. A complete unmarked catalogue is appended together
+with `survey:<career>:<system-hash>` in one `OutboxDb.AppendAndSetState` transaction; a marked
+catalogue sends only a `complete: false` header and session; its complete catalogue is already
+durable. The marker is therefore committed only after every undroppable catalogue row exists, and
+a crash can cause a harmless resend rather than permanent loss. Re-enabling `system.body` later
+permits the next session boundary to retry.
+
+The required Sol and SolDense game-thread cost measurements remain **unmeasured**. Automated tests
+pin enumeration, cap, validity and ordering, but they cannot establish the player-visible load-time
+cost in KSA. Measuring both with the status diagnostics open — including SolDense's 3,215 bodies —
+remains a blocking manual acceptance item; no timing is claimed here until that run is performed.
 
 Runtime state lives in the player's KSA user directory — `catlog.toml`, `outbox.db`,
 `install-id.txt`, the credential — **never beside the installed DLLs**, because a mod update replaces
@@ -300,8 +368,8 @@ make sim SCENARIO=hop-lithobrake CRED=<path> ASSERT=1 SPEED=100
 ```
 
 Scenarios are C# classes producing `SimStep`s — sim-time-stamped snapshot sets and signals — fed
-through the **real** detector, outbox, signer and shipper against a **real** server. Six of them:
-`hop-lithobrake`, `orbit-and-back`, `rud-sampler`, `tumbleweed`, `cheater`, `soak`.
+through the **real** detector, outbox, signer and shipper against a **real** server. Seven of them:
+`hop-lithobrake`, `orbit-and-back`, `rud-sampler`, `tumbleweed`, `cheater`, `two-saves`, `soak`.
 
 `cheater` is the one that earns its place: it flies two flights, one flagged *before* its scoring
 events and one flagged ~60 s *after*. Only the second tests the rebuild backstop — a scenario that
@@ -318,7 +386,7 @@ about pacing.
 ## `catlog.loadgen` — the volume harness
 
 A sibling project, and `catlog.sim` deliberately does not know it exists. The dependency runs one way
-only: adding a `--random` mode to the simulator would have put its six exactly-asserted scenarios one
+only: adding a `--random` mode to the simulator would have put its seven exactly-asserted scenarios one
 refactor away from being a statement about a dice roll.
 
 It does **not** fabricate envelopes. Like the simulator it emits only telemetry snapshots and game
@@ -352,6 +420,33 @@ installs, and the guard tests over `mod/catlog`'s sources are unaffected by it.
 
 Running it, and how to make the numbers mean something, is in
 [../DEVELOPMENT.md](../DEVELOPMENT.md#5-load-testing--make-loadgen).
+
+### Measured cost of `telemetry.window.state`
+
+The final-v1 state shape was measured on 2026-08-10 rather than estimated. This deterministic,
+realistic loadgen corpus ran 12 players for 45 simulated minutes through the real detector,
+accumulator, outbox, signer and production Brotli compressor:
+
+```sh
+make loadgen SERVER_URL=http://127.0.0.1:18080 ADMIN_URL=http://127.0.0.1:6060 \
+  PLAYERS=12 DURATION=45m SEED=4242 NAMESPACE=d3c-state-cost \
+  CONCURRENCY=12 BATCH=2000 SHIP_AGE=1h AUTH=admin READERS=0 \
+  MODERATION=0 TOO_NEW=0 REPORT=json \
+  LOADGEN_ARGS='--no-feed --no-dedup-probe'
+```
+
+A loopback capture retained the exact `.br` request bodies. A temporary .NET measurement helper
+referenced `catlog.lib`, decompressed each body with production `BrotliCodec`, removed only the
+balanced `,"state":{...}` member from `telemetry.window` lines (all other NDJSON bytes stayed
+identical), and recompressed with the same codec. The 12 batches contained 7,391 events and 4,581
+state-bearing windows. They measured 5,411,205 raw / 572,354 Brotli bytes with state and 4,978,266
+raw / 567,760 Brotli bytes without it: **4,594 compressed bytes, or 0.809%, of growth**. The command,
+seed and namespace reproduce the corpus construction; reproduce the comparison by capturing the
+request bodies on the loopback `SERVER_URL`, applying that exact state-only byte removal, and
+recompressing both forms with `BrotliCodec`. The capture proxy, batches and helper used for this run
+were temporary measurement artifacts and are not committed or claimed to remain available. The
+proxy did not alter captured request bodies; its forwarded requests were not used as measurement
+evidence.
 
 ## §7.5 Test suites
 

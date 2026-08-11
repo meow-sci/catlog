@@ -1,0 +1,31 @@
+{{define "content" -}}
+<div class="page-head">
+  <h1 id="challenges-title">Challenges</h1>
+  <p>Leaderboards with one rule and one deadline. Finished challenges keep their results.</p>
+</div>
+
+<div class="stack" id="challenges-index" data-now="{{.Data.Now}}">
+  {{- range .Data.Groups}}
+  <section class="panel challenge-group" id="challenges-{{.Key}}" data-state="{{.Key}}">
+    <header><h2 class="panel-title">{{.Title}}</h2></header>
+    <div class="table-wrap" role="region" tabindex="0" aria-label="{{.Title}} challenges">
+      <table>
+        <thead><tr><th scope="col">Challenge</th><th scope="col">Window</th><th scope="col">Scope</th><th scope="col" class="value">Entrants</th></tr></thead>
+        <tbody>
+          {{- range .Challenges}}
+          <tr class="challenge-row" data-challenge="{{.Challenge}}" data-state="{{.State}}">
+            <th scope="row"><a href="/challenges/{{.Challenge}}">{{.Title}}</a><br><small class="muted">{{.Blurb}}</small></th>
+            <td><time datetime="{{iso .Opens}}">{{datetime .Opens}}</time><br><span class="muted">to <time datetime="{{iso .Closes}}">{{datetime .Closes}}</time></span></td>
+            <td>{{scopeLabel .Scope}}</td>
+            <td class="value tnum" data-value="{{.Entrants}}">{{num .Entrants}}</td>
+          </tr>
+          {{- else}}
+          <tr class="challenge-empty"><td colspan="4">{{.Empty}}</td></tr>
+          {{- end}}
+        </tbody>
+      </table>
+    </div>
+  </section>
+  {{- end}}
+</div>
+{{- end}}

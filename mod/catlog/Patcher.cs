@@ -282,7 +282,7 @@ public static class Patcher
         Install(harmony, "Universe.LoadSystem",
             AccessTools.Method(typeof(Universe), nameof(Universe.LoadSystem)),
             prefix: nameof(LoadSystemPrefix),
-            postfix: nameof(SessionBoundaryPostfix));
+            postfix: nameof(LoadSystemPostfix));
 
         // ── career identity (§4.1) ──────────────────────────────────────────────────────────
         // KSA has no save/career/player id anywhere; the save's own folder name is the only
@@ -373,6 +373,23 @@ public static class Patcher
     /// <summary>How many solver batches have been applied since load — the "is the game feeding us" heartbeat.</summary>
     public static long SolverBatches { get; private set; }
 
+    [KsaAnchor("Universe.LoadSystem(string)",
+        SourceFile = "KSA/Universe.cs:167-179", Verified = "2026-08-10",
+        GameVersion = "2026.8.5.5168", Risk = ChurnRisk.Low,
+        Notes = "Postfix is required: CurrentSystem is assigned at line 174 after construction.")]
+    private static void LoadSystemPostfix()
+    {
+        try
+        {
+            SystemSurvey.CaptureCurrent();
+            _runtime?.OnSessionBoundary();
+        }
+        catch (Exception ex)
+        {
+            ModLog.Log.Warn($"catlog: system survey failed: {ex.Message}");
+        }
+    }
+
     private static void DestroyVehicleFromEventPrefix(Vehicle vehicle, VehicleDestructionEvent destructionEvent)
     {
         if (_runtime is not { } runtime)
@@ -390,6 +407,10 @@ public static class Patcher
                 return;
 
             Destroying.Add(id);
+            // Read crew and parts in this prefix while the vehicle is intact. After this prefix
+            // returns, DestroyVehicleFromEvent tail-calls Universe.DestroyVehicle;
+            // EndAllCrewMissions clears every occupied seat and Dispose tears the parts down in
+            // the same frame.
             runtime.Signal(new RudSignal(
                 simT,
                 wallMs,
@@ -403,6 +424,7 @@ public static class Patcher
                 // §4/D11: everyone survives. EndAllCrewMissions banks the mission and frees the
                 // kitten; the physics path never reaches KillCrew.
                 CrewCount: VehicleTelemetry.CrewCount(vehicle),
+                PartCount: VehicleTelemetry.PartCount(vehicle),
                 // Prefix: the vehicle is fully intact (Universe.cs:1699), so the position is the
                 // position it died at rather than a torn-down zero.
                 Lat: VehicleTelemetry.Latitude(vehicle),

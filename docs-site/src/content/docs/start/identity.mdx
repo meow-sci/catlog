@@ -1,13 +1,13 @@
 ---
 title: Your identity and your handle
 description: >-
-  What catlog knows about who you are — which is a handle, a hash, and nothing
-  else.
+  The handle is the only public identity catlog has, what a ban does to it, and
+  the mark a rewound career carries.
 sidebar:
   order: 3
 ---
 
-import { Aside } from "@astrojs/starlight/components";
+import { LinkCard } from "@astrojs/starlight/components";
 
 ## The handle is the only public identity
 
@@ -15,36 +15,14 @@ Boards, profiles, comparisons and the activity feed show one thing: the handle y
 claimed. There is no display name, no avatar sourced from anywhere, and no second
 identifier a determined reader could join on.
 
-## catlog never receives an email address
+A handle is permanent and never recycled. Nobody can take a name you were known by
+and be mistaken for you, and that holds after a ban and after a deletion.
 
-Not "stores it encrypted", not "deletes it after signup" — **never asks for it**.
-The sign-in flow does not request an email scope from any identity provider, so
-there is no email in the database, none in a backup, and none in a dump.
-
-Your player key is a keyed hash of the identity provider's stable subject id. That
-also makes bans stick: an email is something you can change, a provider subject is
-not.
-
-## What is in the recorded data, and what is published
-
-Three identifiers ride along with events, and none of them survives to a public
-response in the form the mod produced.
-
-| In the recorded event | What it is                                         | What you see published  |
-| --------------------- | -------------------------------------------------- | ----------------------- |
-| `install`             | A random id generated once on your machine         | **Removed entirely.**   |
-| `career`              | A hash of your installation id and your save       | Re-labelled per player. |
-| `kid`                 | A hash of your installation id and a kitten's name | Re-labelled per player. |
-
-"Re-labelled per player" means the published label is derived from the player it
-belongs to as well as the value, so the same career or the same kitten name
-produces different labels for different players. Nothing can be cross-referenced
-between two people's rows.
-
-<Aside type="note" title="Kitten names are shown">
-  The name itself appears — "brought Hunter home safely" is the whole point of the feed. It is
-  trimmed to 32 printable characters. The identifier beside it is not what you see.
-</Aside>
+<LinkCard
+  title="Privacy"
+  href="/catlog/start/privacy/"
+  description="What catlog knows about who you are — no email address, an opaque player key, and three identifiers that never survive publication."
+/>
 
 ## What a ban does
 
@@ -60,32 +38,9 @@ Two consequences worth knowing:
   "not found".** Deliberately — the alternative is a way to test whether somebody
   was banned.
 
-## Being removed does not mean your data was deleted
-
-There are three separate things that can happen to an account, and they are
-different on purpose. Two of them are reversible.
-
-| | What happens to the account | What happens to your flights |
-|---|---|---|
-| **Ban** | Your credential stops working and your handles are retired for good. You find out immediately, because the mod starts getting refused. | They stay recorded. They stop counting towards anything the moment the ban lands. |
-| **Withheld** | Nothing changes for you. The mod keeps working and keeps sending. | They are moved out of the leaderboard log into a separate table, and everything you send afterwards goes there too. Nobody can see them. |
-| **Deleted** | The account is gone, and a marker stays behind so it cannot be remade. | Everything is deleted — flights, the archive copy, all of it. This one cannot be undone. |
-
-The middle one exists so that a moderation decision made in a hurry does not have
-to be permanent. Somebody who is withheld can be put back exactly as they were —
-same flights, same records, in the same order, so a record you set first is still
-yours. Or, after a look at what actually happened, their data can be deleted for
-good. Both choices stay open.
-
-<Aside type="note" title="It is a person's decision, never an automatic one">
-  Nothing about this is triggered by your numbers. catlog does not look at the shape of your
-  data and decide something is suspicious — it never has and it is not going to. Withholding an
-  account is something the person running catlog does deliberately, about behaviour, and it is
-  the same tool used for harassment and abuse rather than for anything to do with scores.
-</Aside>
-
-If you want your own data gone, ask — deletion is a request you can make about
-your own account, and it takes everything with it.
+A ban, a withheld account and a deletion are three different things, and what each
+one does to the flights you already flew is on the [privacy
+page](/catlog/start/privacy/).
 
 ## The career rewind mark
 

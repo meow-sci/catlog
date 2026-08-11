@@ -126,6 +126,7 @@ public sealed class WindowAccumulator
         private double? _peakG;
         private double? _maxQPa;
         private double _warpMax;
+        private StateVec? _state;
         private int _n;
 
         internal VehicleWindow(TelemetrySnapshot first)
@@ -155,6 +156,9 @@ public sealed class WindowAccumulator
 
             _body = s.Body;
             _massKgLast = s.MassKg;
+            // Atomic last-sample provenance: assigning null deliberately clears an older state,
+            // especially across an SOI/body change where retaining it would mislabel the frame.
+            _state = s.State;
             _t1 = s.SimT;
             _n++;
         }
@@ -172,7 +176,8 @@ public sealed class WindowAccumulator
             MaxQPa: _maxQPa,
             MassKgLast: _massKgLast,
             RadarAltM: _radarAlt?.ToAgg(),
-            WarpMax: _warpMax);
+            WarpMax: _warpMax,
+            State: _state);
     }
 
     private sealed class Fold

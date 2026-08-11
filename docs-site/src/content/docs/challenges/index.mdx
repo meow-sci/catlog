@@ -1,0 +1,111 @@
+---
+title: Weekly challenges
+description: How catlog will rank curated rules inside explicit UTC windows.
+sidebar:
+  order: 1
+---
+
+import { Aside } from "@astrojs/starlight/components";
+import ChallengeDetail from "../../../components/ChallengeDetail.astro";
+import { CHALLENGES } from "../../../data/challenges";
+
+A challenge is a dated leaderboard with a curated rule and a deadline. It asks a temporary question
+of the same recorded history that builds the ordinary leaderboards: perhaps one best result, a
+running total or a set of distinct things achieved before the window closes. It does not alter an
+ordinary board or attach a separate score or rank to your profile; its result belongs to that
+challenge's standings.
+
+The rule and its opening and closing dates are part of a catlog server release. They cannot be
+edited while the server is running. That keeps a later rebuild honest: old history is always judged
+by the same challenge definition as live history, rather than by a rule somebody changed after the
+events arrived.
+
+The compile-time registry now contains six Week 33 challenges. Their shared window opens at
+2026-08-10 00:00 UTC and closes at 2026-08-17 00:00 UTC. The [challenge
+archive](/catlog/challenges/archive/) gives each rule, scope and ranking direction.
+
+## The deadline is when catlog receives the flight
+
+Challenge windows are always UTC, so everybody gets the same window, and use the time each event
+reaches the catlog server. They do not use your computer's clock or the clock inside the save. An
+event received exactly when a challenge opens can count; one received exactly when it closes cannot.
+
+<Aside type="caution" title="Offline flights still have to arrive on time">
+  Your flights have to reach catlog before the deadline — if you play offline, get back online
+  before it closes. A flight that remains queued until afterwards does not count, even if you flew
+  it while the challenge was open.
+</Aside>
+
+## Who or what a challenge ranks
+
+A challenge can compare one result per player, one result per save, or one result per player within
+each celestial system. The scope belongs to the challenge rule:
+
+- A **player** challenge can combine qualifying play across saves and systems.
+- A **save** challenge keeps each save's result separate.
+- A **system** challenge keeps each player's result separate inside each matching celestial system,
+  so different systems are not presented as the same contest.
+
+Closed challenge results are designed to remain available rather than expiring like a rolling
+daily or weekly leaderboard. That makes an archive of past challenges possible without treating
+last week's result as disposable. Nothing is deleted when the deadline passes.
+
+## Where to see challenge results
+
+The [visitor challenge catalogue](https://catlog.science.fail/challenges) groups the shipped rules
+as **Open now**, **Coming up** and **Finished**, using the server's clock. While a challenge is open,
+the catlog home page also shows its compact standings. Each catalogue entry links to a result page
+with the rule, fixed UTC window and ranked rows.
+
+An open challenge page repeats the deadline plainly: your flights have to reach catlog before it
+closes. If you play offline, get back online in time. After closing, the same page and rows remain
+available under Finished; the result becomes part of the archive rather than disappearing.
+
+The [public challenge index](https://catlog.science.fail/v1/challenges) lists every definition with
+an `upcoming`, `open` or `closed` state and its entrant count. That state comes from the catlog
+server's clock, not from your browser. A shared cache can briefly retain the previous state at the
+opening or closing instant, for up to 30 seconds.
+
+Each challenge also has a detail response at `GET /v1/challenges/{challenge}`; for example, [Heavy
+Lift Week's JSON results](https://catlog.science.fail/v1/challenges/heavy_lift_week). A closed
+challenge is served exactly like an open one, with its final rows intact.
+
+Visible rows leave hidden accounts out and close the resulting rank gaps. The published `entrants`
+number still counts the raw matching rows, including hidden accounts, just as it does on a
+leaderboard. On a save-scoped challenge those rows are saves rather than distinct players, so the
+number can also include several saves belonging to one player.
+
+Public labels follow the challenge scope. A player-scoped result carries neither a save nor a system
+unless its rule explicitly constrains one. A save-scoped result adds its public save number and
+per-player save label. A system-scoped result carries the celestial system's public name, hash and
+slug. The mod's raw save identity is never published, and optional `context` is passed through the
+same redaction as a leaderboard row.
+
+## Eligibility and rebuilds
+
+A challenge contribution tied to a flight follows the same final eligibility as a leaderboard
+result. A [flagged flight](/catlog/leaderboards/eligibility/) contributes nothing. If a flight is
+flagged after an earlier event appeared to qualify, rebuilding the projections removes that
+contribution.
+
+Challenge windows remain attached to recorded receive times during a rebuild. That means a
+challenge deployed after its window has closed can still find qualifying events from that window in
+the existing history. It does not reopen the deadline or admit an event that reached catlog too
+late.
+
+## Shipped challenges
+
+The entries below come directly from the typed challenge catalogue at build time. There is no
+second hand-maintained list of shipped definitions.
+
+{CHALLENGES.map((challenge) => <ChallengeDetail challenge={challenge.challenge} />)}
+
+“Payload” in Heavy Lift Week means the whole vehicle's mass when orbit was achieved, including its
+propellant. catlog cannot separate cargo from rocket and does not pretend it can. Coasting Class
+means no engine was installed at launch, not no propulsion: RCS thrusters, decoupler springs and a
+docking port's push can still move the vehicle.
+
+<Aside type="note" title="The rules are deployed, not edited live">
+  The visitor pages and JSON results are both public. There is still no admin screen or runtime
+  setting for creating or changing a challenge; its rule and dates belong to the deployed server.
+</Aside>

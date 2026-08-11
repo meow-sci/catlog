@@ -4,7 +4,7 @@ description: >-
   EVAs, tumbles, losses, and the periodic roster snapshot that Distance Travelled
   is built from.
 sidebar:
-  order: 6
+  order: 7
 ---
 
 import { Aside } from "@astrojs/starlight/components";
@@ -27,13 +27,41 @@ import EventDetail from "../../../components/EventDetail.astro";
 <EventDetail type="kitten.eva_end" />
 <EventDetail type="kitten.tumble" />
 
+The **Kittens To Orbit And Home** board follows the crew list on a recovered flight that had reached
+orbit. It counts each kitten once per save. A kitten who joined after orbit and rode home counts; a
+kitten who was there at orbit but transferred away before recovery does not. Catlog uses the crew
+list at recovery rather than trying to reconstruct every seat transfer through EVA and docking.
+
 ## What counts as a tumble
 
 The game decides. A kitten is tumbling when it is touching the ground and moving
 faster than the tumble speed gate, which is **6.5 m/s** in a stock game.
 
 catlog records the transition **into** tumbling and nothing else. A tumble ends by
-righting itself, and counting that too would double every fall.
+righting itself, and counting that too would double every fall. It also records what
+the kitten was doing immediately beforehand: **airborne** means a landing that did
+not end on its feet, while **grounded** means a trip after it was already running on
+the surface. If that earlier state cannot be named, the record says **unknown**
+rather than guessing.
+
+A tumble record is a game-state transition, not a promise of one record per visible
+cartwheel. If a tumbling kitten spends more than half a second off the ground, the
+game calls it airborne again. A hard bounce can then start another tumble, so one
+rough cartwheel can produce several records, including more than one whose earlier
+state was airborne. A settled kitten instead passes through righting itself before
+returning to grounded.
+
+The Kitten Tumbles board still counts every tumble record, whether it began in the
+air or on the ground. **Did Not Land On Their Feet** is the narrower count: only an
+airborne-to-tumbling change belongs there. Every other earlier state, including
+unknown and states added by a future game build, remains a tumble without being
+guessed into that board.
+
+Each tumble also counts on a **Tumbles on _World_** board when the world's name can
+form a safe board address. Those per-world boards include every kind of tumble, not
+only failed landings, and exist for worlds players actually visit rather than for a
+built-in list. If a world's name cannot form an address, the all-world total still
+counts it.
 
 <Aside type="caution" title="Why changing the tuning flags your flight">
 That 6.5 m/s figure is a single number sitting in a debug window with a drag
@@ -69,9 +97,10 @@ take today, a seat catlog could not read, a save loaded in between — the loss 
 recorded without a flight on purpose. Guessing would strike a record off a flight
 that had nothing to do with it, and that is worse than missing one.
 
-Note also that a vehicle coming apart does **not** kill its crew — the game ends
-their missions instead. That is why a RUD records the crew who were aboard and
-they all live.
+The crew recorded at a physics RUD now feeds two occupancy boards. It is not a death count: the
+normal physics path ends those missions without killing the kittens. Choosing to scuttle a vehicle
+is a separate game path that can mark its crew lost, and catlog deliberately does not turn that
+choice into a public kittens-scuttled leaderboard.
 
 <EventDetail type="roster.snapshot" />
 

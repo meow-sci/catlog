@@ -4,7 +4,7 @@ description: >-
   The 30-second flight summary — how catlog samples your flight, what it keeps,
   the two heights it measures, and why a missing reading is not a zero.
 sidebar:
-  order: 7
+  order: 8
 ---
 
 import { Aside } from "@astrojs/starlight/components";
@@ -18,6 +18,26 @@ A full window is **60 samples**. Windows do not overlap — a sample at exactly 
 boundary closes one window and opens the next.
 
 <EventDetail type="telemetry.window" />
+
+## Where the vehicle was going
+
+When the game can provide the complete reading, a window also keeps the vehicle's
+position **and velocity** at its final sample. Both are measured relative to the
+world named by the window, in a frame that does not rotate with the ground.
+Position alone would only draw a line between samples; keeping velocity as well
+makes it possible for a future viewer to follow the curve between widely spaced
+points, including under time warp.
+
+This is the **last** state in the window, not an average. An average position would
+not describe anywhere the vehicle really was. It is also all-or-nothing: if any
+coordinate is unavailable, or the vehicle changes worlds while the reading is
+being taken, the entire state is left out. Catlog never substitutes an origin or
+keeps an older world's coordinates under a newer world name.
+
+<Aside type="note" title="Recorded for a future view, not scored">
+  No leaderboard reads position or velocity. The state travels with the background summary so it is
+  discarded first if the local spool fills; crashes, landings and other gameplay events remain.
+</Aside>
 
 ## When a window is short
 
@@ -86,7 +106,7 @@ one.
 
 ## Switching it off
 
-This is the largest thing catlog sends and the most tempting one to turn off, and
+This is the largest family of things catlog sends and the most tempting one to turn off, and
 you can. It costs you six boards — Peak G Survived, Max Q Survived, Highest
 Altitude, Lowest Pass, Fastest Surface Speed and Fastest Orbital Speed — and
 nothing else supplies them. It also removes the only thing catlog is allowed to discard on its

@@ -20,6 +20,8 @@ if (!board) throw new Error(`Unknown board in BoardDetail: ${stat}`);
 
 const anchor = board.stat.replaceAll(/[<>]/g, "");
 const direction = board.ascending ? "Lowest wins" : "Highest wins";
+const scopeLabels = { player: "players", career: "saves", system: "systems" } as const;
+const scopes = board.scopes.map((scope) => scopeLabels[scope]).join(" · ");
 ---
 
 <section class="bd" id={anchor}>
@@ -28,6 +30,7 @@ const direction = board.ascending ? "Lowest wins" : "Highest wins";
     <span class="ev-pill">{direction}</span>
     <span class="ev-pill">unit: {board.unit}</span>
     {board.career && <span class="ev-pill">career time</span>}
+    <span class="ev-pill">{scopes}</span>
   </h3>
 
   <p class="bd-key"><code>{board.stat}</code></p>

@@ -66,8 +66,8 @@ public sealed class ModConfig
         # "telemetry.window". The mod cannot read that, the whole file fails to parse, and you
         # silently get stock settings back. Write the name in quotes, always.
         #
-        # Five types cannot be switched off, because switching them off is a cheat rather
-        # than a preference, and setting them to false here is dropped with a warning:
+        # Six types cannot be switched off, because switching them off breaks scoring integrity
+        # or mandatory system attribution. Setting them to false here is dropped with a warning:
         #
         #   flight.flagged   marks a run as tainted. It is the ONLY thing that does, so
         #                    without it teleporting, refuelling, resource editing and console
@@ -75,6 +75,7 @@ public sealed class ModConfig
         #   kitten.kia       is what stops a crash that killed the crew being counted as a
         #                    lithobrake you survived.
         #   session.started  is the only record that a save was reloaded.
+        #   system.discovered binds the session and career to the loaded celestial system.
         #   flight.started   is what makes a flight a flight — with no start there is no crew,
         #                    no body, and nothing for a board to join against.
         #   flight.ended     is what makes a flight recovered. Without it nothing you land is
@@ -85,6 +86,8 @@ public sealed class ModConfig
         #
         # [events]
         # "session.started" = true    # locked on
+        # "system.discovered" = true  # locked on
+        # "system.body" = true        # celestial catalogue and system-scoped boards
         # "flight.started" = true     # locked on
         # "flight.ended" = true       # locked on
         # "flight.flagged" = true     # locked on
@@ -175,7 +178,7 @@ public sealed class ModConfig
     /// </summary>
     /// <remarks>
     /// <para>
-    /// <b>Empty by default, and it stays empty.</b> Writing all 22 live keys out would mean every
+    /// <b>Empty by default, and it stays empty.</b> Writing all 25 registered keys out would mean every
     /// future type silently arriving switched to whatever the file happens to say, and would turn a
     /// one-line opt-out into a wall of noise. The full list ships commented out in
     /// <c>Header</c> instead — that block is the only place the shape is documented for a player,

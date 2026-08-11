@@ -148,12 +148,18 @@ public sealed record FrameBoundarySignal(double SimT, long WallMs, long Sequence
 /// is the only moment the career can change, which is why it rides on this signal and nowhere else.
 /// Null is the honest value when the game project could not tell which save was loaded.
 /// </param>
+/// <param name="System">The immutable KSA-free survey cached at system load, or null.</param>
+/// <param name="IncludeSystemBodies">Worker decision to include catalogue rows in this boundary.</param>
+/// <param name="SystemComplete">Whether the accompanying catalogue is complete.</param>
 public sealed record SessionLoadedSignal(
     double SimT,
     long WallMs,
     string GameBuild,
     string ModVersion,
-    string? CareerId = null) : GameSignal(SimT, WallMs);
+    string? CareerId = null,
+    Telemetry.SystemSnapshot? System = null,
+    bool IncludeSystemBodies = false,
+    bool SystemComplete = false) : GameSignal(SimT, WallMs);
 
 /// <summary>A vehicle entered the simulation — the start of a flight.</summary>
 /// <param name="SimT">Universe sim seconds.</param>
@@ -174,6 +180,7 @@ public sealed record SessionLoadedSignal(
 /// means uncrewed, and the two are the same thing: an empty array on the wire.
 /// </param>
 /// <param name="StageCount">How many stages the vehicle has; 0 when the read failed.</param>
+/// <param name="EngineCount">Installed rocket engines, or null when the read failed.</param>
 /// <param name="Lat">Latitude in degrees, or null when it could not be read.</param>
 /// <param name="Lon">Longitude in degrees, or null when it could not be read.</param>
 public sealed record VehicleCreatedSignal(
@@ -188,6 +195,7 @@ public sealed record VehicleCreatedSignal(
     double LaunchGameTime,
     IReadOnlyList<string>? KittenNames = null,
     int StageCount = 0,
+    int? EngineCount = null,
     double? Lat = null,
     double? Lon = null) : GameSignal(SimT, WallMs);
 
@@ -250,6 +258,7 @@ public sealed record VehicleRecoveredSignal(
 /// Occupied seats. Per D11 these kittens all survive: the physics destruction path never calls
 /// <c>KillCrew</c> (<c>docs/ksa-integration.md</c> §4).
 /// </param>
+/// <param name="PartCount">Parts on the intact vehicle at destruction.</param>
 /// <param name="Lat">Latitude in degrees, or null when it could not be read.</param>
 /// <param name="Lon">Longitude in degrees, or null when it could not be read.</param>
 public sealed record RudSignal(
@@ -263,6 +272,7 @@ public sealed record RudSignal(
     double AltitudeM,
     string Body,
     int CrewCount,
+    int PartCount,
     double? Lat = null,
     double? Lon = null) : GameSignal(SimT, WallMs);
 
@@ -372,9 +382,11 @@ public sealed record EvaEndSignal(double SimT, long WallMs, string KittenName, d
 /// <param name="SimT">Universe sim seconds.</param>
 /// <param name="WallMs">Client unix milliseconds.</param>
 /// <param name="KittenName">The kitten's roster name.</param>
+/// <param name="From">Lowercase locomotion mode immediately before tumbling.</param>
 /// <param name="SpeedMs">Tangential speed at the transition, in m/s.</param>
 /// <param name="Body">Lowercase parent body name.</param>
-public sealed record TumbleSignal(double SimT, long WallMs, string KittenName, double SpeedMs, string Body)
+public sealed record TumbleSignal(
+    double SimT, long WallMs, string KittenName, string From, double SpeedMs, string Body)
     : GameSignal(SimT, WallMs);
 
 /// <summary>

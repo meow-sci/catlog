@@ -16,6 +16,14 @@ const (
 	StatFastestSurfaceSpeed       = "fastest_surface_speed"
 	StatFastestOrbitalSpeed       = "fastest_orbital_speed"
 	StatKittenTumbles             = "kitten_tumbles"
+	StatBotchedLandings           = "botched_landings"
+	StatPartsLost                 = "parts_lost"
+	StatBiggestPartsLost          = "biggest_parts_lost"
+	StatKittensToOrbitAndBack     = "kittens_to_orbit_and_back"
+	StatBiggestCrewWreck          = "biggest_crew_wreck"
+	StatKittensWrecked            = "kittens_wrecked"
+	StatBodiesBy1Y                = "bodies_by_1y"
+	StatBodiesBy10Y               = "bodies_by_10y"
 	StatRUDTotal                  = "rud_total"
 	StatOrbitsAchieved            = "orbits_achieved"
 	StatSOIBodies                 = "soi_bodies"
@@ -52,7 +60,13 @@ const (
 	StatLandings            = "landings"
 	StatLowestPass          = "lowest_pass"
 	StatBiggestStack        = "biggest_stack"
+	StatCareerPlaytime      = "career_playtime"
+	StatPlaySessions        = "play_sessions"
 )
+
+// SprintYearSeconds is catlog's flat 365-day duration year. It deliberately
+// does not come from any celestial body's orbital period.
+const SprintYearSeconds = 365 * 24 * 3600
 
 // Board is the metadata `GET /v1/leaderboards` publishes for one stat (§4.8).
 type Board struct {
@@ -71,16 +85,20 @@ type Board struct {
 	// context therefore carries `career` (and may be qualified by the career's
 	// rewind mark). See career.go.
 	Career bool `json:"career"`
+	// BodyDerived is true when the board key is derived from a celestial-body
+	// name. It is metadata for readers: player scope merges replaceable systems,
+	// while system scope is the comparable question.
+	BodyDerived bool `json:"body_derived,omitempty"`
 }
 
 // fixedBoards is the §5.6 table, in display order: the "how did you survive
 // that" records first, then the speed and shape records, then what was on the
-// pad, then the counters, then the one career-time board whose key is a
-// constant.
+// pad, then the counters and roster totals, then the career-time and
+// save-native boards.
 //
-// Every entry here is a board because a fold with that name exists, so the list
-// is a property of the build. The two *families* below are not: their keys come
-// out of the data.
+// Every entry here is a board because a registered fold writes that stat, so
+// the list is a property of the build. The *families* below are not: their keys
+// come out of the data.
 //
 // Four boards have an **empty unit** — `roundest_orbit` (an eccentricity),
 // `most_parts`, `most_stages` and `biggest_stack` (bare counts of a thing whose
@@ -135,6 +153,16 @@ var fixedBoards = func() []Board {
 		rec(StatTopKittenDistance, "Furthest-Travelled Kitten", "m"),
 		rec(StatTopKittenMissions, "Most Missions Flown", "missions"),
 		{Stat: StatFastestToOrbit, Title: "Fastest to Orbit", Unit: "ms", Ascending: true, Career: true},
+		{Stat: StatCareerPlaytime, Title: "Longest Save", Unit: "ms", Career: true},
+		rec(StatPlaySessions, "Play Sessions", "sessions"),
+		rec(StatBotchedLandings, "Did Not Land On Their Feet", "tumbles"),
+		rec(StatPartsLost, "Parts In Lost Vehicles", "parts"),
+		rec(StatBiggestPartsLost, "Biggest Vehicle Lost", "parts"),
+		rec(StatKittensToOrbitAndBack, "Kittens To Orbit And Home", "kittens"),
+		rec(StatBiggestCrewWreck, "Most Kittens Aboard A Lost Vehicle", "kittens"),
+		rec(StatKittensWrecked, "Kittens Aboard Lost Vehicles", "kittens"),
+		rec(StatBodiesBy1Y, "Worlds In The First Year", "bodies"),
+		rec(StatBodiesBy10Y, "Worlds In Ten Years", "bodies"),
 	}
 }()
 
@@ -152,9 +180,9 @@ func FixedBoards() []Board { return slices.Clone(fixedBoards) }
 
 // --- the dynamic board families ------------------------------------------------
 //
-// Two board keys are not constants. `fastest_to_<body>` and `rud_<cause>` take
-// their second half from the event stream — a celestial body, a destruction
-// cause — and catlog holds no list of either.
+// Family board keys are not constants. `fastest_to_<body>`, `tumbles_on_<body>`
+// and `rud_<cause>` take their second half from the event stream — a celestial
+// body or a destruction cause — and catlog holds no list of either.
 //
 // It held one, and that was wrong. KSA's celestial systems are hand-authored
 // content that ships as data and that mods extend or replace, and docs/events.md
@@ -195,6 +223,10 @@ type family struct {
 	prefix string
 	// after is the fixed board this family's members are listed under.
 	after string
+	// bodyDerived marks families whose keys are built from body names. Keeping
+	// the fact on the family makes future data-derived families opt in here,
+	// rather than teaching each reader about key prefixes.
+	bodyDerived bool
 	// board derives one member's metadata from its stat key and suffix.
 	board func(stat, suffix string) Board
 }
@@ -206,10 +238,18 @@ var families = []family{{
 		return Board{Stat: stat, Title: "RUDs — " + titleize(cause), Unit: "RUDs"}
 	},
 }, {
-	prefix: "fastest_to_",
-	after:  StatFastestToOrbit,
+	prefix:      "fastest_to_",
+	after:       StatFastestToOrbit,
+	bodyDerived: true,
 	board: func(stat, body string) Board {
 		return Board{Stat: stat, Title: "Fastest to " + titleize(body), Unit: "ms", Ascending: true, Career: true}
+	},
+}, {
+	prefix:      "tumbles_on_",
+	after:       StatKittenTumbles,
+	bodyDerived: true,
+	board: func(stat, body string) Board {
+		return Board{Stat: stat, Title: "Tumbles on " + titleize(body), Unit: "tumbles"}
 	},
 }}
 
@@ -220,6 +260,10 @@ func FastestToStat(body string) (string, bool) { return familyStat("fastest_to_"
 // RUDStat is the per-cause board key for a §4.2 cause, reporting false when the
 // cause cannot be half of a stat key.
 func RUDStat(cause string) (string, bool) { return familyStat("rud_", cause) }
+
+// TumblesOnStat is the per-body tumble board key, reporting false when the
+// body's name cannot be half of a stat key.
+func TumblesOnStat(body string) (string, bool) { return familyStat("tumbles_on_", body) }
 
 // familyStat builds a family stat key out of a value the wire carried.
 func familyStat(prefix, value string) (string, bool) {
@@ -306,7 +350,9 @@ func Describe(stat string) (Board, bool) {
 		if !ok || norm != suffix {
 			return Board{}, false
 		}
-		return f.board(stat, suffix), true
+		b := f.board(stat, suffix)
+		b.BodyDerived = f.bodyDerived
+		return b, true
 	}
 	return Board{}, false
 }
@@ -1029,7 +1075,7 @@ func (landingsFold) Apply(ctx context.Context, b *Batch, ev Event) error {
 // --- counter folds -----------------------------------------------------------
 
 // countFold implements the boards that are simply "how many of this event":
-// `kitten_tumbles`, `dockings`, `stagings`.
+// `dockings`, `stagings`, `play_sessions`.
 type countFold struct {
 	stat      string
 	eventType string
@@ -1048,12 +1094,54 @@ func (f countFold) Apply(ctx context.Context, b *Batch, ev Event) error {
 	return addCount(ctx, b, ev, f.stat, 1)
 }
 
-// rudFold implements `rud_total` and the `rud_<cause>` family (§5.6).
-type rudFold struct{}
+// tumbleFold counts every kitten.tumble in the unchanged lifetime total and,
+// when the body can form a safe stat key, in the per-body family.
+//
+// `from` is the kitten's locomotion mode immediately before the tumble. The
+// game's own state machine distinguishes a botched landing (airborne ->
+// tumbling) from a trip (grounded -> tumbling), so botched_landings tests only
+// for the one value it owns. From is an open set: every other value, including
+// "unknown" and future modes, still contributes to the total and body family.
+type tumbleFold struct{}
 
-func (rudFold) Name() string { return StatRUDTotal }
+// The fold name is deliberately not the unchanged total's stat key. Replacing
+// the old countFold must change BuildID so existing projections rebuild and
+// backfill the split and per-body history without a BuildVersion bump.
+func (tumbleFold) Name() string { return "tumble_split" }
 
-func (rudFold) Apply(ctx context.Context, b *Batch, ev Event) error {
+func (tumbleFold) Apply(ctx context.Context, b *Batch, ev Event) error {
+	p, ok := payloadOf[KittenTumble](ev)
+	if !ok {
+		return nil
+	}
+	ok, err := scoreable(ctx, ev, b)
+	if err != nil || !ok {
+		return err
+	}
+	if err := addCount(ctx, b, ev, StatKittenTumbles, 1); err != nil {
+		return err
+	}
+	if p.From == "airborne" {
+		if err := addCount(ctx, b, ev, StatBotchedLandings, 1); err != nil {
+			return err
+		}
+	}
+	stat, ok := TumblesOnStat(p.Body)
+	if !ok {
+		return nil
+	}
+	return addCount(ctx, b, ev, stat, 1)
+}
+
+// rudPartsFold implements the RUD total/family plus the lost-parts and
+// aboard-lost-vehicle boards from one vehicle.rud eligibility decision.
+type rudPartsFold struct{}
+
+// The stable name differs from the E2 rud_parts identity so BuildID forces a
+// historical rebuild that populates the two appended crew boards.
+func (rudPartsFold) Name() string { return "rud_parts_crew" }
+
+func (rudPartsFold) Apply(ctx context.Context, b *Batch, ev Event) error {
 	p, ok := payloadOf[VehicleRUD](ev)
 	if !ok {
 		return nil
@@ -1068,13 +1156,38 @@ func (rudFold) Apply(ctx context.Context, b *Batch, ev Event) error {
 	// The per-cause board comes from the cause the event carried, not from a
 	// list of the causes this build happens to know: a cause a newer game or mod
 	// introduces gets its own board rather than disappearing into the total.
-	// Only a cause that cannot be half of a stat key counts towards `rud_total`
-	// alone.
-	stat, ok := RUDStat(p.Cause)
-	if !ok {
+	// A cause that cannot be half of a stat key receives no per-cause row; it
+	// can still contribute to the independent part and crew boards below.
+	if stat, valid := RUDStat(p.Cause); valid {
+		if err := addCount(ctx, b, ev, stat, 1); err != nil {
+			return err
+		}
+	}
+	// A zero part reading means the prefix could not read the intact vehicle. It
+	// is still a RUD and may still carry an independently valid crew count.
+	if p.PartCount > 0 {
+		if err := addCount(ctx, b, ev, StatPartsLost, float64(p.PartCount)); err != nil {
+			return err
+		}
+		if err := putRecord(ctx, b, ev, StatBiggestPartsLost, float64(p.PartCount), map[string]any{
+			"body":   p.Body,
+			"cause":  p.Cause,
+			"flight": ids.String(ev.FlightID),
+		}); err != nil {
+			return err
+		}
+	}
+	if p.CrewCount < 1 {
 		return nil
 	}
-	return addCount(ctx, b, ev, stat, 1)
+	if err := addCount(ctx, b, ev, StatKittensWrecked, float64(p.CrewCount)); err != nil {
+		return err
+	}
+	return putRecord(ctx, b, ev, StatBiggestCrewWreck, float64(p.CrewCount), map[string]any{
+		"body":   p.Body,
+		"cause":  p.Cause,
+		"flight": ids.String(ev.FlightID),
+	})
 }
 
 // orbitsFold implements `orbits_achieved` (§5.6).
@@ -1097,8 +1210,8 @@ func (orbitsFold) Apply(ctx context.Context, b *Batch, ev Event) error {
 // soiFold implements `soi_bodies` (§5.6): the number of distinct bodies whose
 // sphere of influence the player has entered, materialized in `player_body`.
 //
-// The count is advanced by one only when the INSERT OR IGNORE actually inserts,
-// so the board never needs a `count(*)` and stays correct under replay.
+// Each scope is recomputed only when its own backing set gains a row. Lifetime,
+// career and system unions are separate queries because they are separate sets.
 type soiFold struct{}
 
 func (soiFold) Name() string { return StatSOIBodies }
@@ -1113,20 +1226,44 @@ func (soiFold) Apply(ctx context.Context, b *Batch, ev Event) error {
 		return err
 	}
 	added, err := b.AddBody(ctx, ev.PlayerID, "soi", p.ToBody, ev.Seq)
-	if err != nil || !added {
-		return err // an err, or a body already visited
+	if err != nil {
+		return err
 	}
-	return addCount(ctx, b, ev, StatSOIBodies, 1)
+	if added {
+		n, err := b.BodyCount(ctx, ev.PlayerID, "soi")
+		if err != nil {
+			return err
+		}
+		if err := setValue(ctx, b, ev, StatSOIBodies, float64(n)); err != nil {
+			return err
+		}
+	}
+
+	newForCareer, err := b.AddCareerBody(ctx, ev, "soi", p.ToBody)
+	if err != nil || !newForCareer {
+		return err
+	}
+	n, err := b.CareerBodyCount(ctx, ev.PlayerID, ev.Career, "soi")
+	if err != nil {
+		return err
+	}
+	if err := setCareerValue(ctx, b, ev, StatSOIBodies, float64(n)); err != nil {
+		return err
+	}
+	sn, ok, err := b.SystemBodyCount(ctx, ev, "soi")
+	if err != nil || !ok {
+		return err
+	}
+	return setSystemValue(ctx, b, ev, StatSOIBodies, float64(sn))
 }
 
 // landedBodiesFold implements `landed_bodies`: how many distinct bodies the
 // player has put something down on.
 //
 // The set-backed shape of `soi_bodies`, and for the same reason (PROJ-011):
-// `AddBody` reports whether the `player_body` row was new, so the counter
-// advances only on a new row and the board never needs a `count(*)` and stays
-// correct under replay. It writes `kind = 'landed'` alongside soiFold's
-// `'soi'`, which the table's (player_id, kind, body) key already allows for.
+// `AddBody` and `AddCareerBody` report novelty independently, so the lifetime
+// and save-local totals move only when their own set gains a row. It writes
+// `kind = 'landed'` alongside soiFold's `'soi'` in both sibling tables.
 //
 // "Landed on" is any surface contact — terrain, ocean or both — because
 // splashing down on a body is arriving at it. `splashdowns` is the board that
@@ -1160,10 +1297,35 @@ func (landedBodiesFold) Apply(ctx context.Context, b *Batch, ev Event) error {
 		return err
 	}
 	added, err := b.AddBody(ctx, ev.PlayerID, "landed", p.Body, ev.Seq)
-	if err != nil || !added {
-		return err // an err, or a body already landed on
+	if err != nil {
+		return err
 	}
-	return addCount(ctx, b, ev, StatLandedBodies, 1)
+	if added {
+		n, err := b.BodyCount(ctx, ev.PlayerID, "landed")
+		if err != nil {
+			return err
+		}
+		if err := setValue(ctx, b, ev, StatLandedBodies, float64(n)); err != nil {
+			return err
+		}
+	}
+
+	newForCareer, err := b.AddCareerBody(ctx, ev, "landed", p.Body)
+	if err != nil || !newForCareer {
+		return err
+	}
+	n, err := b.CareerBodyCount(ctx, ev.PlayerID, ev.Career, "landed")
+	if err != nil {
+		return err
+	}
+	if err := setCareerValue(ctx, b, ev, StatLandedBodies, float64(n)); err != nil {
+		return err
+	}
+	sn, ok, err := b.SystemBodyCount(ctx, ev, "landed")
+	if err != nil || !ok {
+		return err
+	}
+	return setSystemValue(ctx, b, ev, StatLandedBodies, float64(sn))
 }
 
 // splashdownFold implements `splashdowns`: arrivals in water.
@@ -1210,8 +1372,71 @@ func (recoveredFold) Apply(ctx context.Context, b *Batch, ev Event) error {
 	return addCount(ctx, b, ev, StatKittensRecovered, float64(p.CrewCount))
 }
 
-// distanceFold implements `distance_travelled` (§5.6): the sum, over a player's
-// kittens, of the furthest each has ever travelled.
+// kittensToOrbitFold counts distinct (career, kid) pairs whose flight reached
+// orbit and later ended recovered with that kitten still aboard. The set lives
+// in career_body under kind orbit_kid: its body column is the generic set
+// member here, deliberately not a celestial body. It never writes player_body:
+// kid omits career, so roster identity must be interpreted per save rather than
+// collapsed across careers.
+type kittensToOrbitFold struct{}
+
+func (kittensToOrbitFold) Name() string { return StatKittensToOrbitAndBack }
+
+func (kittensToOrbitFold) Apply(ctx context.Context, b *Batch, ev Event) error {
+	p, ok := payloadOf[FlightEnded](ev)
+	if !ok || p.Reason != "recovered" || len(p.Kids) == 0 {
+		return nil
+	}
+	ok, err := scoreable(ctx, ev, b)
+	if err != nil || !ok {
+		return err
+	}
+	flight, found, err := b.Flight(ctx, ev.FlightID)
+	if err != nil || !found || flight.Milestones&MilestoneOrbit == 0 ||
+		flight.FirstOrbitSeq <= 0 || flight.FirstOrbitSeq >= ev.Seq {
+		return err
+	}
+
+	// Keep wire order. The totals and NULL contexts are order-insensitive today,
+	// but the insertion sequence is part of deterministic replay and must not be
+	// replaced by map iteration if later provenance is added.
+	for _, kid := range p.Kids {
+		added, err := b.AddCareerSetMember(ctx, ev, "orbit_kid", kid)
+		if err != nil {
+			return err
+		}
+		if !added {
+			continue
+		}
+		lifetime, err := b.CareerSetCount(ctx, ev.PlayerID, "orbit_kid")
+		if err != nil {
+			return err
+		}
+		if err := setValue(ctx, b, ev, StatKittensToOrbitAndBack, float64(lifetime)); err != nil {
+			return err
+		}
+		career, err := b.CareerBodyCount(ctx, ev.PlayerID, ev.Career, "orbit_kid")
+		if err != nil {
+			return err
+		}
+		if err := setCareerValue(ctx, b, ev, StatKittensToOrbitAndBack, float64(career)); err != nil {
+			return err
+		}
+		system, known, err := b.SystemCareerSetCount(ctx, ev, "orbit_kid")
+		if err != nil {
+			return err
+		}
+		if known {
+			if err := setSystemValue(ctx, b, ev, StatKittensToOrbitAndBack, float64(system)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// distanceFold implements `distance_travelled` (§5.6): the sum of the per-save
+// kitten totals in the selected player, career or system scope.
 //
 // roster.snapshot carries running totals rather than deltas, so every column is
 // folded with max() — a snapshot that arrives out of order, or a save reloaded
@@ -1234,6 +1459,9 @@ func (distanceFold) Apply(ctx context.Context, b *Batch, ev Event) error {
 		if err := b.UpsertKitten(ctx, ev.PlayerID, k, ev.Seq); err != nil {
 			return err
 		}
+		if err := b.UpsertCareerKitten(ctx, ev, k); err != nil {
+			return err
+		}
 	}
 
 	// Two per-kitten records off the same roster: the furthest one kitten has
@@ -1254,16 +1482,20 @@ func (distanceFold) Apply(ctx context.Context, b *Batch, ev Event) error {
 		return err
 	}
 	if travelled.Value > 0 {
-		if err := putRecord(ctx, b, ev, StatTopKittenDistance, travelled.Value,
+		if err := putPlayerRecord(ctx, b, ev, StatTopKittenDistance, travelled.Value,
 			map[string]any{"kitten": travelled.Name}); err != nil {
 			return err
 		}
 	}
 	if missions.Value > 0 {
-		if err := putRecord(ctx, b, ev, StatTopKittenMissions, missions.Value,
+		if err := putPlayerRecord(ctx, b, ev, StatTopKittenMissions, missions.Value,
 			map[string]any{"kitten": missions.Name}); err != nil {
 			return err
 		}
+	}
+
+	if err := putScopedKittenTops(ctx, b, ev); err != nil {
+		return err
 	}
 
 	total, err := b.KittenDistance(ctx, ev.PlayerID)
@@ -1273,7 +1505,70 @@ func (distanceFold) Apply(ctx context.Context, b *Batch, ev Event) error {
 	if total <= 0 {
 		return nil
 	}
-	return setValue(ctx, b, ev, StatDistanceTravelled, total)
+	if err := setValue(ctx, b, ev, StatDistanceTravelled, total); err != nil {
+		return err
+	}
+	if ev.Career == "" {
+		return nil
+	}
+	careerTotal, err := b.CareerKittenDistance(ctx, ev.PlayerID, ev.Career)
+	if err != nil || careerTotal <= 0 {
+		return err
+	}
+	if err := setCareerValue(ctx, b, ev, StatDistanceTravelled, careerTotal); err != nil {
+		return err
+	}
+	system, err := b.CareerSystem(ctx, ev.PlayerID, ev.Career)
+	if err != nil || system == "" {
+		return err
+	}
+	systemTotal, err := b.SystemKittenDistance(ctx, ev.PlayerID, system)
+	if err != nil || systemTotal <= 0 {
+		return err
+	}
+	return setSystemValue(ctx, b, ev, StatDistanceTravelled, systemTotal)
+}
+
+func putScopedKittenTops(ctx context.Context, b *Batch, ev Event) error {
+	if ev.Career == "" {
+		return nil
+	}
+	system, err := b.CareerSystem(ctx, ev.PlayerID, ev.Career)
+	if err != nil || system == "" {
+		return err
+	}
+	careerTravelled, careerMissions, err := b.CareerKittenTops(ctx, ev.PlayerID, ev.Career)
+	if err != nil {
+		return err
+	}
+	systemTravelled, systemMissions, err := b.SystemKittenTops(ctx, ev.PlayerID, system)
+	if err != nil {
+		return err
+	}
+	for _, item := range []struct {
+		stat   string
+		career KittenTop
+		system KittenTop
+	}{
+		{StatTopKittenDistance, careerTravelled, systemTravelled},
+		{StatTopKittenMissions, careerMissions, systemMissions},
+	} {
+		if item.career.Value > 0 {
+			cx, err := encodeContext(map[string]any{"kitten": item.career.Name})
+			if err != nil {
+				return err
+			}
+			b.putCareerStat(kindRecord, ev, system, item.stat, item.career.Value, cx)
+		}
+		if item.system.Value > 0 {
+			cx, err := encodeContext(map[string]any{"kitten": item.system.Name})
+			if err != nil {
+				return err
+			}
+			b.putSystemStat(kindRecord, ev, system, item.stat, item.system.Value, cx)
+		}
+	}
+	return nil
 }
 
 // flightBody is the body a flight's `flight.started` reported, for the record
@@ -1342,6 +1637,35 @@ func careerTime(ctx context.Context, ev Event, b *Batch) (float64, bool, error) 
 // the one place a career time becomes a board value.
 func careerMillis(seconds float64) float64 { return seconds * 1000 }
 
+// careerPlaytimeFold records how far the career's own clock has run.
+//
+// It folds `ev.SimTime` directly and NEVER reads career.max_sim_t, even though
+// that column holds the same number. careerFold is a state fold: on a rebuild it
+// runs in pass 1, so by pass 2 the table already holds the career's FINAL
+// high-water mark and every event would read it. The value would agree with the
+// incremental result and the `updated_seq` would not — the rebuild would stamp
+// the career's first event, the incremental path its last raising one. That is a
+// rebuild-versus-incremental divergence for no benefit: max(sim_t) over the
+// career's events IS max_sim_t, and putRecord's strictly-larger rule computes it
+// replay-stably.
+//
+// There is no flag gate. A duration is not a feat: a teleport-flagged flight is
+// one flight inside a save, and the save was still played for as long as it was
+// played. This joins the four boards that already carry no flag exclusion for
+// reasons of their own (see the Boards table in docs/event-details.md).
+type careerPlaytimeFold struct{}
+
+func (careerPlaytimeFold) Name() string { return StatCareerPlaytime }
+
+func (careerPlaytimeFold) Apply(ctx context.Context, b *Batch, ev Event) error {
+	if !ev.HasCareer() || !ev.HasSimTime || ev.SimTime <= 0 {
+		return nil
+	}
+	return putRecord(ctx, b, ev, StatCareerPlaytime, careerMillis(ev.SimTime), map[string]any{
+		"career": ev.Career,
+	})
+}
+
 // toOrbitFold implements `fastest_to_orbit`: how long into a career the player
 // first put something into a stable orbit around anything.
 type toOrbitFold struct{}
@@ -1385,11 +1709,17 @@ func (toBodyFold) Apply(ctx context.Context, b *Batch, ev Event) error {
 		return err
 	}
 
-	// soiFold owns the row's existence; this only ever lowers its time. It runs
-	// after soiFold (fold order in fold.go), so the row is already there. The
-	// coalesce covers a row soiFold inserted on a career-less event, which has
-	// no time yet — min() over NULL is NULL in SQLite.
+	// soiFold normally owns the row's existence. The set-member call is a no-op
+	// for that known-system row and creates the save-local row when the system is
+	// still unknown, because the sprint's player and career answers remain
+	// meaningful even though no comparable system row can be written.
+	if _, err := b.AddCareerSetMember(ctx, ev, "soi", p.ToBody); err != nil {
+		return err
+	}
 	if err := b.LowerBodyTime(ctx, ev.PlayerID, "soi", p.ToBody, t); err != nil {
+		return err
+	}
+	if err := b.LowerCareerBodyTime(ctx, ev, "soi", p.ToBody, t); err != nil {
 		return err
 	}
 
@@ -1405,4 +1735,58 @@ func (toBodyFold) Apply(ctx context.Context, b *Batch, ev Event) error {
 		"from":   p.FromBody,
 		"flight": ids.String(ev.FlightID),
 	})
+}
+
+// bodySprintFold derives save-native SOI counts after toBodyFold has lowered
+// the current career_body.first_sim_t. A year is catlog's flat 365-day duration
+// unit, not a planet's orbital period: celestial-system content never defines a
+// server leaderboard threshold.
+//
+// Each scope asks a different question. Career is this save's distinct bodies;
+// player is the best single save, never a union across saves; system is the best
+// single save bound to that system. All use an inclusive at-or-before boundary.
+type bodySprintFold struct{}
+
+func (bodySprintFold) Name() string { return "body_sprints" }
+
+func (bodySprintFold) Apply(ctx context.Context, b *Batch, ev Event) error {
+	p, ok := payloadOf[VehicleSOI](ev)
+	if !ok || p.ToBody == "" {
+		return nil
+	}
+	if _, ok, err := careerTime(ctx, ev, b); err != nil || !ok {
+		return err
+	}
+	for _, sprint := range []struct {
+		stat      string
+		threshold float64
+	}{
+		{StatBodiesBy1Y, SprintYearSeconds},
+		{StatBodiesBy10Y, 10 * SprintYearSeconds},
+	} {
+		career, err := b.CareerBodyCountBefore(ctx, ev.PlayerID, ev.Career, "soi", sprint.threshold)
+		if err != nil {
+			return err
+		}
+		if err := setCareerValue(ctx, b, ev, sprint.stat, float64(career)); err != nil {
+			return err
+		}
+		player, err := b.BodyCountBefore(ctx, ev.PlayerID, "soi", sprint.threshold)
+		if err != nil {
+			return err
+		}
+		if err := setValue(ctx, b, ev, sprint.stat, float64(player)); err != nil {
+			return err
+		}
+		system, known, err := b.SystemBodyCountBefore(ctx, ev, "soi", sprint.threshold)
+		if err != nil {
+			return err
+		}
+		if known {
+			if err := setSystemValue(ctx, b, ev, sprint.stat, float64(system)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }

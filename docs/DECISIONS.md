@@ -20,17 +20,17 @@ commit. See [ARCHITECTURE.md](ARCHITECTURE.md#7-keeping-the-documentation-true) 
 
 ## Contents
 
-- **[Repository, toolchain & dependencies](#repository-toolchain--dependencies)** — `REPO-*`, 25 entries
-- **[Storage — Turso, schema & compression](#storage--turso-schema--compression)** — `STORE-*`, 18 entries
-- **[Ingest, auth & the conformance vectors](#ingest-auth--the-conformance-vectors)** — `INGEST-*`, 25 entries
-- **[Identity, handles & moderation](#identity-handles--moderation)** — `IDENT-*`, 18 entries
-- **[Projector, boards & the read API](#projector-boards--the-read-api)** — `PROJ-*`, 103 entries
-- **[Archive & restore](#archive--restore)** — `ARCH-*`, 13 entries
-- **[The frontend](#the-frontend)** — `UI-*`, 44 entries
-- **[The mod and its KSA-free core](#the-mod-and-its-ksa-free-core)** — `MOD-*`, 79 entries
-- **[The load harness](#the-load-harness)** — `LOAD-*`, 26 entries
-- **[Containers, nginx & deployment](#containers-nginx--deployment)** — `OPS-*`, 26 entries
-- **[Documentation](#documentation)** — `DOCS-*`, 4 entries
+- **[Repository, toolchain & dependencies](#repository-toolchain--dependencies)** — `REPO-*`
+- **[Storage — Turso, schema & compression](#storage--turso-schema--compression)** — `STORE-*`
+- **[Ingest, auth & the conformance vectors](#ingest-auth--the-conformance-vectors)** — `INGEST-*`
+- **[Identity, handles & moderation](#identity-handles--moderation)** — `IDENT-*`
+- **[Projector, boards & the read API](#projector-boards--the-read-api)** — `PROJ-*`
+- **[Archive & restore](#archive--restore)** — `ARCH-*`
+- **[The frontend](#the-frontend)** — `UI-*`
+- **[The mod and its KSA-free core](#the-mod-and-its-ksa-free-core)** — `MOD-*`
+- **[The load harness](#the-load-harness)** — `LOAD-*`
+- **[Containers, nginx & deployment](#containers-nginx--deployment)** — `OPS-*`
+- **[Documentation](#documentation)** — `DOCS-*`
 
 ---
 
@@ -354,6 +354,26 @@ Moving the rows makes the exclusion a property of the data rather than of the qu
 
 Two consequences recorded so they are not mistaken for oversights. **`PurgePlayer` deletes from both tables** — an account deletion that left a copy of the log behind would be a privacy failure dressed as a feature. And **the ingest write path forks once**, on a primary-key lookup per batch rather than a cached set: it is next to two signature verifications so the cost is invisible, and a cache here would be a coherence question on the one path where getting it wrong publishes a shadowbanned player's records to a leaderboard.
 
+### STORE-019 — Player-owned projections inherit moderation from the log; shared system catalogues remain
+
+*Accepted · 2026-08-10 · Task A9.*
+
+No projection table is enumerated by the shadow-ban or purge path, and the new player-owned tables
+need no moderation wiring. A shadow ban moves the player's rows out of `event`; a purge deletes that
+player from both `event` and `shadowban_event`. The next rebuild therefore cannot see those events
+and cannot reproduce any of their `career_stat`, `system_stat`, `career_body` or `career_kitten`
+rows. This is the same structural exclusion STORE-018 chose over a flag: a projection added later
+inherits it automatically, while a per-table delete list would make every new projection a chance
+to forget the Constitution §7 guarantee. The handle directory hides the account while stale live
+projections await that rebuild.
+
+`system` and `system_body` are intentionally different. They are immutable catalogue facts keyed by
+a content hash, not rows owned by the player who happened to report them. Removing one account must
+not directly erase a catalogue other players use, and leaving an otherwise unreferenced catalogue
+behind publishes no identity or achievement. A rebuild reproduces it when the remaining live log
+still reports it and naturally drops it otherwise; moderation is required to remove the player's
+binding and derived achievements, not common game content.
+
 ## Ingest, auth & the conformance vectors
 
 The §4.5.3 verification chain, the idempotency contract, and how the cross-language vectors stay byte-identical.
@@ -515,6 +535,26 @@ The stream chain's documented justification is now honest, and `stream_state.gap
 `Batch001_PayloadsRoundTripThroughTheirRecords` is what makes those pairs load-bearing: each `payload` is deserialised into its `Payloads.cs` record, re-serialised with `CatlogJson.Options` and compared structurally, so a key the record drops or invents is a failure rather than a divergence nobody sees. It is the only assertion in either suite that looks inside a payload, and it found no disagreement — every Go-written payload round-trips through the C# record with an identical key set and identical values. **Key order is deliberately not compared.** Go builds payloads from `map[string]any` so `encoding/json` emits them alphabetically; the mod emits declaration order. Neither is normative, `bh` hashes the bytes each side actually produced, and making one of them normative would buy nothing while adding a way for a harmless reordering to break the build. Recorded as standing drift in `docs/event-details.md`, not as a defect.
 
 Regeneration remains byte-identical (INGEST-008, INGEST-009). `docs/event-details.md`'s "Conformance coverage" section and its per-event **Vectors.** lines were rewritten in the same commit, and drift item 27 (and the residual of item 26) are closed by this.
+
+### INGEST-026 — Final-v1 discriminator pairs are cross-language fixture obligations, not illustrative examples
+
+*Accepted · 2026-08-10 · Task D6.*
+
+The 33-line conformance batch carries both sides wherever a final-v1 payload distinction can be
+lost without a syntax error: `flight.started.engine_count` absent versus explicit 0,
+`telemetry.window.state` wholly present versus wholly absent, and `kitten.tumble.from` airborne
+versus grounded. A fixture with only one side lets a decoder collapse unknown into zero, invent an
+origin for missing state, or accidentally treat an open discriminator as a one-value enum while
+both language suites still report agreement. The paired rows therefore test meaning, not merely
+deserialisation. Required `vehicle.rud.part_count` and the five required `vehicle.orbit` additions
+remain single rows because there is no optional discriminator to pair.
+
+All five final-v1 payload extensions are audited together because the fixture is the integration
+seam between independently maintained C# and Go implementations. Regenerating one addition in
+isolation can leave a sibling shape, line citation, compressed-body hash or proof stale while the
+changed row itself passes. Keeping the audit atomic makes the batch, its Brotli body, its `bh`, the
+proof layer and both references describe the same bytes. These are pre-launch final `ver` 1 shapes,
+so this strengthens coverage without inventing a version history or upcaster that never shipped.
 
 ---
 
@@ -846,6 +886,11 @@ The sharp edge of a movable clock is now four tests rather than a note. §4.5.3 
 
 That entry justified an eleven-name list read off `Content/Core/Astronomicals.xml` on the grounds that `vehicle.soi.to_body` is client text and a key built from client text would let anyone mint a leaderboard. The premise was right and the remedy was wrong. KSA's celestial systems are **hand-authored content that ships as data and that mods extend or replace**, `docs/events.md` has said from the beginning that `body` is "opaque to server", and a compiled-in list is guaranteed to be wrong for somebody — silently, because a player who reaches a body we never heard of simply gets no board and no error. `stats.TimedBodies` and `stats.RUDCauses` are deleted. `fastest_to_<body>` and `rud_<cause>` are now **families**: the fold builds the key from the value the event carried, and the same argument applies to causes — a destruction cause a future build adds gets its own board instead of vanishing into `rud_total`. The six §4.2 causes survive only as *fixture data* in `internal/seed`, which is what they always were.
 
+The later system catalogue and everywhere badges do not reverse this decision: their body set is
+reported by KSA into the immutable log for one content-derived system, never compiled into the
+server. The permanent refusal and its current system-aware boundary are recorded in
+[ROADMAP.md](ROADMAP.md#a-server-side-catalogue-of-celestial-body-names).
+
 ### PROJ-034 — A family board is listed once at least two distinct players are on it, and that one clause is the whole of the mitigation (owner's call)
 
 *Accepted · 2026-08-07 · WP-DYNBOARDS.*
@@ -856,7 +901,7 @@ Removing the allow-list naively lets a modified client invent ten thousand place
 
 *Accepted · 2026-08-07 · WP-DYNBOARDS.*
 
-Two consequences, both deliberate. (1) `toBodyFold` and `rudFold` write the per-player value for **every** body and every cause regardless of publication, so the threshold is a display rule that can be turned down to publish history already in the projection, never a decision to stop collecting. A body sitting at one player is published the moment a second player arrives — no rebuild, no migration. (2) A board with one entrant is still *served* at `/v1/leaderboards/{stat}` and still shows on that player's profile. Gating the page as well would give every such profile row a link to a 404 and would hide a player's own achievement from them until somebody else repeated it, while buying nothing: reaching it requires already knowing the exact key, which is not a way to fill anything. "Published" means "in the index", and the index is the surface the mitigation is for.
+Two consequences, both deliberate. (1) `toBodyFold` and `rudPartsFold` (formerly `rudFold`; PROJ-116) write the per-player value for **every** body and every cause regardless of publication, so the threshold is a display rule that can be turned down to publish history already in the projection, never a decision to stop collecting. A body sitting at one player is published the moment a second player arrives — no rebuild, no migration. (2) A board with one entrant is still *served* at `/v1/leaderboards/{stat}` and still shows on that player's profile. Gating the page as well would give every such profile row a link to a 404 and would hide a player's own achievement from them until somebody else repeated it, while buying nothing: reaching it requires already knowing the exact key, which is not a way to fill anything. "Published" means "in the index", and the index is the surface the mitigation is for.
 
 ### PROJ-036 — Board metadata is derived from the key, so a board for a place nobody has ever typed here arrives fully described
 
@@ -1378,6 +1423,851 @@ Three changes. **Detached**: the endpoint answers `202` with a job and `GET /adm
 
 Polling rather than SSE, deliberately: a rebuild is minutes long and its status is five integers. A second of latency on a progress bar does not justify a subscriber registry and its failure modes.
 
+### PROJ-104 — Career and celestial-system scopes are table dimensions, and a save's last event is provenance independent of scoring
+
+*Accepted · 2026-08-09 · career and system scopes.*
+
+`career_stat(player_id, career, stat, …)` and `system_stat(player_id, system, stat, …)` are sibling
+projection tables rather than compound stat keys. A board key must continue to describe one rule by
+itself: `stats.Describe` derives metadata from that key and `stats.Catalog` groups dynamic families
+by its prefix. Encoding a career or system into the key would force both to parse identity data and
+would multiply an unbounded catalog. A scope is therefore a storage dimension, as periods already
+are (PROJ-042). Career rows deliberately have no period dimension: a save is already a time scope,
+and players × boards × buckets × careers is unbounded storage for a question with no useful meaning.
+
+`career_stat.system` is denormalised so filtering by system is a covered predicate, not a join, and
+`system_stat` keeps comparison between replaceable KSA celestial-system definitions explicit. The
+tables arrive before their writers because projections are rebuilt from the immutable log and the
+fresh final schema is the contract; there is no production history to backfill (PROJ-100).
+
+The `career.last_seq` column advances for every event carrying the career, including events without
+a clock reading, events that do not score, and events on flagged flights. Deriving "last active"
+from a board's `updated_seq` would erase precisely that activity and would leave a save with no score
+undatable. `last_seq` records provenance only; it excludes and scores nothing, and because event seq
+is the server's total order it is deterministic across batch sizes and rebuilds.
+
+### PROJ-105 — Every board receives every scope through the shared write helpers, with no opt-out registry
+
+*Accepted · 2026-08-09 · career and system scopes.*
+
+Every record, best and counter contribution now writes the player row and fans into its career row
+and, when the career's celestial system is known, its system row. The fan-out lives in the three
+shared write helpers rather than in individual folds. That is the same compositional property
+periods established in PROJ-044: all fixed boards, both event-named families and a future board get
+the scopes without another list to update. An opt-out list was rejected because it would make every
+new board depend on somebody remembering a second registry, while the downside of a rarely useful
+per-save view is only an uninteresting row.
+
+Set-backed totals are deliberately outside the generic fan-out. A lifetime sum, one save's sum and
+the union across a player's saves in one system are different queries; copying one value under all
+three labels would be plausible and wrong. Their three helpers therefore accept separately computed
+values. Unknown systems are skipped rather than back-filled: career identity is still enough for the
+save row, while a system row without a system cannot make a comparable claim.
+
+### PROJ-106 — Lifetime and save-local sets are siblings, and roster distance adds the save-local rows
+
+*Accepted · 2026-08-09 · career and system scopes.*
+
+`player_body` and `kitten` retain their lifetime identities, while `career_body` and
+`career_kitten` hold the corresponding save-local sets. Widening either lifetime table with sentinel
+rows was rejected: lifetime novelty and save novelty answer different questions, and putting both
+in one table would make every count depend on remembering which identity a row represents. Separate
+primary keys make the two novelty signals independent by construction, at the bounded cost of one
+additional projection row per save-local body or kitten.
+
+The split is required for kittens, not merely convenient. A kitten's private `kid` is derived from
+the install and roster name and contains no career, while KSA stores the roster in the save. Two
+saves can therefore contain two different kittens named Mittens that collapse into one lifetime
+`kitten` row under `max()`. `career_kitten` keeps them separate, so the final greenfield
+`distance_travelled` value sums those save-local rows: every cat's distance counts across saves,
+rather than only the furthest total ever seen for a reused name. There is no published history to
+preserve, so documenting and building the intended final meaning is safer than carrying a known
+pre-launch quirk.
+
+### PROJ-107 — System identity is the canonical surveyed forest, shared across installs
+
+*Accepted · 2026-08-10 · celestial-system survey.*
+
+A system id is SHA-256 over every stable value the survey will publish—raw identity strings, the
+complete parent forest, semantic class/kind, physical values, rotation/orientation and orbital
+elements—using a versioned, length-prefixed binary encoding. It is truncated to ten bytes and
+rendered as lowercase Crockford. There is deliberately **no install-id salt**: this identity exists
+to put different players running the same public game content into the same comparison scope. A
+private per-install id would make that impossible, while a bespoke system's residual correlation is
+the same accepted content correlator as a player-chosen vehicle or kitten name (PROJ-050).
+
+The hash uses KSA's canonical surveyed output even where KSA derives it at runtime, because two
+published catalogue rows must not claim one identity. It excludes sanitised join keys,
+completeness/session fields, terrain samples, mutable positions/state vectors and cosmetic assets:
+those either collapse raw content, describe emission health rather than the system, vary with time or
+machine settings, or are not published at all. Length-prefixed UTF-8 and fixed-width big-endian
+numbers replace the old tab/newline text formula because ids may contain separators, cultures format
+numbers differently, and `-0`/NaN payloads otherwise make equal content hash differently.
+
+The registered `All.OfType<IParentBody>()` forest is the source of truth, not a template count and
+not `CelestialSystem.Count`. The latter includes vehicles, its backing list uses swap-remove, and a
+save load removes template vehicles and reorders surviving celestials. Sorting raw ids ordinally
+before hashing makes identity independent of that lifecycle accident. Treating the catalogue as a
+forest also preserves mod systems with multiple roots; selecting the game's first sun would silently
+delete content from identity.
+
+The survey runs once, in a postfix on `Universe.LoadSystem`, and its immutable result is cached for
+session-boundary emission. A prefix would run before `CurrentSystem` is assigned; re-enumerating on
+every session would spend game-thread work for data that save loading cannot change. KSA also
+swallows construction failures per root, so the survey hashes what actually registered. A partial
+forest therefore gets its own honest id rather than impersonating the intact template. This choice
+serves Constitution §3's frame budget and §6's derived, explainable data without inventing recovery
+state or a server-side celestial allow-list.
+
+### PROJ-108 — System attribution is mandatory; the large immutable catalogue is optional, complete-or-nothing and sent once
+
+*Accepted · 2026-08-10 · celestial-system events.*
+
+`system.discovered` is always reported once per session because a save's system is not decoration:
+it is the join that says which catalogue gives every body name meaning and which system-scoped rows
+may be compared. Making that header configurable would let a one-line setting detach records from
+their scope and leave the server guessing whether two occurrences of “Luna” describe the same
+content. The potentially thousands-of-rows `system.body` catalogue remains configurable because it
+cannot improve a score by disappearing: without every declared body, effective completeness is
+false and catalogue/everywhere functionality awards nothing.
+
+That asymmetry determines the failure contract. Disabled body reporting, more than 5,000 materialised
+bodies, or an invalid required numeric emits one `complete: false` header and no body rows or marker.
+A truncated list was rejected because it looks complete enough to a naïve consumer and can award an
+“everywhere” result in exactly the wrong direction. Optional orbital values are different: a root
+really has no orbit, an unbound body really has no finite period, and omitting those values preserves
+that distinction rather than turning “not applicable” into zero. The root star's infinite sphere of
+influence alone becomes wire zero because JSON cannot carry infinity and a root has no competing
+parent boundary to misstate.
+
+The immutable body rows are sent once per `(career, system hash)` while the small attribution header
+is sent every session. At stock scale this avoids repeatedly shipping the same content; at
+SolDense's 3,215 bodies it is the difference between bounded one-time cost and a rude tax on every
+save load. Runtime appends header, all bodies and `session.started`, then commits
+`survey:<career>:<hash>` in the same transaction. Marking first was rejected because a crash would
+lose the catalogue permanently; failing before commit may resend, and immutable server first-write
+folding makes resend harmless. The 5,000-body cap is a documented refusal aimed at generated or
+adversarial content, not a stock-data allow-list.
+
+The survey remains a game-thread load-boundary operation because KSA collections cannot safely
+escape that thread; workers receive only immutable records. Sol and SolDense timing numbers are not
+recorded here because they have not yet been measured. That manual diagnostics run remains a
+blocking acceptance item: inventing a reassuring number would defeat the reason the frame-budget
+check exists.
+
+### PROJ-109 — System catalogues are immutable first-write state, and completeness is intention plus cardinality
+
+*Accepted · 2026-08-10 · celestial-system projections.*
+
+`system` and `system_body` are state projections, not scores. The system header is first-write by
+content hash; each body is first-write by `(hash, body)`. Repeated identical input is idempotent and
+differing input retains the first value; a conflicting header also emits a structured warning.
+Updating to the latest copy was rejected because projector batch size and replay order could then
+change the final catalogue, which would make a rebuild disagree with incremental state. The conflict
+is deterministic projection integrity rather than client plausibility: it excludes nobody, changes no score and
+introduces no celestial allow-list. KSA's `class` string remains opaque.
+
+One header field is deliberately monotone rather than strictly immutable. A matching later
+`complete: true` promotes `reported_complete` false→true so a player may enable body reporting after
+first declining it; a later false cannot erase the completed state. Even true is only intent.
+Effective completeness additionally requires the number of stored body rows to equal the declared
+body count. Trusting the bit alone would let an interrupted large catalogue award an everywhere
+result before its final row; trusting cardinality alone would turn a deliberately declined empty set
+into a claim of completeness. Both predicates are required.
+
+Body rows carry their hash and may be folded before their header, including across projector
+batches. They are stored without a foreign key or placeholder `system`: a placeholder cannot know
+the display name, and therefore cannot receive a stable slug without later mutation and conflict
+rules. Readers hide orphan rows until the real header arrives. `systemFold` runs first among state
+folds so a `system.discovered` that precedes `session.started` binds the career before that same
+buffered batch advances its clock or writes scoped scores.
+
+The career binding itself is also first-write. A later different hash leaves the first system in
+place and sets `system_changed`; the mark is provenance, not punishment, exactly like `rewound`. It
+qualifies comparison context, excludes nothing and claims nothing about why the content changed.
+
+System slugs use a dedicated ASCII algorithm rather than `statSuffix`: display names legitimately
+contain spaces and parentheses, while stat suffixes are protocol keys whose alphabet must remain
+strict. Lowercase letters/digits survive, punctuation runs become one hyphen, empty input falls back
+to eight hash characters, and collisions receive `-2`, `-3`, … in ascending first-seen sequence.
+Sequence order is already the projector's deterministic total order, so the readable address is
+stable across rebuilds and batch sizes without a Unicode library or a mutable slug registry.
+
+### PROJ-110 — Board scope is an explicit read dimension, and identity travels only as far as comparison requires
+
+*Accepted · 2026-08-10 · Task B1.*
+
+Every board has player, career and celestial-system projections, so the read API advertises those
+three scopes on every index row and echoes the selected scope on every detail response. Making scope
+an explicit query dimension keeps one board key equal to one achievement rule (PROJ-104) and lets a
+client discover the available comparisons without a second board registry. `body_derived` is
+authoritative metadata rather than prefix logic copied into each client: it warns that player scope
+may merge like-named bodies from different game content, while system scope is the comparable view.
+
+Rolling periods remain player-only. A career is already a time scope, and crossing it with buckets
+would multiply players × boards × saves × windows; system periods would introduce the same storage
+dimension without a named player question to justify it. The API rejects those combinations instead
+of returning an empty or silently all-time answer. Likewise `?system=` is rejected in player scope:
+`player_stat` has already merged a player's systems, so accepting the predicate would claim a
+precision the stored row cannot supply. Career and system scopes resolve the filter's public slug or
+hash to the content hash they actually store.
+
+Rows carry exactly the identity their comparison needs. Career rows expose a per-player save ordinal
+and the existing per-player career relabel, never the install-derived raw career key (PROJ-049).
+System-capable rows expose the raw content hash plus name and slug, because equality across players
+is the purpose of that hash and relabelling it would destroy the join. Player rows expose neither:
+their projection has already merged both dimensions. This separation makes the privacy boundary
+visible in the response shape rather than dependent on a caller remembering which opaque token is
+safe.
+
+All three scopes share the same over-fetch-and-drop visibility pass. Published ranks close gaps left
+by banned, purged or handleless accounts, while index counts and entrant denominators remain the raw
+ban-inclusive projection counts. Exact filtered totals would require scanning whole boards on every
+request; keeping the existing cheap denominator and exact visible positional rank preserves the
+cacheable read surface Constitution §2 requires without letting a hidden account occupy a displayed
+position.
+
+### PROJ-111 — A save page separates activity provenance, simulation playtime and board participation
+
+*Accepted · 2026-08-10 · Task B2.*
+
+A public save is addressed by its player's first-seen ordinal and represented by the existing
+per-player career relabel. catlog never receives the save's local name, and publishing the raw career
+key would reconnect accounts played from one install (PROJ-049), so an ordinal plus an opaque label
+is the most identity the server can honestly and safely expose. The friendly system reference is
+included only after the save reports one. `system_changed` and `rewound` remain true-only provenance
+marks: turning either into an exclusion would make ordinary XML edits or save loads punitive and
+would violate their recorded projection semantics.
+
+Three numbers on the page deliberately come from three different facts. `playtime_ms` is the
+career's highest valid simulation clock; `first` and `last` resolve the first and last event
+sequences against the immutable log; `boards` counts the save's projected score rows. Using board
+updates as a shortcut for activity would erase saves that never scored and would omit clockless,
+flagged or non-scoring events. Duplicating receive timestamps into projections.db would create a
+rebuild invariant for data events.db already owns, so the read path performs one batched sequence
+lookup under PROJ-010 instead.
+
+Save-detail ranks use the career board's exact value-and-earlier-sequence comparator and subtract
+every ahead row owned by hidden accounts. The unit is a save, not a player: one hidden player may
+have several qualifying careers, and `entrants` therefore also counts saves. This preserves exact
+visible positions without making the denominator an expensive visibility scan, matching the scope
+contract in PROJ-110 and the non-oracle rule in PROJ-007. The endpoints reuse the common public
+cache, CORS and recursive redaction boundaries rather than acquiring save-specific variants.
+
+Badge fields are intentionally absent until the badge projection exists. A zero placeholder would
+look authoritative while conveying only implementation order, and would force clients to depend on
+a shape whose meaning had not yet been built.
+
+### PROJ-112 — Demo history and browser tests prove ranking dimensions, not a frozen catalogue size
+
+*Accepted · 2026-08-10 · Task B7.*
+
+The deterministic demo now gives two players two populated saves, with landings in every save and a
+mix of unknown, friendly, changed-system and rewound provenance. A one-save fixture could render the
+new pages while never proving that career scope preserves two rows owned by the same player; a
+fixture with only known systems could likewise hide the required em dash. The seed deliberately
+models both sides so browser assertions are non-vacuous and remain reproducible without invented
+test-only response data. System discovery still precedes the session it describes, matching the
+runtime emission contract even in synthetic history.
+
+The browser suite compares career-board rows, exact values and ordering directly with the JSON API,
+and the simulator adds a two-save scenario through the real detector-to-shipper path. These cover
+different failures: the seed proves public rendering and links, while the simulator proves the mod
+actually changes career identity. Fixed board keys are asserted by inclusion and dynamic families
+separately, never by total catalogue size, because content-defined bodies and RUD causes make an
+exact count inherently stale (PROJ-039).
+
+### PROJ-113 — Friendly system identity follows a derived value, but is never joined onto raw history
+
+*Accepted · 2026-08-10 · Task C5.*
+
+Profile and comparison rows carry the optional friendly system reference when their winning context
+names a save with a known binding. Resolving the page's distinct hashes in one batch gives clients a
+usable name and link without an N+1 system lookup, while keeping the player projection's meaning
+honest: the row is still one merged lifetime result, and the system is provenance rather than a new
+ranking dimension. The shared content hash remains raw because cross-player equality is its purpose;
+the install-derived career identity remains recursively relabelled under PROJ-049.
+
+Raw event pages deliberately do not receive the same join. A career's system is immutable
+first-write derived state, not a field recorded on every historical envelope, so adding the current
+binding to an old event would invent evidence and become especially misleading after
+`system_changed`. The collection census does add system-header and catalogue-body row counts: those
+bounded projection counts make adoption and catalogue scale observable and distinguish surveyed
+bodies from `collection.bodies`, which counts places players actually reached.
+
+### PROJ-114 — Flight join state retains launch facts and set-only milestones without repeating them on the wire
+
+*Accepted · 2026-08-10 · Task D5.*
+
+A flight is already the natural join key between its beginning and everything it later does.
+Repeating engine count on every SOI event or kitten identities on every orbit event would spend the
+player's game-thread and wire budget restating immutable launch facts. `flight_state` already exists
+for exactly this join—boards use its body and flags—so it now retains the remaining launch facts,
+the first nonempty career, and five achievement bits. Migration 0009 remains the sole owner of
+nullable engine count; migration 0010 adds part count, launch mass, career and milestones rather
+than disguising the extension as another payload change.
+
+Milestones are set-only historical facts, deliberately separate from exclusion flags. Orbit
+achieved, atmosphere exited, survived landing and docking each OR one bit and nothing ever clears
+it. That makes incremental accumulation and a replay of the immutable log converge without an
+award table or mutation history. “Other SOI” is stricter because it is a comparison with launch:
+the launch body must already be known from an actual start no later than the SOI event, and the
+destination must differ. An early SOI remains unmarked when the later start arrives; retro-awarding
+would let rebuild use knowledge the incremental path did not have.
+
+The same ordering rule governs every future composite that needs a nullable launch fact:
+`StartedSeq > 0`, `StartedSeq <= candidate.Seq`, and that fact is present. This is intentionally
+conservative for incomplete or out-of-order logs. It can decline a candidate whose facts become
+known later, but it cannot award one only because rebuild pass 1 saw the future. Raw milestones that
+need no launch fact—an early orbit achievement included—still accumulate normally. The asymmetry is
+what keeps rebuild deterministic without pretending event order was better than the stored log.
+The retained facts and bits are inputs only: D5 adds no badge, board or player-visible award.
+
+### PROJ-115 — The tumble split preserves the total and treats game state and body names as open data
+
+*Accepted · 2026-08-10 · Task E1.*
+
+`kitten_tumbles` remains the count of every decoded tumble so an existing number never changes
+meaning. **Did Not Land On Their Feet** is a second counter, not a replacement: it tests only exact
+`from == "airborne"`, because the game's own movement-state transition distinguishes a failed
+landing from a grounded trip without a speed heuristic. `from` remains an open set. `"grounded"`,
+`"unknown"` and modes introduced by later game builds still increment the total and are simply not
+guessed into the narrower board.
+
+The `tumbles_on_<body>` family likewise adds a view without subtracting from the total. It uses the
+shared `familyStat` rules, so there is no body allow-list and a body that cannot form a safe key
+still increments `kitten_tumbles` (and `botched_landings` when airborne) while receiving no family
+row. All three writes go through `addCount` after one flag check, which gives player, career and
+system scope automatically and keeps a tuning-flagged flight off every view. The fixed board is
+appended after the existing 42 to preserve their published positions; family members remain grouped
+under `kitten_tumbles`.
+
+Replacing the generic count fold changes its stable identity from `kitten_tumbles` to
+`tumble_split`. That change is intentional: `BuildID` notices the projection graph changed and
+queues a historical rebuild, backfilling the new fixed and per-body rows from the immutable log.
+`BuildVersion` remains 1 because no event or stored schema changed; hiding the new outputs behind
+the old identity would leave existing deployments permanently missing history.
+
+### PROJ-116 — Lost-parts boards measure whole vehicles, share one positive reading, and rebuild history
+
+*Accepted · 2026-08-10 · Task E2.*
+
+KSA exposes one trustworthy boundary here: destruction of the whole vehicle while its intact parts
+collection can still be read. It does not expose a reliable event for each part exploding or
+breaking away. The honest projections therefore describe vehicle sizes. **Parts In Lost Vehicles**
+adds the intact `part_count` from each RUD; **Biggest Vehicle Lost** keeps the largest one from a
+single RUD. Neither title nor explanation claims separately observed break-offs.
+
+Both boards require `part_count > 0`. Zero is the wire fallback for a failed intact-vehicle read:
+adding it would be a meaningless no-op, while accepting it as a record would publish a measurement
+the game never supplied. One `rudPartsFold` applies the existing flight-flag gate once, preserves
+`rud_total` and `rud_<cause>`, then fans the positive reading through `addCount` and `putRecord` to
+player, career and system scope. The additive board needs no context; the largest-single-loss row
+retains `body`, `cause` and `flight` so readers can identify what the record describes.
+
+The fold's stable identity changes from `rud_total` to `rud_parts`. That deliberately changes
+`BuildID` so existing immutable history backfills both appended boards; retaining the old identity
+would leave upgraded installations starting at zero. `BuildVersion`, event `ver` and storage schema
+remain unchanged because this is a new projection over an already-final payload, not a wire or
+schema revision. Both fixed rows append after the earlier 43, preserving every existing published
+position.
+
+### PROJ-117 — Orbit-and-home kittens are a save-local set resolved by the recovery-time crew list
+
+*Accepted · 2026-08-10 · Task E3.*
+
+A kitten counts when a flight that reached orbit later ends recovered with that kitten aboard. The
+orbit fact comes from `flight_state.milestones`, not a temporary correlation between two events that
+may be arbitrarily far apart. “Home” deliberately means KSA recovery: the game offers recovery only
+on the system's home body, while at rest and in contact. Landing elsewhere and staying there is not
+home under the only boundary the game exposes honestly.
+
+The ordered `flight.ended.kids` list is authoritative. A kitten who boards after orbit and rides
+home counts; one who was aboard at orbit but transfers away before recovery does not. Tracking every
+seat transfer through EVA, boarding and docking would create a larger state machine to answer a
+question the recovery event already answers directly. Iterating that list in wire order also keeps
+replay deterministic; current board contexts are NULL, but map iteration must not make later
+provenance byte-unstable.
+
+Membership is stored as `career_body(kind='orbit_kid', body=kid)`. The existing `body` column is the
+generic set-member slot and needs no rename or migration. `player_body` remains unchanged: kitten
+ids omit career, so putting them in the lifetime table would collapse identically named kittens from
+different saves. Instead the player value counts every `(career, kid)` member, the career value
+counts one save, and the system value counts rows across that player's saves with the known system.
+Those three totals are recomputed and written independently; an unknown system suppresses only the
+system row. The new fold's stable identity `kittens_to_orbit_and_back` changes `BuildID` and
+backfills immutable history without an event-version, wire, schema or `BuildVersion` change.
+
+### PROJ-118 — Lost-vehicle crew boards publish occupancy, not an inferred fate
+
+*Accepted · 2026-08-10 · Task E4.*
+
+Build 5168 exposes two different paths. A physics structural failure destroys the whole vehicle and
+ends its crew missions without calling `KillCrew`; the player destroy path separately calls
+`KillCrew`, which can set the roster's KIA bit. `vehicle.rud.crew_count` is read at the former
+whole-vehicle boundary. The only honest claim available to a projection is therefore how many
+kittens were aboard, not that they died, that bodies were destroyed, or even that the loss was a
+crash or explosion. **Most Kittens Aboard A Lost Vehicle** keeps the largest positive crew reading;
+**Kittens Aboard Lost Vehicles** adds those readings.
+
+The two crew writes join the existing combined RUD fold after its single `scoreable` decision, but
+remain independent of the part and cause branches. An unreadable part count cannot erase a valid
+crew count, and a cause that cannot form a family key cannot erase either. The additive row has NULL
+context; the record retains exact `body`, `cause` and `flight` provenance. Appending both fixed rows
+preserves every prior published position, while changing the stable fold identity from `rud_parts`
+to `rud_parts_crew` changes `BuildID` so immutable history backfills without an event-version,
+wire, schema or `BuildVersion` change.
+
+A `kittens_scuttled` board is deliberately refused. `kitten.kia` identifies a player-initiated
+scuttle with crew aboard, and ranking that choice would create a durable public consequence attached
+to a person for using a game action. That fails Constitution §8's consequence test. Keeping the
+occupancy boards narrowly tied to physics RUDs avoids implying that refusal through a different
+title or formula.
+
+### PROJ-119 — World sprints rank one save against flat inclusive duration limits
+
+*Accepted · 2026-08-10 · Task E5/E6.*
+
+The community question is how many distinct worlds one save reached early, so each result remains
+save-native. Career scope counts that save; player scope keeps the best one-save count; and
+system scope keeps the best one-save count among the player's saves in that system. Unioning bodies
+across saves would publish a tour no single career completed and would make the save view disagree
+with the ordinary board about what achievement it ranks.
+
+A year is exactly `365 * 24 * 3600` seconds: a flat duration already shared with catlog's duration
+formatting, not Earth's or any other body's orbital period. Taking it from game content would make
+the same stat mean different durations in different systems and reintroduce a celestial fact the
+server intentionally does not own. The boundaries are inclusive: an arrival at exactly 31,536,000
+or 315,360,000 seconds satisfies “in the first year” or “in ten years” rather than losing on a
+floating-point fencepost.
+
+Every qualifying SOI recomputes both boards after lowering that save's earliest arrival time. This
+is necessary because loading an earlier save can make a repeated body's arrival cross a threshold;
+running only on set novelty would leave the projection stale. Player, save and system values are
+queried and written independently, never mirrored. An unknown system suppresses only the system
+write, because the save and player answers remain meaningful without a comparison identity. The
+new stable fold identity `body_sprints` changes `BuildID` so immutable history backfills, while the
+event wire, schema and `BuildVersion` remain unchanged.
+
+### PROJ-120 — Badge awards are insert-once inside a rebuild-authoritative two-scope projection
+
+*Accepted · 2026-08-10 · Task F1.*
+
+A merit badge is a milestone, so the useful historical fact is the first event at which the current
+projection awards it. `badge_award` therefore keeps the first row for `(player, scope, badge)` inside
+one build and has no revocation column. A rebuild remains authoritative and may omit that row when
+current rules or final flight state no longer award it, or discover a newly introduced badge in old
+history. Keeping punitive or irrevocable badge history beside the immutable event log would create
+a second eligibility engine that could disagree with the boards and would violate the project's
+rebuildable-projection model.
+
+Lifetime and per-save awards share one table because their columns and first-write rule are
+identical. The empty career sentinel cannot collide with a real save id, and avoids parallel
+schemas, flushes and readers that would inevitably drift. The lifetime row keeps both the first
+qualifying save and its system because it otherwise has no career to join through; the per-save row
+needs no duplicate `first_career`. `earned_at` uses the server receive stamp rather than the
+untrusted client wall clock, while nullable `earned_sim_t` preserves the career-relative time only
+when one existed. Context remains projector-authored and under the same field and public-redaction
+promise as board context — including the four-key default display allow-list — rather than becoming
+a route for arbitrary payload data.
+
+The table is player-owned projection output, so moderation must not enumerate or mutate it directly.
+Structural removal from the live log followed by rebuild removes shadowbanned or purged players'
+awards; restoring withheld events at their original sequence positions and rebuilding restores any
+currently eligible awards. This inherits STORE-019's future-proof Constitution §7 guarantee and
+leaves shared celestial-system catalogue facts alone. The player site describes only this model
+foundation now: badge predicates, catalogues and public award surfaces belong to later tasks and are
+not implied by the existence of storage.
+
+### PROJ-121 — Badge metadata reuses board key derivation and the one community-publication threshold
+
+*Accepted · 2026-08-10 · Task F2.*
+
+The badge registry mirrors the board registry because it has the same two hard problems: describe a
+fixed or data-derived key without consulting stored rows, and prevent one person's invented place
+name from filling a public catalogue. Fixed metadata is ordered and compile-time; each family title
+is a pure function of its key. A place introduced by a game update or system mod therefore arrives
+fully described without a celestial-body allow-list, database lookup or deployment.
+
+Family construction reuses the board `statSuffix` and `titleize` rules rather than copying them. A
+badge key is also a URL path segment, so a second alphabet, length limit or title normaliser would
+eventually let the same body work in one catalogue and fail in the other. Sharing the rule makes an
+invalid name fail consistently and makes a fixed-key collision impossible by the same test already
+used for boards.
+
+Dynamic badge families also reuse `[boards] min_players`. It answers the same privacy/community
+question as a dynamic board family: whether a data-derived name has enough independent holders to
+belong in the public index. A separate badge threshold would be another knob operators would set to
+the same value, and two policies that could drift for no player benefit. The gate affects listing
+only; pure description and later award storage remain valid below it. Fixed badges are always
+listed. This task deliberately registers metadata without awarding folds, so documenting all 35
+fixed entries and three patterns does not imply that any is currently earnable.
+
+### PROJ-122 — Badge first-write semantics exist in both the pending map and SQL
+
+*Accepted · 2026-08-10 · Task F3.*
+
+`badge_award` promises the earliest qualifying event in the current projection, but SQL conflict
+handling can preserve only the earliest row that reaches SQL. Several candidates for one badge can
+arrive inside one projector batch before any statement runs. The pending accumulator must therefore
+retain the lowest sequence itself and replace the whole candidate together — system, first save,
+receive timestamp, optional career clock and context. Keeping a low sequence beside provenance from
+a later event would be a subtler lie than picking the later event outright. Once flushed,
+`ON CONFLICT DO NOTHING` is the matching half: a later batch must not update the earlier committed
+row. Together they make first-award identity independent of batch and flush boundaries.
+
+One helper offers the same qualifying event to lifetime and per-save scope. Duplicating that work in
+every future badge predicate would eventually omit one scope, encode context twice or resolve two
+different system/provenance answers. The helper always offers the lifetime row and adds the save row
+only when a career exists; it deliberately does not apply flight eligibility, because flightless
+badges have no flight to test and each flight-bearing fold must use the established final-state
+`scoreable` rule. `HasBadge` reads pending state before SQL for the same reason board and flight
+caches do: logic inside one projector batch must observe the same projection as logic split across
+two batches.
+
+This is write plumbing rather than feature exposure. No badge fold calls the helper yet, and no API
+or UI reads the rows, so documenting the machinery does not make the registered catalogue earnable.
+
+### PROJ-123 — Orbit-order badges retain the first achieved-orbit sequence instead of trusting final state
+
+*Accepted · 2026-08-10 · Task F4.*
+
+Badge folds run in the rebuild's second pass, when `flight_state` already contains the completed
+history. The orbit milestone bit can prove only that a flight reached orbit at some point; by itself
+it cannot prove that orbit preceded a docking or recovered ending. Using that bit alone would award
+the composite during rebuild when orbit came later, and could make the answer depend on whether the
+events shared an incremental batch.
+
+Migration 0012 therefore adds `first_orbit_seq`, with zero meaning no achieved orbit and every
+achieved-orbit event lowering it to the earliest positive sequence. `orbit_and_back` and
+`docked_after_orbit` require that sequence to be strictly less than the candidate event's sequence.
+Strict comparison refuses equal sequence numbers rather than inventing an ordering. The existing
+milestone bit remains because it answers the independent set-membership question cheaply; the
+sequence is the smallest durable fact that answers ordering without correlating history inside a
+badge fold or adding a new pipeline stage.
+
+The same strict comparison corrects the existing `kittens_to_orbit_and_back` fold. Its public rule
+already said orbit happened before recovery, but a refined replay previously tested only the final
+milestone bit and could count a kitten when an out-of-order orbit followed recovery. Because that
+changes an existing fold's answer without changing its stable name, `stats.BuildVersion` advances
+from 1 to 2; the schema-version change would also force today's rebuild, but the semantic bump keeps
+the build identity honest independently of migration numbering.
+
+F4 installs the four reusable badge shapes between board and log folds but leaves `BadgeFolds`
+empty. Activating only a convenient subset would turn the documented 35-badge catalogue into a
+misleading partial feature; F5 will register the complete starter set atomically. Stable fold names
+are still defined now so catalogue activation changes `BuildID` and rebuilds immutable history.
+Threshold shapes read each scope's effective board value after board folds run. The Batch cache must
+therefore merge pending count, record, best and set writes over its SQL baseline; reading SQL alone
+would award one event late after a flush and never award inside a large unflushed batch. Keeping the
+effective value updated after its first read makes both paths identical.
+
+### PROJ-124 — The starter catalogue activates every F4 shape together and leaves completeness to its own fold
+
+*Accepted · 2026-08-10 · Task F5.*
+
+F5 activates 33 fixed badges and all three dynamic body families in the registry's exact group and
+display order. The two remaining fixed entries, `been_to_every_planet` and `been_to_everything`,
+stay metadata-only until F7. They are subset questions over an effectively complete game-reported
+system catalogue, not another threshold or event predicate; pretending they award now would either
+compile a body list into the server or weaken “every” into an answer the documented rule does not
+ask. Keeping them visible but explicitly inactive makes the implementation boundary honest without
+forking the catalogue.
+
+All flight-bearing event, composite and family folds use final flight state; threshold folds inherit
+the board fold's eligibility by reading its post-write effective value after `BoardFolds`. Launch
+facts remain ordered through `HasStartFactAt`; zero-engine means the nullable fact is present and
+exactly zero, never “no propulsion detected.” Orbit/recovery ordering uses `first_orbit_seq`, so a
+rebuild cannot borrow a future orbit. Tier badges are independent rows: reaching eight bodies keeps
+the three-, five- and eight-body awards because they answer cumulative milestones rather than a
+single replaceable level.
+
+Fixed awards deliberately store NULL context. Their key and first qualifying event already state
+what happened, and copying arbitrary payload fields would expand a future public surface without a
+consumer. Dynamic family awards keep exactly `body`, preserving the opaque reported name behind the
+normalised key. Fold names contain the fixed key or stable family identity, so activating this
+catalogue changes `BuildID` and rebuilds existing immutable history. The existing schema and
+`BuildVersion` need no further bump: F5 adds named folds, while PROJ-123 already bumped the one
+existing fold whose meaning changed.
+
+### PROJ-125 — System-filtered badge holders are deduplicated from per-save awards, not lifetime provenance
+
+*Accepted · 2026-08-10 · Task F6.*
+
+The lifetime badge row is the canonical unfiltered holder because its primary key already permits
+one row per player and badge. It cannot answer a system filter: it retains only the system of the
+current projection's first award, so filtering it would omit a player who later earned the same
+badge in another system. System-filtered reads therefore use per-save rows in that system and select
+one deterministic earliest row per player by earning sequence and then raw-career tie-break. Counts
+use the same distinct-player population. This preserves later-system participation without letting
+one player's several saves inflate holders or the denominator.
+
+Store rows retain system, lifetime first-save provenance, nullable simulation time and nullable
+context because G1 needs all of them, but the raw career values remain below the read-API identity
+boundary. F6 deliberately registers no badge endpoints early. Its only public addition is the
+bounded collection census: `badges` counts distinct keys with lifetime holders, while
+`badge_awards` counts every lifetime and per-save row. Reusing the existing whole-response cache on
+projection `WriteGen` plus the 10-second TTL keeps the extra group-by off repeated origin requests
+and ensures a committed projection write invalidates the answer immediately.
+
+### PROJ-126 — Everywhere badges compare save-local visits with the game-reported complete catalogue
+
+*Accepted · 2026-08-10 · Task F7.*
+
+Every World and Nothing Left are subset questions, not thresholds over the exploration total. Their
+denominator is the immutable catalogue reported for that save's bound system: normalized
+`kind == "planet"` rows for Every World, and every row—including parentless roots and unknown
+concrete classes—for Nothing Left. The server neither maps concrete classes nor holds body names.
+This keeps game updates and modified systems honest inputs to the same rule instead of making the
+default system an accidental protocol allow-list.
+
+A reported-complete bit alone can arrive before thousands of catalogue rows, and cardinality alone
+would turn an intentionally absent catalogue into an empty success. Both badges therefore require
+the established effective-completeness conjunction, plus a nonempty selected subset to refuse
+vacuous truth. The fold runs after the SOI set fold and its catalogue and save-membership reads merge
+pending batch writes. Awarding on the final missing arrival is then independent of projector batch
+and flush boundaries. Catalogue completion itself is not an award trigger; a later qualifying SOI
+rechecks the subset. Final-state flight eligibility remains authoritative on rebuild, so a late flag
+can remove the current-projection award without adding revocation state.
+
+The two fixed fold names occupy their reserved catalogue slots, so adding them changes `BuildID` and
+forces immutable history through the new predicates. No stored or wire shape changed and no existing
+fold changed meaning, so neither the projection schema nor `stats.BuildVersion` advances.
+
+A modified client can report a complete one-planet system and an invented visit to mint both
+badges. That is explicitly accepted under Constitution §8: signatures identify the sender, not the
+truth of their celestial catalogue, and an invented SOI event can already mint the tier ladder just
+as cheaply. Detecting plausibility would require a server body list or accumulated suspicion
+machinery, both more complex and less honest than this hobby project's proportionate integrity
+boundary.
+
+### PROJ-127 — Badge reads share board visibility but keep system meaning at save scope
+
+*Accepted · 2026-08-10 · Task G1.*
+
+Badge holder pages reuse the leaderboard over-fetch-and-drop pass rather than creating another
+moderation filter. Hidden, purged and handleless players therefore close ranks and offsets count
+visible rows. The published `holders` value remains the raw, ban-inclusive distinct-player census,
+like board `count` and profile `players`: making it exact would require reading the entire holder set
+on every request and would expose aggregate changes as a ban oracle. Rows and counts still use the
+same lifetime or system-filtered population before that display-only filter.
+
+A lifetime award is the canonical unfiltered holder and exposes its first earning save only through
+the player's ordinal and per-player relabel. A system-filtered holder view instead uses per-save
+awards, keeping one deterministic earliest save per player, because the lifetime row cannot retain
+later-system achievements. Player lifetime checklists intentionally offer only fixed unearned
+badges; there is no single bounded body catalogue across all of a player's saves. An exact-save
+checklist may add family members only from that save's own effectively complete system catalogue.
+This preserves modified-system meaning, avoids global family enumeration, and makes an incomplete
+catalogue an absent checklist rather than a misleading list of missing achievements.
+
+All award context crosses the existing recursive redaction boundary, and raw career columns exist
+only long enough to resolve a save ordinal and stable per-player label. The four endpoints are part
+of the final pre-launch v1 contract, so adding them does not advance an API version.
+
+### PROJ-128 — The demo pins representative badge behaviour, not a frozen catalogue size
+
+*Accepted · 2026-08-10 · Task G4.*
+
+The existing deterministic histories already contain the right honest events for badge examples:
+all three players start flights, two saves cross the Wanderer threshold, and `demo_ace` plus
+`demo_crasher` both reach Luna in the reported Sol system. G4 therefore adds no fixture-only award
+write and no redundant gameplay event. It asserts the awards after the ordinary projector drains,
+including save and system provenance, so the seed proves the same fold path a real upload uses.
+
+The seed deliberately fixes examples—one event badge, one tier and one two-holder body family—but
+not the number of catalogue entries or total awards. Badge and board registries are compile-time
+catalogues expected to grow; freezing their counts would turn an unrelated addition into fixture
+churn and repeat the mistake PROJ-039 avoids for public catalogue tests. End-to-end checks likewise
+compare the visitor catalogue with the JSON response row for row, while using the two-player Luna
+award only to prove the dynamic publication gate and friendly provenance are genuinely exercised.
+
+### PROJ-129 — Challenge results are permanent projections of compile-time dated rules
+
+*Accepted · 2026-08-10 · Task H1.*
+
+A challenge definition will live in the deployed server artifact, not a database row or admin
+setting. Incremental projection and a later rebuild must replay the same immutable history against
+the same rule; mutable definitions would make disagreement inevitable. H1 therefore establishes
+only the generic result/member schema and batch-aware member primitive. The registry, folds and
+public result reads arrive in their owning tasks rather than being guessed by storage code.
+
+Challenge rows do not reuse `player_stat_period`. That table's retention delete is correct for
+rolling calendar leaderboards but would erase the archive of a closed challenge, which is precisely
+the history this feature must retain. Separate bounded tables also represent distinct qualifying
+members without confusing them with out-of-window `career_body` facts. They grow by entrants and by
+the finite member sets admitted by curated rules, with no time-bucket multiplier.
+
+The empty-string scope sentinels are deliberate: player is `('', '')`, save is
+`(<career>, <system>)`, and system is `('', <system>)`. A genuinely cross-system player aggregate
+must never acquire the label of its last contributor. A read-through member set merges SQL rows with
+pending additions before counting, so flush size cannot change a set-valued result. Both tables are
+player-owned for structural moderation and rebuild, while their row counts join the existing cached
+collection census as storage facts rather than an early challenge API.
+
+### PROJ-130 — The challenge registry ships empty before definitions and folds land together
+
+*Accepted · 2026-08-10 · Task H2.*
+
+Challenge metadata now has one compile-time Go registry and one derived player-facing TypeScript
+mirror, but H2 puts no placeholder challenge in either. A believable-looking example with dates and
+no fold would claim that players can enter a contest the projector cannot score; a hidden fold-free
+literal would also change future catalogue and build assumptions before its rule was reviewable.
+The first six definitions therefore land with their concrete folds in H4. The empty registry is a
+deliberate, validated state, not an unfinished runtime configuration.
+
+Startup validation happens before catlogd creates keys or opens databases. Keys must be canonical
+stat suffixes and cannot overlap either fixed or derivable family board keys; windows must be
+positive and ordered; scopes and the reserved one-per-definition `challenge:<key>` fold identities
+must be exact and unique. Stopping at startup makes compile-time corruption loud without putting
+defensive branches in every event fold. The registry has no admin route or database representation,
+because changing a dated rule underneath an incremental projection would make rebuild disagreement
+an architectural property rather than a bug.
+
+The window API takes a timestamp argument and compares only the server-assigned event receive time
+against `[opens, closes)`. `Open(now)` is presentation-only; a future fold must call `InWindow` with
+the event, preserving PROJ-043 across replay. Past windows remain legal because PROJ-090's ordinary
+rebuild is the one backfill mechanism. The docs component is fail-fast against the derived mirror,
+so H4 cannot add a player-visible challenge by prose alone or silently render an unknown key.
+
+### PROJ-131 — The challenge engine owns time, scope and merge; each rule owns eligibility
+
+*Accepted · 2026-08-10 · Task H3.*
+
+Every challenge shares three mechanical decisions, so H3 implements them once: reject an event
+outside the half-open server-receive window before invoking rule code, translate the declared scope
+into the H1 career/system sentinels, and merge record/best/count values with the exact board rules.
+Keeping the strict comparison in both the pending map and SQL preserves the earlier sequence and its
+context on a tie regardless of flush size. Sorted composite-key flushing gives the rebuild the same
+deterministic write surface as every other batched projection.
+
+Eligibility stays in the concrete rule. The generic engine cannot infer that every candidate has a
+flight—some challenge sources are genuinely flightless—and applying `scoreable` centrally would
+pretend it had inspected an attribution that may not exist. Conversely, omitting it from a
+flight-bearing rule would score a flagged flight. The executable value-function contract therefore
+states and tests the ownership explicitly: a flight-bearing rule calls `scoreable` before returning
+`ok=true`. This makes the arbitrary predicate and its exclusion readable in one place, while still
+inheriting D22's final-state correction on refined rebuild.
+
+Challenge folds occupy one stable second-pass slot after badges and before the log census, with one
+`challenge:<key>` identity per definition. A name added later changes `BuildID`, forcing the normal
+rebuild that PROJ-090 already defines as the sole backfill; the replay uses stored `recv_time`, so it
+can discover an old qualifying event without reopening a deadline. H3 keeps both shipped catalogue
+and rule map empty: generic machinery is testable with injected synthetic definitions, while no
+player-visible contest exists until H4 lands metadata and executable rules together.
+
+### PROJ-132 — Starter challenges use observable payload facts and system identity, not inferred vehicle intent
+
+*Accepted · 2026-08-10 · Task H4.*
+
+The first six challenges deliberately exercise record, best and count writes across player, save
+and per-system scope under one explicit Week 33 receive-time window. Their predicates reuse facts
+the ordinary boards already trust: achieved orbit, present career clock, tumble, surviving landing,
+recovered crew and the immutable launch-time engine count. Every flight-bearing rule calls
+`scoreable` itself. This keeps each contest explainable in one look and lets D22's refined rebuild
+remove a contribution when a later flag completed the flight's state.
+
+“Payload” is retained because it is the word players use, but its definition is deliberately the
+whole vehicle's current mass at orbit achievement, propellant included. KSA has no dependable
+payload/cargo split at that point, so inventing one would turn a measured event field into an
+inference. Heavy Lift and Feather Touch resolve the event save's system home rather than hardcoding
+Earth; this makes the comparison valid for replaceable catalogues and refuses missing provenance
+instead of guessing.
+
+Coasting Class similarly says “no engine installed”, not “no propulsion”. Only a present
+`engine_count == 0` qualifies; RCS, springs and docking push-off remain possible and are stated rather
+than detected. Its member is written only after window, eligibility, ordered launch fact and system
+gates, using `<system>\x00<body>` in the dedicated read-through set. Reusing `career_body` would let
+an earlier powered or out-of-window visit suppress a valid later one. No physics plausibility or
+forgery detector is added: signatures cannot make an attacker-controlled client truthful, and
+Constitution §8 says the complexity budget belongs elsewhere.
+
+### PROJ-133 — Challenge reads expose raw scope rows only inside the store boundary
+
+*Accepted · 2026-08-10 · Task H5.*
+
+The challenge read seam returns a store-owned `ChallengeRow` with raw career and system fields. It
+does not reuse `CareerStatRow`: challenge rows can be player-, save- or system-scoped, and attaching
+a save ordinal to the common type would falsely imply that every scope has a save. The empty-string
+sentinels remain the projection's compact internal scope encoding, not public identities. Phase I
+owns the directory lookup, career relabelling, system reference, ban visibility and context
+redaction because those operations need dependencies the projection store deliberately does not
+have. Keeping that boundary now makes it mechanically harder for a later endpoint to publish the
+mod's raw save identity by accident (Constitution §1).
+
+One optional system parameter serves both the ordinary challenge population and a within-system
+comparison. Empty means **omit the predicate**, not `system=''`; nonempty means exact equality. That
+distinction is necessary because player/save/system scopes share one table and an empty argument is
+a caller's request for all applicable rows, while an empty stored value is a real player-scope
+sentinel. Leaderboard order and `ChallengeAhead` use the board comparator—requested value direction,
+then earlier `updated_seq`—with stable row-key fallbacks for deterministic pages. Entrants count
+matching ranked rows rather than distinct players, so a save-scoped contest honestly counts saves.
+
+Nullable projector context is preserved as nil `json.RawMessage` rather than rewritten into a
+different JSON value. H5 adds no endpoint or UI: publishing requires the Phase I privacy and
+visibility work, and a storage method should not guess that presentation contract early.
+
+### PROJ-134 — Challenge publication shares ranked visibility but keeps a raw scoped-row denominator
+
+*Accepted · 2026-08-10 · Task I1.*
+
+Challenge pages use the existing generic over-fetch-and-drop visibility path instead of growing a
+challenge-specific moderation loop. A hidden player may own several save-scoped rows, so applying
+the requested offset before visibility would skip visible entrants and copying a player-stat-only
+helper would almost certainly drift. Dropping first makes the public page and its positional ranks
+describe exactly the same visible population.
+
+`entrants` remains the raw matching-row census, including hidden owners, for the same reason board
+counts do: exact visible aggregates would scan an unbounded result on each cached read and would make
+the aggregate itself a moderation oracle. It counts saves separately at career scope because each
+save is an independently ranked entrant; player and system definitions already enforce their own
+one-row scope keys. The apparent mismatch is intentional and documented: ranks describe the visible
+page, while the denominator describes retained scoped rows.
+
+Challenge state is presentation derived solely from catlogd's server clock. A public cache can
+therefore show the preceding state for at most its 30-second freshness window at an opening or close,
+but no stored result depends on that answer: folds continue to gate on immutable server receive
+timestamps. Closed challenges stay readable because retained results are the archive. Publication
+also performs the privacy joins promised by PROJ-133—per-player save labels, friendly systems,
+receive times and recursive context redaction—so raw career identity never enters a response type.
+
+### PROJ-135 — Challenge demo coverage moves the test clock, not the compile-time calendar
+
+*Accepted · 2026-08-10 · Task I4.*
+
+All six shipped Appendix C challenges deliberately share the same fixed Week 33 window. The older
+I4 outline asked one seeded challenge to be open while another was already closed, but satisfying
+that literally would require changing a shipped window or adding a fixture-only seventh definition.
+Either choice would make the public compile-time catalogue serve the test instead of the product and
+would break the registry/data parity H4 established.
+
+The throwaway e2e server therefore moves its existing development-only clock to the fixed in-window
+instant `2026-08-14 00:00 UTC` before `/admin/seed`. The seed continues to insert real events through
+the immutable log and ordinary projector, now with inputs that genuinely exercise all six challenge
+rules. Browser coverage first proves their Open standings, then moves the same server clock past the
+common close and proves that the retained rows are served from Finished, finally restoring the
+in-window clock. This covers both presentation states truthfully and deterministically, just not at
+the same instant—an impossible state for the current registry.
+
+The fixture pins representative values, scope sentinels, system/save provenance and coasting member
+state, but not entrant or definition totals. New definitions are expected to extend the catalogue;
+freezing its size would repeat the brittle catalogue assertion rejected by PROJ-039 and PROJ-128.
+Moving the clock after an event cannot retroactively admit it, so manual testing must start with a
+fresh data directory when changing the seed receive instant.
+
+### PROJ-136 — Admin clients accept every successful HTTP status, while rebuild tests choose wait explicitly
+
+*Accepted · 2026-08-10 · final integration gate.*
+
+The detached rebuild contract answers `202 Accepted`, but the shared `catlogctl` admin client treated
+every status except `200 OK` as an error. That made the documented polling path fail before it could
+read the job it was meant to follow. The client now accepts the complete HTTP success class and still
+decodes the endpoint's typed response; redirects and error statuses remain failures.
+
+Integration tests that need to compare projections after the swap send `{"wait": true}` explicitly.
+This preserves the production default—operators get a detached job—without racing a board read
+against an in-progress rebuild or teaching tests a response shape the ordinary POST does not return.
+
 ## Archive & restore
 
 The filesystem archiver, the manifest, restore verification, and the R2 design that is deliberately not built.
@@ -1756,6 +2646,152 @@ The original reason was narrower — a second frontend was served at `/app/` on 
 - **§11's DOM contract** in `docs/ui-design.md`, which the e2e suite asserts against the surviving site.
 
 **One outstanding action outside this repository:** the Cloudflare zone's *Cache everything* rule still names `/app/assets/`. Edge configuration is not in `infra/`, so no `make deploy` will remove it — see [operations.md](operations.md#3--cloudflare-zone-settings). Harmless while it sits there (nothing serves that prefix any more) and still wrong.
+
+### UI-058 — Ranking scope is a first-class board control, and navigation preserves every applicable dimension
+
+*Accepted · 2026-08-10 · Task B4.*
+
+A board key still describes one achievement, but its rows can compare players, saves or celestial
+systems (PROJ-110). The HTML page therefore presents scope as a selector beside the existing window
+selector instead of multiplying board routes or inventing separate catalogues. Players remain the
+default because that preserves every existing board URL. Human labels say Players, Saves and
+Systems; save rows link their ordinal and system-capable rows show the friendly name, while the
+content hash remains API comparison identity rather than something a person is asked to read.
+
+Scope and time are independent query dimensions with an intentional boundary: only player scope has
+rolling windows. A save is already a period, and crossing either non-player scope with windows would
+offer a control the API refuses and a projection catlog does not store. The page consequently hides
+period controls outside player scope and explains the save case in one sentence rather than
+silently presenting an empty result.
+
+Every chip and pager URL is derived from a copy of the current query, removing only parameters that
+become invalid. Reconstructing links from `period` and `offset` was cheaper in template code but
+would reset a save ranking to players during pagination or discard a system filter; that is a
+navigation correctness bug disguised as a default. Offsets reset when a comparison dimension
+changes, while pagers preserve scope, system, period and bucket.
+
+Body-derived player rankings receive a short ambiguity note because equal body names need not mean
+equal game content. The note links to system scope rather than adding an empty system column to a
+player projection that has already merged systems. Across every scope, the raw float remains on the
+value cell under UI-028: a formatted duration is presentation and cannot be used to test or sort the
+ranking it represents.
+
+### UI-059 — Saves are a profile drill-down, not a new top-level destination or a second stat renderer
+
+*Accepted · 2026-08-10 · Task B5.*
+
+A save has meaning in the context of the player who owns it: its ordinal and public label are
+deliberately per-player, and the raw career identity never leaves the read API boundary (PROJ-111).
+The two save pages therefore hang from the profile and the profile gains a Saves action. A
+top-level Saves link would ask for a global save directory catlog neither exposes nor needs. Its
+original five-link description is superseded by UI-061, which adds the collection-wide Badges
+destination without adding a global save directory.
+
+The list presents the distinct facts available for every save: friendly system when known,
+simulation playtime, first and last activity, and board participation. Unknown system is an em dash
+rather than a synthetic value. The original deferral of badge space is superseded by UI-061 now
+that exact per-save award counts exist; the column must show the real count, including a real zero.
+
+Save detail reuses the board/profile value and context cells rather than growing a parallel number
+renderer. That preserves exact raw floats, unit formatting, context display policy and the rewound
+marker automatically. Its rank copy says saves because career-scope entrants are careers, not
+accounts; saying players would be visibly wrong as soon as one player places with two saves.
+`system_changed` receives a separate explanatory mark because it qualifies per-system comparison,
+but like `rewound` it is provenance rather than punishment and changes no placement.
+
+### UI-060 — Celestial systems are comparison references reached from the question that needs them
+
+*Accepted · 2026-08-10 · Task C7.*
+
+A system catalogue answers which same-named world a result refers to and what the game is simulating;
+it does not rank anything. Its pages therefore use the restrained API-reference table treatment with
+no ranks, bars or winner accents. The detail table shows the physical and orbital facts a player can
+scan, while leaving the six angles to the complete API response for a future renderer. Showing every
+element in HTML would make the common question harder to answer without adding a useful comparison.
+
+Systems do not consume a top-level navigation slot. They are linked from board scope controls,
+friendly system cells and the board index's measured system count, placing the reference beside the
+moment a player asks whether two Luna results mean the same world. This preserves the global header
+for collection-wide destinations while keeping the catalogue discoverable without guessing a URL.
+The raw fingerprint remains content identity rather than personal identity, but the player docs call
+out that a unique custom catalogue can still be recognisable; making that trade explicit is safer
+than implying that non-personal data can never identify context.
+
+### UI-061 — Badges use the existing page grammar and save counts use one grouped read
+
+*Accepted · 2026-08-10 · Task G2.*
+
+Merit badges are a collection-wide destination as well as a profile drill-down, so the catalogue
+gets the sixth header link while player and save badge pages keep their ownership breadcrumbs. The
+four pages consume the same non-HTTP readapi methods as the JSON routes; web does not reconstruct
+visibility, system filtering or private save identity. Badge holder pagination clones the current
+query so a system comparison cannot silently turn back into a global one.
+
+The visual treatment spends no new design vocabulary. Catalogue and checklist entries are the
+existing `.tiles`/`.tile` shape. Earned state uses the established accent as a fill with its
+on-accent foreground, while unearned state uses muted foreground. There is no badge animation,
+icon, raw colour or second card primitive. Fixed UTC times and explicit Save/System links make an
+award comparable; em dashes state missing provenance instead of hiding it in blank UI.
+
+Adding a Badges column to the saves index creates an obvious N+1 trap if the page asks for each
+save's checklist separately. The store therefore provides one grouped per-player career census and
+readapi resolves it to public ordinals before web sees it. This adds a narrow read seam rather than
+letting presentation code touch projections, keeping request cost bounded and the raw career
+identity below the same privacy boundary as every other page.
+
+### UI-062 — Challenges spend the final header slot and reuse ranked-page grammar
+
+*Accepted · 2026-08-10 · Task I2.*
+
+Challenges are a collection-wide destination, so their catalogue takes the seventh header link
+after Badges. Seven is now an explicit maximum rather than an accidental current count: adding an
+eighth would make narrow-header wrapping the information architecture. A later feature must enter
+through an existing destination or deliberately redesign navigation instead of silently extending
+the row.
+
+The pages add no visual model. Each state group is a standard panel table, detail values and context
+use the existing ranking partials, and the home page adapts the first open challenge to the existing
+compact board table. That keeps exact values, friendly save/system provenance, accessibility and
+future formatting fixes shared with boards. Web calls only readapi's non-HTTP methods, preserving
+the moderation and raw-career boundary rather than reconstructing it from store rows.
+
+The home page trusts the one `ChallengeList` response's server-time state and never evaluates the
+window in a browser. Detail pages render fixed UTC plus a short relative hint from the injected
+server clock; this is bounded cached presentation, not a projection gate. The explicit offline
+deadline sentence is preferable to machinery that pretends a client can report after close, and
+finished pages remain readable because a closed challenge is an archive state, not deletion.
+
+### UI-063 — The privacy narrative is told once, on `/docs/privacy`, and every other surface links to it
+
+*Accepted · 2026-08-10.*
+
+The email guarantee was in the footer of every page, in a panel on `/login`, twice on
+`/docs/install`, and the redaction rules were restated in full above both raw-event tables. The
+guarantee is worth stating; stating it on every page a reader loads is not. The dominant use of the
+site is browsing stats, and a person browsing a leaderboard is not making a decision about their
+identity provider — they read the privacy page once, if at all, and then they want to look at
+boards. Copy that repeats also decays unevenly: five paraphrases of one guarantee are five things
+that can drift apart, and `docs/ui-design.md` §9.3's rule that the wording must never be softened
+made every one of them expensive to touch.
+
+So: **`/docs/privacy` is the single home for the narrative**, unchanged and still in §9.3's plain
+register, and it gains the IP-location line that only `/docs/install` had carried. The footer names
+it as a destination beside Install and API. The raw-event pages keep one clause about units and link
+*What this log leaves out*. `/docs/install` keeps the factual not-sent list and drops the argument
+after it.
+
+Two surfaces keep an inline statement, because on those two the claim is the thing the reader is
+about to act on rather than background: **`/login`** says in one sentence that no email address is
+requested — the reader is a click away from authorising an identity provider, and the scope is the
+decision in front of them — and **`/docs/api`** keeps its paragraph on the three fields that never
+appear in a response, because that is the response shape and a client author needs it in the
+reference, not in a privacy page.
+
+§9.3 is amended rather than overridden: it governs *how* a load-bearing claim is worded wherever it
+is made, not *how many pages* make it. Nothing about what catlog stores, receives or publishes
+changed here; only how often a reader is told. `#login-privacy` and `#privacy-no-email` /
+`#privacy-scopes` survive as DOM hooks, so the e2e assertions still hold the guarantees to the
+pages that own them.
 
 ---
 
@@ -2342,6 +3378,130 @@ The spec named `Vehicle.GetRadarAltitude()` as the source for `radar_alt_m`. **I
 
 **Recorded at three sites on purpose** — here, in [ksa-integration.md](ksa-integration.md) §1, and in a long remark on the method — because the failure mode is somebody "simplifying" it back to the obvious one-line call, which compiles, passes every test, produces identical numbers, and costs a terrain fetch per vehicle per tick. Nothing in the test suite would catch that. If a future build makes `GetRadarAltitude()` cheap, the substitution becomes legitimate and this entry is superseded; until then it is not.
 
+### MOD-081 — A RUD's part count measures the intact vehicle, because KSA exposes no per-part destruction event
+
+*Accepted · 2026-08-10 · Task D1.*
+
+KSA's trustworthy observation is `Universe.DestroyVehicleFromEvent`: one whole-vehicle destruction
+boundary, reached while the vehicle and its part tree are still intact. The game then ends the crew
+missions and disposes the vehicle. It exposes no corresponding event for every individual part that
+explodes or breaks away, so describing `part_count` as “parts destroyed” in that sense would claim
+observations the game never made. The honest measurement is `Vehicle.Parts.Count` in the existing
+prefix: the size of the intact vehicle that was lost. A failed read is the non-optional fallback 0,
+and no current fold consumes it.
+
+This is a final-v1 contract correction before launch, not a deployed wire migration. Keeping
+`vehicle.rud` at `ver: 1` follows DOCS-005: there is no public history or old client population to
+upcast, while minting a fictitious v2 would preserve a shape nobody has consumed. The count is
+recorded now because the immutable log cannot recover it later; giving it a board remains a separate
+fold decision.
+
+### MOD-082 — “No engines” is an optional flight-start fact, not an inferred history of propulsion
+
+*Accepted · 2026-08-10 · Task D2.*
+
+The only cheap, stable fact KSA exposes is how many installed `EngineController` modules a vehicle
+has when catlog first sees it. That is the right boundary because `flight.started` already captures
+the vehicle's other construction facts there, and because a split piece is a new vehicle with a new
+flight. Counting rocket cores or nozzles instead was rejected: their controller may be an RCS
+thruster, so a probe with attitude control would be recorded as carrying a rocket engine it does
+not have.
+
+The field is optional. Present 0 is the useful “no engines were installed” fact; a failed KSA read
+must be absent so it cannot become a false zero in the immutable log. The count deliberately makes
+no stronger claim: RCS, decoupler springs and docking pushoff can impart velocity, and a craft may
+shed engines later. Inferring whether it “really coasted” from event shape would be the
+cross-history plausibility machinery Constitution §8 refuses.
+
+This edits the final pre-launch `ver: 1` shape in place, with no upcaster, under DOCS-005. There is
+no deployed v1 history to preserve, while recording the nullable fact now lets a later projection
+use it without pretending the immutable log can reconstruct a vehicle's starting configuration.
+
+### MOD-083 — A tumble records the previous locomotion mode and preserves KSA's edges without smoothing
+
+*Accepted · 2026-08-10 · Task D3.*
+
+The previous locomotion mode is the only honest distinction KSA exposes between two visually
+different events: `Airborne → Tumbling` is a failed landing, while `Grounded → Tumbling` is a trip.
+The 2 Hz poll already retains that previous mode for edge detection, so putting its lowercased value
+in the immutable event records the fact at the only time it is recoverable. The value is an open
+set and the mapper is total: a future or unreadable enum becomes `"unknown"` rather than crashing,
+rejecting new game data, or inventing a cause.
+
+Catlog deliberately does not merge nearby edges into one supposed fall. Stock KSA moves a tumbling
+kitten back to `Airborne` after 0.5 seconds without contact, and a later bounce can enter `Tumbling`
+again. One visible cartwheel may therefore emit several tumbles, some from airborne. Preserving the
+game's state machine is reproducible; a timing heuristic would make the answer depend on an
+arbitrary window and conceal real transitions.
+
+The existing `kitten_tumbles` projection remains unchanged and continues to count every event. The
+new fact is recorded now because it cannot be reconstructed later; choosing whether a board should
+filter it is a separate projection decision. This is the final pre-launch `ver: 1` payload under
+DOCS-005, not a fictional migration: no deployed history or client population requires an upcaster.
+
+### MOD-084 — Orbit milestones carry the complete drawable element set, while boards keep their existing meanings
+
+*Accepted · 2026-08-10 · Task D3b.*
+
+Apoapsis, periapsis, eccentricity and inclination describe the broad shape of an orbit but cannot
+place that shape in space or time. Recording semi-major axis, the two orientation angles, time at
+periapsis and period at the same milestone closes that gap while the game values are in hand. The
+semi-major axis is recorded directly rather than re-derived from rounded payload values, and angles
+are converted from the game's radians to the wire's degrees beside the existing inclination.
+
+The fields are facts, not new scores. No fold reads them and no board is added or silently changes
+meaning. They use the existing orbit payload's non-optional zero policy so one record does not mix
+two absence conventions: a non-finite reading becomes zero, and an unbound conic has period zero
+because it has no repeating cycle. Consumers can distinguish that case using the milestone's conic
+meaning rather than treating a fabricated period as real.
+
+This completes the final pre-launch `vehicle.orbit` `ver: 1` shape under DOCS-005. There is no
+deployed event history or old client population to upcast, so minting a v2 would preserve a contract
+nobody has consumed and make the two implementations carry needless compatibility machinery.
+
+### MOD-085 — Vessel state is atomic last-sample data on the one passive, prunable event
+
+*Accepted · 2026-08-10 · Task D3c.*
+
+A position sequence can only be interpolated; position plus velocity can be propagated. At the
+30-sim-second telemetry cadence, especially under warp, interpolation alone is visibly wrong near
+periapsis and a dropped neighbour would otherwise leave an unbridgeable hole. Each window therefore
+carries the last sample's complete state when available. It is not averaged—a mean position is not a
+physical state—and every sample replaces the previous value, including with absence, so an SOI
+transition cannot attach old-parent coordinates to a new `body`.
+
+The six numbers are one fact. If one is non-finite or unreadable, or the re-read parent does not
+match the payload body, the whole object is omitted. A partial vector or fabricated origin would be
+smaller to encode but would turn missing evidence into a real location and make a future renderer
+confidently wrong. The recorded frame is exactly KSA's parent-body-centred inertial frame, with
+position in metres and velocity in metres per second; no global-frame conversion is inferred.
+
+The placement is the decisive tradeoff. `telemetry.window` is the registry's only passive event and
+the outbox's only prunable record, so path detail is shed before every discrete gameplay fact when a
+player's local spool is under pressure. Putting the same material on any event type would make it
+undroppable. The measured cost supports that choice: a deterministic 12-player, 45-simulated-minute
+loadgen corpus contained 7,391 events and 4,581 states; removing only each state member from otherwise
+byte-identical NDJSON and recompressing with production Brotli changed 567,760 bytes to 572,354—an
+increase of 4,594 bytes, **0.809%**, far below the roughly one-third reconsideration gate.
+
+No fold reads the state and no board changes. This is the final pre-launch `telemetry.window` `ver: 1`
+shape under DOCS-005, so there is no fictional version bump or upcaster for undeployed history.
+
+### MOD-086 — Survey anchors cite the exact member declarations they justify
+
+*Accepted · 2026-08-10 · post-J4 source audit.*
+
+`SystemSurvey` already read the correct KSA members, but three `[KsaAnchor].SourceFile` strings named
+adjacent declarations: `Astronomical.Id` without `Class`, the lines before `SystemInfo.DisplayName`
+and `.Id`, and the timed CCF→CCE overload's neighbouring CCF→CCI method. Those annotations are the
+mechanical checklist for the next decompile bump; an adjacent line that happens to exist would turn
+the audit trail into false confidence even though runtime behavior remained correct.
+
+The literals now cite both `Astronomical` members and the exact build-5168 declarations, and the
+existing repository-source test pins them beside the survey's enumeration and lifecycle invariants.
+No game read, payload or projection changes: this corrects only the evidence attached to those
+reads.
+
 ## The load harness
 
 `catlog.loadgen`: many randomised players through the real pipeline, and what one laptop actually does.
@@ -2892,3 +4052,147 @@ catalogue changes. That keeps them compositional with the folds that award them 
 historical eligibility engine whose answer could disagree with the leaderboards it claims to
 recognise. Each implementing task still records the appropriate area decision with its code; this
 entry records why the plan contains no unresolved alternative branches.
+
+### DOCS-006 — Per-save rankings get one player-facing explanation, while shared board mechanics stay linked
+
+*Accepted · 2026-08-10 · Task B6.*
+
+Every board can be viewed by player, save or celestial system, but repeating that explanation in
+every catalogue entry would make scope look like three different scoring rules and create dozens of
+copies to drift. The catalogue therefore carries one concise scope pill per board and links to one
+Per-save boards page for the identity, ranking and time-window consequences. The ordinary board
+remains the player view, so existing readers meet the new dimension without having their familiar
+answer silently redefined.
+
+The save page uses only facts a player can observe: continuing the same KSA game keeps the save,
+starting another game creates one, and catlog numbers saves because it never learns their local
+names. It says explicitly where identity has limits and that a rewind mark excludes nothing. This
+keeps the privacy boundary understandable without publishing or teaching internal identifiers.
+
+The page links to the existing empty-board explanation instead of copying it. Empty-on-rebuild is
+one projection-swap behaviour shared by save, badge and challenge work; separate player-facing
+versions would eventually disagree about timing or guarantees. One canonical explanation makes the
+new page shorter and keeps the mechanism owned where eligibility and rebuild effects are already
+explained.
+
+### DOCS-007 — The badge catalogue is one typed, fail-fast mirror without a publication-status axis
+
+*Accepted · 2026-08-10 · Task G3.*
+
+The player catalogue renders every fixed badge and each dynamic family pattern directly from
+`src/data/badges.ts` through `BadgeDetail.astro`. The component resolves each key and fails the Astro
+build when it is absent, so prose cannot silently name an entry that the typed mirror does not know.
+That single build-time path is preferable to a second hand-maintained list or a client-side island:
+both would create another catalogue whose ordering and rules could drift from `event-details.md`.
+
+The temporary active/inactive field is removed now that every fixed badge and all three families
+award. Keeping a status axis whose only legal value was “active” would imply mutable publication
+state and invite player prose to disagree with the projection. Activation belongs to the implemented
+catalogue contract; family visibility remains the separate holder-count gate described by the read
+API. `docs/event-details.md` remains authoritative when this derived player-facing mirror disagrees.
+
+### DOCS-008 — Both challenge reference pages render the typed catalogue and link the two live reads
+
+*Accepted · 2026-08-10 · Task I3.*
+
+The challenge overview and archive both render `CHALLENGES` through the same fail-fast
+`ChallengeDetail.astro` component. A prose list of the six current names looked harmless while the
+windows matched, but it was a second catalogue that could omit the seventh definition without any
+build failure. Rendering the typed mirror on both pages makes adding a definition a single derived
+data edit and makes a missing component lookup fail the Astro build. `docs/event-details.md` remains
+authoritative when the mirror disagrees.
+
+Each rendered definition links separately to its server-rendered visitor result and its JSON result.
+Those are different useful surfaces, and hiding one behind a generic “live results” label made the
+reader guess which representation they would get. The pages also state that a challenge is a dated
+leaderboard whose standings do not alter ordinary boards or attach a second score to a profile;
+without that boundary, “temporary challenge” could sound like a modifier applied to every ranking.
+
+### DOCS-009 — The decision-log contents names areas and prefixes, not manually counted entries
+
+*Accepted · 2026-08-10 · Task J1.*
+
+The J1 coverage audit found six of the eleven entry totals in this file's Contents stale even though
+their links and area prefixes were correct. Those totals duplicate information already expressed by
+the headings, add nothing to navigation or next-number selection, and require every unrelated
+decision to edit a distant line. The Contents therefore keeps only each area's link and prefix.
+Audits derive counts and maxima from headings when they need them; the document no longer carries a
+second hand-maintained answer that can silently disagree with its own entries.
+
+### DOCS-010 — The joined event reference keeps structural coverage explicit and removes resolved drift
+
+*Accepted · 2026-08-10 · Task J2.*
+
+`docs/event-details.md` is the joined contract between wire events and every projection consumer,
+so a registry table that names only ordinary feeds must say where badge and challenge consumers are
+specified rather than implying they do not exist. The same audit makes `BodyDerived`, second-pass
+ordering, the full state pass, badge/challenge eligibility and replay-stability constraints explicit:
+these are structural properties that determine whether two implementations produce the same rows,
+not incidental implementation notes.
+
+The Known drift section remains a work list, not a changelog. Resolved and superseded items are
+removed once their owning references are correct, while genuine documented implementation quirks
+remain. This keeps an audit from repeatedly treating completed work as open and makes the remaining
+items actionable. The audit also verified the registries and conformance vectors against code rather
+than changing their already-correct counts, order or hashes.
+
+### DOCS-011 — The roadmap separates available KSA evidence from promised product work
+
+*Accepted · 2026-08-10 · Task J3.*
+
+The refactor made body catalogues, orbital elements and state vectors available without committing
+catlog to a server-owned body list or a 3D renderer. Those boundaries now live under Deliberately not
+built: otherwise a future reader could mistake prerequisite data for an unfinished feature and undo
+the open-set system design. The same section records why payload/booster mass, HUD delta-v and heat
+cannot honestly support the suggested projections, and points to the complete source survey instead
+of copying its evidence into another list that would drift.
+
+The new KSA reads remain source-verified but not game-verified. Their specific observable outcomes
+therefore belong in the existing first-run checklist: explicit-zero versus absence, event ordering,
+stable and changed system identity, finite orbital values, atomic state absence and measured frame
+cost. Keeping those checks beside the older patch and detector checks makes “works in KSA” one dated
+exercise rather than allowing compile-time evidence to be mistaken for a completed runtime test.
+
+### DOCS-012 — Final-contract documentation follows registries and durable seams, not plan-era snapshots
+
+*Accepted · 2026-08-10 · Task J4.*
+
+The final documentation audit removed transitional statements that remained after their dependent
+work landed: 23 event types, five locked types, empty future scope tables and future challenge
+results. These facts now follow the implemented 25-type registry, its exact six-entry mandatory set,
+and the live projection/read seams. Keeping the old snapshots would make otherwise-correct endpoint,
+schema and conformance descriptions disagree about which build they document.
+
+The UI contract now names the save and badge DOM hooks added by the ten new route patterns, while no
+longer attaching that contract to a manually counted number of tests. The KSA survey prose likewise
+describes its durable boundary—one capture per loaded system, cached across ordinary session
+boundaries—rather than treating the current once-per-launch call graph as the abstraction. These
+choices keep the references stable when tests are added or KSA gains another legitimate system-load
+path without weakening the exact behavior that implementations and end-to-end tests depend on.
+
+### DOCS-013 — `docs-site` gets a Privacy page, and it is the only page that tells that story
+
+*Accepted · 2026-08-10.*
+
+The player-facing site said the same things the datastar site did, and said them in three places:
+a "No email, ever" card on the splash page, a bullet list under *What catlog is*, and two sections
+plus a three-outcome table under *Your identity and your handle*. A reader who came to look up
+which events feed Softest Landing met the privacy argument three times before reaching an event.
+
+`start/privacy.mdx` now carries all of it — the email guarantee, what is and is not recorded, the
+`install` / `career` / `kid` table with the re-labelling rule, what is public, the
+ban/withheld/deleted table, and deletion — and it is fifth in *Start here*, after the pages that
+explain what catlog does. The others shed their copies and link: *What catlog is* keeps two
+sentences and a card, *Your identity and your handle* keeps the handle's public role, what a ban
+does to visibility and the career rewind mark, and *Sessions and flights* keeps a parenthetical
+where a kitten identifier is described. `src/data/events.ts` keeps its per-field note that an
+identifier is re-labelled, because that is the field's published shape and the event browser is
+where a reader asks about it.
+
+The ban/withheld/deleted table moved rather than being duplicated, which is the point: it answers
+"what happens to my flights", and having it on two pages is exactly how the two would come to
+disagree. `start/identity.mdx` links to it in a sentence.
+
+This mirrors [UI-063](#ui-063) on the datastar site, deliberately: the two sites are the same
+information for the same people, and a rule about where a claim lives is worth nothing if it holds
+on only one of them.

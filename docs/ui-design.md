@@ -309,7 +309,7 @@ stay hermetic (D2 — the same argument that made
 
 **Latin subset only, and it is safe for the dynamic strings but not for every glyph we
 write.** Every dynamic string catlog renders is ASCII by construction: handles are
-`[a-z0-9._-]`; kitten names are "sanitized to printable US-ASCII, max 32 chars"
+`[a-z0-9._-]`; kitten names are "sanitized to printable US-ASCII, max 128 chars"
 (`docs/events.md`); body names pass `statSuffix`'s `[a-z0-9._-]` for boards and `sanitize()`
 for the feed. The punctuation is ours, and it has to be checked one glyph at a time against
 the package's own `unicode.json` — **the `unicode-range` is the list of glyphs the file
@@ -612,10 +612,20 @@ surface and the pages that document it; `/login` and `/dashboard` need a session
 
 | Route | Data | What a human wants here |
 |---|:--:|---|
-| `/` | ● | **Where am I and what is happening?** Global tiles, three featured boards, the live feed, a search box, and — if a "me" handle is set — a personal card above the fold |
+| `/` | ● | **Where am I and what is happening?** Global tiles, the current open challenge, three featured boards, the live feed, a search box, and — if a "me" handle is set — a personal card above the fold |
 | `/boards` | ● | The index. Which boards exist, how populated, which way each reads |
-| `/boards/{stat}` | ● | One board, paged, with a period selector, my row highlighted and reachable in one click |
+| `/boards/{stat}` | ● | One board ranked by players, saves or systems, paged, with applicable period controls and my row highlighted |
+| `/badges` | ● | Every published merit badge, grouped in catalogue order with its holder count |
+| `/badges/{badge}` | ● | One badge's first-earned holder ranking, optionally filtered to one celestial system |
+| `/challenges` | ● | Every challenge grouped as Open now, Coming up or Finished, preserving the API order inside each group |
+| `/challenges/{challenge}` | ● | One challenge's rule, UTC window, scope and retained ranked results |
+| `/systems` | ● | The systems catlog has recorded, with catalogue size and participation counts |
+| `/systems/{slug}` | ● | One system as a reference catalogue: its home world and the physical/orbital facts for every body |
 | `/p/{handle}` | ● | One player: every placement, every rank *and its denominator*, and a way to start comparing |
+| `/p/{handle}/badges` | ● | One player's earned lifetime badges and fixed-badge checklist |
+| `/p/{handle}/saves` | ● | One player's saves: system, played time, activity bounds and number of boards |
+| `/p/{handle}/saves/{ordinal}` | ● | One save: its system and playtime, then every board placement ranked among saves |
+| `/p/{handle}/saves/{ordinal}/badges` | ● | One save's earned badges and its system-local checklist |
 | `/p/{handle}/events` | ● | **New.** The raw event log for that handle, live-tailed on page one |
 | `/events` | ● | **New.** The whole raw log, every player mixed together — same rows, same redaction, `?type=`/`?handle=` filters, live-tailed on page one |
 | `/compare?handles=a,b,c` | ● | **New.** Up to 8 players side by side across every board any of them is on |
@@ -639,12 +649,144 @@ surface and the pages that document it; `/login` and `/dashboard` need a session
   to the page containing them;
 - `/p/{handle}` says "This is you" rather than "This is me".
 
-**B — "see global stats for all."** `/` opens with global tiles, then the featured boards,
+The profile button row places **Saves** and **Badges** beside **Compare** and **Raw events**. Saves
+remain subordinate to a player's public profile. Badges are also a collection-wide catalogue, so
+they add the sixth top-level link between Leaderboards and Compare (`#nav-badges`) and use
+`aria-current="page"` on all four badge pages.
+
+Challenges add the seventh top-level link (`#nav-challenges`) after Badges. **Seven links is the
+header's maximum budget.** A later collection feature must enter through an existing destination or
+justify a different navigation structure; it must not silently add an eighth link and rely on
+wrapping. Both challenge pages use `aria-current="page"` on that link.
+
+`/p/{handle}/saves` is one `.panel` containing a table headed **Save · System · Played · First
+seen · Last seen · Boards · Badges**. Each Save link is the player's first-seen ordinal and opens its detail
+page. System is the friendly name linked to `/systems/{slug}`, never the content hash; a save that
+has not reported a system shows the ordinary no-value glyph `—`, not `NaN`, `0`, blank text or an
+empty link. Played passes `playtime_ms` through `units.Format` as `ms`, so the duration ladder may
+render `37.5 s`, `4d 06h` or another appropriate pair. First seen and Last seen are fixed-UTC
+instants under §4.4, not durations. Boards is the save's board-row count; Badges is the exact
+per-save award count and links to that save's badge page. The empty state is exactly
+*"No saves recorded yet."*
+
+`/p/{handle}/saves/{ordinal}` identifies the page as *"Save 2 · Sol · played 4d 06h"* (omitting the
+system segment when it is unknown) and renders that save's stats as the profile table scoped to one
+career. A placement says *"#3 of 41 saves on Landings"*: both the visible rank and the raw entrant
+denominator are save rows, never players. The table reuses the shared `value-cell` and
+`context-cell` partials, so §4.4's exact `data-value`, title and unit rendering and §6.1's context
+allow-list remain identical to board and profile rows.
+
+The save summary ends with its badge count linked to `/p/{handle}/saves/{ordinal}/badges`. The saves
+index obtains every count through one grouped read keyed by public save ordinal; it never calls the
+per-save checklist once per row. This keeps a player with many saves at a constant number of
+projection reads and keeps raw career keys below the read API.
+
+The existing rewound dagger and its exact tooltip remain unchanged: *"An earlier save of this
+career was loaded, so its clock did not only run forwards."* A true `system_changed` adds a separate
+mark with the exact tooltip *"The celestial system this save is in changed. Per-system comparisons
+before and after are not comparing the same worlds."* Both qualify the save's provenance; neither
+excludes a row, changes its value or changes its rank.
+
+**Merit badges.** `/badges` preserves the registry's group and badge order. Each entry is a `.tile`
+inside `.tiles`, never a second card primitive, and carries `data-badge` plus a tabular holder count
+with `data-value`. `/badges/{badge}` is the earliest-earned holder table with Rank, Player, Save,
+System, Earned and Detail columns. The optional `?system=<slug-or-hash>` filter is resolved through
+the read API before the page query; pagination clones the query, so the system survives Previous
+and Next links. Save and system values are friendly links, never raw careers or hashes, and either
+missing value is an em dash. Earned times are fixed UTC `<time>` elements.
+
+Player and save badge pages use the same template and separate **Earned** from **Unearned**. Earned
+tiles use `--color-accent` as a fill with `--color-accent-fg` on top; unearned tiles use
+`--color-fg-muted`. No badge introduces a colour, animation, icon or container shape. Every earned
+tile shows linked `Save N · System name`; an unknown save or system is an em dash, never a blank
+chip. The empty earned state is exactly *"No badges yet. Fly something."* Numbers and timestamps
+carry `data-value`; earned times render `YYYY-MM-DD HH:MM UTC`.
+
+`/challenges` contains three `.panel` tables in the fixed order **Open now**, **Coming up**,
+**Finished**. Rows remain in the order returned by `ChallengeList`; templates do not re-sort a
+server-clock decision. Their empty copies are exactly *"Nothing running just now."*, *"Nothing
+scheduled yet."* and *"Nothing has finished yet."* The home page uses that same single catalogue
+read, selects its first open entry, and renders its top three through the existing `board-table`
+partial with `Compact: true`. With no open entry it renders no challenge shell.
+
+`/challenges/{challenge}` is a standard panel plus table, never a new card shape. Opens and closes
+are fixed UTC instants. The parenthesised close hint is plain server-rendered prose from the injected
+server clock—no browser clock and no `Intl` date formatter. Every open page says exactly *"Your
+flights have to reach catlog before it closes. If you play offline, get back online in time."*
+Finished pages omit that reminder but retain the same ranked archive and pagination. Save scope
+adds only a friendly `Save N` link; system scope adds only the friendly system link. Raw save labels,
+career keys and system hashes never render. Values and receive times carry exact `data-value`, and
+the value/context partials remain shared with ordinary rankings.
+
+**B — "see global stats for all."** `/` opens with global tiles, the current open challenge when
+there is one, then the featured boards,
 then the feed. The **period selector** on `/boards/{stat}` —
 `alltime | daily | weekly | monthly | yearly`, fully supported by the API since the rolling
 periods landed and **unused when this was written** — turns a static ranking into "what
 happened this week", which is the cheapest available way to make a leaderboard worth
 revisiting. Shipping it is most of Journey B.
+
+Every board page also carries a **ranking selector** directly above its period controls. It
+renders `#board-scopes` as links labelled **Players**, **Saves** and **Systems**, in that order.
+The selected `.chip` has `aria-current="page"`; each link carries `data-scope` and remains an
+`<a href>`. `player` is the default and is omitted from a canonical URL. The label helper falls
+back to an unknown scope's raw key so a future server-advertised scope stays navigable rather than
+rendering blank.
+
+Windows apply only to player rankings. Save and system rankings are all-time, so their pages do not
+render `#board-periods`; in save scope `#board-scope-note` says exactly *"A save is already a period,
+so these boards have no time windows."* System scope likewise offers no period links rather than
+constructing a query the read API refuses. Changing scope or period resets the row offset. Scope,
+period, system filter and bucket links, and both pagers, are built from a copied query rather than
+reconstructed from a hand-picked subset: changing one dimension preserves every other applicable
+dimension. A switch to player scope drops `system`, because player scope rejects that filter; a
+switch to save or system scope drops `period` and `at`, because those scopes are all-time; a pager
+changes only `offset`.
+
+The table remains one ranking with scope-specific identity columns between Handle and the value:
+
+- Save scope adds a **Save** cell, `td.save`, linking to `/p/{handle}/saves/{save}` as
+  *"Save N"*.
+- Save and system scope add a **System** column. It shows the friendly system name and links to
+  `/systems/{slug}`; it never prints the content hash. A save whose system is not yet known uses the
+  site's ordinary em dash rather than a blank label or invented system.
+
+On a body-derived board in player scope, a note appears above the table instead of adding a
+misleading system column: *"This board ranks a **name**. If two celestial systems both have a
+Luna, both are here — see the same board [by system](?scope=system)."* The final phrase is a real
+link, with other applicable query values preserved. This note is absent in save and system scope,
+where the row itself provides the comparison context.
+
+None of these columns changes §4.4. Every `td.value` continues to carry
+`data-value="<the exact float, as sent>"`, even when the rendered value is a duration such as
+`5m 13s`; pager, sorting and e2e assertions never recover a number from display text.
+
+**Celestial-system reference pages.** Systems do not take a top-level navigation slot. They are
+context for a comparison rather than a destination every visit begins with, so a reader reaches
+them from a board's scope controls, a friendly System link on a save or scoped board row, or the
+`/boards` header sentence *"catlog is tracking N celestial systems"*. That sentence links to
+`/systems` and uses the server's actual count. It is present even when the count is zero; the empty
+index then says exactly *"No systems recorded yet."*
+
+`/systems` is one `.panel` containing a **Name · Bodies · Players · Saves** table, ordered by player
+count descending. The name links to `/systems/{slug}`. Counts are plain tabular numerals: these are
+catalogue and participation facts, not placements, so the table has no rank column, bar or winner
+accent.
+
+`/systems/{slug}` opens with the friendly system name, home body, body count and player count, then
+one table headed **Name · Class · Parent · Radius · Sphere of influence · Semi-major axis · Period**.
+Rows order by tree depth and then semi-major axis so the catalogue reads outward from its roots.
+Every numeric cell uses `units.Format`, remains `tabular-nums`, and carries the exact source float in
+`data-value`; absent parent/orbit values use the ordinary em dash. Home and parent keys resolve to
+body display names, with the key itself as the honest fallback; neither page renders the system's
+content hash. The six orbital angles remain in the API for a future renderer and are intentionally
+absent from this table: seven useful columns are a reference, while expanding it into an element
+dump would make the page harder to answer from.
+
+Both pages use the restrained reference treatment established by `/docs/api`: one bordered panel,
+ordinary table rows and no leaderboard ranks, bars or accent fills. Their purpose is to answer
+*"which Luna is that?"* and *"what is the game actually simulating?"*, not to imply that a system or
+body has won anything.
 
 **C — "compare with friends."** From a profile, **Compare** adds that handle to a set held
 in the URL. From search, a multi-select adds several. `/compare?handles=…` renders one row
@@ -1156,6 +1298,21 @@ the intention. A model, matching the existing voice:
 > relabelled per player for the same reason: they still group your own records together, and
 > they cannot be matched against anybody else's.
 
+**This rule governs the wording of a statement, not the number of pages that carry one.**
+The register above is mandatory *where the claim is made*; it is not a licence to restate
+the claim on every page. **`/docs/privacy` is the single place the privacy narrative is
+told**, in full and in this register, and every other surface links to it instead of
+paraphrasing it. Two carve-outs, and only two:
+
+- **`/login`** states in one sentence that no email address is requested, because the reader
+  is about to authorise an identity provider and the scope is the decision in front of them.
+- **`/docs/api`** states which fields never appear in a response, because that is the shape
+  of the API and a client author needs it in the reference.
+
+Everything else — the footer, the raw-event pages, `/docs/install` — carries a link and a
+factual pointer, never the argument. The main use of this site is browsing stats; a reader
+who wants the guarantee goes and reads it once. See [DECISIONS.md](DECISIONS.md) UI-063.
+
 **Destructive confirmations.** *"This deletes every event, batch and credential, and retires
 your handles permanently — neither you nor anybody else can ever claim them again. It cannot
 be undone."* Consequences, in order, no jokes.
@@ -1192,17 +1349,40 @@ rendered has crossed the line this budget exists to hold.
 
 Things a redesign will delete without noticing, and what breaks when it does.
 
-**The DOM contract the e2e suite asserts (all 47 tests depend on it).** `#home-title`;
+**The DOM contract the e2e suite asserts.** `#home-title`;
 `#tile-boards[data-value]`, `#tile-placements[data-value]`;
 `#featured-boards .featured-board[data-stat]`; `tr.board-row[data-rank][data-handle]` with
 `td.value[data-value]` and `td.context`; `#boards-index tr.boards-row[data-stat]
 [data-ascending]` with `td.unit` and `td.direction`; `#boards-title`; `#boards-note` (must
 contain the server's `min_players` number); `#board-title[data-stat]`;
 `#board-direction[data-ascending]`; `#board-periods a[data-period]`;
+`#board-scopes a[data-scope]`; `#board-scope-note`; `td.save`;
+`#saves-title[data-handle]`; `#saves-table tr.save-row[data-save][data-save-id]`;
+`#saves-empty`; `#save-title[data-handle][data-save]`; `#save-summary` with
+`.system-changed` when applicable and `#save-badges[data-value]`; `#save-stats
+tr.profile-row[data-stat][data-rank][data-ascending]`; `#save-stats-empty`;
+`#boards-systems`; `#systems-index tr.system-row[data-system]` (the value is the slug) with numeric
+`td.value[data-value]`; `#system-title[data-system]` (also the slug); `#system-bodies
+tr.system-body[data-body][data-rank]` with numeric `td.value[data-value]` (the `value` class supplies
+tabular numerals);
 `#board-bucket[data-bucket]`; `#board-prev`, `#board-next`, `#board-range`;
+`#badges-title`; `#badges-catalogue[data-min-players]` with
+`.badge-group[data-group]` and `.badge-tile[data-badge]`; `.badge-count[data-value]`;
+`#badges-note` when the publication threshold exceeds one; `#badge-title[data-badge]`;
+`#badge-system-filter` when filtered; `#badge-holders tr.badge-holder[data-rank][data-handle]`;
+`#badge-holders-empty`; `#badge-prev`, `#badge-next`, `#badge-range`;
+`#player-badges-title[data-handle]` with optional `[data-save]`; `#earned-badges
+.badge-earned[data-badge][data-earned]`; `#earned-badges-empty`; `#unearned-badges
+.badge-unearned[data-badge]`; `#profile-badges`;
+`#open-challenge[data-challenge]`; `#challenges-index[data-now]` with
+`.challenge-group[data-state]` and `tr.challenge-row[data-challenge][data-state]`;
+`#challenge-title[data-challenge]`; `#challenge-metadata[data-state]`; `#challenge-closes`;
+`#challenge-close-hint`; `#challenge-deadline` on open pages only;
+`#challenge-standings tr.challenge-holder[data-rank][data-handle]` with
+`td.value[data-value]`; `#challenge-prev`, `#challenge-next`, `#challenge-range`;
 `thead th.value` (the unit header, §4.4); `#profile-handle[data-handle]`;
 `#profile-stats tr[data-stat][data-rank]` with `td.rank[data-players]`;
-`#profile-me-toggle`, `#profile-me-note`, `#profile-compare`, `#profile-events`;
+`#profile-me-toggle`, `#profile-me-note`, `#profile-compare`, `#profile-saves`, `#profile-events`;
 `#me-chip`, `#me-link`, `#me-gone`, `#me-standing`, `#me-standing-rows .standing-row`,
 `tr.is-me`; `#search-q`, `#search-results li[data-handle]`, `#search-suggest li a`,
 `#search-short`, `#search-empty`; `#compare-table` with `th.handle-col[data-handle]`,
@@ -1216,7 +1396,7 @@ readiness signal), `#events-types a[data-type]`, `#events-newest`, `#events-olde
 hint, plus its `paused` state), `#events-live` (the pause/resume toggle, hidden until me.js
 wires it), `#events-tail` (the `data-init` element holding the SSE open),
 `#events-heartbeat`, `#events-handle-filter[data-handle]` with `#events-handle-clear` on the
-global page, `#nav-events`; `#theme-toggle`;
+global page, `#nav-events`; `#nav-badges`; `#nav-challenges`; `#theme-toggle`;
 `#feed-panel` (and `#feed-panel[data-stream]` + `#feed-status`, the connection hint me.js
 maintains); `#feed[data-source]` — there is deliberately no `data-count`, which the SSE
 prepend path could not keep true, and a sometimes-wrong attribute is worse than none;

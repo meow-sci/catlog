@@ -1,7 +1,7 @@
 ---
 title: Every board
 description: >-
-  All 40 fixed leaderboards and the two board families, with the events behind
+  All 50 fixed leaderboards and the three board families, with the events behind
   each one and every rule that disqualifies a value.
 sidebar:
   order: 2
@@ -10,8 +10,9 @@ sidebar:
 import { Aside } from "@astrojs/starlight/components";
 import BoardDetail from "../../../components/BoardDetail.astro";
 
-Forty fixed boards, in the order they are published, then the two families whose
-members appear as people reach new worlds and find new ways to lose a vehicle.
+Fifty fixed boards, in the order they are published, then the three families whose
+members appear as people tumble on new worlds, reach new worlds and find new ways to lose a vehicle.
+The newest fixed boards appear after the original 42 so their published positions do not move.
 
 ## Records — how much you survived
 
@@ -123,6 +124,13 @@ Orbit**, which describes what got there rather than where it got to.
 <BoardDetail stat="landed_bodies" />
 <BoardDetail stat="landings" />
 
+<Aside type="note" title="A world counts once in each scope">
+  Your player total is the union of the worlds reached across all your saves. A career row asks the
+  same question of one save, while a celestial-system row takes the union across all your saves that
+  use that system. Reaching the same world in two saves therefore still counts once in the player
+  and system totals, but once in each save's own row.
+</Aside>
+
 <Aside type="note" title="Bodies Landed On and Landings count different things">
   Landings counts arrivals: every time you brought something down and it survived, at any speed, on
   any world, however many times over. Bodies Landed On counts worlds, once each — and it asks the
@@ -143,6 +151,13 @@ Orbit**, which describes what got there rather than where it got to.
 
 <BoardDetail stat="distance_travelled" />
 
+<Aside type="note" title="The same roster name in two saves means two cats">
+  KSA keeps its roster inside the save. If two saves both have a kitten called Mittens, those are
+  different cats even though catlog receives the same private kitten label for both. Distance
+  Travelled keeps each save's roster separate and adds both totals: the player row adds every save,
+  a career row adds one save, and a celestial-system row adds the saves using that system.
+</Aside>
+
 ## Per-kitten records
 
 The two boards above and below answer different questions about the same roster:
@@ -162,8 +177,9 @@ Two rules apply to all of them:
 
 - A reading with no career or no clock attached is skipped. An absent time is not
   treated as zero, which would otherwise win every board instantly.
-- The time is taken **per player**, not per career. Your best across all your
-  careers is your entry.
+- The time is taken **per player** on the ordinary board: your best across all
+  your saves is your entry. Every board can also be read **per save** — see
+  [Saves](/catlog/leaderboards/saves/) — where each of your saves ranks on its own.
 
 If a career's clock ever went backwards — you loaded an older save — it is marked
 as rewound beside the row. **The mark excludes nothing.** It is there so a reader
@@ -171,7 +187,82 @@ can see the clock behind the number did not run forwards.
 
 <BoardDetail stat="fastest_to_orbit" />
 
-## The two families
+## The save itself
+
+These boards describe the saves you play rather than a particular flight. **Longest
+Save** follows the career clock attached to events: on the player board it picks
+your longest-running save, while a career row shows how long that one save has
+been played. A flight flag does not disqualify that time, because the duration of
+a save is not a flying feat.
+
+**Play Sessions** counts the first session as well as every later load. It is the
+number of times play began, not merely the number of times a save was resumed.
+
+<BoardDetail stat="career_playtime" />
+<BoardDetail stat="play_sessions" />
+
+## The appended boards
+
+<BoardDetail stat="botched_landings" />
+
+Kitten Tumbles preserves the original total: every recorded tumble counts, including a grounded
+trip or a rough cartwheel with several bounce edges. Did Not Land On Their Feet is the narrower
+view. It counts only a tumble that began from airborne, which is how the game's movement states
+identify a landing that did not finish upright. An unknown or future movement state remains in the
+total and does not become a botched landing by guesswork.
+
+<BoardDetail stat="parts_lost" />
+<BoardDetail stat="biggest_parts_lost" />
+
+Both read the same final intact-vehicle part count. Parts In Lost Vehicles adds those sizes across
+your RUDs; Biggest Vehicle Lost keeps the largest single one. **KSA does not blow parts off one at a
+time — a vehicle either survives or it does not. This is how big the thing was when it stopped
+existing.** A zero means the size could not be read and moves neither board.
+
+<BoardDetail stat="kittens_to_orbit_and_back" />
+
+Here **home** means the flight ended through KSA's recovery action. Recovery is only available on
+the system's home world, while at rest and in contact, so landing somewhere else and leaving the
+crew there is not coming home. The crew list at recovery is the authority: a kitten who boarded
+after orbit and rode home counts, while one who reached orbit but transferred away before recovery
+does not. The orbit must be recorded before recovery; an orbit event that arrives later cannot turn
+an earlier recovery into a round trip.
+
+<BoardDetail stat="biggest_crew_wreck" />
+<BoardDetail stat="kittens_wrecked" />
+
+Both boards use the kittens aboard a whole vehicle when a physics RUD takes that vehicle out.
+**This is not a body count. It is how many kittens were aboard when a vehicle was lost. Physics
+accidents normally send them home; a player-initiated scuttle is a different game path, so catlog
+does not claim what happened to them here.** Most Kittens Aboard A Lost Vehicle keeps the largest
+single crew; Kittens Aboard Lost Vehicles adds the crews across qualifying RUDs. Neither counts
+individual bodies, parts, crashes or explosions, and catlog does not publish a kittens-scuttled
+board.
+
+<BoardDetail stat="bodies_by_1y" />
+<BoardDetail stat="bodies_by_10y" />
+
+These are best-save challenges. A save counts each different world first reached at or before the
+exact limit; the player view keeps the best one save, and the celestial-system view keeps the best
+one save using that system. Neither view joins early arrivals from several saves into a result no
+single save achieved. Loading an older point can move a world's first known arrival earlier, so
+catlog checks the save's result again on every qualifying arrival rather than only when a world is
+new.
+
+If a save's celestial system is not known yet, its save and player results still move; only the
+celestial-system view is absent until there is a system identity to rank under.
+
+A catlog year here is exactly **365 days**: 31,536,000 seconds. Ten years is exactly 315,360,000
+seconds. It is a flat duration used by catlog, not the orbital period of Earth or any other world,
+and no fact about the current celestial system defines it.
+
+## The three families
+
+<BoardDetail stat="tumbles_on_<body>" />
+
+Each world's board counts all tumbles there, not only botched landings. A world name that cannot
+form a safe board address still contributes to Kitten Tumbles; only its dedicated family member is
+missing.
 
 <BoardDetail stat="rud_<cause>" />
 

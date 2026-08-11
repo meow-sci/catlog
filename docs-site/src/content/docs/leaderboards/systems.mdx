@@ -1,0 +1,66 @@
+---
+title: Celestial systems and fair comparisons
+description: >-
+  Why catlog keeps worlds from different celestial systems separate, how it
+  recognises matching content, and what that reveals.
+sidebar:
+  order: 5
+---
+
+import { Aside, LinkCard } from "@astrojs/starlight/components";
+
+To catlog, a **celestial system** is the set of worlds your game loaded. Those
+worlds come from files shipped with Kitten Space Agency, and a system mod — or
+you, with a text editor — can change them.
+
+## Why a leaderboard cares
+
+If you and I are both playing the game as it ships, we are in the same system
+and our Luna records are the same race. If you have installed a system mod, your
+Luna may be a completely different world. catlog can tell, so it does not
+pretend otherwise.
+
+A board can therefore compare players, saves or systems without treating two
+different worlds with the same name as interchangeable. The system reference
+pages show the worlds behind each comparison: what they are called, how large
+they are and where they orbit.
+
+<LinkCard
+  title="How board views work"
+  href="/catlog/leaderboards/"
+  description="Players, saves and celestial systems are three views of the same board."
+/>
+
+## How catlog knows two systems match
+
+Once, when you load a save, catlog writes down the worlds and where they orbit
+and makes a fingerprint of that catalogue. Everyone playing the same stock game
+produces the same fingerprint. **It is about shared game content, not about
+you**, and matching across players is exactly what makes a fair system
+comparison possible.
+
+[The celestial-system event reference](/catlog/events/systems/) explains what
+the mod records, when it records it and why a catalogue is complete or
+explicitly incomplete.
+
+## A save keeps its first system
+
+A save never changes system in catlog. If you edit the system files and reload
+that save, catlog marks that the content changed but keeps the save bound to the
+first system it reported. The save and its qualifying results keep ranking
+normally. Nothing is deleted, no score is lowered, and the mark is not an
+accusation.
+
+## Every World means every world in one system
+
+The **Every World** badge is judged against one celestial system, not against a
+hard-coded list of stock worlds. Its page names the system, so “Every World” in
+stock KSA is not presented as the same achievement as “Every World” in a
+twelve-planet conversion.
+
+<Aside type="note" title="A custom system can be recognisable">
+  A popular stock fingerprint belongs to many players. A one-off custom system may belong to only
+  you, so publishing it can make your play recognisable even though the fingerprint contains no
+  account or machine identity. That is the same trade a memorable handle makes. Read [Your identity
+  and your handle](/catlog/start/identity/) for the rest of the public-identity boundary.
+</Aside>

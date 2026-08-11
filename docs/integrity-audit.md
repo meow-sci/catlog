@@ -133,16 +133,16 @@ so ask it.
 
 **The `[events]` locked list (M10, added 2026-08-09).** The mod now lets a player switch individual
 event types off in `catlog.toml`, which is a **new player-controlled surface that can suppress
-events** and therefore belongs in this audit. Five types refuse the setting, and a `false` on any of
+events** and therefore belongs in this audit. Six types refuse the setting, and a `false` on any of
 them is dropped with a warning naming the key.
 
 Against the five-part test, taking the refusal itself as the mechanism under audit:
 
 1. **Stock-data test.** It compares against catlog's own wire contract and nothing else — a set of
-   five type names from the registry, tested with a set membership. It models nothing about what a
+   six type names from the registry, tested with set membership. It models nothing about what a
    player ought to be able to achieve, and reads no game value at all.
-2. **One-look test.** One `HashSet` with the reason for each of the five written beside it, read by
-   both enforcement points and by the test that asserts the list is exactly those five.
+2. **One-look test.** One `HashSet` with the reason for each of the six written beside it, read by
+   both enforcement points and by the test that asserts the list is exactly those six.
 3. **No-new-machinery test.** No table, no stage, no job, no accumulated state. It is a membership
    test on a string, evaluated per envelope.
 4. **Honest-player test.** An honest player cannot trip it, because tripping it requires typing

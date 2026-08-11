@@ -30,6 +30,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/meow-sci/catlog/server/internal/config"
 	"github.com/meow-sci/catlog/server/internal/identity"
@@ -70,11 +71,29 @@ const BoardRows = 100
 // relabelled in. Widen it deliberately; do not bypass it.
 type Read interface {
 	BoardList(ctx context.Context) (readapi.BoardsResponse, error)
+	BadgeList(ctx context.Context) (readapi.BadgesResponse, error)
+	Badge(ctx context.Context, badge string, system *readapi.SystemRef, limit, offset int) (readapi.BadgeResponse, bool, error)
+	ChallengeList(ctx context.Context) (readapi.ChallengesResponse, error)
+	Challenge(ctx context.Context, challenge string, limit, offset int) (readapi.ChallengeResponse, bool, error)
 	// Board takes the window as well as the page. `/boards/{stat}` now offers a
 	// period selector, so this site passes through whatever `?period=` named
 	// rather than always asking for `alltime`.
-	Board(ctx context.Context, stat, period, bucket string, limit, offset int) (readapi.BoardResponse, bool, error)
+	Board(ctx context.Context, stat, period, bucket, scope, system string, limit, offset int) (readapi.BoardResponse, bool, error)
+	// ResolveSystem turns a URL-facing slug or hash into the canonical compact
+	// identity a scoped board read accepts.
+	ResolveSystem(ctx context.Context, key string) (readapi.SystemRef, bool, error)
+	// Systems and System are the catalogue read seam. Pages never reach into
+	// projections directly, including when a URL supplies the raw hash form.
+	Systems(ctx context.Context) (readapi.SystemsResponse, error)
+	System(ctx context.Context, key string) (readapi.SystemDetail, bool, error)
 	Player(ctx context.Context, handle string) (readapi.PlayerResponse, bool, error)
+	// Saves and Save are the read seam for the B5 pages. B4 adds them here so
+	// those pages cannot be tempted to query projections directly.
+	Saves(ctx context.Context, handle string) (readapi.SavesResponse, bool, error)
+	Save(ctx context.Context, handle string, ordinal int64) (readapi.SaveResponse, bool, error)
+	PlayerBadges(ctx context.Context, handle string) (readapi.PlayerBadgesResponse, bool, error)
+	SaveBadges(ctx context.Context, handle string, ordinal int64) (readapi.PlayerBadgesResponse, bool, error)
+	SaveBadgeCounts(ctx context.Context, handle string) (map[int64]int64, bool, error)
 	// PlayerEvents is the raw log behind `/p/{handle}/events`.
 	PlayerEvents(ctx context.Context, handle, typ string, before int64, limit int) (readapi.EventsResponse, bool, error)
 	// GlobalEvents is the whole log's newest page, every player mixed together —
@@ -141,6 +160,10 @@ type Deps struct {
 	Accounts Accounts
 	// Log receives one line per failed render.
 	Log *slog.Logger
+	// Now supplies the server clock for fixed relative deadline prose. The
+	// challenge index's own Now remains authoritative for selecting the home
+	// page's currently-open definition.
+	Now func() time.Time
 }
 
 // Server serves the §5.7 HTML routes and the SSE feed.
@@ -170,6 +193,9 @@ func New(deps Deps) (*Server, error) {
 	if deps.Log == nil {
 		deps.Log = slog.Default()
 	}
+	if deps.Now == nil {
+		deps.Now = time.Now
+	}
 	tpl, err := parseTemplates()
 	if err != nil {
 		return nil, err
@@ -187,7 +213,17 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /{$}", s.handleHome)
 	mux.HandleFunc("GET /boards", s.handleBoards)
 	mux.HandleFunc("GET /boards/{stat}", s.handleBoard)
+	mux.HandleFunc("GET /badges", s.handleBadges)
+	mux.HandleFunc("GET /badges/{badge}", s.handleBadge)
+	mux.HandleFunc("GET /challenges", s.handleChallenges)
+	mux.HandleFunc("GET /challenges/{challenge}", s.handleChallenge)
+	mux.HandleFunc("GET /systems", s.handleSystems)
+	mux.HandleFunc("GET /systems/{slug}", s.handleSystem)
 	mux.HandleFunc("GET /p/{handle}", s.handleProfile)
+	mux.HandleFunc("GET /p/{handle}/badges", s.handlePlayerBadges)
+	mux.HandleFunc("GET /p/{handle}/saves", s.handleSaves)
+	mux.HandleFunc("GET /p/{handle}/saves/{ordinal}", s.handleSave)
+	mux.HandleFunc("GET /p/{handle}/saves/{ordinal}/badges", s.handleSaveBadges)
 	mux.HandleFunc("GET /p/{handle}/events", s.handlePlayerEvents)
 	mux.HandleFunc("GET /events", s.handleEvents)
 	mux.HandleFunc("GET /stats", s.handleStats)

@@ -93,15 +93,15 @@ public sealed class CareerTests
         string firstSession = pipeline.SessionId;
 
         // Reloading the same save: new session, same career.
-        EventEnvelope reload = Assert.Single(pipeline.ProcessSignal(
-            Loaded(simT: 4_000, career: TestData.CareerId)));
+        EventEnvelope reload = pipeline.ProcessSignal(
+            Loaded(simT: 4_000, career: TestData.CareerId)).Single(static e => e.Type == EventTypes.SessionStarted);
         Assert.NotEqual(firstSession, reload.Session);
         Assert.Equal(TestData.CareerId, reload.Career);
         Assert.Equal(TestData.CareerId, pipeline.CareerId);
 
         // Loading a different save: new session and a new career.
-        EventEnvelope other = Assert.Single(pipeline.ProcessSignal(
-            Loaded(simT: 12.5, career: TestData.OtherCareerId)));
+        EventEnvelope other = pipeline.ProcessSignal(
+            Loaded(simT: 12.5, career: TestData.OtherCareerId)).Single(static e => e.Type == EventTypes.SessionStarted);
         Assert.NotEqual(reload.Session, other.Session);
         Assert.Equal(TestData.OtherCareerId, other.Career);
         Assert.Equal(TestData.OtherCareerId, pipeline.CareerId);
@@ -117,8 +117,9 @@ public sealed class CareerTests
     {
         EventPipeline pipeline = TestData.Pipeline();
 
-        EventEnvelope started = Assert.Single(pipeline.ProcessSignal(
-            new SessionLoadedSignal(0, TestData.WallMs, "2026.8.5.5168", "0.1.0")));
+        EventEnvelope started = pipeline.ProcessSignal(
+            new SessionLoadedSignal(0, TestData.WallMs, "2026.8.5.5168", "0.1.0", System: TestData.SystemSurvey()))
+            .Single(static e => e.Type == EventTypes.SessionStarted);
 
         Assert.Equal(TestData.CareerId, started.Career);
     }
@@ -135,10 +136,10 @@ public sealed class CareerTests
         EventPipeline pipeline = TestData.Pipeline();
         pipeline.ProcessSignal(TestData.Created(simT: 0));
 
-        EventEnvelope late = Assert.Single(pipeline.ProcessSignal(
-            Loaded(simT: 9_000, career: TestData.CareerId)));
-        EventEnvelope early = Assert.Single(pipeline.ProcessSignal(
-            Loaded(simT: 1_200, career: TestData.CareerId)));
+        EventEnvelope late = pipeline.ProcessSignal(
+            Loaded(simT: 9_000, career: TestData.CareerId)).Single(static e => e.Type == EventTypes.SessionStarted);
+        EventEnvelope early = pipeline.ProcessSignal(
+            Loaded(simT: 1_200, career: TestData.CareerId)).Single(static e => e.Type == EventTypes.SessionStarted);
 
         Assert.Equal(late.Career, early.Career);
         Assert.True(early.SimT < late.SimT, "the reloaded save's clock must be reported as it is");
@@ -173,5 +174,5 @@ public sealed class CareerTests
     }
 
     private static SessionLoadedSignal Loaded(double simT, string career)
-        => new(simT, TestData.WallMs, "2026.8.5.5168", "0.1.0", career);
+        => new(simT, TestData.WallMs, "2026.8.5.5168", "0.1.0", career, TestData.SystemSurvey());
 }

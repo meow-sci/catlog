@@ -108,6 +108,27 @@ public sealed record TelemetrySnapshot(
     /// <summary>Inclination in <b>degrees</b> — the game stores radians, the wire wants <c>inc_deg</c>.</summary>
     public double IncDeg { get; init; }
 
+    /// <summary>Semi-major axis, in metres.</summary>
+    public double SmaM { get; init; }
+
+    /// <summary>Longitude of the ascending node, in degrees.</summary>
+    public double LanDeg { get; init; }
+
+    /// <summary>Argument of periapsis, in degrees.</summary>
+    public double ArgpDeg { get; init; }
+
+    /// <summary>Time at periapsis, in game seconds.</summary>
+    public double TPe { get; init; }
+
+    /// <summary>Orbital period in seconds, or 0 for an unbound trajectory.</summary>
+    public double PeriodS { get; init; }
+
+    /// <summary>
+    /// Body-centred inertial position and velocity at this sample, or null unless all six
+    /// components were finite and relative to <see cref="Body"/>.
+    /// </summary>
+    public StateVec? State { get; init; }
+
     /// <summary>The conic class, supplied by the game project. See <see cref="OrbitClass"/>.</summary>
     public OrbitClass OrbitClass { get; init; } = OrbitClass.Unknown;
 

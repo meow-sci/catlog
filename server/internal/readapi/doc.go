@@ -3,8 +3,12 @@
 //
 //	GET /v1/leaderboards               board metadata + row counts
 //	GET /v1/leaderboards/{stat}        one board, ?limit=50&offset=0, limit ≤ 200
+//	GET /v1/systems                    celestial-system headers + player/save counts
+//	GET /v1/systems/{slug}             one complete celestial catalogue, slug or hash
 //	GET /v1/players?q=                 handle search, handles only
 //	GET /v1/players/{handle}           one profile, 404 for unknown or banned
+//	GET /v1/players/{handle}/saves     that player's saves in first-seen order
+//	GET /v1/players/{handle}/saves/{n} one save's career-scoped board rows
 //	GET /v1/players/{handle}/events    that player's raw event log, redacted
 //	GET /v1/compare?handles=a,b,c      the same board rows for up to 8 handles
 //	GET /v1/feed                       the activity feed snapshot (feed.go)

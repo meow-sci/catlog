@@ -53,6 +53,7 @@ type FlightStarted struct {
 	CrewCount   int      `json:"crew_count"`
 	Kids        []string `json:"kids"`
 	StageCount  int      `json:"stage_count"`
+	EngineCount *int     `json:"engine_count"`
 	Lat         *float64 `json:"lat"`
 	Lon         *float64 `json:"lon"`
 }
@@ -114,12 +115,17 @@ type VehicleAtmosphere struct {
 // not from-centre radii. §4.2 left that ambiguous; docs/ksa-integration.md
 // settles it, and the mod names its snapshot fields ApAltM/PeAltM to match.
 type VehicleOrbit struct {
-	Phase  string  `json:"phase"` // achieved | escaped
-	Body   string  `json:"body"`
-	ApM    float64 `json:"ap_m"`
-	PeM    float64 `json:"pe_m"`
-	Ecc    float64 `json:"ecc"`
-	IncDeg float64 `json:"inc_deg"`
+	Phase   string  `json:"phase"` // achieved | escaped
+	Body    string  `json:"body"`
+	ApM     float64 `json:"ap_m"`
+	PeM     float64 `json:"pe_m"`
+	Ecc     float64 `json:"ecc"`
+	IncDeg  float64 `json:"inc_deg"`
+	SmaM    float64 `json:"sma_m"`
+	LanDeg  float64 `json:"lan_deg"`
+	ArgpDeg float64 `json:"argp_deg"`
+	TPe     float64 `json:"t_pe"`
+	PeriodS float64 `json:"period_s"`
 	// MassKg is the mass at the instant the milestone fired, and is written as
 	// 0 when the read failed — the same thing FlightStarted.MassKg does. That
 	// is why `heaviest_to_orbit` gates on `> 0` rather than trusting the field:
@@ -142,6 +148,7 @@ type VehicleRUD struct {
 	AltitudeM float64  `json:"altitude_m"`
 	Body      string   `json:"body"`
 	CrewCount int      `json:"crew_count"`
+	PartCount int      `json:"part_count"`
 	Lat       *float64 `json:"lat"`
 	Lon       *float64 `json:"lon"`
 }
@@ -240,6 +247,7 @@ type KittenEvaEnd struct {
 type KittenTumble struct {
 	Kid     string  `json:"kid"`
 	Name    string  `json:"name"`
+	From    string  `json:"from"`
 	SpeedMs float64 `json:"speed_ms"`
 	Body    string  `json:"body"`
 }
@@ -274,6 +282,13 @@ type RosterSnapshot struct {
 	Kittens []RosterKitten `json:"kittens"`
 }
 
+// StateVec is a position in metres and velocity in metres per second, both
+// relative to the TelemetryWindow body in its inertial frame.
+type StateVec struct {
+	Pos Vec3 `json:"pos"`
+	Vel Vec3 `json:"vel"`
+}
+
 // TelemetryWindow is `telemetry.window`: one per vehicle per 30 s of sim time.
 type TelemetryWindow struct {
 	T0Sim          float64  `json:"t0_sim"`
@@ -296,6 +311,9 @@ type TelemetryWindow struct {
 	// time. **Descriptive only** (Constitution §8): it may annotate a row, and
 	// it may never reject or disqualify one. It is not a cheat signal.
 	WarpMax float64 `json:"warp_max"`
+	// State is absent when any of its six components was unreadable. A pointer
+	// keeps absence distinct from the legitimate all-zero origin vector.
+	State *StateVec `json:"state"`
 }
 
 // SessionStarted is `session.started`.
@@ -303,6 +321,59 @@ type SessionStarted struct {
 	ModVer    string `json:"mod_ver"`
 	GameBuild string `json:"game_build"`
 	Install   string `json:"install"`
+}
+
+// SystemDiscovered binds a session and career to one canonical system hash.
+type SystemDiscovered struct {
+	System   string `json:"system"`
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Home     string `json:"home"`
+	Bodies   int    `json:"bodies"`
+	Complete bool   `json:"complete"`
+}
+
+// Vec3 is the shared three-dimensional vector shape used by catalogue axes
+// and body-centred inertial vehicle state.
+type Vec3 struct {
+	X float64 `json:"x"`
+	Y float64 `json:"y"`
+	Z float64 `json:"z"`
+}
+
+type Quat struct {
+	X float64 `json:"x"`
+	Y float64 `json:"y"`
+	Z float64 `json:"z"`
+	W float64 `json:"w"`
+}
+
+// SystemBody is one immutable celestial catalogue row. The six shape values
+// are pointers because they are absent as a group on roots or unreadable orbits;
+// PeriodS is independently absent for unbound conics.
+type SystemBody struct {
+	System     string   `json:"system"`
+	Body       string   `json:"body"`
+	Name       string   `json:"name"`
+	Class      string   `json:"class"`
+	Kind       string   `json:"kind"`
+	Rank       int      `json:"rank"`
+	Parent     *string  `json:"parent"`
+	RadiusM    float64  `json:"radius_m"`
+	MassKg     float64  `json:"mass_kg"`
+	SoiM       float64  `json:"soi_m"`
+	AtmoM      float64  `json:"atmo_m"`
+	OceanM     float64  `json:"ocean_m"`
+	AngVel     float64  `json:"angvel"`
+	Axis       Vec3     `json:"axis"`
+	CcfToCceT0 Quat     `json:"ccf_to_cce_t0"`
+	SmaM       *float64 `json:"sma_m"`
+	Ecc        *float64 `json:"ecc"`
+	IncDeg     *float64 `json:"inc_deg"`
+	LanDeg     *float64 `json:"lan_deg"`
+	ArgpDeg    *float64 `json:"argp_deg"`
+	TPe        *float64 `json:"t_pe"`
+	PeriodS    *float64 `json:"period_s"`
 }
 
 // decodePayload turns a verbatim payload into its typed form.
@@ -314,6 +385,10 @@ func decodePayload(typ string, raw json.RawMessage) (any, error) {
 	switch typ {
 	case "session.started":
 		return decodeInto[SessionStarted](raw)
+	case "system.discovered":
+		return decodeInto[SystemDiscovered](raw)
+	case "system.body":
+		return decodeInto[SystemBody](raw)
 	case "flight.started":
 		return decodeInto[FlightStarted](raw)
 	case "flight.ended":

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -28,29 +29,98 @@ import (
 // is the rendering, not the queries — those are readapi's, and its own suite
 // covers them.
 type fakeRead struct {
-	boards readapi.BoardsResponse
-	board  map[string]readapi.BoardResponse
-	player map[string]readapi.PlayerResponse
-	events map[string]readapi.EventsResponse
-	global readapi.EventsResponse
+	boards        readapi.BoardsResponse
+	board         map[string]readapi.BoardResponse
+	badges        readapi.BadgesResponse
+	badge         map[string]readapi.BadgeResponse
+	challenges    readapi.ChallengesResponse
+	challenge     map[string]readapi.ChallengeResponse
+	playerBadges  map[string]readapi.PlayerBadgesResponse
+	saveBadges    map[string]readapi.PlayerBadgesResponse
+	badgeCounts   map[string]map[int64]int64
+	system        map[string]readapi.SystemRef
+	systems       readapi.SystemsResponse
+	systemDetails map[string]readapi.SystemDetail
+	player        map[string]readapi.PlayerResponse
+	saves         map[string]readapi.SavesResponse
+	save          map[string]readapi.SaveResponse
+	events        map[string]readapi.EventsResponse
+	global        readapi.EventsResponse
 	// players maps a player id to its handle for PublicEvents; an id off the
 	// map is a handle-less player, which PublicEvents must drop.
-	players map[int64]string
-	handles []string
-	err     error
+	players    map[int64]string
+	handles    []string
+	err        error
+	systemsErr error
 	// lastPeriod and lastOffset record what the board page actually asked for,
 	// so a test can assert that `?period=` and `?offset=` reach the read layer
 	// rather than merely appearing in the URL.
-	lastPeriod string
-	lastOffset int
+	lastPeriod, lastBucket, lastScope, lastSystem string
+	lastLimit, lastOffset                         int
+	lastSystemKey                                 string
+	lastBadgeSystem                               *readapi.SystemRef
+	lastBadgeLimit, lastBadgeOffset               int
+	challengeListCalls, challengeCalls            int
+	lastChallengeKey                              string
+	lastChallengeLimit, lastChallengeOffset       int
 }
 
 func (f *fakeRead) BoardList(context.Context) (readapi.BoardsResponse, error) {
 	return f.boards, f.err
 }
 
-func (f *fakeRead) Board(_ context.Context, stat, period, _ string, limit, offset int) (readapi.BoardResponse, bool, error) {
-	f.lastPeriod, f.lastOffset = period, offset
+func (f *fakeRead) BadgeList(context.Context) (readapi.BadgesResponse, error) {
+	return f.badges, f.err
+}
+
+func (f *fakeRead) ChallengeList(context.Context) (readapi.ChallengesResponse, error) {
+	f.challengeListCalls++
+	return f.challenges, f.err
+}
+
+func (f *fakeRead) Challenge(_ context.Context, challenge string, limit, offset int) (readapi.ChallengeResponse, bool, error) {
+	f.challengeCalls++
+	f.lastChallengeKey, f.lastChallengeLimit, f.lastChallengeOffset = challenge, limit, offset
+	if f.err != nil {
+		return readapi.ChallengeResponse{}, true, f.err
+	}
+	out, ok := f.challenge[challenge]
+	if !ok {
+		return readapi.ChallengeResponse{}, false, nil
+	}
+	out.Limit, out.Offset = limit, offset
+	if offset >= len(out.Rows) {
+		out.Rows = nil
+	} else {
+		out.Rows = out.Rows[offset:]
+		if len(out.Rows) > limit {
+			out.Rows = out.Rows[:limit]
+		}
+	}
+	return out, true, nil
+}
+
+func (f *fakeRead) Badge(_ context.Context, badge string, system *readapi.SystemRef, limit, offset int) (readapi.BadgeResponse, bool, error) {
+	f.lastBadgeSystem, f.lastBadgeLimit, f.lastBadgeOffset = system, limit, offset
+	if f.err != nil {
+		return readapi.BadgeResponse{}, true, f.err
+	}
+	out, ok := f.badge[badge]
+	if !ok {
+		return readapi.BadgeResponse{}, false, nil
+	}
+	out.Limit, out.Offset = limit, offset
+	if offset > 0 {
+		out.Rows = nil
+	} else if len(out.Rows) > limit {
+		out.Rows = out.Rows[:limit]
+	}
+	return out, true, nil
+}
+
+func (f *fakeRead) Board(_ context.Context, stat, period, bucket, scope, system string, limit, offset int) (readapi.BoardResponse, bool, error) {
+	f.lastPeriod, f.lastBucket, f.lastScope, f.lastSystem = period, bucket, scope, system
+	f.lastLimit, f.lastOffset = limit, offset
 	if f.err != nil {
 		return readapi.BoardResponse{}, true, f.err
 	}
@@ -58,7 +128,7 @@ func (f *fakeRead) Board(_ context.Context, stat, period, _ string, limit, offse
 	if !ok {
 		return readapi.BoardResponse{}, false, nil
 	}
-	b.Limit, b.Offset, b.Period = limit, offset, period
+	b.Limit, b.Offset, b.Period, b.Bucket, b.Scope = limit, offset, period, bucket, scope
 	if offset > 0 {
 		// Page two of a one-page board is empty, which is what makes the pager
 		// assertions mean something.
@@ -67,12 +137,79 @@ func (f *fakeRead) Board(_ context.Context, stat, period, _ string, limit, offse
 	return b, true, nil
 }
 
+func (f *fakeRead) ResolveSystem(_ context.Context, key string) (readapi.SystemRef, bool, error) {
+	if f.err != nil {
+		return readapi.SystemRef{}, true, f.err
+	}
+	ref, ok := f.system[key]
+	return ref, ok, nil
+}
+
+func (f *fakeRead) Systems(context.Context) (readapi.SystemsResponse, error) {
+	if f.err != nil {
+		return readapi.SystemsResponse{}, f.err
+	}
+	return f.systems, f.systemsErr
+}
+
+func (f *fakeRead) System(_ context.Context, key string) (readapi.SystemDetail, bool, error) {
+	f.lastSystemKey = key
+	if f.err != nil {
+		return readapi.SystemDetail{}, true, f.err
+	}
+	if f.systemsErr != nil {
+		return readapi.SystemDetail{}, true, f.systemsErr
+	}
+	out, ok := f.systemDetails[key]
+	return out, ok, nil
+}
+
 func (f *fakeRead) Player(_ context.Context, handle string) (readapi.PlayerResponse, bool, error) {
 	if f.err != nil {
 		return readapi.PlayerResponse{}, true, f.err
 	}
 	p, ok := f.player[handle]
 	return p, ok, nil
+}
+
+func (f *fakeRead) Saves(_ context.Context, handle string) (readapi.SavesResponse, bool, error) {
+	if f.err != nil {
+		return readapi.SavesResponse{}, true, f.err
+	}
+	out, ok := f.saves[handle]
+	return out, ok, nil
+}
+
+func (f *fakeRead) Save(_ context.Context, handle string, ordinal int64) (readapi.SaveResponse, bool, error) {
+	if f.err != nil {
+		return readapi.SaveResponse{}, true, f.err
+	}
+	out, ok := f.save[handle+"/"+strconv.FormatInt(ordinal, 10)]
+	return out, ok, nil
+}
+
+func (f *fakeRead) PlayerBadges(_ context.Context, handle string) (readapi.PlayerBadgesResponse, bool, error) {
+	if f.err != nil {
+		return readapi.PlayerBadgesResponse{}, true, f.err
+	}
+	out, ok := f.playerBadges[handle]
+	return out, ok, nil
+}
+
+func (f *fakeRead) SaveBadges(_ context.Context, handle string, ordinal int64) (readapi.PlayerBadgesResponse, bool, error) {
+	if f.err != nil {
+		return readapi.PlayerBadgesResponse{}, true, f.err
+	}
+	out, ok := f.saveBadges[handle+"/"+strconv.FormatInt(ordinal, 10)]
+	return out, ok, nil
+}
+
+func (f *fakeRead) SaveBadgeCounts(_ context.Context, handle string) (map[int64]int64, bool, error) {
+	if f.err != nil {
+		return nil, true, f.err
+	}
+	out, ok := f.badgeCounts[handle]
+	return out, ok, nil
 }
 
 func (f *fakeRead) PlayerEvents(_ context.Context, handle, typ string, _ int64, limit int) (readapi.EventsResponse, bool, error) {
@@ -273,8 +410,30 @@ func newFixture(t *testing.T) *fixture {
 			// server mentions this place, and the index must render it anyway.
 			{Stat: "fastest_to_zephyria", Title: "Fastest to Zephyria", Unit: "s", Ascending: true, Count: 2},
 		}},
-		board:   map[string]readapi.BoardResponse{},
-		handles: []string{"demo_crasher", "demo_ace"},
+		board: map[string]readapi.BoardResponse{},
+		badges: readapi.BadgesResponse{MinPlayers: 2, Badges: []readapi.BadgeSummary{
+			{Badge: stats.BadgeFirstFlight, Title: "Off The Pad", Blurb: "Your first flight.", Group: "first-steps", Holders: 2},
+			{Badge: stats.BadgeFirstOrbit, Title: "Around We Go", Blurb: "You made orbit.", Group: "first-steps", Holders: 1},
+			{Badge: "orbited_luna", Title: "Orbited Luna", Blurb: "You made orbit around Luna.", Group: "exploration", Holders: 2},
+		}},
+		badge:        map[string]readapi.BadgeResponse{},
+		challenge:    map[string]readapi.ChallengeResponse{},
+		playerBadges: map[string]readapi.PlayerBadgesResponse{},
+		saveBadges:   map[string]readapi.PlayerBadgesResponse{},
+		badgeCounts:  map[string]map[int64]int64{},
+		system: map[string]readapi.SystemRef{
+			"solar-system": {Hash: "hash-sol", Name: "Solar System", Slug: "solar-system"},
+			"hash-sol":     {Hash: "hash-sol", Name: "Solar System", Slug: "solar-system"},
+		},
+		systems: readapi.SystemsResponse{Systems: []readapi.SystemSummary{
+			{Hash: "raw-sol-hash-must-not-render", Name: "Solar System", Slug: "solar-system", HomeBody: "sun", Bodies: 4, Players: 4, Careers: 7, Complete: true},
+			{Hash: "raw-alpha-hash-must-not-render", Name: "Alpha Centauri", Slug: "alpha-centauri", HomeBody: "alpha-a", Bodies: 2, Players: 9, Careers: 11, Complete: true},
+			{Hash: "raw-beta-hash-must-not-render", Name: "Beta Pictoris", Slug: "beta-pictoris", HomeBody: "beta", Bodies: 3, Players: 9, Careers: 10, Complete: true},
+		}},
+		systemDetails: map[string]readapi.SystemDetail{},
+		saves:         map[string]readapi.SavesResponse{},
+		save:          map[string]readapi.SaveResponse{},
+		handles:       []string{"demo_crasher", "demo_ace"},
 		player: map[string]readapi.PlayerResponse{
 			"demo_crasher": {
 				Handle: "demo_crasher", Since: 1767225600000,
@@ -338,6 +497,35 @@ func newFixture(t *testing.T) *fixture {
 		},
 		players: map[int64]string{1: "demo_crasher", 2: "demo_ace"},
 	}
+	const challengeNow = int64(1_786_665_600_000) // 2026-08-14T00:00:00Z
+	read.challenges = readapi.ChallengesResponse{
+		Now: challengeNow,
+		Challenges: []readapi.ChallengeSummary{
+			{Challenge: "heavy_lift_week", Title: "Heavy Lift Week", Blurb: "Get the heaviest payload into orbit.", Unit: "kg", Scope: stats.ScopeSystem, Opens: 1_786_320_000_000, Closes: 1_786_924_800_000, State: "open", Entrants: 2},
+			{Challenge: "speedrun_orbit", Title: "From Scratch To Orbit", Blurb: "Start a save and get to orbit.", Unit: "ms", Ascending: true, Scope: stats.ScopeCareer, Opens: 1_786_320_000_000, Closes: 1_786_924_800_000, State: "open", Entrants: 1},
+			{Challenge: "next_week", Title: "Next Week", Blurb: "Something ill-advised later.", Unit: "tumbles", Scope: stats.ScopePlayer, Opens: 1_787_529_600_000, Closes: 1_788_134_400_000, State: "upcoming"},
+			{Challenge: "old_week", Title: "Last Week's Mistake", Blurb: "An archived bad idea.", Unit: "tumbles", Scope: stats.ScopePlayer, Opens: 1_785_715_200_000, Closes: 1_786_320_000_000, State: "closed", Entrants: 1},
+		},
+	}
+	sun := "sun"
+	earth := "earth"
+	solarDetail := readapi.SystemDetail{
+		Hash: "raw-sol-hash-must-not-render", Name: "Solar System", Slug: "solar-system",
+		HomeBody: "earth", Players: 4, Careers: 7, Complete: true,
+		// Deliberately not display order: the page owns rank/SMA ordering.
+		Bodies: []readapi.SystemBody{
+			{Body: "luna", Name: "Luna", Class: "moon", Rank: 2, Parent: &earth,
+				RadiusM: 1_737_400, SoiM: 66_100_000, SmaM: ptr(384_400_000.25), PeriodS: ptr(2_360_591.5), IncDeg: ptr(5.145)},
+			{Body: "earth", Name: "Kerbin", Class: "planet", Rank: 1, Parent: &sun,
+				RadiusM: 6_371_000.125, SoiM: 924_000_000, SmaM: ptr(149_597_870_700.75), PeriodS: ptr(31_558_149.8), LanDeg: ptr(12.5)},
+			{Body: "wanderer", Name: "Wanderer", Class: "minor body", Rank: 1, Parent: &sun,
+				RadiusM: 1234.5, SoiM: 0},
+			{Body: "sun", Name: "Helios", Class: "star", Rank: 0,
+				RadiusM: 696_340_000, SoiM: 0},
+		},
+	}
+	read.systemDetails["solar-system"] = solarDetail
+	read.systemDetails["raw-sol-hash-must-not-render"] = solarDetail
 	for _, stat := range web.FeaturedBoards {
 		read.board[stat] = readapi.BoardResponse{Stat: stat, Title: "Board " + stat, Unit: "m/s"}
 	}
@@ -348,6 +536,93 @@ func newFixture(t *testing.T) *fixture {
 			{Rank: 2, Handle: "demo_ace", Value: 62, Updated: 1767225600000},
 		},
 	}
+	sol := read.system["solar-system"]
+	read.challenge["heavy_lift_week"] = readapi.ChallengeResponse{
+		ChallengeSummary: readapi.ChallengeSummary{
+			Challenge: "heavy_lift_week", Title: "Heavy Lift Week", Blurb: "Get the heaviest payload into orbit.",
+			Unit: "kg", Scope: stats.ScopeSystem, Opens: 1_786_320_000_000, Closes: 1_786_924_800_000,
+			State: "open", Entrants: 2,
+		},
+		Rows: []readapi.ChallengeRow{
+			{Rank: 1, Handle: "demo_crasher", System: &sol, Value: 42_000, Context: json.RawMessage(`{"mass_kg":42000,"body":"earth"}`), Updated: 1_786_665_000_000},
+			{Rank: 2, Handle: "demo_ace", System: &sol, Value: 35_000, Updated: 1_786_664_000_000},
+		},
+	}
+	read.challenge["speedrun_orbit"] = readapi.ChallengeResponse{
+		ChallengeSummary: readapi.ChallengeSummary{
+			Challenge: "speedrun_orbit", Title: "From Scratch To Orbit", Blurb: "Start a save and get to orbit.",
+			Unit: "ms", Ascending: true, Scope: stats.ScopeCareer, Opens: 1_786_320_000_000,
+			Closes: 1_786_924_800_000, State: "open", Entrants: 1,
+		},
+		Rows: []readapi.ChallengeRow{{Rank: 1, Handle: "demo_crasher", Save: 1, SaveID: "save-label-one", Value: 313_000, Updated: 1_786_663_000_000, Rewound: true}},
+	}
+	read.challenge["old_week"] = readapi.ChallengeResponse{
+		ChallengeSummary: readapi.ChallengeSummary{
+			Challenge: "old_week", Title: "Last Week's Mistake", Blurb: "An archived bad idea.", Unit: "tumbles",
+			Scope: stats.ScopePlayer, Opens: 1_785_715_200_000, Closes: 1_786_320_000_000, State: "closed", Entrants: 1,
+		},
+		Rows: []readapi.ChallengeRow{{Rank: 1, Handle: "demo_ace", Value: 8, Updated: 1_786_319_000_000}},
+	}
+	read.saves["demo_crasher"] = readapi.SavesResponse{
+		Handle: "demo_crasher",
+		Saves: []readapi.SaveSummary{
+			{Save: 1, SaveID: "save-label-one", System: &sol, SystemChanged: true,
+				PlaytimeMS: 367_200_000, First: 1767225600000, Last: 1767312000000, Rewound: true, Boards: 7},
+			{Save: 2, SaveID: "save-label-two", PlaytimeMS: 313_000,
+				First: 1767398400000, Last: 1767398700000, Boards: 0},
+		},
+	}
+	read.saves["demo_ace"] = readapi.SavesResponse{Handle: "demo_ace", Saves: []readapi.SaveSummary{}}
+	read.save["demo_crasher/1"] = readapi.SaveResponse{
+		Handle: "demo_crasher", Save: 1, SaveID: "save-label-one", System: &sol,
+		SystemChanged: true, PlaytimeMS: 367_200_000, Rewound: true,
+		Stats: []readapi.SaveStat{{
+			Stat: stats.StatLandings, Title: "Landings", Unit: "landings", Value: 12.5,
+			Rank: 3, Entrants: 41, Context: json.RawMessage(`{"body":"duna","career":"save-label-one"}`),
+			Updated: 1767225600000,
+		}},
+	}
+	read.save["demo_crasher/2"] = readapi.SaveResponse{
+		Handle: "demo_crasher", Save: 2, SaveID: "save-label-two", PlaytimeMS: 313_000,
+		Stats: []readapi.SaveStat{{
+			Stat: stats.StatStagings, Title: "Stagings", Unit: "stagings", Value: 4,
+			Rank: 8, Entrants: 20, Updated: 1767398700000,
+		}},
+	}
+	read.badge[stats.BadgeFirstFlight] = readapi.BadgeResponse{
+		Badge: stats.BadgeFirstFlight, Title: "Off The Pad", Blurb: "Your first flight.", Group: "first-steps", Holders: 2,
+		Rows: []readapi.BadgeHolderRow{
+			{Rank: 1, Handle: "demo_crasher", Save: 1, SaveID: "save-label-one", System: &sol, Earned: 1786113120000,
+				Context: json.RawMessage(`{"body":"duna"}`)},
+			{Rank: 2, Handle: "demo_ace", Save: 2, SaveID: "save-label-ace", Earned: 1786113180000},
+		},
+	}
+	read.playerBadges["demo_crasher"] = readapi.PlayerBadgesResponse{
+		Handle: "demo_crasher",
+		Earned: []readapi.BadgeAward{{
+			Badge: stats.BadgeFirstFlight, Title: "Off The Pad", Blurb: "Your first flight.", Group: "first-steps",
+			Save: 1, SaveID: "save-label-one", System: &sol, Earned: 1786113120000,
+		}},
+		Unearned: []readapi.BadgeSummary{{
+			Badge: stats.BadgeFirstOrbit, Title: "Around We Go", Blurb: "You made orbit.", Group: "first-steps", Holders: 1,
+		}},
+	}
+	read.playerBadges["demo_ace"] = readapi.PlayerBadgesResponse{
+		Handle: "demo_ace", Earned: []readapi.BadgeAward{}, Unearned: []readapi.BadgeSummary{},
+	}
+	read.saveBadges["demo_crasher/1"] = readapi.PlayerBadgesResponse{
+		Handle: "demo_crasher",
+		Earned: []readapi.BadgeAward{
+			{Badge: stats.BadgeFirstFlight, Title: "Off The Pad", Blurb: "Your first flight.", Group: "first-steps", Save: 1, SaveID: "save-label-one", System: &sol, Earned: 1786113120000},
+			{Badge: "reached_duna", Title: "Reached Duna", Blurb: "You reached Duna.", Group: "exploration", Save: 1, SaveID: "save-label-one", System: &sol, Earned: 1786116720000},
+		},
+		Unearned: []readapi.BadgeSummary{{Badge: stats.BadgeFirstOrbit, Title: "Around We Go", Blurb: "You made orbit.", Group: "first-steps", Holders: 1}},
+	}
+	read.saveBadges["demo_crasher/2"] = readapi.PlayerBadgesResponse{
+		Handle: "demo_crasher", Earned: []readapi.BadgeAward{}, Unearned: []readapi.BadgeSummary{},
+	}
+	read.badgeCounts["demo_crasher"] = map[int64]int64{1: 2, 2: 0}
+	read.badgeCounts["demo_ace"] = map[int64]int64{}
 
 	accounts := &fakeAccounts{}
 	broadcaster := projector.NewBroadcaster()
@@ -362,6 +637,7 @@ func newFixture(t *testing.T) *fixture {
 		Sessions:    sessions,
 		Accounts:    accounts,
 		Log:         testutil.DiscardLogger(),
+		Now:         func() time.Time { return time.UnixMilli(challengeNow) },
 	})
 	if err != nil {
 		t.Fatalf("web.New: %v", err)
@@ -431,16 +707,31 @@ func TestEveryPageRenders(t *testing.T) {
 			`id="boards-index"`, `data-stat="rud_total"`, "Biggest Lithobrake Survived",
 			// The index is whatever the server listed, including a board no
 			// constant in this repository names.
-			`data-stat="fastest_to_zephyria"`, "Fastest to Zephyria", `id="boards-note"`,
+			`data-stat="fastest_to_zephyria"`, "Fastest to Zephyria", `id="boards-note"`, `id="boards-systems"`,
 		}},
 		{"/boards/biggest_lithobrake_survived", 200, []string{
 			`id="board-title"`, `data-handle="demo_crasher"`, `data-rank="2"`,
-			`id="board-periods"`, `data-period="weekly"`, `id="board-range"`,
+			`id="board-scopes"`, `data-scope="career"`, `id="board-periods"`,
+			`data-period="weekly"`, `id="board-range"`,
 		}},
 		{"/boards/no_such_board", 404, []string{`id="not-found"`}},
-		{"/boards/biggest_lithobrake_survived?period=nope", 404, []string{`id="not-found"`}},
+		{"/boards/biggest_lithobrake_survived?period=nope", 400, []string{`id="not-found"`}},
 		{"/p/demo_crasher", 200, []string{`id="profile-handle"`, `data-stat="biggest_lithobrake_survived"`, "#1"}},
+		{"/badges", 200, []string{`id="badges-catalogue"`, `data-badge="first_flight"`, `data-badge="orbited_luna"`}},
+		{"/badges/first_flight", 200, []string{`id="badge-title"`, `id="badge-holders"`, `data-handle="demo_crasher"`}},
+		{"/badges/no_such_badge", 404, []string{`id="not-found"`}},
+		{"/challenges", 200, []string{`id="challenges-index"`, `data-challenge="heavy_lift_week"`, `data-challenge="old_week"`}},
+		{"/challenges/heavy_lift_week", 200, []string{`id="challenge-title"`, `id="challenge-standings"`, `data-handle="demo_crasher"`}},
+		{"/challenges/old_week", 200, []string{`id="challenge-title"`, `data-state="closed"`, `data-handle="demo_ace"`}},
+		{"/challenges/no_such_challenge", 404, []string{`id="not-found"`}},
+		{"/p/demo_crasher/badges", 200, []string{`id="player-badges-title"`, `id="earned-badges"`, `id="unearned-badges"`}},
+		{"/p/demo_crasher/saves/1/badges", 200, []string{`id="player-badges-title"`, `data-save="1"`, `data-badge="reached_duna"`}},
 		{"/p/nobody", 404, []string{`id="not-found"`}},
+		{"/p/demo_crasher/saves", 200, []string{`id="saves-table"`, `data-save="1"`, "Save 2"}},
+		{"/p/demo_crasher/saves/1", 200, []string{`id="save-title"`, `id="save-stats"`, "#3"}},
+		{"/systems", 200, []string{`id="systems-index"`, `data-system="solar-system"`, "Alpha Centauri"}},
+		{"/systems/solar-system", 200, []string{`id="system-title" data-system="solar-system"`, `id="system-bodies"`, "Luna"}},
+		{"/systems/no-such-system", 404, []string{`id="not-found"`}},
 		{"/p/demo_crasher/events", 200, []string{
 			`id="events-log"`, `data-type="vehicle.impact"`, `id="events-older"`,
 		}},
@@ -477,6 +768,122 @@ func TestEveryPageRenders(t *testing.T) {
 				mustContain(t, body, want, tc.path)
 			}
 		})
+	}
+}
+
+func TestSystemsIndexOrdersByPlayersAndRendersExactCounts(t *testing.T) {
+	f := newFixture(t)
+	body := f.get(t, "/systems").Body.String()
+
+	alpha := strings.Index(body, `data-system="alpha-centauri"`)
+	beta := strings.Index(body, `data-system="beta-pictoris"`)
+	sol := strings.Index(body, `data-system="solar-system"`)
+	if alpha < 0 || beta < 0 || sol < 0 || alpha > beta || beta > sol {
+		t.Fatalf("systems are not ordered by player count descending:\n%s", body)
+	}
+	// Alpha and Beta both have nine players. Stable sorting deliberately keeps
+	// the read API's first-seen order for that tie.
+	for _, want := range []string{
+		`<section class="panel" id="systems-panel">`,
+		`<th scope="col">Name</th>`, `<th scope="col" class="value">Bodies</th>`,
+		`<th scope="col" class="value">Players</th>`, `<th scope="col" class="value">Saves</th>`,
+		`<a href="/systems/alpha-centauri">Alpha Centauri</a>`,
+		`class="value" data-value="9"`, `class="value" data-value="11"`,
+	} {
+		mustContain(t, body, want, "systems index")
+	}
+	mustNotContain(t, body, "raw-alpha-hash-must-not-render", "systems index")
+	mustNotContain(t, body, "raw-beta-hash-must-not-render", "systems index")
+	mustNotContain(t, body, "raw-sol-hash-must-not-render", "systems index")
+
+	f.read.systems.Systems = nil
+	empty := f.get(t, "/systems").Body.String()
+	mustContain(t, empty, `<tr id="systems-empty"><td colspan="4">No systems recorded yet.</td></tr>`, "empty systems index")
+}
+
+func TestSystemPageResolvesNamesSortsOutwardAndFormatsExactValues(t *testing.T) {
+	f := newFixture(t)
+	body := f.get(t, "/systems/solar-system").Body.String()
+	if f.read.lastSystemKey != "solar-system" {
+		t.Errorf("System key = %q, want solar-system", f.read.lastSystemKey)
+	}
+	for _, want := range []string{
+		`id="system-title" data-system="solar-system">Solar System</h1>`,
+		`id="system-summary">Home body Kerbin`,
+		`<span class="tnum" data-value="4">`,
+		`<td>Helios</td>`, `<td>Kerbin</td>`,
+		`data-value="6371000.125"`, `>6.37</span> Mm`,
+		`data-value="149597870700.75"`, `data-value="31558149.8"`,
+		`<td>Helios</td>`, // the parent key "sun" resolves to its display name
+	} {
+		mustContain(t, body, want, "system detail")
+	}
+
+	// Rank first, then missing SMA, then finite SMA, with rank-2 Luna last.
+	last := -1
+	for _, key := range []string{"sun", "wanderer", "earth", "luna"} {
+		at := strings.Index(body, `data-body="`+key+`"`)
+		if at < 0 || at <= last {
+			t.Fatalf("body %q is not in outward order:\n%s", key, body)
+		}
+		last = at
+	}
+
+	for _, hidden := range []string{
+		"raw-sol-hash-must-not-render", "inc_deg", "lan_deg", "argp_deg", "5.145", "12.5",
+		`class="rank"`, `class="bar"`, `class="accent"`,
+	} {
+		mustNotContain(t, body, hidden, "system reference page")
+	}
+	wandererStart := strings.Index(body, `data-body="wanderer"`)
+	if wandererStart < 0 {
+		t.Fatalf("wanderer row missing from system page:\n%s", body)
+	}
+	wandererEnd := strings.Index(body[wandererStart:], `</tr>`)
+	if wandererEnd < 0 {
+		t.Fatalf("wanderer row is not closed:\n%s", body[wandererStart:])
+	}
+	wanderer := body[wandererStart : wandererStart+wandererEnd]
+	if got := strings.Count(wanderer, `<td class="value">&#8212;</td>`); got != 2 {
+		t.Errorf("unbound body's absent SMA/period em dashes = %d, want 2:\n%s", got, wanderer)
+	}
+	if got := strings.Count(wanderer, `data-value=`); got != 2 {
+		t.Errorf("unbound body's numeric data values = %d, want only radius and SOI:\n%s", got, wanderer)
+	}
+
+	// Raw hashes are accepted as route keys but the canonical page still shows
+	// only the friendly name and slug.
+	byHash := f.get(t, "/systems/raw-sol-hash-must-not-render")
+	if byHash.Code != http.StatusOK || f.read.lastSystemKey != "raw-sol-hash-must-not-render" {
+		t.Fatalf("raw-hash route = %d, key %q", byHash.Code, f.read.lastSystemKey)
+	}
+	mustNotContain(t, byHash.Body.String(), "raw-sol-hash-must-not-render", "raw-hash system page")
+}
+
+func TestSystemRoutesCacheAndErrorsAndBoardsLink(t *testing.T) {
+	f := newFixture(t)
+	for _, path := range []string{"/systems", "/systems/solar-system"} {
+		rec := f.get(t, path)
+		if rec.Code != http.StatusOK || rec.Header().Get("Cache-Control") != readapi.CacheControl {
+			t.Errorf("GET %s = %d, cache %q", path, rec.Code, rec.Header().Get("Cache-Control"))
+		}
+	}
+	notFound := f.get(t, "/systems/unknown")
+	if notFound.Code != http.StatusNotFound || notFound.Header().Get("Cache-Control") != "no-store" {
+		t.Errorf("unknown system = %d, cache %q", notFound.Code, notFound.Header().Get("Cache-Control"))
+	}
+	mustContain(t, notFound.Body.String(), "catlog has no such celestial system.", "unknown system")
+
+	boards := f.get(t, "/boards").Body.String()
+	mustContain(t, boards, `id="boards-systems"><a href="/systems">catlog is tracking <span class="n" data-n="3" data-d="0">3</span> celestial systems</a>.`, "boards systems link")
+	mustNotContain(t, boards, `id="nav-systems"`, "top navigation")
+
+	f.read.systemsErr = errors.New("projections are unreadable")
+	for _, path := range []string{"/boards", "/systems", "/systems/solar-system"} {
+		rec := f.get(t, path)
+		if rec.Code != http.StatusInternalServerError || rec.Header().Get("Cache-Control") != "no-store" {
+			t.Errorf("GET %s error = %d, cache %q", path, rec.Code, rec.Header().Get("Cache-Control"))
+		}
 	}
 }
 
@@ -542,17 +949,564 @@ func TestBoardDetailShowsTheAllowListAndHidesTheRest(t *testing.T) {
 func TestBoardPassesTheWindowAndTheOffsetThrough(t *testing.T) {
 	f := newFixture(t)
 
-	f.get(t, "/boards/biggest_lithobrake_survived?period=weekly&offset=100")
+	f.get(t, "/boards/biggest_lithobrake_survived?period=weekly&at=2026-W32&limit=75&offset=100")
 	if f.read.lastPeriod != stats.PeriodWeekly {
 		t.Errorf("period reaching Read = %q, want weekly", f.read.lastPeriod)
 	}
-	if f.read.lastOffset != 100 {
-		t.Errorf("offset reaching Read = %d, want 100", f.read.lastOffset)
+	if f.read.lastBucket != "2026-W32" || f.read.lastScope != stats.ScopePlayer ||
+		f.read.lastSystem != "" || f.read.lastLimit != 75 || f.read.lastOffset != 100 {
+		t.Errorf("Read args = period %q bucket %q scope %q system %q limit %d offset %d",
+			f.read.lastPeriod, f.read.lastBucket, f.read.lastScope, f.read.lastSystem,
+			f.read.lastLimit, f.read.lastOffset)
 	}
 
 	f.get(t, "/boards/biggest_lithobrake_survived")
-	if f.read.lastPeriod != stats.PeriodAllTime {
-		t.Errorf("default period = %q, want alltime", f.read.lastPeriod)
+	if f.read.lastPeriod != stats.PeriodAllTime || f.read.lastScope != stats.ScopePlayer ||
+		f.read.lastBucket != "" || f.read.lastSystem != "" || f.read.lastLimit != web.BoardRows || f.read.lastOffset != 0 {
+		t.Errorf("default Read args = period %q bucket %q scope %q system %q limit %d offset %d",
+			f.read.lastPeriod, f.read.lastBucket, f.read.lastScope, f.read.lastSystem,
+			f.read.lastLimit, f.read.lastOffset)
+	}
+}
+
+func TestBoardValidationMatchesReadAPIOrderAndCombinations(t *testing.T) {
+	f := newFixture(t)
+	tests := []struct {
+		path   string
+		status int
+		detail string
+	}{
+		{"?limit=nope&period=nope&scope=nope", 400, "Limit must be an integer."},
+		{"?offset=nope&period=nope&scope=nope", 400, "Offset must be an integer."},
+		{"?period=nope&scope=nope", 400, "Period must be one of"},
+		{"?scope=nope&system=missing", 400, "Ranking must be players, saves or systems."},
+		{"?scope=career&period=weekly&at=bad&system=missing", 400, "Saves boards have no time windows."},
+		{"?scope=system&period=daily&system=missing", 400, "Systems boards have no time windows."},
+		{"?period=alltime&at=2026-08-10", 400, "not a well-formed alltime window"},
+		{"?system=solar-system", 400, "System filtering needs a saves or systems ranking."},
+		{"?scope=career&system=missing", 404, "catlog has never seen a system by that name."},
+	}
+	const base = "/boards/biggest_lithobrake_survived"
+	for _, tc := range tests {
+		t.Run(tc.path, func(t *testing.T) {
+			rec := f.get(t, base+tc.path)
+			if rec.Code != tc.status || !strings.Contains(rec.Body.String(), tc.detail) {
+				t.Errorf("GET %s = %d, want %d containing %q\n%s", tc.path, rec.Code, tc.status, tc.detail, rec.Body)
+			}
+		})
+	}
+
+	for _, key := range []string{"solar-system", "hash-sol"} {
+		rec := f.get(t, base+"?scope=career&system="+key)
+		if rec.Code != http.StatusOK || f.read.lastSystem != "hash-sol" || f.read.lastScope != stats.ScopeCareer {
+			t.Errorf("system %q = %d, Read scope/system = %q/%q", key, rec.Code, f.read.lastScope, f.read.lastSystem)
+		}
+	}
+	f.get(t, base+"?limit=999&offset=-7")
+	if f.read.lastLimit != readapi.MaxLimit || f.read.lastOffset != 0 {
+		t.Errorf("clamped paging = %d/%d, want %d/0", f.read.lastLimit, f.read.lastOffset, readapi.MaxLimit)
+	}
+}
+
+func TestBoardChipAndPagerURLsPreserveOnlyApplicableDimensions(t *testing.T) {
+	f := newFixture(t)
+	const path = "/boards/biggest_lithobrake_survived"
+	body := f.get(t, path+"?period=weekly&at=2026-W32&limit=1&offset=1").Body.String()
+	for _, want := range []string{
+		`data-scope="career" href="/boards/biggest_lithobrake_survived?limit=1&amp;scope=career"`,
+		`data-scope="system" href="/boards/biggest_lithobrake_survived?limit=1&amp;scope=system"`,
+		`data-period="weekly" href="/boards/biggest_lithobrake_survived?at=2026-W32&amp;limit=1&amp;period=weekly"`,
+		`data-period="daily" href="/boards/biggest_lithobrake_survived?limit=1&amp;period=daily"`,
+		`href="/boards/biggest_lithobrake_survived?at=2026-W32&amp;limit=1&amp;period=weekly" id="board-prev"`,
+	} {
+		mustContain(t, body, want, "player board URLs")
+	}
+	mustNotContain(t, body, `scope=career&amp;offset=`, "scope chip reset")
+	mustNotContain(t, body, `period=daily&amp;offset=`, "period chip reset")
+
+	body = f.get(t, path+"?period=weekly&at=2026-W32&limit=1").Body.String()
+	mustContain(t, body,
+		`href="/boards/biggest_lithobrake_survived?at=2026-W32&amp;limit=1&amp;offset=1&amp;period=weekly" id="board-next"`,
+		"next pager")
+
+	body = f.get(t, path+"?scope=career&system=solar-system&limit=1&offset=1").Body.String()
+	for _, want := range []string{
+		`data-scope="player" href="/boards/biggest_lithobrake_survived?limit=1"`,
+		`data-scope="system" href="/boards/biggest_lithobrake_survived?limit=1&amp;scope=system&amp;system=solar-system"`,
+		`href="/boards/biggest_lithobrake_survived?limit=1&amp;scope=career&amp;system=solar-system" id="board-prev"`,
+	} {
+		mustContain(t, body, want, "career board URLs")
+	}
+	if f.read.lastSystem != "hash-sol" {
+		t.Errorf("career system reaching Read = %q, want canonical hash", f.read.lastSystem)
+	}
+	mustContain(t, body, `<tr class="board-empty"><td colspan="7">`, "career empty table width")
+}
+
+func TestBoardScopeControlsAndScopedColumns(t *testing.T) {
+	f := newFixture(t)
+	const stat = stats.StatBiggestLithobrakeSurvived
+	const path = "/boards/" + stat
+
+	player := f.get(t, path).Body.String()
+	for _, want := range []string{
+		`class="periods" id="board-scopes" aria-label="Ranking"`,
+		`class="chip selected" data-scope="player"`, `aria-current="page">Players</a>`,
+		`data-scope="career"`, `>Saves</a>`, `data-scope="system"`, `>Systems</a>`,
+		`id="board-periods"`,
+	} {
+		mustContain(t, player, want, "player scope controls")
+	}
+	mustNotContain(t, player, `id="board-scope-note"`, "player scope")
+	mustNotContain(t, player, `<th scope="col" class="save">`, "player scope")
+
+	ref := &readapi.SystemRef{Hash: "hash-sol", Name: "Solar System", Slug: "solar-system"}
+	f.read.board[stat] = readapi.BoardResponse{
+		Stat: stat, Title: "Biggest Lithobrake Survived", Unit: "ms",
+		Rows: []readapi.BoardRow{{Rank: 1, Handle: "demo_crasher", Save: 2, SaveID: "save-label",
+			System: ref, Value: 313000.125, Updated: 1767225600000}},
+	}
+	career := f.get(t, path+"?scope=career&system=solar-system").Body.String()
+	for _, want := range []string{
+		`class="chip selected" data-scope="career"`, `aria-current="page">Saves</a>`,
+		`id="board-scope-note">A save is already a period, so these boards have no time windows.`,
+		`<th scope="col" class="save">Save</th>`, `<th scope="col" class="system">System</th>`,
+		`<td class="save"><a href="/p/demo_crasher/saves/2">Save 2</a></td>`,
+		`<td class="system"><a href="/systems/solar-system">Solar System</a></td>`,
+		`data-value="313000.125"`,
+	} {
+		mustContain(t, career, want, "career scope")
+	}
+	mustNotContain(t, career, `id="board-periods"`, "career period controls")
+	mustNotContain(t, career, "hash-sol", "career human-facing system")
+
+	system := f.get(t, path+"?scope=system").Body.String()
+	mustContain(t, system, `class="chip selected" data-scope="system"`, "system scope")
+	mustContain(t, system, `<th scope="col" class="system">System</th>`, "system scope")
+	mustNotContain(t, system, `<th scope="col" class="save">`, "system scope")
+	mustNotContain(t, system, `id="board-periods"`, "system period controls")
+	mustNotContain(t, system, `id="board-scope-note"`, "system career note")
+	systemEmpty := f.get(t, path+"?scope=system&offset=100").Body.String()
+	mustContain(t, systemEmpty, `<tr class="board-empty"><td colspan="6">`, "system empty table width")
+	playerEmpty := f.get(t, path+"?offset=100").Body.String()
+	mustContain(t, playerEmpty, `<tr class="board-empty"><td colspan="5">`, "player empty table width")
+}
+
+func TestBodyDerivedPlayerBoardExplainsNameCollisionAndLinksSystemScope(t *testing.T) {
+	f := newFixture(t)
+	const stat = "fastest_to_luna"
+	f.read.board[stat] = readapi.BoardResponse{
+		Stat: stat, Title: "Fastest to Luna", Unit: "ms",
+		Rows: []readapi.BoardRow{{Rank: 1, Handle: "demo_ace", Value: 5000}},
+	}
+	body := f.get(t, "/boards/"+stat).Body.String()
+	for _, want := range []string{
+		`id="board-scope-note"`, `This board ranks a <strong>name</strong>.`,
+		`If two celestial systems both have a Luna, both are here`,
+		`href="/boards/fastest_to_luna?scope=system">by system</a>`,
+	} {
+		mustContain(t, body, want, "body-derived player note")
+	}
+	body = f.get(t, "/boards/"+stat+"?scope=career").Body.String()
+	if strings.Count(body, `id="board-scope-note"`) != 1 {
+		t.Errorf("career body-derived board: scope note count = %d, want 1", strings.Count(body, `id="board-scope-note"`))
+	}
+	mustNotContain(t, body, `This board ranks a <strong>name</strong>.`, "career body-derived board")
+}
+
+func TestSavesPageRendersExactColumnsRowsAndEmptyState(t *testing.T) {
+	f := newFixture(t)
+	body := f.get(t, "/p/demo_crasher/saves").Body.String()
+	for _, want := range []string{
+		`<th scope="col" class="save">Save</th>`,
+		`<th scope="col" class="system">System</th>`,
+		`<th scope="col" class="value">Played</th>`,
+		`<th scope="col">First seen</th>`,
+		`<th scope="col">Last seen</th>`,
+		`<th scope="col" class="value">Boards</th>`,
+		`<th scope="col" class="value">Badges</th>`,
+		`href="/p/demo_crasher/saves/1">Save 1</a>`,
+		`href="/systems/solar-system">Solar System</a>`,
+		`data-value="367200000" title="367200000 ms">4d 06h`,
+		`datetime="2026-01-01T00:00:00Z">2026-01-01 00:00 UTC</time>`,
+		`datetime="2026-01-02T00:00:00Z">2026-01-02 00:00 UTC</time>`,
+		`<td class="system">&#8212;</td>`,
+		`data-value="313000" title="313000 ms">5m 13s`,
+		`data-value="7"`,
+		`data-value="2"><a href="/p/demo_crasher/saves/1/badges"`,
+	} {
+		mustContain(t, body, want, "saves list")
+	}
+	empty := f.get(t, "/p/demo_ace/saves").Body.String()
+	mustContain(t, empty, `<tr id="saves-empty"><td colspan="7">No saves recorded yet.</td></tr>`, "empty saves")
+}
+
+func TestSavePageRendersScopedStatsAndProvenanceMarks(t *testing.T) {
+	f := newFixture(t)
+	body := f.get(t, "/p/demo_crasher/saves/1").Body.String()
+	for _, want := range []string{
+		`id="save-title" data-handle="demo_crasher" data-save="1">Save 1</h1>`,
+		`href="/systems/solar-system">Solar System</a>`,
+		`played 4d 06h`,
+		`id="save-badges" data-value="2" href="/p/demo_crasher/saves/1/badges"`,
+		`#3 of <span class="n" data-n="41" data-d="0">41</span> saves on <a href="/boards/landings?scope=career">Landings</a>`,
+		`data-stat="landings" data-rank="3" data-ascending="false"`,
+		`data-value="12.5" title="12.5 landings"`,
+		`<span class="ctx-key">body</span> <span class="ctx-value">Duna</span>`,
+		`save-label-one`,
+		`An earlier save of this career was loaded, so its clock did not only run forwards.`,
+		`The celestial system this save is in changed. Per-system comparisons before and after are not comparing the same worlds.`,
+	} {
+		mustContain(t, body, want, "save detail")
+	}
+
+	plain := f.get(t, "/p/demo_crasher/saves/2").Body.String()
+	mustContain(t, plain, `id="save-title" data-handle="demo_crasher" data-save="2">Save 2</h1>`, "plain save")
+	mustContain(t, plain, `played 5m 13s`, "plain save duration")
+	mustNotContain(t, plain, `class="system-changed"`, "unchanged save")
+	mustNotContain(t, plain, `class="rewound"`, "unrewound save")
+	mustNotContain(t, plain, `/systems/`, "save without a known system")
+}
+
+func TestSaveRoutesCacheSuccessAndReturnHonest404sAnd500s(t *testing.T) {
+	f := newFixture(t)
+	for _, path := range []string{"/p/demo_crasher/saves", "/p/demo_crasher/saves/1"} {
+		rec := f.get(t, path)
+		if rec.Code != http.StatusOK || rec.Header().Get("Cache-Control") != readapi.CacheControl {
+			t.Errorf("GET %s = %d, cache %q", path, rec.Code, rec.Header().Get("Cache-Control"))
+		}
+	}
+	for _, path := range []string{
+		"/p/nobody/saves", "/p/nobody/saves/1", "/p/demo_crasher/saves/99",
+		"/p/demo_crasher/saves/0", "/p/demo_crasher/saves/-1", "/p/demo_crasher/saves/not-a-number",
+		"/p/demo_crasher/saves/999999999999999999999999",
+	} {
+		rec := f.get(t, path)
+		if rec.Code != http.StatusNotFound || rec.Header().Get("Cache-Control") != "no-store" {
+			t.Errorf("GET %s = %d, cache %q", path, rec.Code, rec.Header().Get("Cache-Control"))
+		}
+		mustContain(t, rec.Body.String(), `id="not-found"`, path)
+	}
+
+	f.read.err = errors.New("projections are unreadable")
+	for _, path := range []string{"/p/demo_crasher/saves", "/p/demo_crasher/saves/1"} {
+		rec := f.get(t, path)
+		if rec.Code != http.StatusInternalServerError || rec.Header().Get("Cache-Control") != "no-store" {
+			t.Errorf("GET %s error = %d, cache %q", path, rec.Code, rec.Header().Get("Cache-Control"))
+		}
+	}
+}
+
+func TestProfileLinksToSavesAndBadgesWithCollectionFeaturesInTopNavigation(t *testing.T) {
+	f := newFixture(t)
+	body := f.get(t, "/p/demo_crasher").Body.String()
+	mustContain(t, body, `<a class="button secondary" id="profile-saves" href="/p/demo_crasher/saves">Saves</a>`, "profile saves button")
+	mustContain(t, body, `<a class="button secondary" id="profile-badges" href="/p/demo_crasher/badges">Badges</a>`, "profile badges button")
+	mustNotContain(t, body, `id="nav-saves"`, "top navigation")
+	mustContain(t, body, `id="nav-badges"`, "top navigation")
+	mustContain(t, body, `id="nav-challenges"`, "top navigation")
+}
+
+func TestChallengeIndexGroupsInAPIOrderAndUsesExactEmptyCopy(t *testing.T) {
+	f := newFixture(t)
+	body := f.get(t, "/challenges").Body.String()
+	for _, want := range []string{
+		`id="nav-challenges" aria-current="page"`,
+		`id="challenges-index" data-now="1786665600000"`,
+		`id="challenges-open" data-state="open"`, `>Open now</h2>`,
+		`id="challenges-upcoming" data-state="upcoming"`, `>Coming up</h2>`,
+		`id="challenges-closed" data-state="closed"`, `>Finished</h2>`,
+		`href="/challenges/heavy_lift_week">Heavy Lift Week</a>`,
+		`href="/challenges/next_week">Next Week</a>`,
+		`href="/challenges/old_week">Last Week&#39;s Mistake</a>`,
+		`data-value="2"`, `2026-08-10 00:00 UTC`, `2026-08-17 00:00 UTC`,
+	} {
+		mustContain(t, body, want, "challenge index")
+	}
+	if first, second := strings.Index(body, `data-challenge="heavy_lift_week"`), strings.Index(body, `data-challenge="speedrun_orbit"`); first < 0 || second < first {
+		t.Fatal("open challenge group did not preserve API order")
+	}
+	navStart, navEnd := strings.Index(body, `<nav id="site-nav"`), strings.Index(body, `</nav>`)
+	if navStart < 0 || navEnd < navStart {
+		t.Fatal("challenge index has no main navigation")
+	}
+	nav := body[navStart:navEnd]
+	last := -1
+	for _, id := range []string{"nav-boards", "nav-badges", "nav-challenges", "nav-compare", "nav-events", "nav-stats", "nav-docs"} {
+		at := strings.Index(nav, `id="`+id+`"`)
+		if at <= last {
+			t.Fatalf("navigation order broke at %s: %s", id, nav)
+		}
+		last = at
+	}
+
+	f.read.challenges.Challenges = nil
+	empty := f.get(t, "/challenges").Body.String()
+	for _, want := range []string{"Nothing running just now.", "Nothing scheduled yet.", "Nothing has finished yet."} {
+		mustContain(t, empty, want, "challenge empty groups")
+	}
+}
+
+func TestChallengeDetailRendersMetadataScopeProvenanceValuesAndPager(t *testing.T) {
+	f := newFixture(t)
+	body := f.get(t, "/challenges/heavy_lift_week?limit=1").Body.String()
+	if f.read.lastChallengeKey != "heavy_lift_week" || f.read.lastChallengeLimit != 1 || f.read.lastChallengeOffset != 0 {
+		t.Fatalf("challenge read args = %q limit %d offset %d", f.read.lastChallengeKey, f.read.lastChallengeLimit, f.read.lastChallengeOffset)
+	}
+	for _, want := range []string{
+		`id="challenge-title" data-challenge="heavy_lift_week">Heavy Lift Week</h1>`,
+		`id="challenge-metadata" data-state="open"`,
+		`<dt>Ranking</dt><dd>Highest value wins</dd>`,
+		`datetime="2026-08-17T00:00:00Z">2026-08-17 00:00 UTC</time>`,
+		`id="challenge-close-hint" class="muted">(closes in 3 days)</span>`,
+		`Your flights have to reach catlog before it closes. If you play offline, get back online in time.`,
+		`data-rank="1" data-handle="demo_crasher"`,
+		`href="/systems/solar-system">Solar System</a>`,
+		`class="value" data-value="42000" title="42000 kg"`,
+		`<span class="ctx-key">body</span> <span class="ctx-value">Earth</span>`,
+		`data-value="1786665000000"><time datetime="2026-08-13T23:50:00Z">2026-08-13 23:50 UTC</time>`,
+		`href="/challenges/heavy_lift_week?limit=1&amp;offset=1" id="challenge-next"`,
+	} {
+		mustContain(t, body, want, "open system challenge")
+	}
+	for _, forbidden := range []string{"hash-sol", "save-label-one", `class="card`} {
+		mustNotContain(t, body, forbidden, "open system challenge")
+	}
+
+	second := f.get(t, "/challenges/heavy_lift_week?limit=1&offset=1").Body.String()
+	if f.read.lastChallengeOffset != 1 {
+		t.Fatalf("challenge offset = %d", f.read.lastChallengeOffset)
+	}
+	for _, want := range []string{`data-rank="2" data-handle="demo_ace"`, `id="challenge-range">Ranks 2&#8211;2`, `href="/challenges/heavy_lift_week?limit=1" id="challenge-prev"`} {
+		mustContain(t, second, want, "second challenge page")
+	}
+
+	career := f.get(t, "/challenges/speedrun_orbit").Body.String()
+	for _, want := range []string{
+		`<th scope="col" class="save">Save</th>`,
+		`data-value="1" href="/p/demo_crasher/saves/1">Save 1</a>`,
+		`data-value="313000" title="313000 ms"`,
+		`class="rewound"`,
+	} {
+		mustContain(t, career, want, "career challenge")
+	}
+	mustNotContain(t, career, `class="system"`, "career challenge")
+	mustNotContain(t, career, "save-label-one", "career challenge")
+}
+
+func TestClosedChallengeIsAnArchiveWithoutOpenDeadline(t *testing.T) {
+	f := newFixture(t)
+	body := f.get(t, "/challenges/old_week").Body.String()
+	for _, want := range []string{`data-state="closed"`, `(closed 4 days ago)`, `data-handle="demo_ace"`, `data-value="8"`} {
+		mustContain(t, body, want, "closed challenge")
+	}
+	mustNotContain(t, body, `id="challenge-deadline"`, "closed challenge")
+}
+
+func TestHomeUsesOneChallengeListClockAndFirstOpenChallenge(t *testing.T) {
+	f := newFixture(t)
+	body := f.get(t, "/").Body.String()
+	if f.read.challengeListCalls != 1 || f.read.challengeCalls != 1 || f.read.lastChallengeKey != "heavy_lift_week" ||
+		f.read.lastChallengeLimit != web.FeaturedRows || f.read.lastChallengeOffset != 0 {
+		t.Fatalf("home challenge reads = list %d detail %d key %q limit %d offset %d",
+			f.read.challengeListCalls, f.read.challengeCalls, f.read.lastChallengeKey, f.read.lastChallengeLimit, f.read.lastChallengeOffset)
+	}
+	for _, want := range []string{`id="open-challenge" class="panel" data-challenge="heavy_lift_week"`, `Open now: Heavy Lift Week`, `class="catlog-board" data-stat="heavy_lift_week"`} {
+		mustContain(t, body, want, "home open challenge")
+	}
+
+	f = newFixture(t)
+	for i := range f.read.challenges.Challenges {
+		if f.read.challenges.Challenges[i].State == "open" {
+			f.read.challenges.Challenges[i].State = "closed"
+		}
+	}
+	body = f.get(t, "/").Body.String()
+	if f.read.challengeListCalls != 1 || f.read.challengeCalls != 0 {
+		t.Fatalf("no-open home reads = list %d detail %d", f.read.challengeListCalls, f.read.challengeCalls)
+	}
+	mustNotContain(t, body, `id="open-challenge"`, "home without open challenge")
+}
+
+func TestChallengeRoutesCacheValidateAndFailHonestly(t *testing.T) {
+	f := newFixture(t)
+	for _, path := range []string{"/challenges", "/challenges/heavy_lift_week", "/challenges/old_week"} {
+		rec := f.get(t, path)
+		if rec.Code != http.StatusOK || rec.Header().Get("Cache-Control") != readapi.CacheControl {
+			t.Errorf("GET %s = %d cache %q", path, rec.Code, rec.Header().Get("Cache-Control"))
+		}
+	}
+	for _, path := range []string{"/challenges/missing", "/challenges/heavy_lift_week?limit=no", "/challenges/heavy_lift_week?offset=no"} {
+		rec := f.get(t, path)
+		want := http.StatusNotFound
+		if strings.Contains(path, "=no") {
+			want = http.StatusBadRequest
+		}
+		if rec.Code != want || rec.Header().Get("Cache-Control") != "no-store" {
+			t.Errorf("GET %s = %d cache %q, want %d no-store", path, rec.Code, rec.Header().Get("Cache-Control"), want)
+		}
+	}
+	f.get(t, "/challenges/heavy_lift_week?limit=999&offset=-4")
+	if f.read.lastChallengeLimit != readapi.MaxLimit || f.read.lastChallengeOffset != 0 {
+		t.Errorf("clamped args = %d/%d", f.read.lastChallengeLimit, f.read.lastChallengeOffset)
+	}
+	f.read.err = errors.New("projections are unreadable")
+	for _, path := range []string{"/challenges", "/challenges/heavy_lift_week", "/"} {
+		rec := f.get(t, path)
+		if rec.Code != http.StatusInternalServerError || rec.Header().Get("Cache-Control") != "no-store" {
+			t.Errorf("GET %s error = %d cache %q", path, rec.Code, rec.Header().Get("Cache-Control"))
+		}
+	}
+}
+
+func TestBadgeCatalogueGroupsTilesAndExactHolderCounts(t *testing.T) {
+	f := newFixture(t)
+	body := f.get(t, "/badges").Body.String()
+	for _, want := range []string{
+		`id="nav-badges" aria-current="page"`,
+		`id="badges-catalogue" data-min-players="2"`,
+		`class="badge-group" data-group="first-steps"`,
+		`class="badge-group" data-group="exploration"`,
+		`class="tile badge-tile" data-badge="first_flight"`,
+		`href="/badges/orbited_luna">Orbited Luna</a>`,
+		`class="badge-count tnum" data-value="2">Held by`,
+	} {
+		mustContain(t, body, want, "badge catalogue")
+	}
+	if first := strings.Index(body, `data-group="first-steps"`); first < 0 || first > strings.Index(body, `data-group="exploration"`) {
+		t.Fatal("badge groups did not preserve catalogue order")
+	}
+	for _, forbidden := range []string{`class="card`, `#2cfa1f`, `raw-sol-hash`, `save-label-one`} {
+		mustNotContain(t, body, forbidden, "badge catalogue")
+	}
+}
+
+func TestBadgeHolderPageRendersRanksSaveSystemDatesAndPreservesFilter(t *testing.T) {
+	f := newFixture(t)
+	body := f.get(t, "/badges/first_flight").Body.String()
+	if f.read.lastBadgeLimit != readapi.DefaultLimit || f.read.lastBadgeOffset != 0 {
+		t.Fatalf("default badge paging = limit %d offset %d", f.read.lastBadgeLimit, f.read.lastBadgeOffset)
+	}
+	for _, want := range []string{
+		`id="badge-title" data-badge="first_flight">Off The Pad</h1>`,
+		`<th scope="col" class="system">System</th>`,
+		`data-rank="1" data-handle="demo_crasher"`,
+		`class="rank tnum" data-value="1">#1</td>`,
+		`data-value="1" href="/p/demo_crasher/saves/1">Save 1</a>`,
+		`href="/systems/solar-system">Solar System</a>`,
+		`data-value="1786113120000"><time datetime="2026-08-07T14:32:00Z">2026-08-07 14:32 UTC</time>`,
+		`data-handle="demo_ace"`,
+		`<td class="system">&#8212;</td>`,
+	} {
+		mustContain(t, body, want, "badge holders")
+	}
+	for _, forbidden := range []string{"hash-sol", "save-label-one"} {
+		mustNotContain(t, body, forbidden, "badge holders")
+	}
+
+	filtered := f.get(t, "/badges/first_flight?system=solar-system&limit=1").Body.String()
+	if f.read.lastBadgeSystem == nil || f.read.lastBadgeSystem.Hash != "hash-sol" || f.read.lastBadgeLimit != 1 {
+		t.Fatalf("badge read filter = system %+v limit %d", f.read.lastBadgeSystem, f.read.lastBadgeLimit)
+	}
+	for _, want := range []string{
+		`id="badge-system-filter">Showing awards in <a href="/systems/solar-system">Solar System</a>.`,
+		`href="/badges/first_flight?limit=1&amp;offset=1&amp;system=solar-system" id="badge-next"`,
+		`href="/badges/first_flight?limit=1">Show every system</a>`,
+	} {
+		mustContain(t, filtered, want, "filtered badge holder page")
+	}
+
+	f.get(t, "/badges/first_flight?system=hash-sol&limit=999&offset=-4")
+	if f.read.lastBadgeSystem == nil || f.read.lastBadgeSystem.Hash != "hash-sol" ||
+		f.read.lastBadgeLimit != readapi.MaxLimit || f.read.lastBadgeOffset != 0 {
+		t.Fatalf("clamped hash badge read = system %+v limit %d offset %d",
+			f.read.lastBadgeSystem, f.read.lastBadgeLimit, f.read.lastBadgeOffset)
+	}
+}
+
+func TestPlayerBadgePagesSeparateEarnedUnearnedAndShowProvenance(t *testing.T) {
+	f := newFixture(t)
+	body := f.get(t, "/p/demo_crasher/badges").Body.String()
+	for _, want := range []string{
+		`class="tile badge-tile badge-earned" data-badge="first_flight"`,
+		`class="tile badge-tile badge-unearned" data-badge="first_orbit"`,
+		`data-value="1" href="/p/demo_crasher/saves/1">Save 1</a>`,
+		`href="/systems/solar-system">Solar System</a>`,
+		`data-value="1786113120000" datetime="2026-08-07T14:32:00Z">2026-08-07 14:32 UTC</time>`,
+	} {
+		mustContain(t, body, want, "player badges")
+	}
+	for _, forbidden := range []string{"hash-sol", "save-label-one"} {
+		mustNotContain(t, body, forbidden, "player badges")
+	}
+
+	save := f.get(t, "/p/demo_crasher/saves/1/badges").Body.String()
+	for _, want := range []string{
+		`id="player-badges-title" data-handle="demo_crasher" data-save="1">Save 1 badges</h1>`,
+		`data-badge="first_flight"`, `data-badge="reached_duna"`,
+		`href="/p/demo_crasher/saves/1">Save 1</a>`,
+	} {
+		mustContain(t, save, want, "save badges")
+	}
+
+	empty := f.get(t, "/p/demo_ace/badges").Body.String()
+	mustContain(t, empty, `<p id="earned-badges-empty">No badges yet. Fly something.</p>`, "empty player badges")
+}
+
+func TestBadgeRoutesValidationCachingErrorsAndNavigation(t *testing.T) {
+	f := newFixture(t)
+	for _, path := range []string{
+		"/badges", "/badges/first_flight", "/p/demo_crasher/badges", "/p/demo_crasher/saves/1/badges",
+	} {
+		rec := f.get(t, path)
+		if rec.Code != http.StatusOK || rec.Header().Get("Cache-Control") != readapi.CacheControl {
+			t.Errorf("GET %s = %d, cache %q", path, rec.Code, rec.Header().Get("Cache-Control"))
+		}
+		body := rec.Body.String()
+		start := strings.Index(body, `<nav id="site-nav"`)
+		if start < 0 {
+			t.Errorf("GET %s did not render site navigation", path)
+			continue
+		}
+		end := strings.Index(body[start:], `</nav>`)
+		if end < 0 {
+			t.Errorf("GET %s did not close site navigation", path)
+			continue
+		}
+		nav := body[start : start+end]
+		if got := strings.Count(nav, `<a href=`); got != 7 {
+			t.Errorf("GET %s navigation links = %d, want 7", path, got)
+		}
+		for _, id := range []string{"nav-boards", "nav-badges", "nav-challenges", "nav-compare", "nav-events", "nav-stats", "nav-docs"} {
+			if strings.Count(nav, `id="`+id+`"`) != 1 {
+				t.Errorf("GET %s navigation does not contain %s exactly once", path, id)
+			}
+		}
+	}
+	for _, path := range []string{
+		"/badges/missing", "/badges/first_flight?system=missing", "/p/nobody/badges",
+		"/p/nobody/saves/1/badges", "/p/demo_crasher/saves/99/badges", "/p/demo_crasher/saves/no/badges",
+	} {
+		rec := f.get(t, path)
+		if rec.Code != http.StatusNotFound || rec.Header().Get("Cache-Control") != "no-store" {
+			t.Errorf("GET %s = %d, cache %q", path, rec.Code, rec.Header().Get("Cache-Control"))
+		}
+	}
+	for _, path := range []string{"/badges/first_flight?limit=no", "/badges/first_flight?offset=no"} {
+		rec := f.get(t, path)
+		if rec.Code != http.StatusBadRequest || rec.Header().Get("Cache-Control") != "no-store" {
+			t.Errorf("GET %s = %d, cache %q", path, rec.Code, rec.Header().Get("Cache-Control"))
+		}
+	}
+	f.read.err = errors.New("projections are unreadable")
+	for _, path := range []string{
+		"/badges", "/badges/first_flight", "/p/demo_crasher/badges", "/p/demo_crasher/saves/1/badges",
+		"/p/demo_crasher/saves", "/p/demo_crasher/saves/1",
+	} {
+		rec := f.get(t, path)
+		if rec.Code != http.StatusInternalServerError || rec.Header().Get("Cache-Control") != "no-store" {
+			t.Errorf("GET %s error = %d, cache %q", path, rec.Code, rec.Header().Get("Cache-Control"))
+		}
 	}
 }
 

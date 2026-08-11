@@ -199,11 +199,12 @@ test.describe("journey B — everyone's stats", () => {
     // The window is named on the page, so a reader can tell which one they have.
     await expect(page.locator("#board-bucket")).toHaveAttribute("data-bucket", /^\d{4}$/);
 
-    // A window this server does not serve is a 404, and says which of the two
-    // things went wrong.
+    // An invalid window is a bad request, and says which dimension went wrong.
     const res = await page.goto(`/boards/${LITHOBRAKE}?period=fortnightly`);
-    expect(res?.status()).toBe(404);
-    await expect(page.locator("#not-found-detail")).toContainText(/window/i);
+    expect(res?.status()).toBe(400);
+    await expect(page.locator("#not-found-detail")).toHaveText(
+      "Period must be one of all time, daily, weekly, monthly or yearly.",
+    );
   });
 
   test("the pager counts ranks and disables what it cannot do", async ({ page }) => {
@@ -390,9 +391,9 @@ test.describe("the raw event log", () => {
     // client's own clock. This is the one assertion here that is a privacy
     // property rather than a UI property.
     //
-    // Scoped to the log rather than the page: the copy above the table explains
-    // that the installation identifier is never published, and a substring match
-    // over the prose would fail on the sentence that states the guarantee.
+    // Scoped to the log rather than the page: the guarantee itself is stated on
+    // /docs/privacy rather than above this table, but keeping the assertion on
+    // the tbody means it still holds if a future line of prose names a field.
     for (const row of await page.locator("#events-log tbody").all()) {
       const text = (await row.innerText()).toLowerCase();
       expect(text).not.toContain("install");

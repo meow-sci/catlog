@@ -1,0 +1,27 @@
+{{define "content" -}}
+<div class="page-head">
+  <h1 id="badges-title">Merit badges</h1>
+  <p>Once-only recognitions for what happened along the way. They add no score and improve no landing.</p>
+</div>
+
+<div class="stack" id="badges-catalogue" data-min-players="{{.Data.MinPlayers}}">
+  {{- range .Data.Groups}}
+  <section class="badge-group" data-group="{{.Key}}" aria-labelledby="badge-group-{{.Key}}">
+    <h2 id="badge-group-{{.Key}}">{{.Title}}</h2>
+    <div class="tiles">
+      {{- range .Badges}}
+      <article class="tile badge-tile" data-badge="{{.Badge}}">
+        <h3><a class="badge-link" href="{{badgePath .Badge}}">{{.Title}}</a></h3>
+        <p>{{.Blurb}}</p>
+        <p class="badge-count tnum" data-value="{{.Holders}}">Held by {{num .Holders}}</p>
+      </article>
+      {{- end}}
+    </div>
+  </section>
+  {{- end}}
+</div>
+
+{{- if gt .Data.MinPlayers 1}}
+<p id="badges-note" class="muted prose"><small>Place-name badges come from the systems players use. One appears in this catalogue after {{num .Data.MinPlayers}} different players hold it; an earlier award still appears on that player&#8217;s own page.</small></p>
+{{- end}}
+{{- end}}

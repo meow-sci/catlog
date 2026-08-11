@@ -18,6 +18,12 @@ export interface Board {
   ascending: boolean;
   /** True when the value is a time measured from the start of a career. */
   career: boolean;
+  /**
+   * The ranking dimensions this board supports. This is distinct from
+   * `career`: that flag describes the value's clock, while scopes describe
+   * whose rows are ranked.
+   */
+  scopes: ("player" | "career" | "system")[];
   /** Event types that move this board. */
   from: string[];
   /** What the number is, in one line. */
@@ -30,8 +36,10 @@ export interface Board {
   family?: { pattern: string; from: string };
 }
 
-/** The 40 fixed boards, in the order the site publishes them. */
-export const BOARDS: Board[] = [
+const UNIVERSAL_SCOPES: Board["scopes"] = ["player", "career", "system"];
+
+/** The 50 fixed boards, in the order the site publishes them. */
+const BOARD_DEFINITIONS: Omit<Board, "scopes">[] = [
   {
     stat: "biggest_lithobrake_survived",
     title: "Biggest Lithobrake Survived",
@@ -168,7 +176,7 @@ export const BOARDS: Board[] = [
     career: false,
     from: ["vehicle.orbit"],
     what: "The far end of the widest orbit you have ever settled into.",
-    how: "The greatest apoapsis altitude of any orbit you actually reached, measured above the world's average radius rather than from its centre.",
+    how: "The greatest apoapsis altitude of any orbit you actually reached, measured above the world's average radius rather than from its centre. The same event records semi-major axis, node and periapsis directions, periapsis time and period, but no leaderboard scores those five figures.",
     excluded: [
       "The path was not a closed orbit. A fly-by or an escape has no far end to report, and catlog records nothing rather than a nonsense number.",
       "The flight was flagged.",
@@ -395,7 +403,7 @@ export const BOARDS: Board[] = [
     career: false,
     from: ["vehicle.soi"],
     what: "How many distinct worlds you have reached.",
-    how: "One per world, the first time you arrive at it. Arriving again changes nothing.",
+    how: "One per world, the first time you arrive at it. Your player total is the union across every save; a career row counts only that save; a system row is the union across your saves using that celestial system. Arriving again within the same scope changes nothing.",
     excluded: ["The flight was flagged."],
   },
   {
@@ -406,7 +414,7 @@ export const BOARDS: Board[] = [
     career: false,
     from: ["vehicle.situation"],
     what: "How many different worlds you have put something down on.",
-    how: "One per world, the first time you touch its surface. Touching down there again changes nothing. Water counts: splashing down on a world is still arriving at it, and Splashdowns is the board that tells the two apart. It asks whether you have anything standing on a surface there, which is a wider question than Landings: a vehicle already sitting on the ground when a save loads counts here, and so does a rover that rolls to a stop, and neither of those is a landing.",
+    how: "One per world, the first time you touch its surface. Your player total is the union across every save; a career row counts only that save; a system row is the union across your saves using that celestial system. Water counts: splashing down on a world is still arriving at it, and Splashdowns is the board that tells the two apart. It asks whether you have anything standing on a surface there, which is a wider question than Landings: a vehicle already sitting on the ground when a save loads counts here, and so does a rover that rolls to a stop, and neither of those is a landing.",
     excluded: ["The world's name could not be read.", "The flight was flagged."],
   },
   {
@@ -517,8 +525,8 @@ export const BOARDS: Board[] = [
     ascending: false,
     career: false,
     from: ["roster.snapshot"],
-    what: "Total distance travelled across every kitten in your roster.",
-    how: "Each kitten's running total is kept at its highest value ever seen, and the board is the sum of those. A snapshot that arrives out of order, or an older save reloaded, can fail to move the number but can never wind it back.",
+    what: "Total distance travelled by your whole crew across your saves.",
+    how: "Each save keeps its own roster totals. Your player total adds every save; a career row adds that save; a system row adds every save using that celestial system. Kittens with the same roster name in different saves still count separately, because they are different cats. Within one save, an older snapshot can fail to move a total but can never wind it back.",
     excluded: [
       "Nothing. Roster totals are not attached to a flight, so the flag rule has nothing to attach to either. The two per-kitten boards below inherit the same gap.",
     ],
@@ -531,7 +539,7 @@ export const BOARDS: Board[] = [
     career: false,
     from: ["roster.snapshot"],
     what: "How far your single most-travelled kitten has gone.",
-    how: "The largest lifetime distance held by any one kitten in your roster. Distance Travelled adds your whole roster together; this one is your best individual cat, and the row names her.",
+    how: "The largest distance held by any one kitten in the selected player, career or celestial-system scope. Distance Travelled adds the whole roster in that scope together; this one is the best individual cat, and the row names her.",
     excluded: [
       "Nothing. Roster totals are not attached to a flight, so the flag rule has nothing to attach to either — a kitten who did all her travelling on a flagged flight still holds the record.",
     ],
@@ -544,7 +552,7 @@ export const BOARDS: Board[] = [
     career: false,
     from: ["roster.snapshot"],
     what: "How many missions your most-flown kitten has on record.",
-    how: "The largest mission count held by any one kitten in your roster. The game counts a mission that was called off before launch, so this rewards showing up as well as arriving.",
+    how: "The largest mission count held by any one kitten in the selected player, career or celestial-system scope. The game counts a mission that was called off before launch, so this rewards showing up as well as arriving.",
     excluded: [
       "Nothing, for the same reason as the board above: roster totals carry no flight to flag.",
     ],
@@ -563,10 +571,175 @@ export const BOARDS: Board[] = [
       "The event carried no career or no clock reading — an absent time is not treated as zero.",
     ],
   },
+  {
+    stat: "career_playtime",
+    title: "Longest Save",
+    unit: "ms",
+    ascending: false,
+    career: true,
+    from: ["any event carrying career + sim_t"],
+    what: "How long your longest-running save has been played.",
+    how: "The largest positive career-clock reading carried by an event in the selected scope. A career row is the time played in that save; the player row is your longest-running save; a celestial-system row is the longest-running save using that system.",
+    excluded: [
+      "An event with no save or no career-clock reading, or a clock reading of zero or less.",
+      "Nothing based on a flight flag. A duration is not a feat: a flagged flight is still time spent playing that save.",
+    ],
+  },
+  {
+    stat: "play_sessions",
+    title: "Play Sessions",
+    unit: "sessions",
+    ascending: false,
+    career: false,
+    from: ["session.started"],
+    what: "How many times you have started or loaded the game into a save.",
+    how: "One for the initial session and one for every later load in the selected player, save or celestial-system scope. This counts play sessions, not just resumes.",
+    excluded: ["Nothing."],
+  },
+  {
+    stat: "botched_landings",
+    title: "Did Not Land On Their Feet",
+    unit: "tumbles",
+    ascending: false,
+    career: false,
+    from: ["kitten.tumble"],
+    what: "How many tumbles began as a landing that did not end on the kitten's feet.",
+    how: "One for each tumble whose immediately previous movement state was airborne. Grounded trips and every other previous state still count on Kitten Tumbles, but not here.",
+    excluded: [
+      "The tumble began from grounded, unknown, or any state other than airborne.",
+      "The flight was flagged, which includes any flight where the tumble tuning was changed.",
+    ],
+  },
+  {
+    stat: "parts_lost",
+    title: "Parts In Lost Vehicles",
+    unit: "parts",
+    ascending: false,
+    career: false,
+    from: ["vehicle.rud"],
+    what: "How many parts were in the whole vehicles you lost, added together.",
+    how: "Adds the intact vehicle's part count at every RUD. This measures the size of lost vehicles, not individual parts exploding or breaking away.",
+    excluded: [
+      "The part count was zero, which means catlog could not read it.",
+      "The flight was flagged.",
+    ],
+  },
+  {
+    stat: "biggest_parts_lost",
+    title: "Biggest Vehicle Lost",
+    unit: "parts",
+    ascending: false,
+    career: false,
+    from: ["vehicle.rud"],
+    what: "The largest whole vehicle you have lost in one go, measured by its part count.",
+    how: "Keeps the largest positive part count read from an intact vehicle at its RUD boundary. This is one vehicle's size, not a count of separate break-offs.",
+    excluded: [
+      "The part count was zero, which means catlog could not read it.",
+      "The flight was flagged.",
+    ],
+  },
+  {
+    stat: "kittens_to_orbit_and_back",
+    title: "Kittens To Orbit And Home",
+    unit: "kittens",
+    ascending: false,
+    career: false,
+    from: ["flight.ended"],
+    what: "How many save-local kittens rode home on a recovered flight after it reached orbit.",
+    how: "The flight must reach orbit before recovery. Each kitten aboard at recovery counts once per save. The player view adds distinct save-and-kitten pairs across all saves; the system view does the same across saves whose celestial system is known. A kitten who boarded after orbit counts, while one who transferred away before recovery does not, because the recovery-time crew list is authoritative.",
+    excluded: [
+      "The flight never reached orbit.",
+      "The only recorded orbit happened after recovery.",
+      "The flight did not end recovered.",
+      "Nobody was aboard at recovery.",
+      "The flight was flagged.",
+      "Only the celestial-system view skips a save whose system is unknown; its player and save counts still move.",
+    ],
+  },
+  {
+    stat: "biggest_crew_wreck",
+    title: "Most Kittens Aboard A Lost Vehicle",
+    unit: "kittens",
+    ascending: false,
+    career: false,
+    from: ["vehicle.rud"],
+    what: "The most kittens aboard one whole vehicle when it was lost to a physics RUD.",
+    how: "Keeps the largest positive crew count seen at a whole-vehicle RUD. It records who was aboard, not what happened to them; an unusable cause label does not stop this board moving.",
+    excluded: ["Nobody was aboard.", "The flight was flagged."],
+  },
+  {
+    stat: "kittens_wrecked",
+    title: "Kittens Aboard Lost Vehicles",
+    unit: "kittens",
+    ascending: false,
+    career: false,
+    from: ["vehicle.rud"],
+    what: "How many kitten seats were occupied across whole vehicles lost to physics RUDs.",
+    how: "Adds the positive crew count from each qualifying whole-vehicle RUD. It is an occupancy total, not a count of deaths or destroyed bodies; an unusable cause label does not stop this board moving.",
+    excluded: ["Nobody was aboard.", "The flight was flagged."],
+  },
+  {
+    stat: "bodies_by_1y",
+    title: "Worlds In The First Year",
+    unit: "bodies",
+    ascending: false,
+    career: false,
+    from: ["vehicle.soi"],
+    what: "The most different worlds reached in one save during its first 365 days.",
+    how: "A save counts each world whose first arrival was at or before 31,536,000 seconds on its career clock. Your player result is your best single save, never a union across saves; a celestial-system result is the best one save using that system.",
+    excluded: [
+      "A world's first arrival was later than 31,536,000 seconds.",
+      "An arrival with no save or career-clock reading.",
+      "The flight was flagged.",
+      "Only the celestial-system view skips a save whose system is unknown; its player and save results still move.",
+    ],
+  },
+  {
+    stat: "bodies_by_10y",
+    title: "Worlds In Ten Years",
+    unit: "bodies",
+    ascending: false,
+    career: false,
+    from: ["vehicle.soi"],
+    what: "The most different worlds reached in one save during its first ten flat 365-day years.",
+    how: "A save counts each world whose first arrival was at or before 315,360,000 seconds on its career clock. Your player result is your best single save, never a union across saves; a celestial-system result is the best one save using that system.",
+    excluded: [
+      "A world's first arrival was later than 315,360,000 seconds.",
+      "An arrival with no save or career-clock reading.",
+      "The flight was flagged.",
+      "Only the celestial-system view skips a save whose system is unknown; its player and save results still move.",
+    ],
+  },
 ];
 
+// Scope is deliberately attached here rather than repeated on 50 entries. A
+// board added to the catalog receives every scope automatically; there is no
+// opt-out registry to forget to update.
+export const BOARDS: Board[] = BOARD_DEFINITIONS.map((board) => ({
+  ...board,
+  scopes: [...UNIVERSAL_SCOPES],
+}));
+
 /** Boards whose keys are built from the data rather than fixed in advance. */
-export const BOARD_FAMILIES: Board[] = [
+const BOARD_FAMILY_DEFINITIONS: Omit<Board, "scopes">[] = [
+  {
+    stat: "tumbles_on_<body>",
+    title: "Tumbles on <Body>",
+    unit: "tumbles",
+    ascending: false,
+    career: false,
+    from: ["kitten.tumble"],
+    what: "How many times your kittens have gone over on one particular world.",
+    how: "One per tumble on that world, in addition to the all-world Kitten Tumbles total.",
+    excluded: [
+      "The flight was flagged.",
+      "The world's name could not safely form a board key. The tumble still counts towards Kitten Tumbles.",
+    ],
+    family: {
+      pattern: "tumbles_on_<body>",
+      from: "The name of the world where the tumble happened. Catlog has no list of allowed worlds; a family member appears because somebody tumbled there.",
+    },
+  },
   {
     stat: "rud_<cause>",
     title: "RUDs — <Cause>",
@@ -598,6 +771,11 @@ export const BOARD_FAMILIES: Board[] = [
     },
   },
 ];
+
+export const BOARD_FAMILIES: Board[] = BOARD_FAMILY_DEFINITIONS.map((board) => ({
+  ...board,
+  scopes: [...UNIVERSAL_SCOPES],
+}));
 
 export function boardByStat(stat: string): Board | undefined {
   return [...BOARDS, ...BOARD_FAMILIES].find((b) => b.stat === stat);

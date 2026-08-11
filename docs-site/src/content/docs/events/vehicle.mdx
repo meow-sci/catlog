@@ -4,7 +4,7 @@ description: >-
   Situation changes, atmosphere crossings, orbits, sphere-of-influence changes,
   landings, impacts, destruction, staging and docking.
 sidebar:
-  order: 4
+  order: 5
 ---
 
 import { Aside } from "@astrojs/starlight/components";
@@ -62,6 +62,16 @@ state catlog has not seen.
 <EventDetail type="vehicle.atmosphere" />
 <EventDetail type="vehicle.orbit" />
 
+Besides the high point, low point, shape and tilt used by today's orbit boards,
+each orbit record carries the rest of the information needed to describe the
+path: its semi-major axis, the direction of its ascending node and periapsis,
+the game time of periapsis, and its period. These values are **recorded, not
+scored**. No leaderboard ranks any of the five.
+
+An escape path is not closed and will never repeat, so its period is recorded as
+zero. A zero in any of the other new figures can be a real orbital value or the
+fallback for a reading that was not finite; none creates a leaderboard result.
+
 <Aside type="note" title="What counts as orbit">
   Your periapsis has to clear the top of the atmosphere by 1000 m. Around an airless body the bar is
   1000 m above the mean radius. Dropping back below it does not record anything — the bar simply
@@ -75,7 +85,30 @@ and they are the arrival times behind every **Fastest to …** board. Both use t
 name of the body directly. **There is no list of allowed worlds anywhere in
 catlog** — a board exists because somebody went there.
 
+They also feed **Worlds In The First Year** and **Worlds In Ten Years**. Each asks how many distinct
+worlds one save reached by an exact career-clock limit. The player and celestial-system views keep
+the best result from one save; they never combine worlds from several saves. A “year” is catlog's
+flat 365-day duration, not the orbital period of the world you launched from or reached.
+If the save's celestial system is not known, its save and player sprint results still count; only
+the celestial-system view has nowhere honest to place them.
+
 <EventDetail type="vehicle.rud" />
+
+<Aside type="note" title="One whole vehicle, not a trail of break-offs">
+  **KSA does not blow parts off one at a time — a vehicle either survives or it does not. This is
+  how big the thing was when it stopped existing.** The part count is therefore how many parts the
+  intact vehicle had at that final boundary. **Parts In Lost Vehicles** adds those whole-vehicle
+  sizes; **Biggest Vehicle Lost** keeps the largest single one. If that size could not be read,
+  neither board treats it as zero parts.
+</Aside>
+
+The crew count at that same boundary feeds **Most Kittens Aboard A Lost Vehicle** and **Kittens
+Aboard Lost Vehicles**. These are occupancy boards: one keeps the largest crew aboard a single lost
+vehicle, while the other adds the crews across RUDs. **This is not a body count. It is how many
+kittens were aboard when a vehicle was lost. Physics accidents normally send them home; a
+player-initiated scuttle is a different game path, so catlog does not claim what happened to them
+here.** A RUD is a whole-vehicle loss, not necessarily a crash or an explosion.
+
 <EventDetail type="vehicle.impact" />
 
 ## Impacts, and the frame that decides them
@@ -164,4 +197,30 @@ reaches each of them by exactly one route.
 
 Undocking is recorded but scores nothing. There is no undockings board, and the
 event exists so that the piece which split off has a properly-framed flight of its
-own.
+own. Its flight-start facts are read again too, including how many rocket engines
+that piece has after the split; shedding an engine therefore starts a new flight
+for the piece that continues rather than changing the count on the old one.
+
+## What a flight achieved
+
+Catlog remembers five yes-or-no facts about each flight once they happen:
+
+- it achieved orbit;
+- it left an atmosphere;
+- it entered a different world's sphere of influence from the world where it
+  began;
+- it landed and survived; or
+- it docked.
+
+Once observed, an achievement stays part of that flight's history. An escape does
+not erase an earlier orbit, and a later crash does not erase a landing the vehicle
+survived before it. “Another world” is deliberately conservative: catlog only
+records it when the flight's starting world was already known at the time of the
+arrival. If the beginning arrives later in an incomplete or out-of-order history,
+the arrival is not rewritten after the fact.
+
+<Aside type="note" title="Building blocks, not badges yet">
+  No current badge or leaderboard reads these five remembered facts. They are retained now so a
+  future achievement can be derived from the flight history instead of asking the game mod to send
+  the same information again.
+</Aside>

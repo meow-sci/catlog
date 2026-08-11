@@ -53,11 +53,17 @@ Run this checklist on a machine with KSA, then replace each item with a dated re
       Any of these arriving as `0` rather than absent is an omit-don't-zero regression (MOD-078).
 - [ ] **`stage_count` is not 0.** The highest-churn read of the wave. A three-stage rocket reports 3
       on `flight.started`; a 0 means `SequenceList` moved in this build.
+- [ ] **Construction facts survive the KSA read.** A rocket with installed engines reports a
+      positive `flight.started.engine_count`; a probe with RCS but no rocket engine reports an
+      explicit 0; and an induced read failure omits the key rather than claiming zero. Destroy a
+      known vehicle through a physics RUD and confirm `vehicle.rud.part_count` is the number of
+      parts the intact vehicle held at that boundary.
 - [ ] **Teleport does not false-flag.** Go EVA, and separately do an editor decouple. Neither may
       produce `flight.flagged: teleport`. Then teleport from the console or the Set Orbit window:
       that one **must** flag.
 - [ ] **Tumble.** Send a kitten downhill fast enough to trip the 6.5 m/s gate. One `kitten.tumble`
       per tumble — the `Tumbling → Rightening → Grounded` settle must **not** produce a second.
+      Confirm `from: "airborne"` on a botched landing and `from: "grounded"` on a trip.
 - [ ] **Tuning flag.** Open the game's Kitten Locomotion Tuning window and change the tumble gate. One
       session-wide `flight.flagged: tuning`, and every open flight is tainted.
 - [ ] **Staging, docking, EVA.** Stage → `vehicle.staging` with the right index. Dock and undock →
@@ -65,6 +71,18 @@ Run this checklist on a machine with KSA, then replace each item with a dated re
       `kitten.eva_start` / `kitten.eva_end` with a sane duration.
 - [ ] **Save/load is a clean boundary.** Load a save mid-session: a new `session.started`, no spurious
       orbit or SOI events for vehicles that were already there, and the session ULID changes.
+- [ ] **The cached system survey is complete and ordered.** At every session boundary,
+      `system.discovered` arrives before `session.started`, and its header reports the stock body
+      count. On the first unmarked boundary, the emitted body rows have no missing bodies or
+      duplicate ids. Loading the same save twice produces the same system hash. Hand-editing
+      `Astronomicals.xml` produces a different hash on the next load and sets `system_changed` on
+      the career binding.
+- [ ] **Orbit elements are real game values.** On a bound orbit, `sma_m`, `lan_deg`, `argp_deg`,
+      `t_pe` and `period_s` are finite and agree with the game's orbit. On an escape trajectory,
+      `period_s` is exactly 0 rather than NaN or a fabricated period.
+- [ ] **The telemetry state vector is atomic.** A window in flight carries a finite six-number
+      `state` in the documented parent-body-centred inertial frame. Where the KSA read is made to
+      fail, the whole object is absent — never a partial object and never a `{0,0,0}` position.
 - [ ] **Ship to a local server.** `make dev`, claim a handle, point `credential_path` at the download,
       restart the game. The window shows the handle and expiry; *Last ship* goes green with the
       **server's** accepted/deduped counts; the board shows the flight. Kill the server mid-session —
@@ -74,7 +92,9 @@ Run this checklist on a machine with KSA, then replace each item with a dated re
       no `-wal` behind, and the next launch continues the same `sid`/`seq` chain with no
       `409 stream_fork` on the first batch.
 - [ ] **Cost.** With Diagnostics open, confirm the sample stays well under a millisecond with a dozen
-      vehicles in the system, and *Read faults* stays at 0. Constitution §3 — the mod is a guest.
+      vehicles in the system, and *Read faults* stays at 0. Measure the one-time system survey and
+      the per-sample state-vector read separately as well as the whole sample. Constitution §3 — the
+      mod is a guest.
 
 ### Two things this checklist settles
 
@@ -162,13 +182,42 @@ player made months ago is never invisible. If it is ever built, it must go throu
 `ModConfig.Normalize` and `EventTypeFilter.Create` like every other path — the two-layer refusal in
 MOD-072 is not something a UI gets to bypass.
 
-### Locking `vehicle.rud` along with the other five
+### Locking `vehicle.rud` along with the other six
 
-Considered and refused. The five types that cannot be switched off are the ones whose absence makes a
-number *better* than it was; `vehicle.rud` only hides how often a player exploded, and the
+Considered and refused. Five of the six locked types are the score/integrity spine whose absence
+makes a number *better* than it was; `system.discovered` is separately locked because suppressing it
+destroys career-to-system attribution. `vehicle.rud` only hides how often a player exploded, and the
 `vehicle.impact.survived` verdict — the one that actually scores — is computed client-side before the
 filter ever sees the envelope, so it stays honest either way. Vanity-hiding is a preference, and
-Constitution §8's proportionality is the reason the list stops where it does. See MOD-072.
+Constitution §8's proportionality is the reason the score/integrity list stops where it does. See
+MOD-072 and PROJ-108.
+
+### A `kittens_scuttled` leaderboard
+
+Refused. `kitten.kia` identifies the deliberate player-destroy path with crew aboard, so turning it
+into a durable public ranking would attach a public consequence to a person for using an action the
+game offers. That fails Constitution §8's consequence test. The shipped lost-vehicle crew boards
+instead describe only the kittens aboard at a physics RUD and make no claim about deaths; they do
+not provide a softer route to the same scuttle ranking. See PROJ-118.
+
+### A server-side catalogue of celestial-body names
+
+Refused. Catlog compiles no body name into Go: KSA content and mods define an open set, and a server
+list would silently become wrong for somebody. The immutable log instead carries each game's
+reported catalogue under its content-derived system hash. The Every World and Nothing Left badges
+use that per-system catalogue only when its header is effectively complete; they do not turn it into
+a global allow-list. Dynamic board and badge families likewise derive their keys from emitted names
+and apply only protocol-safe key syntax. This is the same position as PROJ-033, extended from board
+keys to the system-aware projections that now exist.
+
+### A 3D celestial-system and flight-path view
+
+Not planned, not scoped and not owed. The data foundation is intentionally present:
+`GET /v1/systems/{slug}` exposes the surveyed forest, `vehicle.orbit` carries the complete milestone
+element set, and `telemetry.window.state` carries parent-body-centred position and velocity samples.
+Those facts make a renderer possible; they do not choose a scene graph, propagation model, camera,
+time control or browser performance budget. A future renderer should start from those contracts
+rather than repeat the KSA survey, but the existence of drawable data is not a promise to build one.
 
 ### Propellant, Δv and any efficiency board that judges a claim
 
@@ -180,9 +229,35 @@ tolerance nobody can defend (aerobraking, gravity assists, staging losses, drag,
 could not read), and its false positives land on **honest players doing something clever**.
 
 What shipped instead is the honest version of the same appetite: `vehicle.orbit.mass_kg` beside
-`flight.started.mass_kg`, and the `heaviest_to_orbit` / `heaviest_launch` pair. That ranks a ratio
-rather than judging a claim. A future decision may record propellant — but it has to write *record
-it, never validate it* down first, the way `warp_max` did. PROJ-099.
+`flight.started.mass_kg`, and the `heaviest_to_orbit` / `heaviest_launch` pair. They rank absolute
+whole-vehicle mass at two observable boundaries for comparison; neither claims a payload split or
+computes a ratio. A future decision may record propellant — but it has to write *record it, never
+validate it* down first, the way `warp_max` did. PROJ-099.
+
+KSA does not expose a durable payload-versus-booster boundary. `SequencePerformance` contains the
+per-stage split that could approximate one, but it is refreshed in flight only while one of two UI
+windows is open and otherwise retains stale editor data. Refusing that split is therefore about the
+trustworthiness of the observation, not implementation cost. Likewise `NavBallData.DeltaV` is only
+the active stage and is refreshed behind the same UI gates, while `ThrustWeightRatio` is a HUD value
+using surface gravity and current throttle rather than a vehicle capability. If expended Δv is ever
+wanted, integrating `KinematicMeasurements.DeltaVelocityCci` is the honest source, and PROJ-099's
+*record it, never validate it* rule must be recorded for that use before the payload changes.
+
+### Reentry-heat boards
+
+Impossible with the current game model. KSA has no thermal simulation, part heat or overheat state;
+the only part-path `Temperature` is a visual-effects value driven by frost and emissivity timing.
+Ranking it would present an FX control as vehicle heating, so there is no missing detector to add.
+
+### Other surveyed KSA possibilities
+
+Appendix D of [the implementation plan](../LOTS_OF_THINGS_PLAN.md#appendix-d--surveyed-readable-and-deliberately-not-built-now)
+records the remaining source survey so a future request begins with evidence rather than another
+decompilation pass. It covers cheap polled reads (fuel fraction, dimensions, structural-load
+fractions, region, module inventory, battery, target and control point), optional celestial
+rendering data, three viable but unused Harmony patch points, and confirmed absences such as
+science, contracts, comms, per-part destruction, aerodynamic detail and EVA-only distance. None is
+promised work; each still needs its own event/projection, cost, privacy and Constitution review.
 
 ### A plausibility rule on what counts as a "real" landing
 

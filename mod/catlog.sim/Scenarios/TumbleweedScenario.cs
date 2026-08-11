@@ -73,8 +73,9 @@ public sealed class TumbleweedScenario : IScenario
 
         // --- three bounding sprints, each ending in a tumble ---
         double now = 6.5;
-        foreach (double speed in TumbleSpeeds)
+        for (int i = 0; i < TumbleSpeeds.Length; i++)
         {
+            double speed = TumbleSpeeds[i];
             double runStart = now;
             for (; now < runStart + 18.0; now += Play.Dt)
             {
@@ -89,7 +90,8 @@ public sealed class TumbleweedScenario : IScenario
 
             // Terrain contact plus tangential speed over the gate: the game's tumble condition.
             yield return SimStep.At(now)
-                .Emit(new TumbleSignal(now, SimClock.Wall(now), KittenName, speed, eva.Body.Name))
+                .Emit(new TumbleSignal(
+                    now, SimClock.Wall(now), KittenName, "grounded", speed, eva.Body.Name))
                 .With(lander.Sample(now), eva.Sample(now));
 
             eva.Rest("rolling");

@@ -27,6 +27,15 @@ different players are on it.
 
 **Your profile.** Every placement, every rank, and *its denominator*: "#3 of 41", not a bare "#3".
 
+**Merit badges.** Once-only recognitions for first flights, ambitious stacks, survivable mistakes,
+exploration and kittens. Each appears both across a player's current history and in the save that
+earned it, with the celestial system shown so an achievement in one system is not confused with
+the same title in another.
+
+**Challenges.** Dated leaderboards with one peculiar rule and a hard receive-time deadline. Open
+challenges appear on the home page, upcoming ones are listed in advance, and finished results stay
+readable as an archive.
+
 **The raw log.** Every event catlog recorded, browsable. This is the part that makes "your record is
 214 m/s" checkable rather than asserted — you can read the flight it came from.
 
@@ -74,9 +83,10 @@ player before anything is published, so two accounts shipping from the same comp
 linked from outside. Your untrusted local clock is never published either.
 
 **You can turn parts of it off.** The mod's settings file lists every kind of thing catlog records,
-and any of them can be switched off individually — each one you turn off is simply a leaderboard you
-stop appearing on. Five cannot be switched off, because they are what keeps everyone else's numbers
-honest rather than anything about you.
+and most can be switched off individually. The cost is that you stop appearing on what that type
+feeds, or lose the catalogue features that only the optional body list supplies. Six cannot be
+switched off: five are what keep everyone else's numbers honest, and the system header is mandatory
+attribution that says which celestial catalogue gives every body name meaning.
 
 **You can leave.** One button deletes everything: events, batches, credentials, archived data. Your
 handle is retired rather than recycled, so nobody can take it and pretend to be you.

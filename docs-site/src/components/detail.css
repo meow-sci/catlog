@@ -1,7 +1,8 @@
 /*
- * Shared chrome for the two detail renderers, EventDetail.astro and
- * BoardDetail.astro. It lives here rather than in EventDetail's `is:global`
- * block because Astro only ships a component's styles on pages that render it,
+ * Shared chrome for the detail renderers: EventDetail.astro, BoardDetail.astro,
+ * BadgeDetail.astro and ChallengeDetail.astro. It lives here rather than in
+ * EventDetail's `is:global` block because Astro only ships a component's styles
+ * on pages that render it,
  * and leaderboards/catalog.mdx imports BoardDetail alone — which uses `.ev-pill`
  * and `.ev-dl` and would otherwise get them unstyled.
  *

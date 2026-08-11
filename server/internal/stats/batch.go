@@ -70,19 +70,46 @@ type Batch struct {
 
 	// Read-through caches. An entry is loaded on first touch and survives a
 	// flush, because after one it holds exactly what the database holds.
-	flights map[ids.ID]*flightEntry
-	careers map[careerKey]*careerEntry
-	bodies  map[int64]map[bodyKey]*bodyEntry
-	kittens map[int64]map[string]*kittenEntry
-	// values caches `player_stat.value` for the one helper that has to read it
-	// back (setValue, for its window delta).
-	values map[statKey]float64
+	flights      map[ids.ID]*flightEntry
+	careers      map[careerKey]*careerEntry
+	systems      map[string]*systemEntry
+	systemBodies map[systemBodyKey]*systemBodyEntry
+	// systemCatalogues loads one system's whole body→kind set on demand. It is
+	// merged with pending systemBodies so completeness/subset reads see the
+	// same catalogue before and after a flush.
+	systemCatalogues map[string]map[string]string
+	// careerOrdinals is the next-save sequence high-water per player. It is
+	// loaded once per player per batch and advanced as new careers are first
+	// seen, so several saves created in one batch receive distinct ordinals.
+	careerOrdinals map[int64]int64
+	bodies         map[int64]map[bodyKey]*bodyEntry
+	careerBodies   map[int64]map[careerBodyKey]*careerBodyEntry
+	kittens        map[int64]map[string]*kittenEntry
+	careerKittens  map[int64]map[careerKittenKey]*careerKittenEntry
+	// values cache effective board values, including writes pending in this
+	// batch. Threshold badges and derived totals both use this read-through.
+	values            map[statKey]float64
+	valueLoaded       map[statKey]bool
+	valueExists       map[statKey]bool
+	careerValues      map[careerStatKey]float64
+	careerValueLoaded map[careerStatKey]bool
+	careerValueExists map[careerStatKey]bool
+	// challengeMembers loads one scoped challenge's durable member set and
+	// merges pending additions into it. Set-valued challenge folds therefore
+	// observe the same novelty/count before and after a flush.
+	challengeMembers map[challengeSetKey]map[string]*challengeMemberEntry
 
 	// Write accumulators, one map per rule. Cleared by every flush. Indexed by
 	// [statKind] rather than carrying it in the value, so the flush walks one
 	// kind at a time — each kind's ON CONFLICT clause is a different statement.
-	stats   [numStatKinds]map[statKey]*pendingStat
-	periods [numStatKinds]map[periodKey]*pendingStat
+	stats          [numStatKinds]map[statKey]*pendingStat
+	careerStats    [numStatKinds]map[careerStatKey]*pendingCareerStat
+	systemStats    [numStatKinds]map[systemStatKey]*pendingStat
+	periods        [numStatKinds]map[periodKey]*pendingStat
+	challengeStats [numStatKinds]map[challengeStatKey]*pendingStat
+	// badges is both the read-through existence cache and the first-write
+	// accumulator. Pending rows retain every column from the earliest seq.
+	badges map[badgeKey]*badgeEntry
 	// census is the event count per (type, period, bucket). One map rather than
 	// one per kind: there is only one rule — add — and the flush is one
 	// statement.
@@ -103,25 +130,37 @@ type Batch struct {
 
 	// dirty flights/careers/bodies/kittens, so a flush walks what changed
 	// rather than everything the batch has ever read.
-	dirtyFlights []ids.ID
-	dirtyCareers []careerKey
-	dirtyBodies  []playerBodyKey
-	dirtyKittens []playerKittenKey
+	dirtyFlights          []ids.ID
+	dirtyCareers          []careerKey
+	dirtySystems          []string
+	dirtySystemBodies     []systemBodyKey
+	dirtyBodies           []playerBodyKey
+	dirtyCareerBodies     []playerCareerBodyKey
+	dirtyKittens          []playerKittenKey
+	dirtyCareerKittens    []playerCareerKittenKey
+	dirtyChallengeMembers []challengeMemberKey
 
 	// Scratch for the sorted key lists a flush builds. Reused rather than
 	// reallocated: a drain flushes once per batch forever, and a fresh slice of
 	// every pending key each time was the largest allocation the batch made
 	// that was not the driver's.
-	statKeys   []statKey
-	periodKeys []periodKey
-	censusKeys []censusKey
-	args       []any
+	statKeys            []statKey
+	careerStatKeys      []careerStatKey
+	systemStatKeys      []systemStatKey
+	systemKeys          []string
+	systemBodyKeys      []systemBodyKey
+	periodKeys          []periodKey
+	badgeKeys           []badgeKey
+	censusKeys          []censusKey
+	challengeMemberKeys []challengeMemberKey
+	challengeStatKeys   []challengeStatKey
+	args                []any
 }
 
 // DefaultFlushRows is how many rows one flushed statement carries. Beyond a
 // few hundred the per-row cost is flat (5.5 µs at 50 rows, 5.2 µs at 200), so
 // this is chosen for a comfortable parameter count rather than for speed: the
-// widest row here binds seven columns, so a flush stays under 3,500 bound
+// widest row here binds nine columns, so a flush stays under 4,500 bound
 // parameters.
 const DefaultFlushRows = 500
 
@@ -134,23 +173,191 @@ type BatchOptions struct {
 // NewBatch opens an incremental batch over tx.
 func NewBatch(tx *sql.Tx, opts BatchOptions) *Batch {
 	b := &Batch{
-		tx:        tx,
-		flushRows: opts.FlushRows,
-		flights:   map[ids.ID]*flightEntry{},
-		careers:   map[careerKey]*careerEntry{},
-		bodies:    map[int64]map[bodyKey]*bodyEntry{},
-		kittens:   map[int64]map[string]*kittenEntry{},
-		values:    map[statKey]float64{},
-		census:    map[censusKey]*pendingCensus{},
+		tx:                tx,
+		flushRows:         opts.FlushRows,
+		flights:           map[ids.ID]*flightEntry{},
+		careers:           map[careerKey]*careerEntry{},
+		systems:           map[string]*systemEntry{},
+		systemBodies:      map[systemBodyKey]*systemBodyEntry{},
+		systemCatalogues:  map[string]map[string]string{},
+		careerOrdinals:    map[int64]int64{},
+		bodies:            map[int64]map[bodyKey]*bodyEntry{},
+		careerBodies:      map[int64]map[careerBodyKey]*careerBodyEntry{},
+		kittens:           map[int64]map[string]*kittenEntry{},
+		careerKittens:     map[int64]map[careerKittenKey]*careerKittenEntry{},
+		values:            map[statKey]float64{},
+		valueLoaded:       map[statKey]bool{},
+		valueExists:       map[statKey]bool{},
+		careerValues:      map[careerStatKey]float64{},
+		careerValueLoaded: map[careerStatKey]bool{},
+		careerValueExists: map[careerStatKey]bool{},
+		challengeMembers:  map[challengeSetKey]map[string]*challengeMemberEntry{},
+		badges:            map[badgeKey]*badgeEntry{},
+		census:            map[censusKey]*pendingCensus{},
 	}
 	for k := range b.stats {
 		b.stats[k] = map[statKey]*pendingStat{}
+		b.careerStats[k] = map[careerStatKey]*pendingCareerStat{}
+		b.systemStats[k] = map[systemStatKey]*pendingStat{}
 		b.periods[k] = map[periodKey]*pendingStat{}
+		b.challengeStats[k] = map[challengeStatKey]*pendingStat{}
 	}
 	if b.flushRows <= 0 {
 		b.flushRows = DefaultFlushRows
 	}
 	return b
+}
+
+// --- challenge_member -------------------------------------------------------
+
+type challengeSetKey struct {
+	playerID  int64
+	career    string
+	system    string
+	challenge string
+}
+
+type challengeMemberKey struct {
+	challengeSetKey
+	member string
+}
+
+type challengeMemberEntry struct {
+	firstSeq int64
+	dirty    bool
+}
+
+type challengeStatKey struct {
+	playerID  int64
+	career    string
+	system    string
+	challenge string
+}
+
+func (b *Batch) putChallengeStat(kind statKind, k challengeStatKey, value float64, cx any, seq int64) {
+	if pending, ok := b.challengeStats[kind][k]; ok {
+		pending.merge(kind, value, cx, seq)
+		return
+	}
+	b.challengeStats[kind][k] = &pendingStat{value: value, cx: cx, seq: seq}
+}
+
+var challengeStatFlush = [numStatKinds]string{
+	kindRecord: ` ON CONFLICT (player_id, career, system, challenge) DO UPDATE SET
+	   value = excluded.value, context = excluded.context, updated_seq = excluded.updated_seq
+	 WHERE excluded.value > challenge_stat.value`,
+	kindBest: ` ON CONFLICT (player_id, career, system, challenge) DO UPDATE SET
+	   value = excluded.value, context = excluded.context, updated_seq = excluded.updated_seq
+	 WHERE excluded.value < challenge_stat.value`,
+	kindCount: ` ON CONFLICT (player_id, career, system, challenge) DO UPDATE SET
+	   value = challenge_stat.value + excluded.value, updated_seq = excluded.updated_seq`,
+}
+
+func (b *Batch) flushChallengeStats(ctx context.Context) error {
+	for kind, pending := range b.challengeStats {
+		if len(pending) == 0 {
+			continue
+		}
+		keys := slices.AppendSeq(b.challengeStatKeys[:0], maps.Keys(pending))
+		slices.SortFunc(keys, compareChallengeStatKey)
+		b.challengeStatKeys = keys
+		err := b.write(ctx, len(keys), 7,
+			`INSERT INTO challenge_stat (player_id, career, challenge, system, value, context, updated_seq) VALUES `,
+			challengeStatFlush[statKind(kind)],
+			func(i int, args []any) []any {
+				k := keys[i]
+				p := pending[k]
+				return append(args, k.playerID, k.career, k.challenge, k.system, p.value, p.cx, p.seq)
+			})
+		if err != nil {
+			return fmt.Errorf("stats: flush challenge_stat: %w", err)
+		}
+		clear(pending)
+	}
+	return nil
+}
+
+func (b *Batch) challengeMemberSet(ctx context.Context, k challengeSetKey) (map[string]*challengeMemberEntry, error) {
+	if members, ok := b.challengeMembers[k]; ok {
+		return members, nil
+	}
+	rows, err := b.tx.QueryContext(ctx, `
+		SELECT member, first_seq FROM challenge_member
+		WHERE player_id = ? AND career = ? AND system = ? AND challenge = ?`,
+		k.playerID, k.career, k.system, k.challenge)
+	if err != nil {
+		return nil, fmt.Errorf("stats: read challenge members for %d/%q/%q/%q: %w",
+			k.playerID, k.career, k.system, k.challenge, err)
+	}
+	defer rows.Close()
+	members := map[string]*challengeMemberEntry{}
+	for rows.Next() {
+		var member string
+		e := &challengeMemberEntry{}
+		if err := rows.Scan(&member, &e.firstSeq); err != nil {
+			return nil, fmt.Errorf("stats: scan challenge member for %d/%q/%q/%q: %w",
+				k.playerID, k.career, k.system, k.challenge, err)
+		}
+		members[member] = e
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("stats: read challenge members for %d/%q/%q/%q: %w",
+			k.playerID, k.career, k.system, k.challenge, err)
+	}
+	b.challengeMembers[k] = members
+	return members, nil
+}
+
+// AddChallengeMember records one distinct member in a challenge scope and
+// reports whether it was new. The pending read-through set makes the answer
+// independent of flush and projector batch boundaries.
+func (b *Batch) AddChallengeMember(ctx context.Context, playerID int64, career, system, challenge, member string, seq int64) (bool, error) {
+	k := challengeSetKey{playerID: playerID, career: career, system: system, challenge: challenge}
+	members, err := b.challengeMemberSet(ctx, k)
+	if err != nil {
+		return false, err
+	}
+	if _, exists := members[member]; exists {
+		return false, nil
+	}
+	e := &challengeMemberEntry{firstSeq: seq, dirty: true}
+	members[member] = e
+	b.dirtyChallengeMembers = append(b.dirtyChallengeMembers, challengeMemberKey{challengeSetKey: k, member: member})
+	return true, nil
+}
+
+// ChallengeMemberCount returns the distinct member count for one challenge
+// scope, including rows added earlier in this batch.
+func (b *Batch) ChallengeMemberCount(ctx context.Context, playerID int64, career, system, challenge string) (int64, error) {
+	members, err := b.challengeMemberSet(ctx, challengeSetKey{
+		playerID: playerID, career: career, system: system, challenge: challenge,
+	})
+	if err != nil {
+		return 0, err
+	}
+	return int64(len(members)), nil
+}
+
+func (b *Batch) flushChallengeMembers(ctx context.Context) error {
+	if len(b.dirtyChallengeMembers) == 0 {
+		return nil
+	}
+	slices.SortFunc(b.dirtyChallengeMembers, compareChallengeMemberKey)
+	b.challengeMemberKeys = append(b.challengeMemberKeys[:0], b.dirtyChallengeMembers...)
+	err := b.write(ctx, len(b.challengeMemberKeys), 6,
+		`INSERT INTO challenge_member (player_id, career, system, challenge, member, first_seq) VALUES `,
+		` ON CONFLICT (player_id, career, system, challenge, member) DO NOTHING`,
+		func(i int, args []any) []any {
+			k := b.challengeMemberKeys[i]
+			e := b.challengeMembers[k.challengeSetKey][k.member]
+			e.dirty = false
+			return append(args, k.playerID, k.career, k.system, k.challenge, k.member, e.firstSeq)
+		})
+	if err != nil {
+		return fmt.Errorf("stats: flush challenge_member: %w", err)
+	}
+	b.dirtyChallengeMembers = b.dirtyChallengeMembers[:0]
+	return nil
 }
 
 // NewRefinedBatch opens the rebuild's batch: `flight_state` is already complete
@@ -204,12 +411,18 @@ func (b *Batch) bucketsFor(recvMS int64) []string {
 // --- flight_state -------------------------------------------------------------
 
 type flightEntry struct {
-	playerID   int64
-	flags      int64
-	reason     sql.NullString
-	crew       sql.NullInt64
-	body       sql.NullString
-	startedSeq int64
+	playerID      int64
+	flags         int64
+	reason        sql.NullString
+	crew          sql.NullInt64
+	body          sql.NullString
+	startedSeq    int64
+	engineCount   sql.NullInt64
+	milestones    int64
+	partCount     sql.NullInt64
+	launchMassKg  sql.NullFloat64
+	career        string
+	firstOrbitSeq int64
 
 	// exists reports that a row exists — in the database, or pending here.
 	exists bool
@@ -220,7 +433,10 @@ func (e *flightEntry) state(id ids.ID) FlightState {
 	return FlightState{
 		FlightID: id, PlayerID: e.playerID, Flags: e.flags,
 		EndedReason: e.reason.String, Crew: e.crew, Body: e.body.String,
-		StartedSeq: e.startedSeq,
+		StartedSeq: e.startedSeq, EngineCount: e.engineCount,
+		Milestones: e.milestones, PartCount: e.partCount,
+		LaunchMassKg: e.launchMassKg, Career: e.career,
+		FirstOrbitSeq: e.firstOrbitSeq,
 	}
 }
 
@@ -239,8 +455,8 @@ func (b *Batch) flightEntry(ctx context.Context, id ids.ID) (*flightEntry, error
 	}
 	e := &flightEntry{}
 	err := b.tx.QueryRowContext(ctx,
-		`SELECT player_id, flags, ended_reason, crew, body, started_seq FROM flight_state WHERE flight_id = ?`,
-		ids.Bytes(id)).Scan(&e.playerID, &e.flags, &e.reason, &e.crew, &e.body, &e.startedSeq)
+		`SELECT player_id, flags, ended_reason, crew, body, started_seq, engine_count, milestones, part_count, launch_mass_kg, career, first_orbit_seq FROM flight_state WHERE flight_id = ?`,
+		ids.Bytes(id)).Scan(&e.playerID, &e.flags, &e.reason, &e.crew, &e.body, &e.startedSeq, &e.engineCount, &e.milestones, &e.partCount, &e.launchMassKg, &e.career, &e.firstOrbitSeq)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 	case err != nil:
@@ -261,28 +477,66 @@ func (b *Batch) touchFlight(id ids.ID, e *flightEntry) {
 
 // EnsureFlight creates the flight's row if it has none, standing in for the
 // `INSERT OR IGNORE` every flight-bearing event ran.
-func (b *Batch) EnsureFlight(ctx context.Context, id ids.ID, playerID, seq int64) error {
+func (b *Batch) EnsureFlight(ctx context.Context, id ids.ID, playerID int64, career string) error {
 	e, err := b.flightEntry(ctx, id)
 	if err != nil {
 		return err
 	}
 	if !e.exists {
 		e.exists = true
-		e.playerID, e.flags, e.startedSeq = playerID, 0, seq
+		e.playerID, e.flags = playerID, 0
+		b.touchFlight(id, e)
+	}
+	if e.career == "" && career != "" {
+		e.career = career
 		b.touchFlight(id, e)
 	}
 	return nil
 }
 
 // StartFlight records `flight.started`.
-func (b *Batch) StartFlight(ctx context.Context, id ids.ID, crew int, body string, seq int64) error {
+func (b *Batch) StartFlight(ctx context.Context, id ids.ID, crew int, body string, engineCount *int, partCount int, launchMassKg float64, seq int64) error {
 	e, err := b.flightEntry(ctx, id)
 	if err != nil {
 		return err
 	}
 	e.crew = sql.NullInt64{Int64: int64(crew), Valid: true}
 	e.body = sql.NullString{String: body, Valid: true}
+	e.engineCount = sql.NullInt64{}
+	if engineCount != nil {
+		e.engineCount = sql.NullInt64{Int64: int64(*engineCount), Valid: true}
+	}
+	e.partCount = sql.NullInt64{Int64: int64(partCount), Valid: true}
+	e.launchMassKg = sql.NullFloat64{Float64: launchMassKg, Valid: true}
 	e.startedSeq = seq
+	b.touchFlight(id, e)
+	return nil
+}
+
+// MarkFlightMilestone sets a historical milestone bit without clearing any
+// already observed milestone.
+func (b *Batch) MarkFlightMilestone(ctx context.Context, id ids.ID, bit int64) error {
+	e, err := b.flightEntry(ctx, id)
+	if err != nil {
+		return err
+	}
+	e.milestones |= bit
+	b.touchFlight(id, e)
+	return nil
+}
+
+// MarkFlightOrbit records both the set-only orbit milestone and the earliest
+// achieved-orbit sequence. The sequence is the durable ordering fact used by
+// composites when a rebuild's first pass has already seen the whole flight.
+func (b *Batch) MarkFlightOrbit(ctx context.Context, id ids.ID, seq int64) error {
+	e, err := b.flightEntry(ctx, id)
+	if err != nil {
+		return err
+	}
+	e.milestones |= MilestoneOrbit
+	if seq > 0 && (e.firstOrbitSeq == 0 || seq < e.firstOrbitSeq) {
+		e.firstOrbitSeq = seq
+	}
 	b.touchFlight(id, e)
 	return nil
 }
@@ -314,16 +568,19 @@ func (b *Batch) flushFlights(ctx context.Context) error {
 		return nil
 	}
 	slices.SortFunc(b.dirtyFlights, func(x, y ids.ID) int { return strings.Compare(string(x[:]), string(y[:])) })
-	err := b.write(ctx, len(b.dirtyFlights), 7,
-		`INSERT INTO flight_state (flight_id, player_id, flags, ended_reason, crew, body, started_seq) VALUES `,
+	err := b.write(ctx, len(b.dirtyFlights), 13,
+		`INSERT INTO flight_state (flight_id, player_id, flags, ended_reason, crew, body, started_seq, engine_count, milestones, part_count, launch_mass_kg, career, first_orbit_seq) VALUES `,
 		` ON CONFLICT (flight_id) DO UPDATE SET
 		   flags = excluded.flags, ended_reason = excluded.ended_reason,
-		   crew = excluded.crew, body = excluded.body, started_seq = excluded.started_seq`,
+		   crew = excluded.crew, body = excluded.body, started_seq = excluded.started_seq,
+		   engine_count = excluded.engine_count, milestones = excluded.milestones,
+		   part_count = excluded.part_count, launch_mass_kg = excluded.launch_mass_kg,
+		   career = excluded.career, first_orbit_seq = excluded.first_orbit_seq`,
 		func(i int, args []any) []any {
 			id := b.dirtyFlights[i]
 			e := b.flights[id]
 			e.dirty = false
-			return append(args, ids.Bytes(id), e.playerID, e.flags, e.reason, e.crew, e.body, e.startedSeq)
+			return append(args, ids.Bytes(id), e.playerID, e.flags, e.reason, e.crew, e.body, e.startedSeq, e.engineCount, e.milestones, e.partCount, e.launchMassKg, e.career, e.firstOrbitSeq)
 		})
 	if err != nil {
 		return fmt.Errorf("stats: flush flight_state: %w", err)
@@ -340,11 +597,15 @@ type careerKey struct {
 }
 
 type careerEntry struct {
-	maxSimT  float64
-	rewound  bool
-	firstSeq int64
-	exists   bool
-	dirty    bool
+	maxSimT       float64
+	rewound       bool
+	firstSeq      int64
+	lastSeq       int64
+	ordinal       int64
+	system        string
+	systemChanged bool
+	exists        bool
+	dirty         bool
 }
 
 func (b *Batch) careerEntry(ctx context.Context, k careerKey) (*careerEntry, error) {
@@ -352,16 +613,17 @@ func (b *Batch) careerEntry(ctx context.Context, k careerKey) (*careerEntry, err
 		return e, nil
 	}
 	e := &careerEntry{}
-	var rewound int64
+	var rewound, systemChanged int64
 	err := b.tx.QueryRowContext(ctx,
-		`SELECT max_sim_t, rewound, first_seq FROM career WHERE player_id = ? AND career = ?`,
-		k.playerID, k.career).Scan(&e.maxSimT, &rewound, &e.firstSeq)
+		`SELECT max_sim_t, rewound, first_seq, last_seq, ordinal, system, system_changed
+		 FROM career WHERE player_id = ? AND career = ?`,
+		k.playerID, k.career).Scan(&e.maxSimT, &rewound, &e.firstSeq, &e.lastSeq, &e.ordinal, &e.system, &systemChanged)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 	case err != nil:
 		return nil, fmt.Errorf("stats: read career %q: %w", k.career, err)
 	default:
-		e.exists, e.rewound = true, rewound != 0
+		e.exists, e.rewound, e.systemChanged = true, rewound != 0, systemChanged != 0
 	}
 	b.careers[k] = e
 	return e, nil
@@ -374,7 +636,32 @@ func (b *Batch) touchCareer(k careerKey, e *careerEntry) {
 	}
 }
 
-// EnsureCareer creates the career's row if it has none.
+// nextOrdinal is the sequence number the next new save of this player takes.
+//
+// Read once per player per batch from the table, then advanced in memory, so a
+// batch that first sees three of a player's saves numbers them 1, 2, 3 in seq
+// order rather than three times 1.
+//
+// Replay-stable by construction: careers are first seen in ascending seq order
+// on both the incremental and the rebuild path, so the same save gets the same
+// number every time. That is what lets the ordinal be a URL segment.
+func (b *Batch) nextOrdinal(ctx context.Context, playerID int64) (int64, error) {
+	if n, ok := b.careerOrdinals[playerID]; ok {
+		b.careerOrdinals[playerID] = n + 1
+		return n + 1, nil
+	}
+	var high int64
+	err := b.tx.QueryRowContext(ctx,
+		`SELECT COALESCE(MAX(ordinal), 0) FROM career WHERE player_id = ?`, playerID).Scan(&high)
+	if err != nil {
+		return 0, fmt.Errorf("stats: read career ordinal high-water for %d: %w", playerID, err)
+	}
+	b.careerOrdinals[playerID] = high + 1
+	return high + 1, nil
+}
+
+// EnsureCareer creates the career's row if it has none and records this event
+// as its latest activity, even when the event has no clock reading or score.
 func (b *Batch) EnsureCareer(ctx context.Context, playerID int64, career string, seq int64) error {
 	k := careerKey{playerID, career}
 	e, err := b.careerEntry(ctx, k)
@@ -382,9 +669,15 @@ func (b *Batch) EnsureCareer(ctx context.Context, playerID int64, career string,
 		return err
 	}
 	if !e.exists {
+		ordinal, err := b.nextOrdinal(ctx, playerID)
+		if err != nil {
+			return err
+		}
 		e.exists, e.maxSimT, e.rewound, e.firstSeq = true, 0, false, seq
-		b.touchCareer(k, e)
+		e.ordinal = ordinal
 	}
+	e.lastSeq = seq
+	b.touchCareer(k, e)
 	return nil
 }
 
@@ -405,7 +698,7 @@ func (b *Batch) MarkRewound(ctx context.Context, playerID int64, career string, 
 }
 
 // AdvanceCareer raises the career's high-water mark, creating the row if it has
-// none.
+// none, and always records this event as the career's latest activity.
 func (b *Batch) AdvanceCareer(ctx context.Context, playerID int64, career string, simT float64, seq int64) error {
 	k := careerKey{playerID, career}
 	e, err := b.careerEntry(ctx, k)
@@ -414,12 +707,16 @@ func (b *Batch) AdvanceCareer(ctx context.Context, playerID int64, career string
 	}
 	switch {
 	case !e.exists:
+		ordinal, err := b.nextOrdinal(ctx, playerID)
+		if err != nil {
+			return err
+		}
 		e.exists, e.maxSimT, e.rewound, e.firstSeq = true, simT, false, seq
+		e.ordinal = ordinal
 	case simT > e.maxSimT:
 		e.maxSimT = simT
-	default:
-		return nil
 	}
+	e.lastSeq = seq
 	b.touchCareer(k, e)
 	return nil
 }
@@ -429,15 +726,16 @@ func (b *Batch) flushCareers(ctx context.Context) error {
 		return nil
 	}
 	slices.SortFunc(b.dirtyCareers, compareCareerKey)
-	err := b.write(ctx, len(b.dirtyCareers), 5,
-		`INSERT INTO career (player_id, career, max_sim_t, rewound, first_seq) VALUES `,
+	err := b.write(ctx, len(b.dirtyCareers), 9,
+		`INSERT INTO career (player_id, career, max_sim_t, rewound, first_seq, last_seq, ordinal, system, system_changed) VALUES `,
 		` ON CONFLICT (player_id, career) DO UPDATE SET
-		   max_sim_t = excluded.max_sim_t, rewound = excluded.rewound`,
+		   max_sim_t = excluded.max_sim_t, rewound = excluded.rewound, last_seq = excluded.last_seq,
+		   system = excluded.system, system_changed = excluded.system_changed`,
 		func(i int, args []any) []any {
 			k := b.dirtyCareers[i]
 			e := b.careers[k]
 			e.dirty = false
-			return append(args, k.playerID, k.career, e.maxSimT, boolInt(e.rewound), e.firstSeq)
+			return append(args, k.playerID, k.career, e.maxSimT, boolInt(e.rewound), e.firstSeq, e.lastSeq, e.ordinal, e.system, boolInt(e.systemChanged))
 		})
 	if err != nil {
 		return fmt.Errorf("stats: flush career: %w", err)
@@ -454,8 +752,43 @@ func (b *Batch) Career(ctx context.Context, playerID int64, career string) (Care
 	}
 	return CareerState{
 		PlayerID: playerID, Career: career,
-		MaxSimT: e.maxSimT, Rewound: e.rewound, FirstSeq: e.firstSeq,
+		MaxSimT: e.maxSimT, Rewound: e.rewound, FirstSeq: e.firstSeq, LastSeq: e.lastSeq,
+		Ordinal: e.ordinal,
+		System:  e.system, SystemChanged: e.systemChanged,
 	}, true, nil
+}
+
+// BindCareerSystem records the first system discovered for a save. A later
+// different hash leaves the first binding intact and raises the non-punitive
+// provenance mark.
+func (b *Batch) BindCareerSystem(ctx context.Context, playerID int64, career, system string, seq int64) error {
+	if career == "" {
+		return nil
+	}
+	if err := b.EnsureCareer(ctx, playerID, career, seq); err != nil {
+		return err
+	}
+	k := careerKey{playerID, career}
+	e := b.careers[k]
+	switch {
+	case e.system == "":
+		e.system = system
+		b.touchCareer(k, e)
+	case e.system != system && !e.systemChanged:
+		e.systemChanged = true
+		b.touchCareer(k, e)
+	}
+	return nil
+}
+
+// CareerSystem reads the system a save is playing in, answering from this
+// batch's own pending writes first. "" means not yet known.
+func (b *Batch) CareerSystem(ctx context.Context, playerID int64, career string) (string, error) {
+	e, err := b.careerEntry(ctx, careerKey{playerID, career})
+	if err != nil || !e.exists {
+		return "", err
+	}
+	return e.system, nil
 }
 
 // --- player_body ---------------------------------------------------------------
@@ -547,6 +880,20 @@ func (b *Batch) LowerBodyTime(ctx context.Context, playerID int64, kind, body st
 	return nil
 }
 
+func (b *Batch) BodyCount(ctx context.Context, playerID int64, kind string) (int64, error) {
+	m, err := b.playerBodies(ctx, playerID)
+	if err != nil {
+		return 0, err
+	}
+	var n int64
+	for k := range m {
+		if k.kind == kind {
+			n++
+		}
+	}
+	return n, nil
+}
+
 func (b *Batch) flushBodies(ctx context.Context) error {
 	if len(b.dirtyBodies) == 0 {
 		return nil
@@ -565,6 +912,334 @@ func (b *Batch) flushBodies(ctx context.Context) error {
 		return fmt.Errorf("stats: flush player_body: %w", err)
 	}
 	b.dirtyBodies = b.dirtyBodies[:0]
+	return nil
+}
+
+// --- career_body ---------------------------------------------------------------
+
+type careerBodyKey struct{ career, kind, body string }
+
+type playerCareerBodyKey struct {
+	playerID int64
+	careerBodyKey
+}
+
+type careerBodyEntry struct {
+	system    string
+	firstSeq  int64
+	firstSimT sql.NullFloat64
+	dirty     bool
+}
+
+func (b *Batch) playerCareerBodies(ctx context.Context, playerID int64) (map[careerBodyKey]*careerBodyEntry, error) {
+	if m, ok := b.careerBodies[playerID]; ok {
+		return m, nil
+	}
+	rows, err := b.tx.QueryContext(ctx,
+		`SELECT career, system, kind, body, first_seq, first_sim_t
+		 FROM career_body WHERE player_id = ?`, playerID)
+	if err != nil {
+		return nil, fmt.Errorf("stats: read career bodies for player %d: %w", playerID, err)
+	}
+	defer rows.Close()
+
+	m := map[careerBodyKey]*careerBodyEntry{}
+	for rows.Next() {
+		var k careerBodyKey
+		e := &careerBodyEntry{}
+		if err := rows.Scan(&k.career, &e.system, &k.kind, &k.body, &e.firstSeq, &e.firstSimT); err != nil {
+			return nil, fmt.Errorf("stats: scan career body for player %d: %w", playerID, err)
+		}
+		m[k] = e
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("stats: read career bodies for player %d: %w", playerID, err)
+	}
+	b.careerBodies[playerID] = m
+	return m, nil
+}
+
+func (b *Batch) touchCareerBody(k playerCareerBodyKey, e *careerBodyEntry) {
+	if !e.dirty {
+		e.dirty = true
+		b.dirtyCareerBodies = append(b.dirtyCareerBodies, k)
+	}
+}
+
+// AddCareerBody records a body reached in one save. A missing career or an
+// undiscovered system cannot identify a scoped row and is deliberately ignored.
+func (b *Batch) AddCareerBody(ctx context.Context, ev Event, kind, body string) (bool, error) {
+	if ev.Career == "" {
+		return false, nil
+	}
+	system, err := b.CareerSystem(ctx, ev.PlayerID, ev.Career)
+	if err != nil || system == "" {
+		return false, err
+	}
+	m, err := b.playerCareerBodies(ctx, ev.PlayerID)
+	if err != nil {
+		return false, err
+	}
+	k := careerBodyKey{ev.Career, kind, body}
+	if _, ok := m[k]; ok {
+		return false, nil
+	}
+	e := &careerBodyEntry{system: system, firstSeq: ev.Seq}
+	m[k] = e
+	b.touchCareerBody(playerCareerBodyKey{ev.PlayerID, k}, e)
+	return true, nil
+}
+
+// AddCareerSetMember records a save-scoped member in career_body while allowing
+// the save's system to remain unknown. E3 uses body as the generic member slot
+// for kind orbit_kid. E5 also uses it to retain timed SOI membership for player
+// and career sprint results when the system is unknown. Ordinary SOI/landed
+// novelty and scoped-union writes keep using AddCareerBody's known-system path.
+func (b *Batch) AddCareerSetMember(ctx context.Context, ev Event, kind, member string) (bool, error) {
+	if ev.Career == "" {
+		return false, nil
+	}
+	system, err := b.CareerSystem(ctx, ev.PlayerID, ev.Career)
+	if err != nil {
+		return false, err
+	}
+	m, err := b.playerCareerBodies(ctx, ev.PlayerID)
+	if err != nil {
+		return false, err
+	}
+	k := careerBodyKey{ev.Career, kind, member}
+	if _, ok := m[k]; ok {
+		return false, nil
+	}
+	e := &careerBodyEntry{system: system, firstSeq: ev.Seq}
+	m[k] = e
+	b.touchCareerBody(playerCareerBodyKey{ev.PlayerID, k}, e)
+	return true, nil
+}
+
+// LowerCareerBodyTime keeps the earliest arrival time for a body in one save.
+func (b *Batch) LowerCareerBodyTime(ctx context.Context, ev Event, kind, body string, t float64) error {
+	if ev.Career == "" {
+		return nil
+	}
+	m, err := b.playerCareerBodies(ctx, ev.PlayerID)
+	if err != nil {
+		return err
+	}
+	k := careerBodyKey{ev.Career, kind, body}
+	e, ok := m[k]
+	if !ok {
+		return nil
+	}
+	if e.firstSimT.Valid && e.firstSimT.Float64 <= t {
+		return nil
+	}
+	e.firstSimT = sql.NullFloat64{Float64: t, Valid: true}
+	b.touchCareerBody(playerCareerBodyKey{ev.PlayerID, k}, e)
+	return nil
+}
+
+func (b *Batch) CareerBodyCount(ctx context.Context, playerID int64, career, kind string) (int64, error) {
+	m, err := b.playerCareerBodies(ctx, playerID)
+	if err != nil {
+		return 0, err
+	}
+	var n int64
+	for k := range m {
+		if k.career == career && k.kind == kind {
+			n++
+		}
+	}
+	return n, nil
+}
+
+// BodiesNotVisited compares one save's SOI membership with its bound system's
+// effectively complete catalogue. kind selects a normalized catalogue kind;
+// empty means every body, including parentless roots and unknown classes.
+// ready is false for a missing/incomplete header, a short catalogue, an
+// unknown career/system, or an empty selected subset.
+func (b *Batch) BodiesNotVisited(ctx context.Context, ev Event, kind string) (missing int64, ready bool, err error) {
+	if ev.Career == "" {
+		return 0, false, nil
+	}
+	system, err := b.CareerSystem(ctx, ev.PlayerID, ev.Career)
+	if err != nil || system == "" {
+		return 0, false, err
+	}
+	header, err := b.systemEntry(ctx, system)
+	if err != nil || !header.exists || !header.reportedComplete {
+		return 0, false, err
+	}
+	catalogue, err := b.systemCatalogue(ctx, system)
+	if err != nil || int64(len(catalogue)) != header.bodyCount {
+		return 0, false, err
+	}
+	var target int64
+	for _, bodyKind := range catalogue {
+		if kind == "" || bodyKind == kind {
+			target++
+		}
+	}
+	if target == 0 {
+		return 0, false, nil
+	}
+	visited, err := b.playerCareerBodies(ctx, ev.PlayerID)
+	if err != nil {
+		return 0, false, err
+	}
+	for k, entry := range visited {
+		if k.career == ev.Career && k.kind == "soi" && entry.system == system {
+			if bodyKind, exists := catalogue[k.body]; exists && (kind == "" || bodyKind == kind) {
+				target--
+			}
+		}
+	}
+	return target, true, nil
+}
+
+// CareerBodyCountBefore counts one save's distinct members whose first clock
+// reading is at or before threshold. NULL clocks are absent facts, not zeroes.
+func (b *Batch) CareerBodyCountBefore(ctx context.Context, playerID int64, career, kind string, threshold float64) (int64, error) {
+	m, err := b.playerCareerBodies(ctx, playerID)
+	if err != nil {
+		return 0, err
+	}
+	var n int64
+	for k, e := range m {
+		if k.career == career && k.kind == kind && e.firstSimT.Valid && e.firstSimT.Float64 <= threshold {
+			n++
+		}
+	}
+	return n, nil
+}
+
+// BodyCountBefore returns the largest qualifying count achieved by any one of
+// the player's saves. It intentionally reads career_body rather than unioning
+// player_body across saves.
+func (b *Batch) BodyCountBefore(ctx context.Context, playerID int64, kind string, threshold float64) (int64, error) {
+	m, err := b.playerCareerBodies(ctx, playerID)
+	if err != nil {
+		return 0, err
+	}
+	counts := map[string]int64{}
+	var best int64
+	for k, e := range m {
+		if k.kind != kind || !e.firstSimT.Valid || e.firstSimT.Float64 > threshold {
+			continue
+		}
+		counts[k.career]++
+		best = max(best, counts[k.career])
+	}
+	return best, nil
+}
+
+// SystemBodyCountBefore returns the largest qualifying count in any one save
+// bound to the event's system. It does not union repeated body names or distinct
+// bodies across careers. ok is false while the current save's system is unknown.
+func (b *Batch) SystemBodyCountBefore(ctx context.Context, ev Event, kind string, threshold float64) (n int64, ok bool, err error) {
+	if ev.Career == "" {
+		return 0, false, nil
+	}
+	system, err := b.CareerSystem(ctx, ev.PlayerID, ev.Career)
+	if err != nil || system == "" {
+		return 0, false, err
+	}
+	m, err := b.playerCareerBodies(ctx, ev.PlayerID)
+	if err != nil {
+		return 0, false, err
+	}
+	counts := map[string]int64{}
+	for k, e := range m {
+		if e.system != system || k.kind != kind || !e.firstSimT.Valid || e.firstSimT.Float64 > threshold {
+			continue
+		}
+		counts[k.career]++
+		n = max(n, counts[k.career])
+	}
+	return n, true, nil
+}
+
+// CareerSetCount reports every save-scoped row of kind for a player. Unlike a
+// body union, identical members in two careers are two distinct facts.
+func (b *Batch) CareerSetCount(ctx context.Context, playerID int64, kind string) (int64, error) {
+	m, err := b.playerCareerBodies(ctx, playerID)
+	if err != nil {
+		return 0, err
+	}
+	var n int64
+	for k := range m {
+		if k.kind == kind {
+			n++
+		}
+	}
+	return n, nil
+}
+
+// SystemCareerSetCount reports every save-scoped row of kind across this
+// player's careers bound to the event's system. It counts rows, not a union of
+// member strings, so the same kid in two saves remains two kittens. known is
+// false while the current save has no system binding.
+func (b *Batch) SystemCareerSetCount(ctx context.Context, ev Event, kind string) (n int64, known bool, err error) {
+	if ev.Career == "" {
+		return 0, false, nil
+	}
+	system, err := b.CareerSystem(ctx, ev.PlayerID, ev.Career)
+	if err != nil || system == "" {
+		return 0, false, err
+	}
+	m, err := b.playerCareerBodies(ctx, ev.PlayerID)
+	if err != nil {
+		return 0, false, err
+	}
+	for k, e := range m {
+		if e.system == system && k.kind == kind {
+			n++
+		}
+	}
+	return n, true, nil
+}
+
+// SystemBodyCount reports the union across this player's saves in the event's
+// system. ok is false while that save's system is unknown.
+func (b *Batch) SystemBodyCount(ctx context.Context, ev Event, kind string) (n int64, ok bool, err error) {
+	if ev.Career == "" {
+		return 0, false, nil
+	}
+	system, err := b.CareerSystem(ctx, ev.PlayerID, ev.Career)
+	if err != nil || system == "" {
+		return 0, false, err
+	}
+	m, err := b.playerCareerBodies(ctx, ev.PlayerID)
+	if err != nil {
+		return 0, false, err
+	}
+	bodies := map[string]struct{}{}
+	for k, e := range m {
+		if e.system == system && k.kind == kind {
+			bodies[k.body] = struct{}{}
+		}
+	}
+	return int64(len(bodies)), true, nil
+}
+
+func (b *Batch) flushCareerBodies(ctx context.Context) error {
+	if len(b.dirtyCareerBodies) == 0 {
+		return nil
+	}
+	slices.SortFunc(b.dirtyCareerBodies, comparePlayerCareerBodyKey)
+	err := b.write(ctx, len(b.dirtyCareerBodies), 7,
+		`INSERT INTO career_body (player_id, career, system, kind, body, first_seq, first_sim_t) VALUES `,
+		` ON CONFLICT (player_id, career, kind, body) DO UPDATE SET first_sim_t = excluded.first_sim_t`,
+		func(i int, args []any) []any {
+			k := b.dirtyCareerBodies[i]
+			e := b.careerBodies[k.playerID][k.careerBodyKey]
+			e.dirty = false
+			return append(args, k.playerID, k.career, e.system, k.kind, k.body, e.firstSeq, e.firstSimT)
+		})
+	if err != nil {
+		return fmt.Errorf("stats: flush career_body: %w", err)
+	}
+	b.dirtyCareerBodies = b.dirtyCareerBodies[:0]
 	return nil
 }
 
@@ -646,10 +1321,10 @@ func (b *Batch) UpsertKitten(ctx context.Context, playerID int64, k RosterKitten
 	return nil
 }
 
-// KittenDistance sums the furthest each of a player's kittens has travelled —
-// the `distance_travelled` board's value.
+// KittenDistance sums the per-save kitten rows. A kid is not save-scoped, so
+// summing the lifetime kitten table would collapse same-named cats in two saves.
 func (b *Batch) KittenDistance(ctx context.Context, playerID int64) (float64, error) {
-	m, err := b.playerKittens(ctx, playerID)
+	m, err := b.playerCareerKittens(ctx, playerID)
 	if err != nil {
 		return 0, err
 	}
@@ -718,6 +1393,191 @@ func (b *Batch) flushKittens(ctx context.Context) error {
 	return nil
 }
 
+// --- career_kitten -------------------------------------------------------------
+
+type careerKittenKey struct{ career, kid string }
+
+type playerCareerKittenKey struct {
+	playerID int64
+	careerKittenKey
+}
+
+type careerKittenEntry struct {
+	system       string
+	name         string
+	travelledM   float64
+	fastestMs    float64
+	missions     int64
+	missionTimeS float64
+	kia          int64
+	updatedSeq   int64
+	dirty        bool
+}
+
+func (b *Batch) playerCareerKittens(ctx context.Context, playerID int64) (map[careerKittenKey]*careerKittenEntry, error) {
+	if m, ok := b.careerKittens[playerID]; ok {
+		return m, nil
+	}
+	rows, err := b.tx.QueryContext(ctx,
+		`SELECT career, system, kid, name, travelled_m, fastest_ms, missions, mission_time_s, kia, updated_seq
+		 FROM career_kitten WHERE player_id = ?`, playerID)
+	if err != nil {
+		return nil, fmt.Errorf("stats: read career kittens for player %d: %w", playerID, err)
+	}
+	defer rows.Close()
+
+	m := map[careerKittenKey]*careerKittenEntry{}
+	for rows.Next() {
+		var k careerKittenKey
+		e := &careerKittenEntry{}
+		if err := rows.Scan(&k.career, &e.system, &k.kid, &e.name, &e.travelledM,
+			&e.fastestMs, &e.missions, &e.missionTimeS, &e.kia, &e.updatedSeq); err != nil {
+			return nil, fmt.Errorf("stats: scan career kitten for player %d: %w", playerID, err)
+		}
+		m[k] = e
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("stats: read career kittens for player %d: %w", playerID, err)
+	}
+	b.careerKittens[playerID] = m
+	return m, nil
+}
+
+// UpsertCareerKitten folds a roster total into its save-specific row. Without
+// both a career and its discovered system, there is no scoped identity to write.
+func (b *Batch) UpsertCareerKitten(ctx context.Context, ev Event, k RosterKitten) error {
+	if ev.Career == "" {
+		return nil
+	}
+	system, err := b.CareerSystem(ctx, ev.PlayerID, ev.Career)
+	if err != nil || system == "" {
+		return err
+	}
+	m, err := b.playerCareerKittens(ctx, ev.PlayerID)
+	if err != nil {
+		return err
+	}
+	key := careerKittenKey{ev.Career, k.Kid}
+	e, ok := m[key]
+	if !ok {
+		e = &careerKittenEntry{system: system}
+		m[key] = e
+	}
+	kia := int64(0)
+	if k.KIA {
+		kia = 1
+	}
+	e.name = k.Name
+	e.travelledM = max(e.travelledM, k.TravelledM)
+	e.fastestMs = max(e.fastestMs, k.FastestMs)
+	e.missions = max(e.missions, int64(k.Missions))
+	e.missionTimeS = max(e.missionTimeS, k.MissionTimeS)
+	e.kia = max(e.kia, kia)
+	e.updatedSeq = ev.Seq
+	if !e.dirty {
+		e.dirty = true
+		b.dirtyCareerKittens = append(b.dirtyCareerKittens, playerCareerKittenKey{ev.PlayerID, key})
+	}
+	return nil
+}
+
+func (b *Batch) CareerKittenDistance(ctx context.Context, playerID int64, career string) (float64, error) {
+	m, err := b.playerCareerKittens(ctx, playerID)
+	if err != nil {
+		return 0, err
+	}
+	var total float64
+	for k, e := range m {
+		if k.career == career {
+			total += e.travelledM
+		}
+	}
+	return total, nil
+}
+
+func (b *Batch) SystemKittenDistance(ctx context.Context, playerID int64, system string) (float64, error) {
+	m, err := b.playerCareerKittens(ctx, playerID)
+	if err != nil {
+		return 0, err
+	}
+	var total float64
+	for _, e := range m {
+		if e.system == system {
+			total += e.travelledM
+		}
+	}
+	return total, nil
+}
+
+func (b *Batch) CareerKittenTops(ctx context.Context, playerID int64, career string) (travelled, missions KittenTop, err error) {
+	m, err := b.playerCareerKittens(ctx, playerID)
+	if err != nil {
+		return KittenTop{}, KittenTop{}, err
+	}
+	keys := slices.AppendSeq([]careerKittenKey(nil), maps.Keys(m))
+	slices.SortFunc(keys, compareCareerKittenKey)
+	for _, k := range keys {
+		if k.career != career {
+			continue
+		}
+		e := m[k]
+		if e.travelledM > travelled.Value {
+			travelled = KittenTop{Name: e.name, Value: e.travelledM}
+		}
+		if v := float64(e.missions); v > missions.Value {
+			missions = KittenTop{Name: e.name, Value: v}
+		}
+	}
+	return travelled, missions, nil
+}
+
+func (b *Batch) SystemKittenTops(ctx context.Context, playerID int64, system string) (travelled, missions KittenTop, err error) {
+	m, err := b.playerCareerKittens(ctx, playerID)
+	if err != nil {
+		return KittenTop{}, KittenTop{}, err
+	}
+	keys := slices.AppendSeq([]careerKittenKey(nil), maps.Keys(m))
+	slices.SortFunc(keys, compareCareerKittenKey)
+	for _, k := range keys {
+		e := m[k]
+		if e.system != system {
+			continue
+		}
+		if e.travelledM > travelled.Value {
+			travelled = KittenTop{Name: e.name, Value: e.travelledM}
+		}
+		if v := float64(e.missions); v > missions.Value {
+			missions = KittenTop{Name: e.name, Value: v}
+		}
+	}
+	return travelled, missions, nil
+}
+
+func (b *Batch) flushCareerKittens(ctx context.Context) error {
+	if len(b.dirtyCareerKittens) == 0 {
+		return nil
+	}
+	slices.SortFunc(b.dirtyCareerKittens, comparePlayerCareerKittenKey)
+	err := b.write(ctx, len(b.dirtyCareerKittens), 11,
+		`INSERT INTO career_kitten (player_id, career, system, kid, name, travelled_m, fastest_ms, missions, mission_time_s, kia, updated_seq) VALUES `,
+		` ON CONFLICT (player_id, career, kid) DO UPDATE SET
+		   name = excluded.name, travelled_m = excluded.travelled_m, fastest_ms = excluded.fastest_ms,
+		   missions = excluded.missions, mission_time_s = excluded.mission_time_s,
+		   kia = excluded.kia, updated_seq = excluded.updated_seq`,
+		func(i int, args []any) []any {
+			k := b.dirtyCareerKittens[i]
+			e := b.careerKittens[k.playerID][k.careerKittenKey]
+			e.dirty = false
+			return append(args, k.playerID, k.career, e.system, k.kid, e.name, e.travelledM,
+				e.fastestMs, e.missions, e.missionTimeS, e.kia, e.updatedSeq)
+		})
+	if err != nil {
+		return fmt.Errorf("stats: flush career_kitten: %w", err)
+	}
+	b.dirtyCareerKittens = b.dirtyCareerKittens[:0]
+	return nil
+}
+
 // --- player_stat and player_stat_period ------------------------------------------
 
 // statKind is which of the four write rules a pending row follows. It is the
@@ -745,10 +1605,31 @@ type periodKey struct {
 	bucket   string
 }
 
+// careerStatKey is the primary key of career_stat. `system` is a written column,
+// not part of the key — a save cannot change systems (§3.15), so it can never
+// split a row in two.
+type careerStatKey struct {
+	playerID int64
+	career   string
+	stat     string
+}
+
+// systemStatKey is the primary key of system_stat.
+type systemStatKey struct {
+	playerID int64
+	system   string
+	stat     string
+}
+
 type pendingStat struct {
 	value float64
 	cx    any
 	seq   int64
+}
+
+type pendingCareerStat struct {
+	pendingStat
+	system string
 }
 
 // merge folds a new write into a pending one under the kind's rule, reporting
@@ -790,6 +1671,11 @@ func (b *Batch) putStat(kind statKind, playerID int64, stat string, value float6
 	}
 	if kind == kindSet {
 		b.values[k] = value
+		b.valueLoaded[k] = true
+		b.valueExists[k] = true
+	} else if b.valueLoaded[k] {
+		b.values[k] = mergedBoardValue(kind, b.values[k], b.valueExists[k], value)
+		b.valueExists[k] = true
 	}
 }
 
@@ -802,25 +1688,235 @@ func (b *Batch) putPeriod(kind statKind, playerID int64, stat, period, bucket st
 	b.periods[kind][k] = &pendingStat{value: value, cx: cx, seq: seq}
 }
 
-// StatValue is a player's current value on a board, counting writes this batch
-// has buffered but not yet flushed. Only setValue needs it — a derived total's
-// *window* contribution is what it grew by, which needs the previous total.
+// putScoped records a record/best/count board write in every scope beyond
+// `player`, so a fold never has to name them and a scope added later composes
+// for free. Derived totals (kindSet) use explicit scope-specific queries and
+// writers instead; one scope's total is not another's.
+func (b *Batch) putScoped(ctx context.Context, kind statKind, ev Event, stat string, value float64, cx any) error {
+	if ev.Career == "" {
+		return nil
+	}
+	system, err := b.CareerSystem(ctx, ev.PlayerID, ev.Career)
+	if err != nil {
+		return err
+	}
+	b.putCareerStat(kind, ev, system, stat, value, cx)
+	if system != "" {
+		b.putSystemStat(kind, ev, system, stat, value, cx)
+	}
+	return nil
+}
+
+// putCareerStat records a board write in the career scope. A no-op when the
+// event has no career: a row keyed on "" would merge every save at once.
+func (b *Batch) putCareerStat(kind statKind, ev Event, system, stat string, value float64, cx any) {
+	if ev.Career == "" {
+		return
+	}
+	k := careerStatKey{ev.PlayerID, ev.Career, stat}
+	if p, ok := b.careerStats[kind][k]; ok {
+		p.merge(kind, value, cx, ev.Seq)
+	} else {
+		b.careerStats[kind][k] = &pendingCareerStat{
+			pendingStat: pendingStat{value: value, cx: cx, seq: ev.Seq},
+			system:      system,
+		}
+	}
+	if kind == kindSet {
+		b.careerValues[k] = value
+		b.careerValueLoaded[k] = true
+		b.careerValueExists[k] = true
+	} else if b.careerValueLoaded[k] {
+		b.careerValues[k] = mergedBoardValue(kind, b.careerValues[k], b.careerValueExists[k], value)
+		b.careerValueExists[k] = true
+	}
+}
+
+// putSystemStat records a board write keyed by (player, celestial system,
+// stat). An unknown system has no comparable scope and writes no row.
+func (b *Batch) putSystemStat(kind statKind, ev Event, system, stat string, value float64, cx any) {
+	if system == "" {
+		return
+	}
+	k := systemStatKey{ev.PlayerID, system, stat}
+	if p, ok := b.systemStats[kind][k]; ok {
+		p.merge(kind, value, cx, ev.Seq)
+	} else {
+		b.systemStats[kind][k] = &pendingStat{value: value, cx: cx, seq: ev.Seq}
+	}
+}
+
+func mergedBoardValue(kind statKind, current float64, exists bool, pending float64) float64 {
+	if !exists || kind == kindSet {
+		return pending
+	}
+	switch kind {
+	case kindCount:
+		return current + pending
+	case kindRecord:
+		return max(current, pending)
+	case kindBest:
+		return min(current, pending)
+	default:
+		return current
+	}
+}
+
+// StatValue is a player's current value on a board, counting every write rule
+// this batch has buffered but not yet flushed.
 func (b *Batch) StatValue(ctx context.Context, playerID int64, stat string) (float64, error) {
 	k := statKey{playerID, stat}
-	if v, ok := b.values[k]; ok {
+	if b.valueLoaded[k] {
+		v := b.values[k]
 		return v, nil
 	}
 	var v float64
 	err := b.tx.QueryRowContext(ctx,
 		`SELECT value FROM player_stat WHERE player_id = ? AND stat = ?`, playerID, stat).Scan(&v)
+	exists := err == nil
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		v = 0
 	case err != nil:
 		return 0, fmt.Errorf("stats: read %s for player %d: %w", stat, playerID, err)
 	}
+	for kind := range b.stats {
+		if p, ok := b.stats[kind][k]; ok {
+			v = mergedBoardValue(statKind(kind), v, exists, p.value)
+			exists = true
+		}
+	}
 	b.values[k] = v
+	b.valueLoaded[k] = true
+	b.valueExists[k] = exists
 	return v, nil
+}
+
+// CareerStatValue reads a career-scoped board value, answering from this
+// batch's own pending writes first so two reads in one batch see each other
+// exactly as they did when each was its own statement.
+func (b *Batch) CareerStatValue(ctx context.Context, playerID int64, career, stat string) (float64, error) {
+	k := careerStatKey{playerID, career, stat}
+	if b.careerValueLoaded[k] {
+		v := b.careerValues[k]
+		return v, nil
+	}
+	var v float64
+	err := b.tx.QueryRowContext(ctx,
+		`SELECT value FROM career_stat WHERE player_id = ? AND career = ? AND stat = ?`,
+		playerID, career, stat).Scan(&v)
+	exists := err == nil
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		v = 0
+	case err != nil:
+		return 0, fmt.Errorf("stats: read %s for player %d career %q: %w", stat, playerID, career, err)
+	}
+	for kind := range b.careerStats {
+		if p, ok := b.careerStats[kind][k]; ok {
+			v = mergedBoardValue(statKind(kind), v, exists, p.value)
+			exists = true
+		}
+	}
+	b.careerValues[k] = v
+	b.careerValueLoaded[k] = true
+	b.careerValueExists[k] = exists
+	return v, nil
+}
+
+// --- badge_award -------------------------------------------------------------
+
+type badgeKey struct {
+	playerID int64
+	career   string
+	badge    string
+}
+
+type badgeEntry struct {
+	system      string
+	firstCareer string
+	earnedSeq   int64
+	earnedAt    int64
+	earnedSimT  sql.NullFloat64
+	context     any
+	exists      bool
+	pending     bool
+}
+
+// HasBadge reports whether a composite lifetime/save award exists, including a
+// row first offered by this batch but not yet flushed.
+func (b *Batch) HasBadge(ctx context.Context, playerID int64, career, badge string) (bool, error) {
+	k := badgeKey{playerID, career, badge}
+	if e, ok := b.badges[k]; ok {
+		return e.exists, nil
+	}
+	e := &badgeEntry{}
+	var one int
+	err := b.tx.QueryRowContext(ctx,
+		`SELECT 1 FROM badge_award WHERE player_id = ? AND career = ? AND badge = ?`,
+		playerID, career, badge).Scan(&one)
+	switch {
+	case err == nil:
+		e.exists = true
+	case errors.Is(err, sql.ErrNoRows):
+	case err != nil:
+		return false, fmt.Errorf("stats: read badge %s for player %d career %q: %w", badge, playerID, career, err)
+	}
+	b.badges[k] = e
+	return e.exists, nil
+}
+
+// putBadge retains the lowest-seq candidate and all provenance belonging to
+// that candidate. A row already loaded from SQL is immutable.
+func (b *Batch) putBadge(playerID int64, career, badge, system, firstCareer string, ev Event, context any) {
+	k := badgeKey{playerID, career, badge}
+	e, ok := b.badges[k]
+	if ok && e.exists && !e.pending {
+		return
+	}
+	if ok && e.pending && e.earnedSeq <= ev.Seq {
+		return
+	}
+	if !ok {
+		e = &badgeEntry{}
+		b.badges[k] = e
+	}
+	e.system = system
+	e.firstCareer = firstCareer
+	e.earnedSeq = ev.Seq
+	e.earnedAt = ev.RecvTime
+	e.earnedSimT = sql.NullFloat64{Float64: ev.SimTime, Valid: ev.HasSimTime}
+	e.context = context
+	e.exists = true
+	e.pending = true
+}
+
+func (b *Batch) flushBadges(ctx context.Context) error {
+	keys := b.badgeKeys[:0]
+	for k, e := range b.badges {
+		if e.pending {
+			keys = append(keys, k)
+		}
+	}
+	if len(keys) == 0 {
+		b.badgeKeys = keys
+		return nil
+	}
+	slices.SortFunc(keys, compareBadgeKey)
+	b.badgeKeys = keys
+	err := b.write(ctx, len(keys), 9,
+		`INSERT INTO badge_award (player_id, career, badge, system, first_career, earned_seq, earned_at, earned_sim_t, context) VALUES `,
+		` ON CONFLICT (player_id, career, badge) DO NOTHING`,
+		func(i int, args []any) []any {
+			k := keys[i]
+			e := b.badges[k]
+			e.pending = false
+			return append(args, k.playerID, k.career, k.badge, e.system, e.firstCareer, e.earnedSeq, e.earnedAt, e.earnedSimT, e.context)
+		})
+	if err != nil {
+		return fmt.Errorf("stats: flush badge_award: %w", err)
+	}
+	return nil
 }
 
 // statFlush is one kind's flush: the conflict clause that spells its rule.
@@ -851,6 +1947,34 @@ var periodFlush = [numStatKinds]string{
 	   value = player_stat_period.value + excluded.value, updated_seq = excluded.updated_seq`,
 }
 
+var careerStatFlush = [numStatKinds]string{
+	kindRecord: ` ON CONFLICT (player_id, career, stat) DO UPDATE SET
+	   value = excluded.value, context = excluded.context, updated_seq = excluded.updated_seq
+	 WHERE excluded.value > career_stat.value`,
+	kindBest: ` ON CONFLICT (player_id, career, stat) DO UPDATE SET
+	   value = excluded.value, context = excluded.context, updated_seq = excluded.updated_seq
+	 WHERE excluded.value < career_stat.value`,
+	kindCount: ` ON CONFLICT (player_id, career, stat) DO UPDATE SET
+	   value = career_stat.value + excluded.value, updated_seq = excluded.updated_seq`,
+	kindSet: ` ON CONFLICT (player_id, career, stat) DO UPDATE SET
+	   value = excluded.value, context = excluded.context, updated_seq = excluded.updated_seq
+	 WHERE excluded.value <> career_stat.value`,
+}
+
+var systemStatFlush = [numStatKinds]string{
+	kindRecord: ` ON CONFLICT (player_id, system, stat) DO UPDATE SET
+	   value = excluded.value, context = excluded.context, updated_seq = excluded.updated_seq
+	 WHERE excluded.value > system_stat.value`,
+	kindBest: ` ON CONFLICT (player_id, system, stat) DO UPDATE SET
+	   value = excluded.value, context = excluded.context, updated_seq = excluded.updated_seq
+	 WHERE excluded.value < system_stat.value`,
+	kindCount: ` ON CONFLICT (player_id, system, stat) DO UPDATE SET
+	   value = system_stat.value + excluded.value, updated_seq = excluded.updated_seq`,
+	kindSet: ` ON CONFLICT (player_id, system, stat) DO UPDATE SET
+	   value = excluded.value, context = excluded.context, updated_seq = excluded.updated_seq
+	 WHERE excluded.value <> system_stat.value`,
+}
+
 func (b *Batch) flushStats(ctx context.Context) error {
 	for kind, pending := range b.stats {
 		if len(pending) == 0 {
@@ -869,6 +1993,54 @@ func (b *Batch) flushStats(ctx context.Context) error {
 			})
 		if err != nil {
 			return fmt.Errorf("stats: flush player_stat: %w", err)
+		}
+		clear(pending)
+	}
+	return nil
+}
+
+func (b *Batch) flushCareerStats(ctx context.Context) error {
+	for kind, pending := range b.careerStats {
+		if len(pending) == 0 {
+			continue
+		}
+		keys := slices.AppendSeq(b.careerStatKeys[:0], maps.Keys(pending))
+		slices.SortFunc(keys, compareCareerStatKey)
+		b.careerStatKeys = keys
+		err := b.write(ctx, len(keys), 7,
+			`INSERT INTO career_stat (player_id, career, system, stat, value, context, updated_seq) VALUES `,
+			careerStatFlush[statKind(kind)],
+			func(i int, args []any) []any {
+				k := keys[i]
+				p := pending[k]
+				return append(args, k.playerID, k.career, p.system, k.stat, p.value, p.cx, p.seq)
+			})
+		if err != nil {
+			return fmt.Errorf("stats: flush career_stat: %w", err)
+		}
+		clear(pending)
+	}
+	return nil
+}
+
+func (b *Batch) flushSystemStats(ctx context.Context) error {
+	for kind, pending := range b.systemStats {
+		if len(pending) == 0 {
+			continue
+		}
+		keys := slices.AppendSeq(b.systemStatKeys[:0], maps.Keys(pending))
+		slices.SortFunc(keys, compareSystemStatKey)
+		b.systemStatKeys = keys
+		err := b.write(ctx, len(keys), 6,
+			`INSERT INTO system_stat (player_id, system, stat, value, context, updated_seq) VALUES `,
+			systemStatFlush[statKind(kind)],
+			func(i int, args []any) []any {
+				k := keys[i]
+				p := pending[k]
+				return append(args, k.playerID, k.system, k.stat, p.value, p.cx, p.seq)
+			})
+		if err != nil {
+			return fmt.Errorf("stats: flush system_stat: %w", err)
 		}
 		clear(pending)
 	}
@@ -982,8 +2154,9 @@ func (b *Batch) flushCensus(ctx context.Context) error {
 // database holds, so re-reading would buy nothing.
 func (b *Batch) Flush(ctx context.Context) error {
 	for _, fn := range []func(context.Context) error{
-		b.flushFlights, b.flushCareers, b.flushBodies,
-		b.flushKittens, b.flushStats, b.flushPeriods, b.flushCensus,
+		b.flushSystems, b.flushSystemBodies, b.flushFlights, b.flushCareers, b.flushBodies, b.flushCareerBodies,
+		b.flushKittens, b.flushCareerKittens, b.flushStats, b.flushCareerStats, b.flushBadges, b.flushSystemStats,
+		b.flushPeriods, b.flushChallengeStats, b.flushChallengeMembers, b.flushCensus,
 	} {
 		if err := fn(ctx); err != nil {
 			return err
@@ -1063,6 +2236,36 @@ func comparePeriodKey(x, y periodKey) int {
 	return strings.Compare(x.bucket, y.bucket)
 }
 
+func compareCareerStatKey(x, y careerStatKey) int {
+	if c := cmpInt64(x.playerID, y.playerID); c != 0 {
+		return c
+	}
+	if c := strings.Compare(x.career, y.career); c != 0 {
+		return c
+	}
+	return strings.Compare(x.stat, y.stat)
+}
+
+func compareSystemStatKey(x, y systemStatKey) int {
+	if c := cmpInt64(x.playerID, y.playerID); c != 0 {
+		return c
+	}
+	if c := strings.Compare(x.system, y.system); c != 0 {
+		return c
+	}
+	return strings.Compare(x.stat, y.stat)
+}
+
+func compareBadgeKey(x, y badgeKey) int {
+	if c := cmpInt64(x.playerID, y.playerID); c != 0 {
+		return c
+	}
+	if c := strings.Compare(x.career, y.career); c != 0 {
+		return c
+	}
+	return strings.Compare(x.badge, y.badge)
+}
+
 func compareCareerKey(x, y careerKey) int {
 	if c := cmpInt64(x.playerID, y.playerID); c != 0 {
 		return c
@@ -1080,11 +2283,71 @@ func comparePlayerBodyKey(x, y playerBodyKey) int {
 	return strings.Compare(x.body, y.body)
 }
 
+func compareCareerBodyKey(x, y careerBodyKey) int {
+	if c := strings.Compare(x.career, y.career); c != 0 {
+		return c
+	}
+	if c := strings.Compare(x.kind, y.kind); c != 0 {
+		return c
+	}
+	return strings.Compare(x.body, y.body)
+}
+
+func comparePlayerCareerBodyKey(x, y playerCareerBodyKey) int {
+	if c := cmpInt64(x.playerID, y.playerID); c != 0 {
+		return c
+	}
+	return compareCareerBodyKey(x.careerBodyKey, y.careerBodyKey)
+}
+
 func comparePlayerKittenKey(x, y playerKittenKey) int {
 	if c := cmpInt64(x.playerID, y.playerID); c != 0 {
 		return c
 	}
 	return strings.Compare(x.kid, y.kid)
+}
+
+func compareCareerKittenKey(x, y careerKittenKey) int {
+	if c := strings.Compare(x.career, y.career); c != 0 {
+		return c
+	}
+	return strings.Compare(x.kid, y.kid)
+}
+
+func comparePlayerCareerKittenKey(x, y playerCareerKittenKey) int {
+	if c := cmpInt64(x.playerID, y.playerID); c != 0 {
+		return c
+	}
+	return compareCareerKittenKey(x.careerKittenKey, y.careerKittenKey)
+}
+
+func compareChallengeMemberKey(x, y challengeMemberKey) int {
+	if c := cmpInt64(x.playerID, y.playerID); c != 0 {
+		return c
+	}
+	if c := strings.Compare(x.career, y.career); c != 0 {
+		return c
+	}
+	if c := strings.Compare(x.system, y.system); c != 0 {
+		return c
+	}
+	if c := strings.Compare(x.challenge, y.challenge); c != 0 {
+		return c
+	}
+	return strings.Compare(x.member, y.member)
+}
+
+func compareChallengeStatKey(x, y challengeStatKey) int {
+	if c := cmpInt64(x.playerID, y.playerID); c != 0 {
+		return c
+	}
+	if c := strings.Compare(x.career, y.career); c != 0 {
+		return c
+	}
+	if c := strings.Compare(x.system, y.system); c != 0 {
+		return c
+	}
+	return strings.Compare(x.challenge, y.challenge)
 }
 
 func cmpInt64(x, y int64) int {

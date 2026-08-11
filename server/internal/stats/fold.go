@@ -68,14 +68,24 @@ func Folds() []Fold {
 }
 
 // SecondPassFolds returns every fold that runs once flight_state and career are
-// complete: the boards, then the census.
+// complete: boards, badges, challenges, then the census.
 //
 // It exists so that "what a rebuild's second pass applies" and "what the
 // incremental loop applies after the state folds" are one list rather than two
 // that have to be kept level. A fold that ran in one and not the other would
 // make a rebuilt projections.db disagree with the incremental one, which is the
 // one property the rebuild exists to guarantee.
-func SecondPassFolds() []Fold { return append(BoardFolds(), LogFolds()...) }
+func SecondPassFolds() []Fold {
+	return secondPassFolds(BoardFolds(), BadgeFolds(), ChallengeFolds(), LogFolds())
+}
+
+func secondPassFolds(boards, badges, challenges, logs []Fold) []Fold {
+	folds := append(append(append(boards, badges...), challenges...), logs...)
+	if err := validateFoldNames(folds); err != nil {
+		panic(err)
+	}
+	return folds
+}
 
 // LogFolds returns the folds that describe the log itself rather than the
 // players in it — currently just the event census behind `GET /v1/stats`.
@@ -84,10 +94,10 @@ func SecondPassFolds() []Fold { return append(BoardFolds(), LogFolds()...) }
 // exclusion, no handle requirement, no tie-break. See census.go.
 func LogFolds() []Fold { return []Fold{censusFold{}} }
 
-// StateFolds returns the folds that maintain the tables the boards read:
-// `flight_state` (the flag exclusion) and `career` (the time-to-milestone
-// grouping and its rewind mark). A rebuild runs these alone on its first pass.
-func StateFolds() []Fold { return []Fold{flightFold{}, careerFold{}} }
+// StateFolds returns the folds that maintain the tables the boards read.
+// systemFold is first because later folds read the career binding through the
+// same Batch, including when discovery and scoring events share one batch.
+func StateFolds() []Fold { return []Fold{systemFold{}, flightFold{}, careerFold{}} }
 
 // FlightFold returns the flight_state fold, which every board fold depends on.
 func FlightFold() Fold { return flightFold{} }
@@ -121,8 +131,8 @@ func BoardFolds() []Fold {
 		recoveryFold{},
 		stagesFold{},
 		evaDurationFold{},
-		countFold{stat: StatKittenTumbles, eventType: "kitten.tumble"},
-		rudFold{},
+		tumbleFold{},
+		rudPartsFold{},
 		orbitsFold{},
 		soiFold{},
 		landedBodiesFold{},
@@ -138,6 +148,10 @@ func BoardFolds() []Fold {
 		distanceFold{},
 		toOrbitFold{},
 		toBodyFold{},
+		careerPlaytimeFold{},
+		countFold{stat: StatPlaySessions, eventType: "session.started"},
+		kittensToOrbitFold{},
+		bodySprintFold{},
 	}
 }
 
@@ -151,6 +165,12 @@ func BoardFolds() []Fold {
 // *larger* value, in memory and again in the flushed `ON CONFLICT` guard, so an
 // equal value leaves the earlier `updated_seq` — and therefore the earlier
 // claimant's rank — untouched (§5.6).
+//
+// Record, best and count writes fan out to every scope because the same event
+// contribution has the same meaning in each. A set write does not: it is a
+// derived total read from another table, and the player, career and system
+// totals are different queries. Those folds call [setValue], [setCareerValue]
+// and [setSystemValue] with independently computed values.
 
 // putBest writes a min-record board: the row is replaced only by a strictly
 // *smaller* value. It is the exact mirror of [putRecord], including the tie
@@ -164,11 +184,29 @@ func putBest(ctx context.Context, b *Batch, ev Event, stat string, value float64
 		return err
 	}
 	b.putStat(kindBest, ev.PlayerID, stat, value, cx, ev.Seq)
+	if err := b.putScoped(ctx, kindBest, ev, stat, value, cx); err != nil {
+		return err
+	}
 	return periodBest(ctx, b, ev, stat, value, cx)
 }
 
 // putRecord writes a record (max) board.
 func putRecord(ctx context.Context, b *Batch, ev Event, stat string, value float64, context map[string]any) error {
+	cx, err := encodeContext(context)
+	if err != nil {
+		return err
+	}
+	b.putStat(kindRecord, ev.PlayerID, stat, value, cx, ev.Seq)
+	if err := b.putScoped(ctx, kindRecord, ev, stat, value, cx); err != nil {
+		return err
+	}
+	return periodRecord(ctx, b, ev, stat, value, cx)
+}
+
+// putPlayerRecord writes only the lifetime row and its period rows. Set-backed
+// folds use it when each scope has a different winning source row and therefore
+// must not fan one lifetime context into the career and system scopes.
+func putPlayerRecord(ctx context.Context, b *Batch, ev Event, stat string, value float64, context map[string]any) error {
 	cx, err := encodeContext(context)
 	if err != nil {
 		return err
@@ -183,12 +221,15 @@ func putRecord(ctx context.Context, b *Batch, ev Event, stat string, value float
 // carries the last contributing seq alongside the summed delta.
 func addCount(ctx context.Context, b *Batch, ev Event, stat string, delta float64) error {
 	b.putStat(kindCount, ev.PlayerID, stat, delta, nil, ev.Seq)
+	if err := b.putScoped(ctx, kindCount, ev, stat, delta, nil); err != nil {
+		return err
+	}
 	return periodAdd(ctx, b, ev, stat, delta)
 }
 
-// setValue writes a derived total, replacing whatever was there. Used by the two
-// boards whose value is a function of another table (`soi_bodies` counts
-// player_body, `distance_travelled` sums kitten) rather than an accumulation.
+// setValue writes a derived total, replacing whatever was there. Used by
+// set-backed and derived-total boards whose value is a function of another
+// table rather than an accumulation.
 func setValue(ctx context.Context, b *Batch, ev Event, stat string, value float64) error {
 	// A derived total's *window* value is what it grew by inside that window —
 	// "distance travelled this month", not "lifetime distance as of this
@@ -209,6 +250,45 @@ func setValue(ctx context.Context, b *Batch, ev Event, stat string, value float6
 	return nil
 }
 
+// setCareerValue writes a derived total in the career scope.
+//
+// Separate from [setValue] rather than folded into it because a derived total is
+// a function of another table, and the per-save figure is a different query from
+// the lifetime one. A fan-out here would write the lifetime number into a row
+// labelled with one save — wrong, and wrong invisibly. Each fold that uses
+// setValue computes its own career figure and calls this beside it.
+//
+// There is no period form: setValue's window write is an increase read from the
+// previous value, and a career scope has no windows (see 0006_career_scope.sql).
+func setCareerValue(ctx context.Context, b *Batch, ev Event, stat string, value float64) error {
+	if ev.Career == "" {
+		return nil
+	}
+	system, err := b.CareerSystem(ctx, ev.PlayerID, ev.Career)
+	if err != nil {
+		return err
+	}
+	b.putCareerStat(kindSet, ev, system, stat, value, nil)
+	return nil
+}
+
+// setSystemValue is its system-scoped twin, and it takes a separate value.
+//
+// A system's derived total is not one save's. "Bodies visited in the Sol
+// system" is the union across every save played there, so it is its own query;
+// mirroring the career figure would label one save's number as all of them.
+func setSystemValue(ctx context.Context, b *Batch, ev Event, stat string, value float64) error {
+	if ev.Career == "" {
+		return nil
+	}
+	system, err := b.CareerSystem(ctx, ev.PlayerID, ev.Career)
+	if err != nil || system == "" {
+		return err
+	}
+	b.putSystemStat(kindSet, ev, system, stat, value, nil)
+	return nil
+}
+
 // encodeContext renders a stat's context column. encoding/json sorts map keys,
 // so the same context always produces the same bytes — which is what lets a
 // rebuild be compared to the incremental result column for column.
@@ -221,6 +301,25 @@ func encodeContext(m map[string]any) (any, error) {
 		return nil, fmt.Errorf("stats: encode context: %w", err)
 	}
 	return string(b), nil
+}
+
+// award records the first badge satisfaction in lifetime scope and, when the
+// event has a career, in that save's scope. Badge folds own eligibility; this
+// helper deliberately performs no scoreable or registry check.
+func award(ctx context.Context, b *Batch, ev Event, badge string, context map[string]any) error {
+	cx, err := encodeContext(context)
+	if err != nil {
+		return err
+	}
+	system, err := b.CareerSystem(ctx, ev.PlayerID, ev.Career)
+	if err != nil {
+		return err
+	}
+	b.putBadge(ev.PlayerID, "", badge, system, ev.Career, ev, cx)
+	if ev.Career != "" {
+		b.putBadge(ev.PlayerID, ev.Career, badge, system, "", ev, cx)
+	}
+	return nil
 }
 
 // scoreable reports whether an event may contribute to a board: it must belong

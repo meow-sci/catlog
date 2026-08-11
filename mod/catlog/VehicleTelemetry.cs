@@ -141,11 +141,15 @@ public static class VehicleTelemetry
     /// <returns>The snapshot, or null.</returns>
     [KsaAnchor("Vehicle.Id/Situation/GetBarometricAltitude/GetSurfaceSpeed/OrbitalSpeed/AccelerationBody/"
                + "TotalMass/Parts.Count/Crew/StructuralLoad; Orbit.Eccentricity/Apoapsis/Periapsis/Inclination/"
+               + "SemiMajorAxis/LongitudeOfAscendingNode/ArgumentOfPeriapsis/TimeAtPeriapsis/Period/"
                + "IsBound/IsHyperbolic/IsParabolic; IParentBody.Id/MeanRadius/GetAtmosphereReference; "
                + "PhysicalAtmosphereReference.GetDynamicPressure(Vehicle)",
-        SourceFile = "KSA/Vehicle.cs / KSA/Orbit.cs / KSA/IParentBody.cs / KSA/PhysicalAtmosphereReference.cs",
-        Verified = "2026-08-07", GameVersion = "2026.8.5.5168", Risk = ChurnRisk.Low,
-        Notes = "UNITS: Orbit.Inclination is RADIANS (Orbit.cs:1160) — converted to degrees here. "
+        SourceFile = "KSA/Vehicle.cs / KSA/Orbit.cs:1152-1170,1757-1775 / KSA/IParentBody.cs / "
+                     + "KSA/PhysicalAtmosphereReference.cs",
+        Verified = "2026-08-10", GameVersion = "2026.8.5.5168", Risk = ChurnRisk.Low,
+        Notes = "UNITS: Orbit.Inclination, LongitudeOfAscendingNode and ArgumentOfPeriapsis are RADIANS "
+                + "(Orbit.cs:1160-1164) — converted to degrees here. SemiMajorAxis is metres, Period is "
+                + "seconds, and TimeAtPeriapsis.Seconds() is game seconds (Orbit.cs:1152-1170). "
                 + "Orbit.Apoapsis/Periapsis are RADII FROM BODY CENTRE (Orbit.cs:1166-1168) — MeanRadius is "
                 + "subtracted here, see ksa-integration §1 and docs/events.md. "
                 + "Vehicle.TotalMass is float (Vehicle.cs:551). "
@@ -197,6 +201,14 @@ public static class VehicleTelemetry
                     : 0.0,
                 PeAltM = Sanitize.RadiusToAltitude(orbit.Periapsis, meanRadius),
                 IncDeg = Sanitize.Finite(orbit.Inclination * RadToDeg),
+                SmaM = Sanitize.Finite(orbit.SemiMajorAxis),
+                LanDeg = Sanitize.Finite(orbit.LongitudeOfAscendingNode * RadToDeg),
+                ArgpDeg = Sanitize.Finite(orbit.ArgumentOfPeriapsis * RadToDeg),
+                TPe = Sanitize.Finite(orbit.TimeAtPeriapsis.Seconds()),
+                // OrbitData's unbound Period is NaN today, but classify explicitly: a future game
+                // returning a finite sentinel must not turn an open trajectory into a closed one.
+                PeriodS = conic == OrbitClass.Bound ? Sanitize.Finite(orbit.Period) : 0.0,
+                State = StateOf(orbit, body),
                 OrbitClass = conic,
                 CrewCount = CrewCount(vehicle),
                 PartCount = PartCount(vehicle),
@@ -213,6 +225,47 @@ public static class VehicleTelemetry
         catch (Exception ex)
         {
             // Omit, never zero-fill (WP7 requirement 7). The caller logs once per session.
+            Faults.Note(ex);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Reads one complete parent-body-centred inertial state vector, or null when any component or
+    /// its parent-body association is unreadable.
+    /// </summary>
+    /// <param name="orbit">The vehicle's current orbit.</param>
+    /// <param name="body">The body name already placed on the snapshot.</param>
+    /// <returns>The complete state, or null; individual failed components are never zero-filled.</returns>
+    [KsaAnchor("Orbit.StateVectors; StateVectors.PositionCci/VelocityCci; Orbit.Parent",
+        SourceFile = "KSA/Orbit.cs:1150,2107-2112 / KSA/StateVectors.cs:6-14",
+        Verified = "2026-08-10", GameVersion = "2026.8.5.5168", Risk = ChurnRisk.Low,
+        Notes = "StateVectors is a ref readonly Orbit property. GetStateVectorsAt transforms the orbital "
+                + "position and velocity through Orb2ParentCci, so both vectors are relative to Orbit.Parent "
+                + "in its inertial frame; units are metres and metres per second.")]
+    private static StateVec? StateOf(Orbit orbit, string body)
+    {
+        try
+        {
+            // Re-read the association after the vector source was selected. A concurrent SOI
+            // transition must omit state rather than label old-parent coordinates with a new body.
+            if (!StringComparer.Ordinal.Equals(body, BodyName(orbit.Parent)))
+                return null;
+
+            ref readonly StateVectors sv = ref orbit.StateVectors;
+            double3 pos = sv.PositionCci;
+            double3 vel = sv.VelocityCci;
+            if (!double.IsFinite(pos.X) || !double.IsFinite(pos.Y) || !double.IsFinite(pos.Z)
+                || !double.IsFinite(vel.X) || !double.IsFinite(vel.Y) || !double.IsFinite(vel.Z))
+            {
+                return null;
+            }
+
+            return StateVec.FiniteOrNull(pos.X, pos.Y, pos.Z, vel.X, vel.Y, vel.Z);
+        }
+        catch (Exception ex)
+        {
+            // State is optional: keep the otherwise valid sample and omit the atomic reading.
             Faults.Note(ex);
             return null;
         }
@@ -710,6 +763,27 @@ public static class VehicleTelemetry
         {
             return 0;
         }
+    }
+
+    /// <summary>
+    /// How many rocket engines are installed on the vehicle, active or not.
+    /// </summary>
+    /// <remarks>
+    /// Counts <c>EngineController</c> modules, not <c>RocketCores</c> or
+    /// <c>RocketNozzles</c>: a <c>RocketCore</c>'s controller may be a
+    /// <c>ThrusterController</c> instead, so those two lists include RCS
+    /// thrusters and would report a probe with attitude control as having
+    /// engines.
+    /// </remarks>
+    [KsaAnchor(
+        "Vehicle.Parts.Modules.Get<EngineController>()",
+        SourceFile = "KSA/ModuleList.cs:164",
+        Verified = "2026-08-09", GameVersion = "2026.8.5.5168", Risk = ChurnRisk.Medium,
+        Notes = "Modules.HasAny<EngineController>() is the cheaper predicate; we want the count.")]
+    public static int? EngineCount(Vehicle vehicle)
+    {
+        try { return vehicle.Parts.Modules.Get<EngineController>().Length; }
+        catch (Exception ex) { Faults.Note(ex); return null; }
     }
 
     /// <summary>Total mass in kilograms.</summary>

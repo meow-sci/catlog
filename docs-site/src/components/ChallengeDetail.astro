@@ -1,0 +1,69 @@
+---
+/** Renders one challenge from src/data/challenges.ts. */
+import { challengeByKey } from "../data/challenges";
+import "./detail.css";
+
+interface Props {
+  challenge: string;
+}
+
+const { challenge: key } = Astro.props;
+const challenge = challengeByKey(key);
+if (!challenge) throw new Error(`Unknown challenge in ChallengeDetail: ${key}`);
+
+const direction = challenge.ascending ? "Lowest wins" : "Highest wins";
+const scopeLabels = {
+  player: "per player",
+  career: "per save",
+  system: "per player and system",
+} as const;
+const formatUTC = (milliseconds: number) =>
+  `${new Date(milliseconds).toISOString().replace("T", " ").slice(0, 16)} UTC`;
+---
+
+<section class="challenge-detail" id={challenge.challenge}>
+  <h3 class="challenge-detail-h">
+    {challenge.title}
+    <span class="ev-pill">{direction}</span>
+    <span class="ev-pill">unit: {challenge.unit}</span>
+    <span class="ev-pill">{scopeLabels[challenge.scope]}</span>
+  </h3>
+
+  <p class="challenge-key"><code>{challenge.challenge}</code></p>
+  <p class="challenge-blurb">{challenge.blurb}</p>
+
+  <dl class="ev-dl">
+    <dt>Opens</dt>
+    <dd>{formatUTC(challenge.opens)}</dd>
+    <dt>Closes</dt>
+    <dd>{formatUTC(challenge.closes)}</dd>
+  </dl>
+
+  <p>
+    <a href={`https://catlog.science.fail/challenges/${challenge.challenge}`}>View visitor results</a>
+    ·
+    <a href={`https://catlog.science.fail/v1/challenges/${challenge.challenge}`}>View JSON results</a>
+  </p>
+</section>
+
+<style is:global>
+  .challenge-detail {
+    margin-block: 2.5rem;
+  }
+
+  .challenge-detail-h {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    align-items: baseline;
+  }
+
+  .challenge-key {
+    margin-block: 0.2rem;
+    font-size: var(--sl-text-sm);
+  }
+
+  .challenge-blurb {
+    font-size: var(--sl-text-lg);
+  }
+</style>

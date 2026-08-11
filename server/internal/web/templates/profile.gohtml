@@ -8,6 +8,8 @@
            and the stored value never leaves this browser. */}}
     <button type="button" id="profile-me-toggle" class="secondary" data-handle="{{$handle}}">This is me</button>
     <a class="button secondary" id="profile-compare" href="{{comparePath $handle}}">Compare</a>
+    <a class="button secondary" id="profile-saves" href="{{playerPath $handle}}/saves">Saves</a>
+    <a class="button secondary" id="profile-badges" href="{{playerPath $handle}}/badges">Badges</a>
     <a class="button secondary" id="profile-events" href="{{eventsPath $handle}}">Raw events</a>
   </p>
 </div>

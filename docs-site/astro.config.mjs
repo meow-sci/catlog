@@ -41,6 +41,9 @@ export default defineConfig({
             { label: "How a flight becomes a score", slug: "start/flight-to-score" },
             { label: "Your identity and your handle", slug: "start/identity" },
             { label: "Turning things off", slug: "start/turning-things-off" },
+            // The one home for the privacy narrative. Every other page links
+            // here rather than restating it. See docs/DECISIONS.md DOCS-013.
+            { label: "Privacy", slug: "start/privacy" },
           ],
         },
         {
@@ -48,6 +51,7 @@ export default defineConfig({
           items: [
             { label: "The event catalog", slug: "events" },
             { label: "Browse every event", slug: "events/browse" },
+            { label: "Celestial systems", slug: "events/systems" },
             { label: "Sessions and flights", slug: "events/sessions-and-flights" },
             { label: "Your vehicle", slug: "events/vehicle" },
             { label: "Engines", slug: "events/engines" },
@@ -61,6 +65,22 @@ export default defineConfig({
             { label: "How boards are built", slug: "leaderboards" },
             { label: "Every board", slug: "leaderboards/catalog" },
             { label: "What counts and what doesn't", slug: "leaderboards/eligibility" },
+            { label: "Per-save boards", slug: "leaderboards/saves" },
+            { label: "Celestial systems", slug: "leaderboards/systems" },
+          ],
+        },
+        {
+          label: "Merit badges",
+          items: [
+            { label: "How badges work", slug: "badges" },
+            { label: "Every badge", slug: "badges/catalog" },
+          ],
+        },
+        {
+          label: "Challenges",
+          items: [
+            { label: "How challenges work", slug: "challenges" },
+            { label: "Challenge archive", slug: "challenges/archive" },
           ],
         },
         {

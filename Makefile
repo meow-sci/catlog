@@ -44,6 +44,8 @@ VERBOSE     ?=
 LOADGEN_ARGS ?=
 # Throwaway data directory for `make e2e` (§8). Never ./data — see the target.
 E2E_DATA_DIR ?= data-e2e
+# 2026-08-14T00:00:00Z, inside every shipped Week 33 challenge window.
+E2E_SEED_AT_MS ?= 1786665600000
 
 .PHONY: help bootstrap build server-build mod-build site-build \
         test server-test mod-test test-integration test-nginx \
@@ -138,7 +140,9 @@ server-run-test-env: server-build
 	@# poller. It exits either way; catlogd is what stays in the foreground.
 	@( for i in $$(seq 1 200); do \
 	     if curl -fsS $(SERVER_URL)/healthz >/dev/null 2>&1; then \
-	       curl -fsS -X POST $(ADMIN_URL)/admin/seed >/dev/null \
+	       curl -fsS -X POST -H 'Content-Type: application/json' \
+	         --data '{"at_ms":$(E2E_SEED_AT_MS)}' $(ADMIN_URL)/admin/clock >/dev/null \
+	         && curl -fsS -X POST $(ADMIN_URL)/admin/seed >/dev/null \
 	         && echo "server-run-test-env: demo dataset seeded" >&2; \
 	       exit 0; \
 	     fi; \

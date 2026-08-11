@@ -97,6 +97,9 @@ type CompareBoard struct {
 type CompareRow struct {
 	Handle string  `json:"handle"`
 	Value  float64 `json:"value"`
+	// System is the friendly content identity of the save that set this value,
+	// when the winning row carries enough provenance to resolve one.
+	System *SystemRef `json:"system,omitempty"`
 	// Rank is the position among visible players on the whole board, not among
 	// the compared handles: "3rd in the world", not "2nd of your friends".
 	Rank    int             `json:"rank"`
@@ -166,9 +169,9 @@ func (s *Server) Compare(ctx context.Context, handles []string) (CompareResponse
 		return CompareResponse{}, err
 	}
 
-	// rowsByStat holds each board's rows in the order the handles were asked
-	// for, which is the order a table's columns go in.
-	rowsByStat := map[string][]CompareRow{}
+	// Profiles are assembled first so their career bindings and system headers
+	// can be resolved once for the whole response rather than once per handle.
+	profiles := make([]PlayerResponse, 0, len(handles))
 	for _, handle := range handles {
 		profile, known, err := s.player(ctx, handle, counts)
 		if err != nil {
@@ -179,10 +182,24 @@ func (s *Server) Compare(ctx context.Context, handles []string) (CompareResponse
 			continue
 		}
 		out.Handles = append(out.Handles, ComparePlayer{Handle: profile.Handle, Found: true, Since: profile.Since})
+		profiles = append(profiles, profile)
+	}
+	profilePtrs := make([]*PlayerResponse, len(profiles))
+	for i := range profiles {
+		profilePtrs[i] = &profiles[i]
+	}
+	if err := s.attachPlayerSystems(ctx, profilePtrs); err != nil {
+		return CompareResponse{}, err
+	}
+
+	// rowsByStat holds each board's rows in the order the handles were asked
+	// for, which is the order a table's columns go in.
+	rowsByStat := map[string][]CompareRow{}
+	for _, profile := range profiles {
 		for _, row := range profile.Stats {
 			rowsByStat[row.Stat] = append(rowsByStat[row.Stat], CompareRow{
 				Handle: profile.Handle, Value: row.Value, Rank: row.Rank,
-				Context: row.Context, Updated: row.Updated, Rewound: row.Rewound,
+				System: row.System, Context: row.Context, Updated: row.Updated, Rewound: row.Rewound,
 			})
 		}
 	}

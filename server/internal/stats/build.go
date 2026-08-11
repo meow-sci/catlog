@@ -24,7 +24,7 @@ import (
 // changes, and it has the same standard of proof: same commit as the change,
 // recorded in DECISIONS.md. The cost of forgetting is a board that is quietly
 // short of history until somebody happens to run a rebuild.
-const BuildVersion = 1
+const BuildVersion = 2
 
 // BuildID identifies the projection build this binary produces: the projections
 // schema version, [BuildVersion], and the ordered name of every registered fold.
@@ -34,13 +34,17 @@ const BuildVersion = 1
 // its contents is that they are not this binary's answer. See
 // `migrations/projections/0005_build.sql`.
 func BuildID(schemaVersion int) string {
+	return buildIDForNames(schemaVersion, FoldNames())
+}
+
+func buildIDForNames(schemaVersion int, names []string) string {
 	h := sha256.New()
 	// Field-separated and newline-terminated, so no two different registries
 	// can hash to the same byte stream by concatenation.
 	h.Write([]byte("catlog-projection-build\n"))
 	h.Write([]byte(strconv.Itoa(schemaVersion) + "\n"))
 	h.Write([]byte(strconv.Itoa(BuildVersion) + "\n"))
-	for _, name := range FoldNames() {
+	for _, name := range names {
 		h.Write([]byte(name + "\n"))
 	}
 	return hex.EncodeToString(h.Sum(nil)[:16])

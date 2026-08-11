@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -61,6 +62,25 @@ func indexNames(t *testing.T, db *store.DB) []string {
 	return out
 }
 
+func indexColumns(t *testing.T, db *store.DB, index string) []string {
+	t.Helper()
+	rows, err := db.Reader().QueryContext(t.Context(), `PRAGMA index_info(`+index+`)`)
+	if err != nil {
+		t.Fatalf("list %s columns: %v", index, err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var seq, cid int
+		var name string
+		if err := rows.Scan(&seq, &cid, &name); err != nil {
+			t.Fatalf("scan %s column: %v", index, err)
+		}
+		out = append(out, name)
+	}
+	return out
+}
+
 func schemaVersions(t *testing.T, db *store.DB) []int {
 	t.Helper()
 	rows, err := db.Reader().QueryContext(t.Context(), `SELECT v FROM schema_version ORDER BY v`)
@@ -104,20 +124,229 @@ func TestMigrationsCreateTheFullDDL(t *testing.T) {
 	t.Run("projections", func(t *testing.T) {
 		p := testutil.Projections(t)
 		want := []string{
-			"career", "event_census", "feed", "flight_state", "kitten", "player_body",
+			"badge_award", "career", "career_body", "career_kitten", "career_stat", "challenge_member", "challenge_stat", "event_census", "feed", "flight_state", "kitten", "player_body",
 			"player_stat", "player_stat_period", "proj_build", "proj_checkpoint", "schema_version",
+			"system", "system_body", "system_stat",
 		}
 		if got := tableNames(t, p.DB); !equal(got, want) {
 			t.Errorf("tables = %v, want %v", got, want)
 		}
 		wantIdx := []string{
+			"badge_by_career", "badge_holders", "badge_system",
+			"career_body_system", "career_kitten_player", "career_kitten_system",
+			"career_stat_rank", "career_stat_system",
 			"census_busiest", "census_window",
-			"fs_player", "stat_period_age", "stat_period_rank", "stat_rank",
+			"challenge_member_count", "challenge_rank",
+			"fs_player", "stat_period_age", "stat_period_rank", "stat_rank", "system_stat_rank",
+			"career_system", "system_body_kind", "system_slug",
 		}
+		slices.Sort(wantIdx)
 		if got := indexNames(t, p.DB); !equal(got, wantIdx) {
 			t.Errorf("indexes = %v, want %v", got, wantIdx)
 		}
+		if p.Version != 13 {
+			t.Errorf("schema version = %d, want 13", p.Version)
+		}
+		rows, err := p.Reader().QueryContext(t.Context(), `PRAGMA table_info(flight_state)`)
+		if err != nil {
+			t.Fatalf("flight_state columns: %v", err)
+		}
+		defer rows.Close()
+		var columns []string
+		for rows.Next() {
+			var cid, notNull, pk int
+			var name, typ string
+			var defaultValue sql.NullString
+			if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
+				t.Fatal(err)
+			}
+			columns = append(columns, fmt.Sprintf("%s %s null=%t default=%s pk=%d", name, typ, notNull == 0, defaultValue.String, pk))
+		}
+		wantColumns := []string{
+			"flight_id BLOB null=true default= pk=1",
+			"player_id INTEGER null=false default= pk=0",
+			"flags INTEGER null=false default=0 pk=0",
+			"ended_reason TEXT null=true default= pk=0",
+			"crew INTEGER null=true default= pk=0",
+			"body TEXT null=true default= pk=0",
+			"started_seq INTEGER null=false default= pk=0",
+			"engine_count INTEGER null=true default= pk=0",
+			"milestones INTEGER null=false default=0 pk=0",
+			"part_count INTEGER null=true default= pk=0",
+			"launch_mass_kg REAL null=true default= pk=0",
+			"career TEXT null=false default='' pk=0",
+			"first_orbit_seq INTEGER null=false default=0 pk=0",
+		}
+		if !slices.Equal(columns, wantColumns) {
+			t.Errorf("flight_state columns = %v, want %v", columns, wantColumns)
+		}
+
+		rows, err = p.Reader().QueryContext(t.Context(), `PRAGMA table_info(badge_award)`)
+		if err != nil {
+			t.Fatalf("badge_award columns: %v", err)
+		}
+		defer rows.Close()
+		columns = nil
+		for rows.Next() {
+			var cid, notNull, pk int
+			var name, typ string
+			var defaultValue sql.NullString
+			if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
+				t.Fatal(err)
+			}
+			columns = append(columns, fmt.Sprintf("%s %s null=%t default=%s pk=%d", name, typ, notNull == 0, defaultValue.String, pk))
+		}
+		wantColumns = []string{
+			"player_id INTEGER null=false default= pk=1",
+			"career TEXT null=false default= pk=1",
+			"badge TEXT null=false default= pk=1",
+			"system TEXT null=false default='' pk=0",
+			"first_career TEXT null=false default='' pk=0",
+			"earned_seq INTEGER null=false default= pk=0",
+			"earned_at INTEGER null=false default= pk=0",
+			"earned_sim_t REAL null=true default= pk=0",
+			"context TEXT null=true default= pk=0",
+		}
+		if !slices.Equal(columns, wantColumns) {
+			t.Errorf("badge_award columns = %v, want %v", columns, wantColumns)
+		}
+		for index, want := range map[string][]string{
+			"badge_system":    {"system", "badge", "earned_seq"},
+			"badge_holders":   {"badge", "earned_seq"},
+			"badge_by_career": {"player_id", "career", "earned_seq"},
+		} {
+			if got := indexColumns(t, p.DB, index); !slices.Equal(got, want) {
+				t.Errorf("%s columns = %v, want %v", index, got, want)
+			}
+		}
+
+		for table, want := range map[string][]string{
+			"challenge_stat": {
+				"player_id INTEGER null=false default= pk=1", "career TEXT null=false default= pk=1",
+				"challenge TEXT null=false default= pk=1", "system TEXT null=false default='' pk=1",
+				"value REAL null=false default= pk=0", "context TEXT null=true default= pk=0",
+				"updated_seq INTEGER null=false default= pk=0",
+			},
+			"challenge_member": {
+				"player_id INTEGER null=false default= pk=1", "career TEXT null=false default= pk=1",
+				"system TEXT null=false default= pk=1", "challenge TEXT null=false default= pk=1",
+				"member TEXT null=false default= pk=1", "first_seq INTEGER null=false default= pk=0",
+			},
+		} {
+			rows, err := p.Reader().QueryContext(t.Context(), `PRAGMA table_info(`+table+`)`)
+			if err != nil {
+				t.Fatalf("%s columns: %v", table, err)
+			}
+			var got []string
+			for rows.Next() {
+				var cid, notNull, pk int
+				var name, typ string
+				var defaultValue sql.NullString
+				if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
+					t.Fatal(err)
+				}
+				got = append(got, fmt.Sprintf("%s %s null=%t default=%s pk=%d", name, typ, notNull == 0, defaultValue.String, pk))
+			}
+			rows.Close()
+			if !slices.Equal(got, want) {
+				t.Errorf("%s columns = %v, want %v", table, got, want)
+			}
+		}
+		for index, want := range map[string][]string{
+			"challenge_rank":         {"challenge", "system", "value", "updated_seq"},
+			"challenge_member_count": {"challenge", "player_id", "career", "system"},
+		} {
+			if got := indexColumns(t, p.DB, index); !slices.Equal(got, want) {
+				t.Errorf("%s columns = %v, want %v", index, got, want)
+			}
+		}
 	})
+}
+
+func TestBadgeAwardSurvivesProjectionRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "projections.db")
+	first := testutil.ProjectionsAt(t, path)
+	_, err := first.Writer().ExecContext(t.Context(), `
+		INSERT INTO badge_award
+			(player_id, career, badge, system, first_career, earned_seq, earned_at, earned_sim_t, context)
+		VALUES
+			(7, '', 'lifetime', '', 'first-save', 11, 1770000000000, NULL, NULL),
+			(7, 'second-save', 'career-award', 'system-hash', '', 12, 1770000001000, 42.5, '{"body":"luna"}')`)
+	if err != nil {
+		t.Fatalf("seed badge awards: %v", err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("close projections: %v", err)
+	}
+
+	second, err := store.OpenProjections(t.Context(), path, testutil.Options())
+	if err != nil {
+		t.Fatalf("reopen projections: %v", err)
+	}
+	defer second.Close()
+	if second.Version != 13 {
+		t.Fatalf("schema version after reopen = %d, want 13", second.Version)
+	}
+	rows, err := second.Reader().QueryContext(t.Context(), `
+		SELECT player_id, career, badge, system, first_career, earned_seq, earned_at,
+		       earned_sim_t IS NULL, context IS NULL
+		FROM badge_award ORDER BY career, badge`)
+	if err != nil {
+		t.Fatalf("read badge awards: %v", err)
+	}
+	defer rows.Close()
+	var got []string
+	for rows.Next() {
+		var playerID, earnedSeq, earnedAt, simNull, contextNull int64
+		var career, badge, system, firstCareer string
+		if err := rows.Scan(&playerID, &career, &badge, &system, &firstCareer, &earnedSeq, &earnedAt, &simNull, &contextNull); err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, fmt.Sprintf("%d/%s/%s/%s/%s/%d/%d/%d/%d", playerID, career, badge, system, firstCareer, earnedSeq, earnedAt, simNull, contextNull))
+	}
+	want := []string{
+		"7//lifetime//first-save/11/1770000000000/1/1",
+		"7/second-save/career-award/system-hash//12/1770000001000/0/0",
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("badge awards after restart = %v, want %v", got, want)
+	}
+}
+
+func TestChallengeRowsSurviveProjectionRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "projections.db")
+	first := testutil.ProjectionsAt(t, path)
+	for _, stmt := range []string{
+		`INSERT INTO challenge_stat (player_id, career, challenge, system, value, context, updated_seq)
+		 VALUES (7, '', 'global', '', 3, NULL, 11),
+		        (7, 'save-a', 'career', 'system-a', 42.5, '{"body":"luna"}', 12)`,
+		`INSERT INTO challenge_member (player_id, career, system, challenge, member, first_seq)
+		 VALUES (7, '', 'system-a', 'set', 'system-a'||char(0)||'luna', 13)`,
+	} {
+		if _, err := first.Writer().ExecContext(t.Context(), stmt); err != nil {
+			t.Fatalf("seed challenge rows: %v", err)
+		}
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.OpenProjections(t.Context(), path, testutil.Options())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	if second.Version != 13 {
+		t.Fatalf("schema version after reopen = %d, want 13", second.Version)
+	}
+	for table, want := range map[string]int{"challenge_stat": 2, "challenge_member": 1} {
+		var got int
+		if err := second.Reader().QueryRowContext(t.Context(), `SELECT count(*) FROM `+table).Scan(&got); err != nil {
+			t.Fatal(err)
+		}
+		if got != want {
+			t.Errorf("%s rows after reopen = %d, want %d", table, got, want)
+		}
+	}
 }
 
 // TestMigrationsAreIdempotent reopens a real file and checks nothing is applied
@@ -193,6 +422,32 @@ func TestMigrationsRunOnMemoryStores(t *testing.T) {
 	}
 	if e.Path() != store.MemoryPath {
 		t.Errorf("path = %q, want %q", e.Path(), store.MemoryPath)
+	}
+}
+
+func TestProjectionCountsIncludeScopeTables(t *testing.T) {
+	p := testutil.MemProjections(t)
+	for _, stmt := range []string{
+		`INSERT INTO career_body (player_id, career, system, kind, body, first_seq) VALUES (1, 'testcareer000001', 'testsystem000001', 'soi', 'luna', 1)`,
+		`INSERT INTO career_kitten (player_id, career, system, kid, name, updated_seq) VALUES (1, 'testcareer000001', 'testsystem000001', 'kid1', 'Mittens', 1)`,
+		`INSERT INTO career_stat (player_id, career, stat, value, updated_seq) VALUES (1, 'testcareer000001', 'landings', 2, 1)`,
+		`INSERT INTO system_stat (player_id, system, stat, value, updated_seq) VALUES (1, 'testsystem000001', 'landings', 2, 1)`,
+		`INSERT INTO system (hash, system_id, name, slug, home_body, body_count, reported_complete, first_seq) VALUES ('testsystem000001', 'Test', 'Test', 'test', 'home', 1, 1, 1)`,
+		`INSERT INTO system_body (hash, body, name, class, kind, rank, radius_m, mass_kg, soi_m, atmo_m, ocean_m, angvel, axis_x, axis_y, axis_z, ccf_to_cce_t0_x, ccf_to_cce_t0_y, ccf_to_cce_t0_z, ccf_to_cce_t0_w, first_seq) VALUES ('testsystem000001', 'home', 'Home', 'Anything', 'other', 0, 1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 1)`,
+		`INSERT INTO badge_award (player_id, career, badge, earned_seq, earned_at) VALUES (1, '', 'first_steps', 1, 1770000000000)`,
+		`INSERT INTO challenge_stat (player_id, career, challenge, system, value, context, updated_seq) VALUES (1, '', 'tumbleweek', '', 2, '{"kind":"tumble"}', 2)`,
+		`INSERT INTO challenge_member (player_id, career, system, challenge, member, first_seq) VALUES (1, '', 'testsystem000001', 'coasting_class', 'testsystem000001'||char(0)||'luna', 3)`,
+	} {
+		if _, err := p.Writer().ExecContext(t.Context(), stmt); err != nil {
+			t.Fatalf("seed projection scope count: %v", err)
+		}
+	}
+	c, err := p.Counts(t.Context())
+	if err != nil {
+		t.Fatalf("counts: %v", err)
+	}
+	if c.CareerStat != 1 || c.SystemStat != 1 || c.CareerBody != 1 || c.CareerKitten != 1 || c.System != 1 || c.SystemBody != 1 || c.BadgeAward != 1 || c.ChallengeStat != 1 || c.ChallengeMember != 1 {
+		t.Errorf("scope counts = %+v; want every seeded scope table count 1", c)
 	}
 }
 

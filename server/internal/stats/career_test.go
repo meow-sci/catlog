@@ -2,6 +2,8 @@ package stats_test
 
 import (
 	"database/sql"
+	"maps"
+	"strings"
 	"testing"
 
 	"github.com/meow-sci/catlog/server/internal/ids"
@@ -17,6 +19,9 @@ import (
 // otherCareer is a second save belonging to the same player.
 const otherCareer = "testcareer000002"
 
+// thirdCareer is a third save belonging to the same player.
+const thirdCareer = "testcareer000003"
+
 // wantRow asserts a stat row exactly, context and seq included — the context is
 // where the career a record was set in is recorded, so these boards need it.
 func wantRow(t *testing.T, got map[string]row, key string, expect row) {
@@ -28,14 +33,17 @@ func wantRow(t *testing.T, got map[string]row, key string, expect row) {
 
 // careerRow reads one row of the `career` table.
 type careerRow struct {
-	maxSimT float64
-	rewound bool
+	maxSimT  float64
+	rewound  bool
+	firstSeq int64
+	lastSeq  int64
+	ordinal  int64
 }
 
 func readCareers(t *testing.T, proj *store.Projections) map[string]careerRow {
 	t.Helper()
 	rows, err := proj.Reader().QueryContext(t.Context(),
-		`SELECT career, max_sim_t, rewound FROM career WHERE player_id = 1 ORDER BY career`)
+		`SELECT career, max_sim_t, rewound, first_seq, last_seq, ordinal FROM career WHERE player_id = 1 ORDER BY career`)
 	if err != nil {
 		t.Fatalf("read career: %v", err)
 	}
@@ -48,7 +56,7 @@ func readCareers(t *testing.T, proj *store.Projections) map[string]careerRow {
 			r       careerRow
 			rewound int64
 		)
-		if err := rows.Scan(&career, &r.maxSimT, &rewound); err != nil {
+		if err := rows.Scan(&career, &r.maxSimT, &rewound, &r.firstSeq, &r.lastSeq, &r.ordinal); err != nil {
 			t.Fatalf("scan career: %v", err)
 		}
 		r.rewound = rewound != 0
@@ -56,6 +64,35 @@ func readCareers(t *testing.T, proj *store.Projections) map[string]careerRow {
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatalf("read career: %v", err)
+	}
+	return out
+}
+
+type careerOrdinalKey struct {
+	player int64
+	career string
+}
+
+func readCareerOrdinals(t *testing.T, proj *store.Projections) map[careerOrdinalKey]int64 {
+	t.Helper()
+	rows, err := proj.Reader().QueryContext(t.Context(),
+		`SELECT player_id, career, ordinal FROM career ORDER BY player_id, first_seq`)
+	if err != nil {
+		t.Fatalf("read career ordinals: %v", err)
+	}
+	defer rows.Close()
+
+	out := map[careerOrdinalKey]int64{}
+	for rows.Next() {
+		var key careerOrdinalKey
+		var ordinal int64
+		if err := rows.Scan(&key.player, &key.career, &ordinal); err != nil {
+			t.Fatalf("scan career ordinal: %v", err)
+		}
+		out[key] = ordinal
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read career ordinals: %v", err)
 	}
 	return out
 }
@@ -213,12 +250,17 @@ func TestFastestToBodySkipsANameThatCannotBeAStatKey(t *testing.T) {
 
 	got := readStats(t, proj)
 	for stat := range got {
-		if stat != "1/soi_bodies" {
+		if strings.HasPrefix(stat, "1/fastest_to_") {
 			t.Errorf("a malformed body name produced the stat %q", stat)
 		}
 	}
 	if got["1/soi_bodies"].Value != 1 {
 		t.Errorf("soi_bodies = %v, want 1 — the visit still happened", got["1/soi_bodies"].Value)
+	}
+	for _, stat := range []string{"1/bodies_by_1y", "1/bodies_by_10y"} {
+		if got[stat].Value != 1 {
+			t.Errorf("%s = %v, want 1 — opaque bodies still count in save sprints", stat, got[stat].Value)
+		}
 	}
 	var first sql.NullFloat64
 	if err := proj.Reader().QueryRowContext(t.Context(),
@@ -248,9 +290,11 @@ func TestFastestToBodyNeverCollidesWithAFixedBoard(t *testing.T) {
 func TestBoardDirectionAndUnitsAreDerivedFromTheKey(t *testing.T) {
 	for stat, want := range map[string]stats.Board{
 		"fastest_to_orbit": {Stat: "fastest_to_orbit", Title: "Fastest to Orbit", Unit: "ms", Ascending: true, Career: true},
-		"fastest_to_luna":  {Stat: "fastest_to_luna", Title: "Fastest to Luna", Unit: "ms", Ascending: true, Career: true},
+		"career_playtime":  {Stat: "career_playtime", Title: "Longest Save", Unit: "ms", Career: true},
+		"play_sessions":    {Stat: "play_sessions", Title: "Play Sessions", Unit: "sessions"},
+		"fastest_to_luna":  {Stat: "fastest_to_luna", Title: "Fastest to Luna", Unit: "ms", Ascending: true, Career: true, BodyDerived: true},
 		"fastest_to_kerbin_ii": {
-			Stat: "fastest_to_kerbin_ii", Title: "Fastest to Kerbin Ii", Unit: "ms", Ascending: true, Career: true,
+			Stat: "fastest_to_kerbin_ii", Title: "Fastest to Kerbin Ii", Unit: "ms", Ascending: true, Career: true, BodyDerived: true,
 		},
 		"rud_total":         {Stat: "rud_total", Title: "Rapid Unscheduled Disassemblies", Unit: "RUDs"},
 		"rud_ground_impact": {Stat: "rud_ground_impact", Title: "RUDs — Ground Impact", Unit: "RUDs"},
@@ -268,7 +312,215 @@ func TestBoardDirectionAndUnitsAreDerivedFromTheKey(t *testing.T) {
 	}
 }
 
+// --- the save itself ---------------------------------------------------------
+
+func TestCareerPlaytimeGoldenValueAndTieBreak(t *testing.T) {
+	proj := testutil.MemProjections(t)
+	apply(t, proj, []input{
+		{typ: "session.started", payload: stats.SessionStarted{ModVer: "0.1.0"}, simT: 10},
+		{flight: flightN(1), typ: "vehicle.staging", payload: stats.VehicleStaging{StageIndex: 0}, simT: 313.5},
+		{career: otherCareer, typ: "session.started", payload: stats.SessionStarted{ModVer: "0.1.0"}, simT: 313.5},
+		// Equal duration: the earlier claim keeps the player row and its context.
+		{career: otherCareer, flight: flightN(2), typ: "vehicle.staging", payload: stats.VehicleStaging{StageIndex: 0}, simT: 313.5},
+	}, 0, false)
+
+	wantRow(t, readStats(t, proj), "1/career_playtime", row{
+		Value: 313_500, Seq: 2, Context: `{"career":"` + defaultCareer + `"}`,
+	})
+	for career, want := range map[string]float64{defaultCareer: 313_500, otherCareer: 313_500} {
+		var value float64
+		if err := proj.Reader().QueryRowContext(t.Context(),
+			`SELECT value FROM career_stat WHERE player_id = 1 AND career = ? AND stat = ?`,
+			career, stats.StatCareerPlaytime).Scan(&value); err != nil {
+			t.Fatalf("read career_playtime for %s: %v", career, err)
+		}
+		if value != want {
+			t.Errorf("career_playtime for %s = %v, want %v", career, value, want)
+		}
+	}
+}
+
+func TestCareerPlaytimeRequiresAPositiveClockAndCareer(t *testing.T) {
+	got := fold(t, []input{
+		{typ: "session.started", payload: stats.SessionStarted{ModVer: "0.1.0"}, noSimT: true},
+		{typ: "session.started", payload: stats.SessionStarted{ModVer: "0.1.0"}, simT: 0},
+		{typ: "session.started", payload: stats.SessionStarted{ModVer: "0.1.0"}, simT: -1},
+		{noCareer: true, typ: "session.started", payload: stats.SessionStarted{ModVer: "0.1.0"}, simT: 900},
+	})
+	if _, ok := got["1/"+stats.StatCareerPlaytime]; ok {
+		t.Errorf("ineligible events produced career_playtime: %v", got)
+	}
+}
+
+func TestCareerPlaytimeIncludesFlaggedActivity(t *testing.T) {
+	f := flightN(1)
+	got := fold(t, []input{
+		{flight: f, typ: "flight.flagged", payload: stats.FlightFlagged{Flag: "teleport"}, simT: 600},
+	})
+	wantRow(t, got, "1/career_playtime", row{
+		Value: 600_000, Seq: 1, Context: `{"career":"` + defaultCareer + `"}`,
+	})
+}
+
+func TestCareerPlaytimeIsTheMaxSimTNotTheCareerTableReading(t *testing.T) {
+	in := []input{
+		{typ: "session.started", payload: stats.SessionStarted{ModVer: "0.1.0"}, simT: 100},
+		{flight: flightN(1), typ: "vehicle.staging", payload: stats.VehicleStaging{StageIndex: 0}, simT: 500},
+		{flight: flightN(1), typ: "telemetry.window", payload: stats.TelemetryWindow{T0Sim: 250, T1Sim: 300, Body: "earth"}, simT: 300},
+	}
+	incremental := testutil.MemProjections(t)
+	apply(t, incremental, in, 0, false)
+	refined := testutil.MemProjections(t)
+	apply(t, refined, in, 0, true)
+
+	want := readStats(t, incremental)["1/"+stats.StatCareerPlaytime]
+	got := readStats(t, refined)["1/"+stats.StatCareerPlaytime]
+	if got != want {
+		t.Errorf("refined career_playtime = %v, incremental = %v", got, want)
+	}
+	if got.Value != 500_000 || got.Seq != 2 {
+		t.Errorf("career_playtime = %v, want 500000 at seq 2", got)
+	}
+}
+
+func TestPlaySessionsCountsLoads(t *testing.T) {
+	proj := testutil.MemProjections(t)
+	apply(t, proj, []input{
+		{typ: "session.started", payload: stats.SessionStarted{ModVer: "0.1.0"}, simT: 0},
+		{typ: "session.started", payload: stats.SessionStarted{ModVer: "0.1.0"}, simT: 100},
+		{career: otherCareer, typ: "session.started", payload: stats.SessionStarted{ModVer: "0.1.0"}, simT: 0},
+	}, 0, false)
+	if got := readStats(t, proj)["1/"+stats.StatPlaySessions].Value; got != 3 {
+		t.Errorf("play_sessions = %v, want 3 including initial sessions and reloads", got)
+	}
+	for career, want := range map[string]float64{defaultCareer: 2, otherCareer: 1} {
+		var value float64
+		if err := proj.Reader().QueryRowContext(t.Context(),
+			`SELECT value FROM career_stat WHERE player_id = 1 AND career = ? AND stat = ?`,
+			career, stats.StatPlaySessions).Scan(&value); err != nil {
+			t.Fatalf("read play_sessions for %s: %v", career, err)
+		}
+		if value != want {
+			t.Errorf("play_sessions for %s = %v, want %v", career, value, want)
+		}
+	}
+}
+
+func TestCareerNativeBoardsHaveSystemScope(t *testing.T) {
+	proj := testutil.MemProjections(t)
+	seedCareerSet(t, proj, defaultCareer, testSystem, 1)
+	seedCareerSet(t, proj, otherCareer, testSystem, 2)
+	apply(t, proj, []input{
+		{typ: "session.started", payload: stats.SessionStarted{ModVer: "0.1.0"}, simT: 100},
+		{career: otherCareer, typ: "session.started", payload: stats.SessionStarted{ModVer: "0.1.0"}, simT: 200},
+		{typ: "session.started", payload: stats.SessionStarted{ModVer: "0.1.0"}, simT: 300},
+	}, 0, false)
+
+	for stat, want := range map[string]float64{
+		stats.StatCareerPlaytime: 300_000,
+		stats.StatPlaySessions:   3,
+	} {
+		var value float64
+		if err := proj.Reader().QueryRowContext(t.Context(),
+			`SELECT value FROM system_stat WHERE player_id = 1 AND system = ? AND stat = ?`,
+			testSystem, stat).Scan(&value); err != nil {
+			t.Fatalf("read system %s: %v", stat, err)
+		}
+		if value != want {
+			t.Errorf("system %s = %v, want %v", stat, value, want)
+		}
+	}
+}
+
 // --- careers and the rewind mark ----------------------------------------------
+
+func TestCareerOrdinalsAreAssignedInFirstSeenOrder(t *testing.T) {
+	proj := testutil.MemProjections(t)
+	apply(t, proj, []input{
+		{career: otherCareer, typ: "session.started", payload: stats.SessionStarted{ModVer: "0.1.0"}, simT: 10},
+		{player: bob, career: thirdCareer, typ: "session.started", payload: stats.SessionStarted{ModVer: "0.1.0"}, simT: 20},
+		{typ: "session.started", payload: stats.SessionStarted{ModVer: "0.1.0"}, simT: 30},
+		{career: otherCareer, flight: flightN(1), typ: "vehicle.staging", payload: stats.VehicleStaging{StageIndex: 0}, simT: 40},
+		{career: thirdCareer, typ: "session.started", payload: stats.SessionStarted{ModVer: "0.1.0"}, simT: 50},
+	}, 0, false)
+
+	got := readCareerOrdinals(t, proj)
+	want := map[careerOrdinalKey]int64{
+		{player: alice, career: otherCareer}:   1,
+		{player: alice, career: defaultCareer}: 2,
+		{player: alice, career: thirdCareer}:   3,
+		{player: bob, career: thirdCareer}:     1,
+	}
+	if !maps.Equal(got, want) {
+		t.Errorf("career ordinals = %v, want %v", got, want)
+	}
+}
+
+func TestCareerOrdinalSurvivesLaterEvents(t *testing.T) {
+	proj := testutil.MemProjections(t)
+	apply(t, proj, []input{
+		{typ: "session.started", payload: stats.SessionStarted{ModVer: "0.1.0"}, simT: 10},
+		{career: otherCareer, typ: "session.started", payload: stats.SessionStarted{ModVer: "0.1.0"}, simT: 20},
+	}, 0, false)
+	apply(t, proj, []input{
+		{career: otherCareer, flight: flightN(1), typ: "vehicle.staging", payload: stats.VehicleStaging{StageIndex: 0}, simT: 30},
+		{flight: flightN(2), typ: "vehicle.staging", payload: stats.VehicleStaging{StageIndex: 0}, simT: 40},
+	}, 2, false)
+
+	got := readCareerOrdinals(t, proj)
+	if got[careerOrdinalKey{player: alice, career: defaultCareer}] != 1 {
+		t.Errorf("first career ordinal = %d, want 1", got[careerOrdinalKey{player: alice, career: defaultCareer}])
+	}
+	if got[careerOrdinalKey{player: alice, career: otherCareer}] != 2 {
+		t.Errorf("second career ordinal = %d, want 2", got[careerOrdinalKey{player: alice, career: otherCareer}])
+	}
+}
+
+func TestBatchSizeDoesNotChangeOrdinals(t *testing.T) {
+	in := []input{
+		{career: otherCareer, typ: "session.started", payload: stats.SessionStarted{ModVer: "0.1.0"}, simT: 10},
+		{typ: "session.started", payload: stats.SessionStarted{ModVer: "0.1.0"}, simT: 20},
+		{career: otherCareer, flight: flightN(1), typ: "vehicle.staging", payload: stats.VehicleStaging{StageIndex: 0}, simT: 30},
+		{career: thirdCareer, typ: "session.started", payload: stats.SessionStarted{ModVer: "0.1.0"}, simT: 40},
+		{flight: flightN(2), typ: "vehicle.staging", payload: stats.VehicleStaging{StageIndex: 0}, simT: 50},
+	}
+
+	var want map[careerOrdinalKey]int64
+	for _, batchSize := range []int{1, 2, 1000} {
+		proj := testutil.MemProjections(t)
+		for start := 0; start < len(in); start += batchSize {
+			end := min(start+batchSize, len(in))
+			apply(t, proj, in[start:end], int64(start), false)
+		}
+		got := readCareerOrdinals(t, proj)
+		if want == nil {
+			want = got
+			continue
+		}
+		if !maps.Equal(got, want) {
+			t.Errorf("batch size %d ordinals = %v, want %v", batchSize, got, want)
+		}
+	}
+}
+
+func TestRebuildReproducesOrdinals(t *testing.T) {
+	in := []input{
+		{career: otherCareer, typ: "session.started", payload: stats.SessionStarted{ModVer: "0.1.0"}, simT: 10},
+		{typ: "session.started", payload: stats.SessionStarted{ModVer: "0.1.0"}, simT: 20},
+		{career: otherCareer, flight: flightN(1), typ: "vehicle.staging", payload: stats.VehicleStaging{StageIndex: 0}, simT: 30},
+		{career: thirdCareer, typ: "session.started", payload: stats.SessionStarted{ModVer: "0.1.0"}, simT: 40},
+	}
+
+	incremental := testutil.MemProjections(t)
+	apply(t, incremental, in, 0, false)
+	rebuilt := testutil.MemProjections(t)
+	apply(t, rebuilt, in, 0, true)
+
+	want := readCareerOrdinals(t, incremental)
+	if got := readCareerOrdinals(t, rebuilt); !maps.Equal(got, want) {
+		t.Errorf("rebuilt career ordinals = %v, want %v", got, want)
+	}
+}
 
 func TestCareerTracksItsHighWaterMark(t *testing.T) {
 	f := flightN(1)
@@ -286,6 +538,52 @@ func TestCareerTracksItsHighWaterMark(t *testing.T) {
 	}
 	if got := careers[otherCareer]; got.maxSimT != 9 || got.rewound {
 		t.Errorf("career %s = %+v, want max_sim_t 9 and no mark", otherCareer, got)
+	}
+}
+
+func TestCareerTracksEveryAttributedEventAsActivity(t *testing.T) {
+	proj := testutil.MemProjections(t)
+	apply(t, proj, []input{
+		{typ: "session.started", payload: stats.SessionStarted{ModVer: "0.1.0"}, simT: 100},
+		// Flagged activity does not score, but it is still activity in this save.
+		{flight: flightN(1), typ: "flight.flagged", payload: stats.FlightFlagged{Flag: "teleport"}, noSimT: true},
+	}, 0, false)
+
+	got := readCareers(t, proj)[defaultCareer]
+	if got.firstSeq != 1 || got.lastSeq != 2 {
+		t.Errorf("career seq range = %d..%d, want 1..2", got.firstSeq, got.lastSeq)
+	}
+	if got.maxSimT != 100 {
+		t.Errorf("max_sim_t = %v, want 100 — a clockless event is activity, not a clock reading", got.maxSimT)
+	}
+	if got := readStats(t, proj); got["1/career_playtime"].Value != 100_000 || got["1/play_sessions"].Value != 1 || len(got) != 2 {
+		t.Errorf("activity boards = %v, want only career_playtime 100000 and play_sessions 1", got)
+	}
+}
+
+func TestCareerLastSeqIsStableAcrossBatchBoundaries(t *testing.T) {
+	in := []input{
+		{flight: flightN(1), typ: "vehicle.staging", payload: stats.VehicleStaging{StageIndex: 0}, simT: 500},
+		// A lower clock must still advance last_seq, while max_sim_t stays put.
+		{flight: flightN(1), typ: "telemetry.window", payload: stats.TelemetryWindow{T0Sim: 400, T1Sim: 450, Body: "earth"}, simT: 450},
+		{flight: flightN(1), typ: "flight.flagged", payload: stats.FlightFlagged{Flag: "console"}, noSimT: true},
+	}
+
+	oneBatch := testutil.MemProjections(t)
+	apply(t, oneBatch, in, 0, false)
+
+	separateBatches := testutil.MemProjections(t)
+	for i := range in {
+		apply(t, separateBatches, in[i:i+1], int64(i), false)
+	}
+
+	want := readCareers(t, oneBatch)[defaultCareer]
+	got := readCareers(t, separateBatches)[defaultCareer]
+	if got != want {
+		t.Errorf("career differs across batch boundaries: got %+v, want %+v", got, want)
+	}
+	if got.firstSeq != 1 || got.lastSeq != 3 || got.maxSimT != 500 {
+		t.Errorf("career = %+v, want first_seq 1, last_seq 3, max_sim_t 500", got)
 	}
 }
 

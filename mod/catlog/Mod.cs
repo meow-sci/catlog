@@ -1,4 +1,5 @@
 using System;
+using KSA;
 using MeowSci.Catlog.Lib.Util;
 using StarMap.API;
 
@@ -42,6 +43,10 @@ public sealed class Mod
 
     /// <summary>Builds the runtime and installs the Harmony patch table.</summary>
     [StarMapAllModsLoaded]
+    [KsaAnchor("Universe.CurrentSystem",
+        SourceFile = "KSA/Universe.cs:92", Verified = "2026-08-10",
+        GameVersion = "2026.8.5.5168", Risk = ChurnRisk.Low,
+        Notes = "Already-loaded fallback after patch installation; null produces no survey.")]
     public void OnFullyLoaded()
     {
         try
@@ -54,6 +59,21 @@ public sealed class Mod
             // CatlogRuntime.Signal is a no-op while collection is off, so the patch bodies cost a
             // boolean each.
             Patcher.Patch(_runtime);
+
+            // AllModsLoaded normally precedes KSA's initial LoadSystem, whose postfix surveys it.
+            // This fallback handles loader-order drift without inventing a snapshot from null.
+            if (Universe.CurrentSystem is not null)
+            {
+                try
+                {
+                    SystemSurvey.CaptureCurrent();
+                    _runtime.OnSessionBoundary();
+                }
+                catch (Exception ex)
+                {
+                    ModLog.Log.Warn($"catlog: already-loaded system survey failed: {ex.Message}");
+                }
+            }
         }
         catch (Exception ex)
         {
@@ -109,6 +129,7 @@ public sealed class Mod
     {
         try
         {
+            SystemSurvey.Clear();
             // Patches first: the runtime is about to stop accepting signals, and a patch body
             // running against a disposed runtime would be a use-after-free in all but name.
             Patcher.Unload();

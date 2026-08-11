@@ -11,15 +11,20 @@ public sealed partial class EventTypesTests
     [Fact]
     public void RegistryHasExactlyTheLaunchSet()
     {
-        // 23 rows: the §4.2 table plus vehicle.landed, counting each of the docked/undocked and
+        // 25 rows, counting each of the docked/undocked and
         // engine.* variants.
-        Assert.Equal(23, EventTypes.All.Count);
+        Assert.Equal(25, EventTypes.All.Count);
 
         // Every type is at ver 1: there is one shape of every event. The server's
         // projector.currentVer is correspondingly empty. A bump here is half a change — the
         // other half is an upcaster on the server for every version in between — so the whole
         // set is pinned rather than left implicit.
         Assert.All(EventTypes.All, static type => Assert.Equal(1, EventTypes.VersionOf(type)));
+        Assert.Equal(1, EventTypes.VersionOf(EventTypes.VehicleRud));
+        Assert.Equal(1, EventTypes.VersionOf(EventTypes.FlightStarted));
+        Assert.Equal(1, EventTypes.VersionOf(EventTypes.KittenTumble));
+        Assert.Equal(1, EventTypes.VersionOf(EventTypes.VehicleOrbit));
+        Assert.Equal(1, EventTypes.VersionOf(EventTypes.TelemetryWindow));
     }
 
     [Fact]

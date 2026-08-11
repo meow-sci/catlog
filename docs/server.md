@@ -63,7 +63,7 @@ server/
     adminapi/   the loopback-only admin mux
     archive/    Store interface + filesystem implementation + chunks and manifests
     units/      the single definition of what a catlog number looks like
-    seed/       the deterministic demo dataset
+    seed/       deterministic event histories for populated demo boards and badges
     testvectors/ the §4.10 generator
     testutil/   throwaway stores, test credentials
     nginxproxy/ the docker-tagged nginx suite (§6.3)
@@ -197,15 +197,256 @@ byte-identical across events. Rows written either way stay readable, so the swit
 | `proj_checkpoint` | One shared cursor for every fold |
 | `proj_build` | The build stamp: which binary's fold set produced this file (migration 0005) |
 | `player_stat` | `(player_id, stat) → value, context, updated_seq` — every board row |
-| `flight_state` | Per flight: `flags` bitfield, `ended_reason`, crew, body |
+| `career_stat` | `(player_id, career, stat) → system, value, context, updated_seq` — the same board keys ranked per save; `system` is denormalised so filtering does not require a join (migration 0006) |
+| `system_stat` | `(player_id, system, stat) → value, context, updated_seq` — board rows ranked within a celestial-system identity (migration 0006) |
+| `flight_state` | Per flight: exclusion flags, ending/launch facts, first nonempty career, set-only achievement milestones, and the earliest achieved-orbit sequence. Migration 0009 owns nullable `engine_count`; migration 0010 adds the retained facts/milestones; migration 0012 adds `first_orbit_seq` |
+| `career` | Per save: sim-time high-water and rewind mark, first/last event seq, public ordinal, first celestial-system identity and non-punitive `system_changed` provenance mark; `last_seq` advances on every attributed event, including non-scoring and flagged activity |
 | `player_body` | Distinct bodies per player and `kind` — `'soi'` (entered) and `'landed'` (touched down) — plus first-arrival times, which only `'soi'` rows carry |
+| `career_body` | Distinct members per save and `kind`, with the career's system identity denormalised; SOI `first_sim_t` supports per-save arrival sprints, and its novelty signal is independent of `player_body` (migration 0007) |
 | `kitten` | Per-kitten totals folded from `roster.snapshot` |
+| `career_kitten` | Per-save kitten totals folded from `roster.snapshot`, with system identity denormalised; unlike `kitten`, it does not merge same-named kittens from different saves (migration 0007) |
+| `system` | One immutable first-seen identity/header per celestial-system hash: raw system id, display name, stable URL slug, home body, declared body count, monotone reported-complete bit and first seq (migration 0008) |
+| `system_body` | One immutable first-seen catalogue row per `(hash, body)`, including opaque game class, semantic kind, forest topology, physical values, orientation and optional orbital elements (migration 0008) |
+| `badge_award` | Current-projection merit-badge awards at lifetime and per-save scope, with first-award sequence, server receive time, optional career time and provenance (migration 0011) |
+| `challenge_stat` | Retained ranked values for compile-time, explicitly dated challenges at player, save or system scope (migration 0013) |
+| `challenge_member` | Retained distinct facts used by set-valued challenge rules, with first sequence and the same scope sentinels as `challenge_stat` (migration 0013) |
 | `feed` | The activity feed, capped at 500 rows |
 | `event_census` | One row per `(type, period, bucket)` — what makes `GET /v1/stats` affordable |
+
+`career_stat` has primary key `(player_id, career, stat)`, rank index
+`(stat, value, updated_seq)`, and system-filter index `(stat, system, value, updated_seq)`.
+`system_stat` has primary key `(player_id, system, stat)` and rank index
+`(stat, value, updated_seq)`. Neither table carries a period: a save is already a time scope, and
+crossing careers with rolling buckets would add an unbounded fourth storage dimension. Both tables
+are populated by the shared board folds; migration 0006 established their final schema before those
+folds landed.
+
+`career_body` has primary key `(player_id, career, kind, body)` and an index on
+`(player_id, system, kind, body)` for distinct-member system unions. Its implemented kinds are
+`'soi'`, `'landed'` and `'orbit_kid'`; the last stores the kitten id in the existing `body` member
+column and is never written to `player_body`. `first_sim_t` is populated only for SOI arrivals.
+Adding `'orbit_kid'` changes no schema: it reuses the generic member column and migration 0007
+table unchanged.
+For `kind='soi'`, `first_sim_t` is the earliest observed arrival in that save. The world-sprint
+projections count rows at or before their flat duration threshold per save, then retain the best
+single-save result at player and known-system scope; they never union early arrivals from several
+saves. A timed SOI member may carry an empty system so the save and player sprint results survive
+missing system identity; only the system-scoped result is omitted.
+`career_kitten` has primary key
+`(player_id, career, kid)`, plus indexes on `(player_id, career)` and `(player_id, system)`. Both
+tables denormalise `system` from the career, and both are rebuildable additions from migration 0007.
+
+Migration `0011_badges.sql` adds
+`badge_award(player_id, career, badge, system, first_career, earned_seq, earned_at,
+earned_sim_t, context, PRIMARY KEY(player_id, career, badge))`. It has indexes
+`badge_system(system, badge, earned_seq)`, `badge_holders(badge, earned_seq)` and
+`badge_by_career(player_id, career, earned_seq)` (`0011_badges.sql:6-20`). The empty career is the
+lifetime scope; a nonempty career is that save's independent award. A lifetime row retains the
+system and save in which the current projection first awarded it. Per-save rows retain their system
+and leave `first_career` empty because `career` already identifies the save. Migration 0011 advances
+the projection schema to version 11, and `ProjectionCounts.BadgeAward` includes the table in the
+admin projection census (`store/projections.go:716,754`).
+
+The store read seam exposes complete `BadgeRow` values, including `system`, lifetime
+`first_career`, nullable `earned_sim_t` and nullable JSON context. `BadgesForPlayer` always applies
+an exact career filter: the empty sentinel means lifetime, not every scope. Unfiltered holder reads
+use only those lifetime rows. A system-filtered holder read instead ranks nonempty per-save rows in
+that system by `(earned_seq, career)`, keeps one row per player, and then orders players by
+`(earned_seq, player_id)`. This includes a player whose lifetime first award belongs to another
+system without counting several qualifying saves as several holders. `BadgeHolderCount` uses the
+same population, and `BadgeCounts` groups lifetime rows only
+(`store/projections.go`, merit-badge reads).
+
+`GET /v1/stats` reports `collection.badges` as the number of badge keys with at least one lifetime
+holder and `collection.badge_awards` as all current lifetime plus per-save award rows. Both are part
+of the existing whole-response cache keyed by projection `WriteGen` with a 10-second TTL
+(`readapi/stats.go`). `readapi/badges.go` uses the same store seams for the four public badge routes:
+the stable/gated catalogue, lifetime or system-filtered distinct-player holder pages, and lifetime
+or exact-save checklists. It resolves raw save provenance to ordinals and per-player labels before
+building any response and passes every context through the shared recursive redactor.
+
+The HTML saves index needs all per-save badge counts at once. `BadgeCountsByCareer` groups one
+player's non-lifetime award rows in one store query; `readapi.SaveBadgeCounts` resolves those private
+career keys against the player's saves and returns only ordinal-to-count pairs. The web package uses
+that narrow non-HTTP seam instead of issuing one checklist read per save, and never receives a raw
+career key (`store/projections.go`, `readapi/badges.go`, `web/pages.go`).
+
+Migration `0013_challenges.sql` adds the challenge projection foundation. `challenge_stat` is keyed
+by `(player_id, career, system, challenge)` and ranked through
+`challenge_rank(challenge, system, value, updated_seq)`. `challenge_member` is keyed by
+`(player_id, career, system, challenge, member)` and indexed by
+`challenge_member_count(challenge, player_id, career, system)`. Player scope uses empty career and
+system; save scope uses its career and bound system; system scope uses empty career and its system.
+Those non-NULL sentinels prevent a mixed player aggregate from being labelled with whichever system
+contributed last.
+
+Challenge rows have no retention. They do not reuse `player_stat_period`, whose calendar buckets
+are deliberately aged out: the archive of a closed challenge is part of the feature. Definitions
+live in the server's compile-time `stats.Challenge` registry so an incremental fold and a later
+rebuild cannot silently apply different mutable rules. Six Week 33 definitions and executable rules
+ship in catalogue order; catlogd validates their one-to-one construction, keys, windows, scopes,
+board collisions and fold identities before creating runtime state. Generic challenge folds occupy
+the second-pass slot after badges and before the event census. The store-only result seam feeds the
+public read API described below and the web layer's server-rendered challenge pages.
+
+The batch foundation
+loads one scoped `challenge_member` set on demand, merges pending additions, and flushes new members
+in deterministic key order. `challenge_stat` contributions likewise merge in per-kind pending maps
+and flush in sorted composite-key order with the same strict record/best/count SQL guards as boards.
+Together those paths make challenge results independent of projector batch size and restart.
+Both challenge tables are player-owned structural projections for moderation/rebuild purposes.
+`ProjectionCounts` and the cached public collection census expose their current row counts as
+`challenge_stat`/`challenge_member` and `challenge_stats`/`challenge_members`, respectively.
+
+The starter rules exercise all three scopes and all three merge kinds. Heavy Lift Week and Feather
+Touch resolve a career's bound system and its cached `home_body` rather than assuming a stock home;
+the former requires an achieved home-body orbit with positive current mass, while the latter takes
+the positive vertical speed of a surviving away-body landing. From Scratch To Orbit is a save-scoped
+minimum of present career `sim_t` converted to milliseconds. Tumbleweek counts tumble events, and
+Full House records positive recovered crew. Every one explicitly applies flight eligibility.
+
+Coasting Class is the set-valued rule. It accepts a nonempty SOI destination only when
+`flight_state` proves a not-later `flight.started` with present `engine_count == 0`, then inserts
+`<system>\x00<body>` into system-scoped `challenge_member` and records the read-through count. The
+member is created only after all gates, so powered and out-of-window visits do not poison novelty;
+including the system in both scope and member keeps identical body keys in different systems
+distinct. Zero engines is not “no propulsion”, and a missing engine count never becomes zero.
+
+The store owns this raw challenge row rather than reusing the presentation-enriched career row:
+
+```go
+type ChallengeRow struct {
+    PlayerID int64
+    Career, System, Challenge string
+    Value float64
+    Context json.RawMessage
+    UpdatedSeq int64
+}
+```
+
+`ChallengeLeaderboard(challenge, system, asc, limit, offset)` reads one ranked page. An empty
+`system` means no system predicate; a nonempty value is an exact `challenge_stat.system` filter.
+Rows use value in the requested direction, then `updated_seq`, `player_id`, `career` and `system`
+ascending for canonical deterministic order. `ChallengeAhead` applies the identical optional
+system filter and counts rows with a strictly better value, or the same value and an earlier
+`updated_seq`. `ChallengeEntrants` counts matching rows, not distinct players: save scope therefore
+counts independently ranked saves, while player and system scope already have one row per player in
+their respective scope. `ChallengesForPlayer` returns every raw row for one player in canonical
+`challenge`, `career`, `system` order.
+
+The empty career/system scope sentinels remain private store values; this layer neither relabels a
+career nor resolves a system for publication. A SQL `NULL` context scans as a nil
+`json.RawMessage`, not the bytes `null` or an empty object. Phase I owns directory visibility,
+public save/system labels and context redaction before any row can leave the process.
+
+`readapi/challenges.go` is that publication boundary. `ChallengeList` reads the server clock once,
+combines every compile-time definition with its raw entrant census, and orders open, upcoming and
+closed groups newest-window-first. `Challenge` uses the shared generic visibility pager: hidden
+owners are over-fetched and dropped so visible offsets and ranks close, while the raw row census
+remains the denominator. It resolves career rows to per-player save ordinals/labels and rewind
+marks, system rows to public system references, receive sequences to timestamps, and recursively
+redacts context. The response types contain no raw career field. The two HTTP adapters are public
+cached/CORS routes. The web layer calls the same non-HTTP methods for `/challenges`,
+`/challenges/{challenge}` and the home page's first currently-open compact ranking; it never
+accesses projections directly.
+
+Awards are insert-once inside one projection build: the first qualifying event keeps its
+`earned_seq`, matching server-side `recv_time` in `earned_at`, nullable event career clock in
+`earned_sim_t`, and nullable JSON `context`. `earned_at` never trusts the client's wall clock.
+Context is projector-authored and promises the same shape and public treatment as
+`player_stat.context`: recursive career/kitten relabelling happens before publication, and the
+default display allow-list remains exactly `body`, `from`, `energy_j` and `t1_sim`; it is not
+arbitrary client JSON. There is no revocation column or accumulated punishment. A rebuild creates a
+fresh table from the live immutable log and is authoritative: current folds and final state may omit
+an award that an earlier build contained, or discover one in old history.
+
+`badge_award` is player-owned projection output and therefore needs no moderation-specific delete
+list. A shadow ban structurally removes the player's events from the live log; the queued rebuild
+drops their awards, and restoring the events at their original sequence numbers plus rebuilding
+restores the same eligible awards. A purge removes the source events permanently, so rebuilding
+cannot recreate the rows. This is the STORE-019 rule; shared `system` and `system_body` catalogue
+facts remain governed by their content, not by whichever player first reported them.
+
+`system` is keyed by the content hash, **not** by `system_id` or display name: two mods may both
+call different content `Sol`. Its unique `slug` is ASCII-only and rebuild-stable. Lowercase ASCII
+letters and digits survive; each run of every other byte becomes one hyphen; leading/trailing
+hyphens are removed and the base is capped at 48 bytes. An empty base falls back to the first eight
+hash characters. Distinct hashes with the same base receive `-2`, `-3`, … in ascending `first_seq`
+order. This is deliberately separate from `statSuffix`, whose protocol-key alphabet must not be
+weakened to accommodate human display names such as `Solar System (Dense)`.
+
+`system_body` has primary key `(hash, body)` and index `(hash, kind, body)`. `class` is KSA's own
+opaque string and has **no allow-list**. The six orbital-shape columns are nullable as a group;
+`period_s` is independently nullable; `parent` is null on every root. Orientation is stored as four
+required quaternion columns, not recomputed. Neither table has a foreign key between them: a body
+may arrive in an earlier projector batch than its header, and creating a placeholder system would
+invent a name and slug that later need mutation rules. Orphan body rows remain internal until the
+real header arrives.
+
+Migration 0008 also adds `career_system(system, player_id)`, the covered path for counting players
+and saves attached to a system without consulting score rows. A save that loaded a system but never
+scored still belongs to that system.
+
+Both tables are immutable first-write projections. A repeated matching header may only promote
+`reported_complete` from 0 to 1; a later false cannot erase it. Conflicting identity fields retain
+the first row and emit a structured warning naming the hash, current seq and first seq. Duplicate
+body rows use `ON CONFLICT DO NOTHING`, so a differing replay also retains the first row. This is
+deterministic projection integrity, not a plausibility or anti-cheat check.
+
+The completeness exposed to readers is **effective completeness**:
+
+```text
+reported_complete == 1 AND count(system_body WHERE hash = system.hash) == body_count
+```
+
+The header bit alone is insufficient: an interrupted large catalogue must not award an everywhere
+result before its last row. Conversely, a later false header cannot regress a catalogue that was
+previously received completely.
 
 `flight_state.flags` is bit0 teleport, bit1 refuel, bit2 resource_edit, bit3 console, bit4 tuning,
 bit5 other. **An unrecognised flag value sets bit5** — failing open would make every future flag a
 scoring loophole for as long as the server lagged the mod.
+
+Migration `0009_flight_engine_count.sql` adds nullable `flight_state.engine_count`. The
+`flight.started` fold writes the decoded `*int` without collapsing it: SQL `NULL` means the start
+event has not been folded or its KSA read was absent, explicit 0 means the vehicle began that flight
+with no installed rocket engine, and a positive value is the installed count. No current board fold
+reads the column; retaining the launch fact now is what lets a later challenge remain a projection
+of the immutable log rather than an inference from subsequent motion.
+
+Migration `0010_flight_facts.sql` adds `milestones INTEGER NOT NULL DEFAULT 0`, nullable
+`part_count INTEGER`, nullable `launch_mass_kg REAL`, and `career TEXT NOT NULL DEFAULT ''`.
+`engine_count` is deliberately not repeated there: migration 0009 already owns it. On a decoded
+`flight.started`, `StartFlight` records crew, body, the exact absent/0/positive engine count, part
+count, launch mass and `started_seq`. Until that event is observed the three launch-fact columns are
+SQL `NULL` and `started_seq` is 0. `EnsureFlight` runs for every flight-bearing event and retains the
+first nonempty career; neither a later empty value nor a later event replaces it.
+
+`milestones` records set-only historical facts, separate from exclusion `flags`: bit 0 orbit
+achieved, bit 1 atmosphere exited, bit 2 entered an SOI other than the known launch body, bit 3
+survived a landing, bit 4 docked. `MarkFlightMilestone` only ORs a bit, so neither incremental fold
+order nor a rebuild can clear an observed achievement. `MilestoneOtherSOI` is conservative: the SOI
+event may set it only when a real `flight.started` has already supplied a nonempty launch body at
+`started_seq <= event.seq`, and `to_body` differs. An early SOI is never retroactively upgraded when
+the start arrives. The raw orbit bit is different: any decoded `phase == "achieved"` sets it even if
+the start event is later; start ordering applies only when a consumer needs a start fact.
+
+Migration `0012_flight_orbit_seq.sql` adds `first_orbit_seq INTEGER NOT NULL DEFAULT 0`. An achieved
+orbit sets the milestone bit and lowers this column to that flight's earliest positive event
+sequence. The bit answers whether orbit ever happened; the sequence answers whether it happened
+strictly before a later candidate. Keeping both prevents the rebuild's completed first pass from
+making a docking or recovery that precedes orbit look eligible.
+
+The batch cache keys each `flightEntry` by flight id and carries the other twelve columns in the
+entry. Its read-through `SELECT`, `FlightState`, sorted dirty-id flush and 13-placeholder
+`INSERT … ON CONFLICT DO UPDATE` use the same order: `player_id, flags, ended_reason, crew, body,
+started_seq, engine_count, milestones, part_count, launch_mass_kg, career, first_orbit_seq` after
+`flight_id`. This is
+load-bearing: pending events in one
+projector batch must see the same accumulated facts and milestone bits that a subsequent batch reads
+from SQL. `FlightState.HasStartFactAt(candidateSeq, factValid)` is the shared fact-order predicate:
+an actual start exists, its sequence is not later than the candidate, and the nullable fact needed by
+that consumer is present.
 
 ## §5.5 Ingest pipeline
 
@@ -236,15 +477,66 @@ applies every fold, and writes all projection updates **and** the checkpoint in 
 then pushes feed rows to the SSE broadcaster.
 
 **`stats.Batch` is why it is fast.** The projector used to issue about twenty-one SQL statements per
-event; folding is dominated by per-statement cost, so a batch now folds into a read-through cache and
-write-back accumulator, merges repeated writes to the same board, and flushes the survivors as a
+event; folding is dominated by per-statement cost, so a batch now folds into read-through caches and
+write-back accumulators, merges repeated board and badge writes, and flushes the survivors as a
 handful of multi-row statements. That took the fold from ~3,300 to ~29,000 events/s, which is enough
 to keep pace with ingest in real time. `TestBatchSizeDoesNotChangeTheProjection` is the test that
 holds it honest: the projection may not depend on where the batch boundaries fell.
 
+Badge writes use a composite `(player_id, career, badge)` pending key. The pending value keeps all
+first-award provenance together and is replaced only by a lower `earned_seq`; `HasBadge` reads that
+map before SQL and caches both presence and absence so same-batch composite logic sees unflushed
+awards without repeated queries. A row loaded from SQL is immutable in the cache. `flushBadges` runs
+immediately after `flushCareerStats` and before `flushSystemStats`, sorts by player id, career and
+badge, chunks nine-column rows by the Batch flush-row bound and uses
+`INSERT ... ON CONFLICT DO NOTHING`. The in-memory lowest-sequence merge and SQL no-op are both
+required: the former preserves the earliest candidate offered inside one flush window, while the
+latter preserves the row an earlier flush already committed. Cache entries survive a flush with
+their pending marker cleared (`stats/batch.go:1545-1638,1873-1884`).
+
+Threshold folds read the effective post-board value through `StatValue` and `CareerStatValue`.
+Those caches retain whether the stored row exists as well as its numeric value, merge pending count,
+record, best and set writes over that baseline, then update the cached effective value as later
+writes arrive. The existence bit matters for ascending boards: an absent row is not a real zero that
+can defeat the first positive best value. A threshold therefore fires on the event that
+crosses it whether that event shares a large projector batch with earlier contributions or follows
+a flush/reload boundary.
+
+The shared `award` helper writes one lifetime candidate and, when a career exists, one independent
+per-save candidate with identical sequence, server receive time, nullable simulation time and
+context. `HasSimTime` distinguishes an absent clock from a real zero, and a context-encoding failure
+writes neither scope. It resolves the career's system once; the lifetime row retains that career as provenance,
+whereas the save row already carries it in its key. The helper does not decide eligibility; each
+registered concrete fold supplies its compile-time or validated family key and owns the established
+flight/board eligibility rule (`stats/fold.go:296-313`). F5 registers 33 fixed folds and three
+dynamic family folds. F7 adds the two fixed effectively-complete-system subset folds, making all 35
+fixed badges active.
+
+`Batch.BodiesNotVisited` resolves the save's bound system, requires a reported-complete header whose
+declared `body_count` exactly equals the effective catalogue row count, and refuses an empty selected
+subset. Its per-system body→kind cache merges unflushed `system_body` inserts, while the existing
+per-player career-body cache already includes unflushed SOI membership. The final missing arrival
+therefore satisfies the subset in the same large batch just as it does after a flush. Kind
+`"planet"` selects the game-emitted normalized planet rows; empty kind selects every body, including
+parentless roots and opaque future classes. No server body list or concrete-class mapping exists
+(`stats/batch.go`, `stats/system.go`, `stats/badgefolds.go`).
+
+State folds run `systemFold → flightFold → careerFold` before every board. `systemFold` is first
+because `system.discovered` precedes `session.started` in the same client boundary and board folds
+read the career's system through the Batch cache. Recording the system and binding the career before
+the career clock advances makes the buffered incremental path match a rebuild. `system.body` is
+order-independent with its header because every row carries the hash and the schema has no foreign
+key.
+
+On the first `system.discovered` for `(player, career)`, the career is bound to that hash once. A
+later different hash leaves `career.system` unchanged and sets `career.system_changed = 1`. The mark
+excludes nothing and scores nothing; it qualifies system-scoped comparisons exactly as `rewound`
+qualifies a career clock. It is provenance for a system definition that changed under one save, not
+an inference about why it changed.
+
 ### The boards
 
-Forty fixed keys, in publish order — which is the order `FixedBoards()` returns and therefore
+Fifty fixed keys, in publish order — which is the order `FixedBoards()` returns and therefore
 the order `GET /v1/leaderboards` lists them, grouped by kind rather than by source event:
 
 - **records** — `biggest_lithobrake_survived`, `peak_g_survived`, `max_q_survived`,
@@ -254,10 +546,13 @@ the order `GET /v1/leaderboards` lists them, grouped by kind rather than by sour
   `most_parts`, `biggest_stack`, `biggest_crew`, `biggest_recovery`, `most_stages`, `longest_eva`;
 - **counters** — `kitten_tumbles`, `rud_total`, `orbits_achieved`, `soi_bodies`, `landed_bodies`,
   `landings`, `dockings`, `stagings`, `splashdowns`, `evas`, `flameouts`, `engine_ignitions`,
-  `kittens_recovered`;
+  `kittens_recovered`, then append-only `botched_landings`, `parts_lost`,
+  `kittens_to_orbit_and_back` and `kittens_wrecked`;
 - **derived totals and per-kitten records** — `distance_travelled`, `top_kitten_distance`,
   `top_kitten_missions`;
-- **career time** — `fastest_to_orbit`.
+- **career time and save-native boards** — `fastest_to_orbit`, `career_playtime`, `play_sessions`;
+- **append-only records and best-save results** — `biggest_parts_lost`, `biggest_crew_wreck`,
+  `bodies_by_1y`, `bodies_by_10y`.
 
 `docs/event-details.md` carries the canonical table: title, unit, direction, source event and fold
 kind for every one of them, plus the eligibility rule board by board. Four of them
@@ -284,8 +579,8 @@ exists because it answers a question its neighbour cannot:
 `> 0` matches every other gate in `boards.go` so no reader has to know that one board consults the
 envelope.
 
-**Newly decoded in `stats/payload.go`.** `FlightStarted` gained `kids []string`, `stage_count int`
-and `lat`/`lon *float64`; `FlightEnded` gained `kids`, `body string` and `lat`/`lon`;
+**Newly decoded in `stats/payload.go`.** `FlightStarted` carries `kids []string`, `stage_count int`,
+nullable `engine_count *int` and `lat`/`lon *float64`; `FlightEnded` gained `kids`, `body string` and `lat`/`lon`;
 `VehicleSituation` gained `radar_alt_m *float64`; `VehicleOrbit` gained `mass_kg float64`;
 `VehicleRUD` and `VehicleImpact` gained `lat`/`lon`; `TelemetryWindow` gained `radar_alt_m *Agg` and
 `warp_max float64`; and `VehicleLanded` is a new struct. **Every optional key is a pointer**,
@@ -421,7 +716,7 @@ is a `Register` line rather than a migration project (PROJ-100).
 
 `currentVer` must equal the mod's `EventTypes.Versions` exactly, or a newer mod's events are skipped
 as a future version until this build catches up and a rebuild runs. `knownTypes` must equal the mod's
-registry name for name and index for index — 23 entries. Until a type is in that list the server
+registry name for name and index for index — 25 entries. Until a type is in that list the server
 answers `400 malformed_batch` for the **whole batch**, so a mod that emits a type its server does not
 know loses everything in the batch, not just the new type: the mod change and the server change have
 to merge together (PROJ-093).
@@ -498,7 +793,7 @@ issuance to the world.
 | `GET /admin/projections/rebuild` | `rebuild -status` | Phase, events scanned, head, and whether the loop is suspended |
 | `POST /admin/archive/run` / `restore` | `archive` / `archive-restore` | §5.10 |
 | `POST /admin/backup` | `backup` | Quiesce the writer, copy `events.db` **and its `-wal`** |
-| `POST /admin/seed` | `seed` | The deterministic demo dataset |
+| `POST /admin/seed` | `seed` | Deterministic demo histories covering boards, representative badges and all six challenge rules when the server receive clock is inside Week 33 |
 | `POST /admin/events` | — | Insert events directly. The dev-loop tool: push one, watch the feed. |
 | `POST /admin/clock` | — | Move the server's notion of now. Development only, mounted only when enabled. |
 | `POST /admin/denylist/publish` | `denylist` | Regenerate the signed deny-list |
@@ -519,6 +814,14 @@ up when `lag_seq == 0` **and** `checkpoint_seq == events.max_seq`. Both halves a
 an empty log the lag is zero because there is nothing to do, and a checkpoint at the head cannot on
 its own distinguish "caught up" from "the fold loop is not running". Nothing in the test harnesses
 sleeps and hopes.
+
+The throwaway `server-run-test-env` moves the development clock to the fixed in-window instant
+`2026-08-14 00:00 UTC` before `POST /admin/seed`. The seed still inserts ordinary immutable events
+and drains the ordinary projector: it does not write challenge tables directly or alter challenge
+definitions. All six shipped definitions share the Appendix C Week 33 window, so browser coverage
+observes the populated Open state, advances `/admin/clock` past the common close to observe the same
+retained rows under Finished, then restores the in-window clock. Open and Finished cannot honestly
+be populated simultaneously with this registry; the test does not invent a seventh fixture rule.
 
 ## §5.10 Archiver
 

@@ -3,6 +3,7 @@ package readapi_test
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -50,8 +51,14 @@ func publicGETs(handle string) []string {
 		"/v1/leaderboards",
 		"/v1/leaderboards/" + stats.StatFastestToOrbit,
 		"/v1/leaderboards/" + stats.StatKittenTumbles,
+		"/v1/badges",
+		"/v1/badges/first_flight",
+		"/v1/challenges",
+		"/v1/challenges/tumbleweek",
 		"/v1/players?q=" + handle[:3],
 		"/v1/players/" + handle,
+		"/v1/players/" + handle + "/badges",
+		"/v1/players/" + handle + "/saves/1/badges",
 		"/v1/players/" + handle + "/events",
 		"/v1/players/" + handle + "/events?type=session.started",
 		"/v1/compare?handles=alpha_pilot,beta_pilot",
@@ -110,6 +117,132 @@ func TestNothingPublicCarriesAnInstallDerivedIdentifier(t *testing.T) {
 			}
 		}
 	}
+}
+
+// TestNoPublicResponseCarriesARawCareer marshals every public response shape
+// built from a fixture whose career is a known sentinel, and fails if that
+// sentinel appears anywhere in the bytes. It is deliberately a blunt instrument:
+// PROJ-049 was a live leak that survived review because the field was three
+// levels down in a context blob, and a rule keyed on field names cannot see a
+// field somebody adds tomorrow.
+func TestNoPublicResponseCarriesARawCareer(t *testing.T) {
+	const sentinel = "raw-career-sentinel-NEVER-PUBLISH"
+	f := newFixture(t)
+	player := f.player("sentinel_pilot")
+	first, last := f.event(player, 1), f.event(player, 2)
+	seedDetailedCareer(t, f, player, sentinel, "", 1, false, false, 90, first, last)
+	seedCareerBoardRow(t, f, player, sentinel, "", stats.StatStagings, 7, 3)
+	seedBadgeAward(t, f, player, "", stats.BadgeFirstFlight, "", sentinel, 4, 1_800_000_000_004, nil,
+		fmt.Sprintf(`{"career":%q,"nested":{"career":%q}}`, sentinel, sentinel))
+	seedBadgeAward(t, f, player, sentinel, stats.BadgeFirstFlight, "", "", 4, 1_800_000_000_004, nil,
+		fmt.Sprintf(`{"career":%q}`, sentinel))
+	seedChallengeRow(t, f, player, sentinel, "", "speedrun_orbit", 12, fmt.Sprintf(`{"career":%q}`, sentinel), 10)
+	// The established profile and player-board shapes also carry contexts. They
+	// sit beside the new career shapes so future response additions can extend
+	// one table instead of inventing another privacy boundary.
+	f.statContext(player, stats.StatStagings, 7,
+		fmt.Sprintf(`{"career":%q,"nested":{"career":%q}}`, sentinel, sentinel))
+
+	tests := []struct {
+		name      string
+		path      string
+		nonVacant func(map[string]any) bool
+	}{
+		{
+			name: "player profile context", path: "/v1/players/sentinel_pilot",
+			nonVacant: func(body map[string]any) bool { return jsonArrayHasRows(body, "stats") },
+		},
+		{
+			name: "player-scoped board context", path: "/v1/leaderboards/stagings",
+			nonVacant: func(body map[string]any) bool { return jsonArrayHasRows(body, "rows") },
+		},
+		{
+			name: "career-scoped board", path: "/v1/leaderboards/stagings?scope=career",
+			nonVacant: func(body map[string]any) bool { return jsonArrayHasRows(body, "rows") },
+		},
+		{
+			name: "saves list", path: "/v1/players/sentinel_pilot/saves",
+			nonVacant: func(body map[string]any) bool { return jsonArrayHasRows(body, "saves") },
+		},
+		{
+			name: "save detail", path: "/v1/players/sentinel_pilot/saves/1",
+			nonVacant: func(body map[string]any) bool { return jsonArrayHasRows(body, "stats") },
+		},
+		{
+			name: "badge catalogue", path: "/v1/badges",
+			nonVacant: func(body map[string]any) bool { return jsonArrayHasRows(body, "badges") },
+		},
+		{
+			name: "badge holder", path: "/v1/badges/first_flight",
+			nonVacant: func(body map[string]any) bool { return jsonArrayHasRows(body, "rows") },
+		},
+		{
+			name: "player lifetime badges", path: "/v1/players/sentinel_pilot/badges",
+			nonVacant: func(body map[string]any) bool { return jsonArrayHasRows(body, "earned") },
+		},
+		{
+			name: "player save badges", path: "/v1/players/sentinel_pilot/saves/1/badges",
+			nonVacant: func(body map[string]any) bool { return jsonArrayHasRows(body, "earned") },
+		},
+		{
+			name: "career challenge", path: "/v1/challenges/speedrun_orbit",
+			nonVacant: func(body map[string]any) bool { return jsonArrayHasRows(body, "rows") },
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := f.get(tc.path)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("GET %s = %d: %s", tc.path, rec.Code, rec.Body)
+			}
+			if strings.Contains(rec.Body.String(), sentinel) {
+				t.Fatalf("GET %s published the raw career in its response bytes: %s", tc.path, rec.Body)
+			}
+			var decoded map[string]any
+			if err := json.Unmarshal(rec.Body.Bytes(), &decoded); err != nil {
+				t.Fatalf("GET %s returned invalid JSON: %v", tc.path, err)
+			}
+			if !tc.nonVacant(decoded) {
+				t.Fatalf("GET %s did not exercise its career-bearing shape: %s", tc.path, rec.Body)
+			}
+			if jsonCarriesString(decoded, sentinel) {
+				t.Fatalf("GET %s published the raw career as a JSON string: %s", tc.path, rec.Body)
+			}
+			marshaled, err := json.Marshal(decoded)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(marshaled), sentinel) {
+				t.Fatalf("GET %s published the raw career somewhere in its JSON: %s", tc.path, marshaled)
+			}
+		})
+	}
+}
+
+func jsonArrayHasRows(body map[string]any, key string) bool {
+	rows, ok := body[key].([]any)
+	return ok && len(rows) > 0
+}
+
+func jsonCarriesString(value any, sentinel string) bool {
+	switch value := value.(type) {
+	case string:
+		return value == sentinel
+	case []any:
+		for _, item := range value {
+			if jsonCarriesString(item, sentinel) {
+				return true
+			}
+		}
+	case map[string]any:
+		for _, item := range value {
+			if jsonCarriesString(item, sentinel) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // The point of relabelling rather than dropping: the labels still group a
@@ -218,6 +351,29 @@ func TestRedactionReachesNestedPayloadKeys(t *testing.T) {
 	// data is not worth building.
 	if p.Kittens[0].Name != "Bramble" || p.Kittens[0].TravelledM != 620000 {
 		t.Errorf("gameplay data was mangled: %+v", p.Kittens[0])
+	}
+}
+
+func TestRedactionPreservesPublicSystemHashes(t *testing.T) {
+	const hash = "ADRTaA6cER7uqfoM_p880GQ6gEevTrhCycd44NRSQ_I"
+	tests := []struct {
+		name string
+		raw  string
+	}{
+		{"top-level system field", `{"system":"` + hash + `"}`},
+		{"nested system field", `{"catalogue":{"system":"` + hash + `"}}`},
+		{"system beside private career", `{"system":"` + hash + `","career":"private-career"}`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := readapi.Redact(7, json.RawMessage(tc.raw))
+			if !strings.Contains(string(got), hash) {
+				t.Errorf("system hash was redacted: %s", got)
+			}
+			if strings.Contains(string(got), "private-career") {
+				t.Errorf("control career was not redacted: %s", got)
+			}
+		})
 	}
 }
 

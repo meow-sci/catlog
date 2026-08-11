@@ -1,0 +1,59 @@
+---
+title: Every badge
+description: >-
+  All 35 fixed merit badges and the three place-name families, with the events
+  and rules behind every award.
+sidebar:
+  order: 2
+---
+
+import { Aside } from "@astrojs/starlight/components";
+import BadgeDetail from "../../../components/BadgeDetail.astro";
+import { BADGES, BADGE_FAMILIES } from "../../../data/badges";
+
+All thirty-five fixed badges and all three place-name families can be awarded now.
+
+<Aside type="note" title="A tier does not replace anything">
+  The exploration and survival tiers are separate badges. Reaching a higher threshold keeps every
+  lower badge, and completing a system does not remove the ordinary exploration tiers.
+</Aside>
+
+## First steps
+
+{BADGES.filter((badge) => badge.group === "first-steps").map((badge) => <BadgeDetail badge={badge.badge} />)}
+
+## Flight
+
+{BADGES.filter((badge) => badge.group === "flight").map((badge) => <BadgeDetail badge={badge.badge} />)}
+
+## Survival
+
+{BADGES.filter((badge) => badge.group === "survival").map((badge) => <BadgeDetail badge={badge.badge} />)}
+
+## Exploration
+
+The numbered tiers count distinct worlds and need no fixed idea of how large a celestial system
+ought to be. The three families use the names reported by the game, so new and modified systems can
+supply their own places without being added to catlog first.
+
+Every World and Nothing Left use the complete catalogue reported by that save's game. Every World
+selects its nonempty set of planets; Nothing Left includes every catalogue entry, including stars
+and other bodies at the root of the system. An incomplete or interrupted catalogue awards neither.
+
+{BADGES.filter((badge) => badge.group === "exploration").map((badge) => <BadgeDetail badge={badge.badge} />)}
+
+### Place-name families
+
+{BADGE_FAMILIES.map((badge) => <BadgeDetail badge={badge.badge} />)}
+
+By default, a particular place-name badge appears in the public catalogue only after two players
+hold it. The award itself can exist before then; the publication threshold keeps one person's
+private system names out of a community-wide list. The [visitor-facing
+catalogue](https://catlog.science.fail/badges) and its [JSON
+form](https://catlog.science.fail/v1/badges) therefore list the fixed badges and only the place-name
+members that have crossed that threshold; neither is a complete list of every award row. Each entry
+on the visitor-facing catalogue links to the page showing that badge's holders.
+
+## Kittens
+
+{BADGES.filter((badge) => badge.group === "kittens").map((badge) => <BadgeDetail badge={badge.badge} />)}

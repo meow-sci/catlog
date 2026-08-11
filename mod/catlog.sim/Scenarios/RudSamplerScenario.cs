@@ -92,7 +92,8 @@ public sealed class RudSamplerScenario : IScenario
                 SpeedMs: flight.SpeedMs,
                 AltitudeM: flight.AltitudeM,
                 Body: body.Name,
-                CrewCount: 1));
+                CrewCount: 1,
+                PartCount: v.PartCount));
 
             yield return SimStep.At(t).Emit([.. signals]).With(Approach(v, flight, t, 1.0));
 

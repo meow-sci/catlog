@@ -1,6 +1,10 @@
 using System;
+using System.Buffers.Binary;
+using System.Collections.Generic;
+using System.IO;
 using System.Security.Cryptography;
 using System.Text;
+using MeowSci.Catlog.Lib.Telemetry;
 
 namespace MeowSci.Catlog.Lib.Util;
 
@@ -65,6 +69,66 @@ public static class Ids
     public static string CareerId(string installId, string saveKey)
         => Hash16($"catlog-career:{installId}:{saveKey}");
 
+    /// <summary>
+    /// The shared content id for a celestial-system survey. Unlike career and kitten ids this has
+    /// no install salt: every player with byte-for-byte equivalent content must produce the same
+    /// id. Raw strings are strict UTF-8 length-prefixed values, bodies are raw-id ordinal sorted,
+    /// and all numbers have a culture-independent binary encoding.
+    /// </summary>
+    public static string SystemId(SystemHashInput input)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+
+        using var bytes = new MemoryStream();
+        bytes.Write("catlog-system-v1"u8);
+        WriteString(bytes, input.SystemId);
+        WriteString(bytes, input.DisplayName);
+        WriteString(bytes, input.HomeBodyId);
+        WriteInt32(bytes, input.BodyCount);
+
+        var bodies = new List<SystemBodyHashInput>(input.Bodies);
+        bodies.Sort(static (left, right) => string.CompareOrdinal(left.Id, right.Id));
+        foreach (SystemBodyHashInput body in bodies)
+        {
+            WriteString(bytes, body.Id);
+            WriteOptionalString(bytes, body.ParentId);
+            WriteString(bytes, body.Class);
+            WriteString(bytes, body.Kind);
+            WriteInt32(bytes, body.Rank);
+            WriteDouble(bytes, body.RadiusM);
+            WriteDouble(bytes, body.MassKg);
+            WriteDouble(bytes, body.SoiM);
+            WriteDouble(bytes, body.AtmoM);
+            WriteDouble(bytes, body.OceanM);
+            WriteDouble(bytes, body.AngularVelocityRadS);
+            WriteDouble(bytes, body.AxisCce.X);
+            WriteDouble(bytes, body.AxisCce.Y);
+            WriteDouble(bytes, body.AxisCce.Z);
+            WriteDouble(bytes, body.CcfToCceT0.X);
+            WriteDouble(bytes, body.CcfToCceT0.Y);
+            WriteDouble(bytes, body.CcfToCceT0.Z);
+            WriteDouble(bytes, body.CcfToCceT0.W);
+
+            bytes.WriteByte(body.Orbit is null ? (byte)0 : (byte)1);
+            if (body.Orbit is { } orbit)
+            {
+                WriteDouble(bytes, orbit.SemiMajorAxisM);
+                WriteDouble(bytes, orbit.Eccentricity);
+                WriteDouble(bytes, orbit.InclinationDeg);
+                WriteDouble(bytes, orbit.LongitudeAscendingNodeDeg);
+                WriteDouble(bytes, orbit.ArgumentPeriapsisDeg);
+                WriteDouble(bytes, orbit.TimeAtPeriapsis);
+            }
+
+            bytes.WriteByte(body.PeriodS.HasValue ? (byte)1 : (byte)0);
+            if (body.PeriodS is double period)
+                WriteDouble(bytes, period);
+        }
+
+        byte[] digest = SHA256.HashData(bytes.GetBuffer().AsSpan(0, checked((int)bytes.Length)));
+        return Crockford16(digest);
+    }
+
     /// <summary>True when <paramref name="value"/> is a well-formed 16-character Crockford id.</summary>
     /// <param name="value">Candidate text.</param>
     /// <returns>True when the text is 16 lowercase Crockford base32 characters.</returns>
@@ -89,6 +153,11 @@ public static class Ids
     {
         byte[] digest = SHA256.HashData(Encoding.UTF8.GetBytes(material));
 
+        return Crockford16(digest);
+    }
+
+    private static string Crockford16(ReadOnlySpan<byte> digest)
+    {
         Span<char> chars = stackalloc char[Hash16Length];
         ulong acc = 0;
         int bits = 0;
@@ -107,13 +176,62 @@ public static class Ids
         return new string(chars);
     }
 
+    private static void WriteString(Stream stream, string value)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        byte[] encoded = new UTF8Encoding(false, true).GetBytes(value);
+        Span<byte> length = stackalloc byte[4];
+        BinaryPrimitives.WriteUInt32BigEndian(length, checked((uint)encoded.Length));
+        stream.Write(length);
+        stream.Write(encoded);
+    }
+
+    private static void WriteOptionalString(Stream stream, string? value)
+    {
+        stream.WriteByte(value is null ? (byte)0 : (byte)1);
+        if (value is not null)
+            WriteString(stream, value);
+    }
+
+    private static void WriteInt32(Stream stream, int value)
+    {
+        Span<byte> encoded = stackalloc byte[4];
+        BinaryPrimitives.WriteInt32BigEndian(encoded, value);
+        stream.Write(encoded);
+    }
+
+    private static void WriteDouble(Stream stream, double value)
+    {
+        if (double.IsNaN(value))
+        {
+            stream.WriteByte(3);
+            return;
+        }
+        if (double.IsPositiveInfinity(value))
+        {
+            stream.WriteByte(1);
+            return;
+        }
+        if (double.IsNegativeInfinity(value))
+        {
+            stream.WriteByte(2);
+            return;
+        }
+
+        stream.WriteByte(0);
+        long bits = BitConverter.DoubleToInt64Bits(value == 0.0 ? 0.0 : value);
+        Span<byte> encoded = stackalloc byte[8];
+        BinaryPrimitives.WriteInt64BigEndian(encoded, bits);
+        stream.Write(encoded);
+    }
+
     /// <summary>
-    /// Sanitizes a roster display name to printable US-ASCII, at most 32 characters (§4.2 —
+    /// Sanitizes a roster display name to printable US-ASCII, at most 128 characters (§4.2 —
     /// this is a moderation surface, so nothing exotic reaches the server).
     /// </summary>
     /// <param name="name">The raw display name.</param>
     /// <returns>The sanitized name; empty input yields <c>"kitten"</c>.</returns>
-    public static string SanitizeName(string? name) => SanitizeAscii(name, 32, "kitten");
+    public static string SanitizeName(string? name) => SanitizeAscii(name, 128, "kitten");
 
     /// <summary>
     /// Sanitizes a vehicle name to printable US-ASCII, at most 64 characters (§4.2
@@ -122,6 +240,12 @@ public static class Ids
     /// <param name="name">The raw vehicle name.</param>
     /// <returns>The sanitized name; empty input yields <c>"vehicle"</c>.</returns>
     public static string SanitizeVehicleName(string? name) => SanitizeAscii(name, 64, "vehicle");
+
+    /// <summary>Sanitizes a system display name to its printable 64-character wire form.</summary>
+    public static string SanitizeSystemName(string? name) => SanitizeAscii(name, 64, "system");
+
+    /// <summary>Sanitizes a system or body raw id for display without changing its join identity.</summary>
+    public static string SanitizeCatalogueName(string? name) => SanitizeAscii(name, 64, "unknown");
 
     private static string SanitizeAscii(string? value, int maxLength, string fallback)
     {

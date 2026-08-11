@@ -116,6 +116,20 @@ public sealed class EventPipelineTests
             produced.Single(static e => e.Type == EventTypes.VehicleRud).Payload);
         Assert.Equal("ground_impact", rud.Cause);
         Assert.Equal(2, rud.CrewCount);
+        Assert.Equal(17, rud.PartCount);
+    }
+
+    [Fact]
+    public void Rud_PreservesAZeroPartCountReading()
+    {
+        EventPipeline pipeline = TestData.Pipeline();
+        pipeline.ProcessSignal(TestData.Created());
+
+        EventEnvelope envelope = Assert.Single(pipeline.ProcessSignal(TestData.Rud(partCount: 0)));
+        var payload = Assert.IsType<VehicleRudPayload>(envelope.Payload);
+
+        Assert.Equal(0, payload.PartCount);
+        Assert.Equal(1, envelope.Ver);
     }
 
     [Fact]
@@ -185,12 +199,31 @@ public sealed class EventPipelineTests
         EventPipeline pipeline = TestData.Pipeline();
 
         EventEnvelope tumble = Assert.Single(pipeline.ProcessSignal(
-            new TumbleSignal(10, TestData.WallMs, "Whiskers", 7.2, "earth")));
+            new TumbleSignal(10, TestData.WallMs, "Whiskers", "airborne", 7.2, "earth")));
         var payload = Assert.IsType<KittenTumblePayload>(tumble.Payload);
 
         Assert.Equal(Ids.KittenId(TestData.InstallId, "Whiskers"), payload.Kid);
         Assert.Equal("Whiskers", payload.Name);
+        Assert.Equal("airborne", payload.From);
         Assert.Equal(16, payload.Kid.Length);
+
+        using JsonDocument json = JsonDocument.Parse(tumble.ToNdjsonLine());
+        Assert.Equal(
+            ["kid", "name", "from", "speed_ms", "body"],
+            json.RootElement.GetProperty("payload").EnumerateObject().Select(static p => p.Name).ToArray());
+    }
+
+    [Theory]
+    [InlineData("airborne")]
+    [InlineData("grounded")]
+    public void Tumble_PreservesThePreviousLocomotionMode(string from)
+    {
+        EventPipeline pipeline = TestData.Pipeline();
+
+        EventEnvelope tumble = Assert.Single(pipeline.ProcessSignal(
+            new TumbleSignal(10, TestData.WallMs, "Whiskers", from, 7.2, "earth")));
+
+        Assert.Equal(from, Assert.IsType<KittenTumblePayload>(tumble.Payload).From);
     }
 
     /// <summary>
@@ -206,7 +239,7 @@ public sealed class EventPipelineTests
             TestData.Created(vehicleId: "Whiskers", vehicleName: "Whiskers", crewCount: 1)));
 
         EventEnvelope tumble = Assert.Single(pipeline.ProcessSignal(
-            new TumbleSignal(10, TestData.WallMs, "Whiskers", 7.2, "earth")));
+            new TumbleSignal(10, TestData.WallMs, "Whiskers", "airborne", 7.2, "earth")));
 
         Assert.NotNull(tumble.Flight);
         Assert.Equal(started.Flight, tumble.Flight);
@@ -226,7 +259,7 @@ public sealed class EventPipelineTests
         EventEnvelope flagged = Assert.Single(pipeline.ProcessSignal(
             new FlaggedSignal(5, TestData.WallMs, null, FlightFlag.Tuning, "TumbleSpeedGate=0.5")));
         EventEnvelope tumble = Assert.Single(pipeline.ProcessSignal(
-            new TumbleSignal(6, TestData.WallMs, "Whiskers", 0.7, "earth")));
+            new TumbleSignal(6, TestData.WallMs, "Whiskers", "grounded", 0.7, "earth")));
 
         Assert.Equal(EventTypes.FlightFlagged, flagged.Type);
         Assert.Equal(flagged.Flight, tumble.Flight);
@@ -243,7 +276,7 @@ public sealed class EventPipelineTests
         EventPipeline pipeline = TestData.Pipeline();
 
         EventEnvelope tumble = Assert.Single(pipeline.ProcessSignal(
-            new TumbleSignal(10, TestData.WallMs, "Whiskers", 7.2, "earth")));
+            new TumbleSignal(10, TestData.WallMs, "Whiskers", "grounded", 7.2, "earth")));
 
         Assert.Null(tumble.Flight);
         Assert.Empty(pipeline.Tracker.ActiveVehicleIds);
@@ -411,8 +444,9 @@ public sealed class EventPipelineTests
         pipeline.ProcessFrame(TestData.Frame(1, TestData.Snapshot(simT: 100, situation: "landed")));
         string oldSession = pipeline.SessionId;
 
-        EventEnvelope started = Assert.Single(pipeline.ProcessSignal(
-            new SessionLoadedSignal(0, TestData.WallMs, "2026.8.5.5168", "0.1.0")));
+        EventEnvelope started = pipeline.ProcessSignal(
+            new SessionLoadedSignal(0, TestData.WallMs, "2026.8.5.5168", "0.1.0", System: TestData.SystemSurvey()))
+            .Single(static e => e.Type == EventTypes.SessionStarted);
 
         Assert.Equal(EventTypes.SessionStarted, started.Type);
         Assert.NotEqual(oldSession, pipeline.SessionId);
@@ -453,7 +487,8 @@ public sealed class EventPipelineTests
         var produced = new List<EventEnvelope> { pipeline.SessionStarted(0, TestData.WallMs) };
         produced.AddRange(pipeline.ProcessSignal(TestData.Created()));
         produced.AddRange(pipeline.ProcessSignal(TestData.Rud()));
-        produced.AddRange(pipeline.ProcessSignal(new TumbleSignal(1, TestData.WallMs, "Whiskers", 7, "earth")));
+        produced.AddRange(pipeline.ProcessSignal(
+            new TumbleSignal(1, TestData.WallMs, "Whiskers", "airborne", 7, "earth")));
         for (int i = 0; i <= 12; i++)
             produced.AddRange(pipeline.ProcessFrame(TestData.Frame(i + 1, TestData.Snapshot(simT: i))));
 
@@ -734,15 +769,46 @@ public sealed class EventPipelineTests
         EventPipeline pipeline = TestData.Pipeline();
 
         EventEnvelope started = Assert.Single(pipeline.ProcessSignal(TestData.Created(
-            crewCount: 2, kittenNames: ["Whiskers", "Mittens"], stageCount: 3, lat: 28.6, lon: -80.6)));
+            crewCount: 2, kittenNames: ["Whiskers", "Mittens"], stageCount: 3,
+            engineCount: 4, lat: 28.6, lon: -80.6)));
 
         var payload = Assert.IsType<FlightStartedPayload>(started.Payload);
         Assert.Equal(
             [Ids.KittenId(TestData.InstallId, "Whiskers"), Ids.KittenId(TestData.InstallId, "Mittens")],
             payload.Kids);
         Assert.Equal(3, payload.StageCount);
+        Assert.Equal(4, payload.EngineCount);
         Assert.Equal(28.6, payload.Lat);
         Assert.Equal(-80.6, payload.Lon);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(4)]
+    public void FlightStarted_PreservesEngineCountAndOrdersItBeforePosition(int engineCount)
+    {
+        EventPipeline pipeline = TestData.Pipeline();
+
+        EventEnvelope started = Assert.Single(pipeline.ProcessSignal(TestData.Created(
+            stageCount: 3, engineCount: engineCount, lat: 28.6, lon: -80.6)));
+        var payload = Assert.IsType<FlightStartedPayload>(started.Payload);
+        string line = started.ToNdjsonLine();
+
+        Assert.Equal(engineCount, payload.EngineCount);
+        Assert.Equal(1, started.Ver);
+        Assert.Contains($"\"stage_count\":3,\"engine_count\":{engineCount},\"lat\":28.6", line);
+    }
+
+    [Fact]
+    public void FlightStarted_OmitsEngineCountWhenTheReadFailed()
+    {
+        EventPipeline pipeline = TestData.Pipeline();
+
+        EventEnvelope started = Assert.Single(pipeline.ProcessSignal(TestData.Created(engineCount: null)));
+        var payload = Assert.IsType<FlightStartedPayload>(started.Payload);
+
+        Assert.Null(payload.EngineCount);
+        Assert.DoesNotContain("\"engine_count\"", started.ToNdjsonLine());
     }
 
     /// <summary>An uncrewed flight says so with an empty array, never a null and never a missing key.</summary>

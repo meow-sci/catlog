@@ -36,6 +36,12 @@ internal static class TestData
         double apAltM = 0,
         double peAltM = 0,
         double incDeg = 0,
+        double smaM = 0,
+        double lanDeg = 0,
+        double argpDeg = 0,
+        double tPe = 0,
+        double periodS = 0,
+        StateVec? state = null,
         OrbitClass orbitClass = OrbitClass.Unknown,
         int crewCount = 0,
         int partCount = 1,
@@ -70,6 +76,12 @@ internal static class TestData
             ApAltM = apAltM,
             PeAltM = peAltM,
             IncDeg = incDeg,
+            SmaM = smaM,
+            LanDeg = lanDeg,
+            ArgpDeg = argpDeg,
+            TPe = tPe,
+            PeriodS = periodS,
+            State = state,
             OrbitClass = orbitClass,
             CrewCount = crewCount,
             PartCount = partCount,
@@ -141,8 +153,9 @@ internal static class TestData
         double speedMs = 62,
         double altitudeM = 0,
         string body = "earth",
-        int crewCount = 2)
-        => new(simT, WallMs, vehicleId, cause, peakG, peakQPa, speedMs, altitudeM, body, crewCount);
+        int crewCount = 2,
+        int partCount = 17)
+        => new(simT, WallMs, vehicleId, cause, peakG, peakQPa, speedMs, altitudeM, body, crewCount, partCount);
 
     internal static VehicleCreatedSignal Created(
         string vehicleId = "v1",
@@ -155,11 +168,12 @@ internal static class TestData
         double launchGameTime = 0,
         IReadOnlyList<string>? kittenNames = null,
         int stageCount = 0,
+        int? engineCount = null,
         double? lat = null,
         double? lon = null)
         => new(
             simT, WallMs, vehicleId, vehicleName, body, massKg, partCount, crewCount, launchGameTime,
-            kittenNames, stageCount, lat, lon);
+            kittenNames, stageCount, engineCount, lat, lon);
 
     /// <summary>Deterministic install id so <c>kid</c> values are stable across runs.</summary>
     internal const string InstallId = "01J9V5M3E8Z0FAKEINSTALL01";
@@ -185,4 +199,14 @@ internal static class TestData
         string? careerId = null,
         EventTypeFilter? types = null)
         => new(PipelineOptions(windowSeconds, careerId: careerId, types: types));
+
+    internal static SystemSnapshot SystemSurvey()
+    {
+        var body = new SystemBodySnapshot(
+            "sol", "Sol", "StellarBody", "star", 0, null,
+            10, 20, 0, 0, 0, 1, new Vec3(0, 1, 0), new Quat(0, 0, 0, 1),
+            null, null, null, null, null, null, null);
+        var hash = new SystemHashInput("Sol", "Sol", "Sol", 1, Array.Empty<SystemBodyHashInput>());
+        return new SystemSnapshot("01kittensol", "Sol", "Sol", "sol", [body], hash);
+    }
 }

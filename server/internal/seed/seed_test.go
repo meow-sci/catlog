@@ -1,10 +1,16 @@
 package seed_test
 
 import (
+	"crypto/sha256"
+	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/meow-sci/catlog/server/internal/directory"
 	"github.com/meow-sci/catlog/server/internal/ids"
@@ -17,6 +23,12 @@ import (
 )
 
 func TestDatasetIsDeterministic(t *testing.T) {
+	for _, challenge := range stats.Challenges() {
+		if !challenge.InWindow(seed.ChallengeRecvMS) {
+			t.Errorf("fixed seed receive time %d is outside %s [%d,%d)",
+				seed.ChallengeRecvMS, challenge.Key, challenge.Opens, challenge.Closes)
+		}
+	}
 	a, b := seed.Dataset(), seed.Dataset()
 	if len(a) != len(b) || len(a) != 3 {
 		t.Fatalf("dataset has %d players, want 3", len(a))
@@ -42,13 +54,28 @@ func TestDatasetIsDeterministic(t *testing.T) {
 					a[i].Handle, j, ids.String(x.ID))
 			}
 			seen[x.ID] = true
+			if x.Type == "system.discovered" {
+				var discovered stats.SystemDiscovered
+				if err := json.Unmarshal(x.Payload, &discovered); err != nil {
+					t.Fatalf("%s system payload: %v", a[i].Handle, err)
+				}
+				digest, err := base64.RawURLEncoding.DecodeString(discovered.System)
+				if err != nil || len(digest) != sha256.Size || len(discovered.System) != 43 ||
+					strings.ContainsAny(discovered.System, "+/=") {
+					t.Errorf("%s system hash %q is not canonical base64url SHA-256", a[i].Handle, discovered.System)
+				}
+				if j+1 >= len(a[i].Events) || a[i].Events[j+1].Type != "session.started" ||
+					a[i].Events[j+1].Career != x.Career || a[i].Events[j+1].SessionID != x.SessionID {
+					t.Errorf("%s system discovery is not immediately before its session.started", a[i].Handle)
+				}
+			}
 		}
 	}
 }
 
-func TestSeedProducesTheExpectedBoards(t *testing.T) {
+func TestSeedProducesExpectedBoardsBadgesAndChallenges(t *testing.T) {
 	dir := t.TempDir()
-	events := testutil.EventsAt(t, filepath.Join(dir, "events.db"))
+	events := challengeEventsAt(t, filepath.Join(dir, "events.db"))
 	projections := testutil.ProjectionsAt(t, filepath.Join(dir, "projections.db"))
 	keys := testutil.Keys(t)
 	ctx := t.Context()
@@ -86,6 +113,7 @@ func TestSeedProducesTheExpectedBoards(t *testing.T) {
 		"demo_crasher/fastest_surface_speed":       782,
 		"demo_crasher/rud_total":                   6,
 		"demo_crasher/kittens_recovered":           1,
+		"demo_crasher/landings":                    2,
 
 		"demo_ace/fastest_surface_speed": 2410,
 		"demo_ace/fastest_orbital_speed": 9450,
@@ -95,7 +123,7 @@ func TestSeedProducesTheExpectedBoards(t *testing.T) {
 		"demo_ace/stagings":              3,
 		"demo_ace/soi_bodies":            4,
 		"demo_ace/kittens_recovered":     5,
-		"demo_ace/distance_travelled":    4_210_000,
+		"demo_ace/landings":              3,
 
 		// demo_ace's second career is the fast one: its clock restarts at 0 and
 		// the builder ticks 12.5 s per event, so orbit lands at 37.5 s into the
@@ -108,10 +136,9 @@ func TestSeedProducesTheExpectedBoards(t *testing.T) {
 		"demo_ace/fastest_to_sol":   62_500,
 		"demo_ace/fastest_to_mars":  75_000,
 
-		"demo_tumbler/kitten_tumbles":     4,
-		"demo_tumbler/soi_bodies":         2,
-		"demo_tumbler/kittens_recovered":  2,
-		"demo_tumbler/distance_travelled": 930_000,
+		"demo_tumbler/kitten_tumbles":    4,
+		"demo_tumbler/soi_bodies":        2,
+		"demo_tumbler/kittens_recovered": 2,
 	}
 	for key, v := range want {
 		if got[key] != v {
@@ -150,6 +177,213 @@ func TestSeedProducesTheExpectedBoards(t *testing.T) {
 				stat, got[seed.HandleAce+"/"+stat], got[seed.HandleCrasher+"/"+stat])
 		}
 	}
+	// Per-save pages and boards must be non-vacuous in the demo: two players
+	// each have two saves, every one has a landing row, and their first/second
+	// saves deliberately exercise unknown/friendly system display.
+	if err := live.With(func(proj *store.Projections) error {
+		landings, err := proj.CareerLeaderboard(ctx, stats.StatLandings, "", false, 100, 0)
+		if err != nil {
+			return err
+		}
+		if len(landings) != 4 {
+			t.Errorf("career landings rows = %d, want 4 populated demo saves", len(landings))
+		}
+		seen := map[string]float64{}
+		for _, row := range landings {
+			seen[fmt.Sprintf("%d/%d", row.PlayerID, row.Ordinal)] = row.Value
+		}
+		for key, want := range map[string]float64{"1/1": 2, "1/2": 1, "3/1": 1, "3/2": 1} {
+			if seen[key] != want {
+				t.Errorf("career landing %s = %v, want %v", key, seen[key], want)
+			}
+		}
+		for _, playerID := range []int64{1, 3} {
+			careers, err := proj.PlayerCareers(ctx, playerID)
+			if err != nil {
+				return err
+			}
+			if len(careers) != 2 || careers[0].System != "" || careers[1].System != seed.DemoSystemHash {
+				t.Errorf("player %d careers = %+v, want unknown then Sol", playerID, careers)
+			}
+			if playerID == 1 && (!careers[1].SystemChanged || !careers[1].Rewound) {
+				t.Errorf("demo_ace second save = %+v, want system-changed and rewound provenance", careers[1])
+			}
+			if playerID == 3 && (careers[1].SystemChanged || careers[1].Rewound) {
+				t.Errorf("demo_crasher second save = %+v, want no provenance qualifications", careers[1])
+			}
+		}
+		system, ok, err := proj.SystemBySlugOrHash(ctx, "sol")
+		if err != nil {
+			return err
+		}
+		if !ok || system.Hash != seed.DemoSystemHash || system.Name != "Sol" || system.Slug != "sol" {
+			t.Errorf("friendly demo system = %+v, %v", system, ok)
+		}
+		byHash, ok, err := proj.SystemBySlugOrHash(ctx, seed.DemoSystemHash)
+		if err != nil {
+			return err
+		}
+		if !ok || byHash != system {
+			t.Errorf("demo system hash lookup = %+v, %v; slug lookup = %+v", byHash, ok, system)
+		}
+		alternate, ok, err := proj.SystemBySlugOrHash(ctx, "sol-dense")
+		if err != nil {
+			return err
+		}
+		if !ok || alternate.Name != "Sol Dense" || alternate.Slug != "sol-dense" {
+			t.Errorf("alternate demo system = %+v, %v", alternate, ok)
+		}
+
+		// Do not pin the total badge catalogue: adding a fixed badge should not
+		// make the demo brittle (PROJ-039). Pin the representative behaviours G4
+		// needs instead: an ordinary event badge, an exploration tier, and a
+		// dynamic family member held by two players so the default gate publishes
+		// it. These rows came through the ordinary fold above, not a fixture-only
+		// projection write.
+		counts, err := proj.BadgeCounts(ctx)
+		if err != nil {
+			return err
+		}
+		for badge, want := range map[string]int64{
+			stats.BadgeFirstFlight: 3,
+			stats.BadgeWanderer:    2,
+			"reached_luna":         2,
+		} {
+			if counts[badge] != want {
+				t.Errorf("seeded badge %s holders = %d, want %d", badge, counts[badge], want)
+			}
+		}
+		published := false
+		for _, badge := range stats.BadgeCatalog(counts, stats.DefaultMinPlayers) {
+			if badge.Key == "reached_luna" {
+				published = true
+				break
+			}
+		}
+		if !published {
+			t.Error("reached_luna is not published at the default two-player family gate")
+		}
+
+		holders, err := proj.BadgeHolders(ctx, "reached_luna", "", 100, 0)
+		if err != nil {
+			return err
+		}
+		if len(holders) != 2 || holders[0].PlayerID != 1 || holders[1].PlayerID != 3 ||
+			holders[0].EarnedSeq >= holders[1].EarnedSeq ||
+			holders[0].System != seed.DemoSystemHash || holders[1].System != seed.DemoSystemHash {
+			t.Errorf("seeded reached_luna holders = %+v, want demo_ace then demo_crasher in Sol", holders)
+		}
+
+		aceCareers, err := proj.PlayerCareers(ctx, 1)
+		if err != nil {
+			return err
+		}
+		if len(aceCareers) < 2 {
+			t.Errorf("demo_ace careers = %+v, want a second save", aceCareers)
+		} else {
+			awards, err := proj.BadgesForPlayer(ctx, 1, aceCareers[1].Career)
+			if err != nil {
+				return err
+			}
+			seen := map[string]store.BadgeRow{}
+			for _, award := range awards {
+				seen[award.Badge] = award
+			}
+			for _, badge := range []string{stats.BadgeFirstFlight, stats.BadgeWanderer, "reached_luna"} {
+				if _, ok := seen[badge]; !ok {
+					t.Errorf("demo_ace Save 2 did not earn representative badge %s: %+v", badge, awards)
+				}
+			}
+			if family := seen["reached_luna"]; family.System != seed.DemoSystemHash ||
+				string(family.Context) != `{"body":"luna"}` {
+				t.Errorf("demo_ace Save 2 reached_luna provenance = %+v context=%s", family, family.Context)
+			}
+		}
+
+		// Challenge rows are also genuine output of this event history. The
+		// injected receive clock is inside Week 33; event wall_t remains the
+		// deterministic January epoch and must not decide challenge admission.
+		type challengeWant struct {
+			key    string
+			player int64
+			value  float64
+			career string
+			system string
+			body   string
+			keys   []string
+			asc    bool
+		}
+		for _, want := range []challengeWant{
+			{key: "heavy_lift_week", player: 1, value: 51_000, system: seed.DemoSystemHash, body: "earth", keys: []string{"body", "flight"}},
+			{key: "speedrun_orbit", player: 1, value: 37_500, career: aceCareers[1].Career, system: seed.DemoSystemHash, body: "earth", keys: []string{"body", "flight"}, asc: true},
+			{key: "tumbleweek", player: 2, value: 4},
+			{key: "coasting_class", player: 1, value: 3, system: seed.DemoSystemHash, body: "mars", keys: []string{"body", "flight"}},
+			{key: "feather_touch", player: 1, value: 3.1, system: seed.DemoSystemHash, body: "mars", keys: []string{"body", "crew_count", "flight", "horizontal_speed_ms"}, asc: true},
+			{key: "full_house", player: 1, value: 3, keys: []string{"body", "flight"}},
+		} {
+			rows, err := proj.ChallengeLeaderboard(ctx, want.key, want.system, want.asc, 100, 0)
+			if err != nil {
+				return err
+			}
+			if len(rows) == 0 || rows[0].PlayerID != want.player || rows[0].Value != want.value ||
+				rows[0].Career != want.career || rows[0].System != want.system {
+				t.Errorf("seeded challenge %s rows = %+v, want player=%d value=%v career=%q system=%q",
+					want.key, rows, want.player, want.value, want.career, want.system)
+				continue
+			}
+			if want.keys == nil {
+				if rows[0].Context != nil {
+					t.Errorf("seeded challenge %s context = %s, want nil", want.key, rows[0].Context)
+				}
+				continue
+			}
+			var context map[string]any
+			if err := json.Unmarshal(rows[0].Context, &context); err != nil {
+				t.Errorf("seeded challenge %s context %s: %v", want.key, rows[0].Context, err)
+				continue
+			}
+			keys := make([]string, 0, len(context))
+			for key := range context {
+				keys = append(keys, key)
+			}
+			slices.Sort(keys)
+			if !slices.Equal(keys, want.keys) || context["body"] != want.body {
+				t.Errorf("seeded challenge %s context = %v, want keys=%v body=%q", want.key, context, want.keys, want.body)
+			}
+			if flight, ok := context["flight"].(string); !ok || flight == "" {
+				t.Errorf("seeded challenge %s has no flight provenance: %v", want.key, context)
+			}
+		}
+		memberRows, err := proj.Reader().QueryContext(ctx,
+			`SELECT member FROM challenge_member
+			 WHERE player_id = 1 AND career = '' AND system = ? AND challenge = 'coasting_class'
+			 ORDER BY first_seq`, seed.DemoSystemHash)
+		if err != nil {
+			return err
+		}
+		defer memberRows.Close()
+		var members []string
+		for memberRows.Next() {
+			var member string
+			if err := memberRows.Scan(&member); err != nil {
+				return err
+			}
+			members = append(members, member)
+		}
+		if err := memberRows.Err(); err != nil {
+			return err
+		}
+		wantMembers := make([]string, len(seed.StockBodyRun))
+		for i, soi := range seed.StockBodyRun {
+			wantMembers[i] = seed.DemoSystemHash + "\x00" + soi.ToBody
+		}
+		if !slices.Equal(members, wantMembers) {
+			t.Errorf("seeded coasting members = %q, want %q", members, wantMembers)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
 	// The flagged flight must not have leaked into anything.
 	for _, key := range []string{
 		"demo_crasher/fastest_orbital_speed", "demo_crasher/orbits_achieved",
@@ -181,7 +415,7 @@ func TestSeedIsWhatARebuildProduces(t *testing.T) {
 	// the flagged flight emits its flag before it scores anything for exactly
 	// this reason.
 	dir := t.TempDir()
-	events := testutil.EventsAt(t, filepath.Join(dir, "events.db"))
+	events := challengeEventsAt(t, filepath.Join(dir, "events.db"))
 	projections := testutil.ProjectionsAt(t, filepath.Join(dir, "projections.db"))
 	keys := testutil.Keys(t)
 	ctx := t.Context()
@@ -204,14 +438,38 @@ func TestSeedIsWhatARebuildProduces(t *testing.T) {
 	if _, err := p.Drain(ctx); err != nil {
 		t.Fatal(err)
 	}
-	incremental := boardValues(t, live)
+	incrementalBoards := boardValues(t, live)
+	incrementalBadges := badgeRows(t, live)
+	incrementalChallenges := challengeRows(t, live)
 
 	if _, err := p.Rebuild(ctx); err != nil {
 		t.Fatalf("rebuild: %v", err)
 	}
-	if rebuilt := boardValues(t, live); !sameFloats(rebuilt, incremental) {
-		t.Errorf("rebuild differs from the seeded incremental state:\n rebuilt: %v\n seeded:  %v", rebuilt, incremental)
+	if rebuilt := boardValues(t, live); !sameFloats(rebuilt, incrementalBoards) {
+		t.Errorf("rebuilt boards differ from seeded incremental state:\n rebuilt: %v\n seeded:  %v", rebuilt, incrementalBoards)
 	}
+	if rebuilt := badgeRows(t, live); !slices.Equal(rebuilt, incrementalBadges) {
+		t.Errorf("rebuilt badges differ from seeded incremental state:\n rebuilt: %v\n seeded:  %v", rebuilt, incrementalBadges)
+	}
+	if rebuilt := challengeRows(t, live); !slices.Equal(rebuilt, incrementalChallenges) {
+		t.Errorf("rebuilt challenges differ from seeded incremental state:\n rebuilt: %v\n seeded:  %v", rebuilt, incrementalChallenges)
+	}
+}
+
+func challengeEventsAt(t *testing.T, path string) *store.Events {
+	t.Helper()
+	opts := testutil.Options()
+	opts.Now = func() time.Time { return time.UnixMilli(seed.ChallengeRecvMS) }
+	db, err := store.OpenEvents(t.Context(), path, opts)
+	if err != nil {
+		t.Fatalf("open challenge-timed events store at %s: %v", path, err)
+	}
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("close challenge-timed events store: %v", err)
+		}
+	})
+	return db
 }
 
 // boardValues reads player_stat keyed "handle/stat".
@@ -252,6 +510,93 @@ func boardValues(t *testing.T, live *projector.Live) map[string]float64 {
 	return out
 }
 
+// badgeRows snapshots every badge column in deterministic primary-key order.
+// The seed's rebuild assertion must cover new projection families as they are
+// added; comparing boards alone would let a badge-only divergence hide behind
+// a test name that promised the whole seeded projection was canonical.
+func badgeRows(t *testing.T, live *projector.Live) []string {
+	t.Helper()
+	var out []string
+	err := live.With(func(p *store.Projections) error {
+		rows, err := p.Reader().QueryContext(t.Context(),
+			`SELECT player_id, career, badge, system, first_career,
+			        earned_seq, earned_at, earned_sim_t, context
+			 FROM badge_award ORDER BY player_id, career, badge`)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var (
+				playerID, earnedSeq, earnedAt int64
+				career, badge, system, first  string
+				sim                           sql.NullFloat64
+				context                       []byte
+			)
+			if err := rows.Scan(&playerID, &career, &badge, &system, &first,
+				&earnedSeq, &earnedAt, &sim, &context); err != nil {
+				return err
+			}
+			out = append(out, fmt.Sprintf("%d|%s|%s|%s|%s|%d|%d|%t:%g|%s",
+				playerID, career, badge, system, first, earnedSeq, earnedAt,
+				sim.Valid, sim.Float64, context))
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		t.Fatalf("read badges: %v", err)
+	}
+	return out
+}
+
+// challengeRows snapshots both challenge tables. Distinct-set membership is
+// projection state too: matching only the visible score could hide a rebuild
+// that forgot which worlds had already contributed.
+func challengeRows(t *testing.T, live *projector.Live) []string {
+	t.Helper()
+	var out []string
+	err := live.With(func(p *store.Projections) error {
+		for _, query := range []string{
+			`SELECT player_id, career, system, challenge, value, context, updated_seq
+			 FROM challenge_stat ORDER BY player_id, career, system, challenge`,
+			`SELECT player_id, career, system, challenge, member, first_seq
+			 FROM challenge_member ORDER BY player_id, career, system, challenge, member`,
+		} {
+			rows, err := p.Reader().QueryContext(t.Context(), query)
+			if err != nil {
+				return err
+			}
+			columns, err := rows.Columns()
+			if err != nil {
+				rows.Close()
+				return err
+			}
+			for rows.Next() {
+				values := make([]any, len(columns))
+				pointers := make([]any, len(columns))
+				for i := range values {
+					pointers[i] = &values[i]
+				}
+				if err := rows.Scan(pointers...); err != nil {
+					rows.Close()
+					return err
+				}
+				out = append(out, fmt.Sprint(values))
+			}
+			if err := rows.Err(); err != nil {
+				rows.Close()
+				return err
+			}
+			rows.Close()
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("read challenges: %v", err)
+	}
+	return out
+}
+
 func sameFloats(a, b map[string]float64) bool {
 	if len(a) != len(b) {
 		return false
@@ -287,7 +632,7 @@ func TestEveryDemoEventCarriesAKnownTypeAndAValidEnvelope(t *testing.T) {
 				t.Errorf("%s: type is not in the §4.2 registry, so /v1/ingest would reject the batch", where)
 			}
 			switch e.Type {
-			case "session.started", "roster.snapshot":
+			case "session.started", "system.discovered", "roster.snapshot":
 				if e.FlightID != ids.Zero {
 					t.Errorf("%s: §4.1 requires a null flight", where)
 				}

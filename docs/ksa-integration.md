@@ -47,16 +47,21 @@ Only the items that change code you would otherwise write.
 | Apoapsis / Periapsis — **radii?** | **VERIFIED as radii** | `public double Periapsis => _data.Periapsis;` `KSA/Orbit.cs:1166`; `public double Apoapsis => _data.Apoapsis;` `KSA/Orbit.cs:1168`; also re-exposed `public double Periapsis => Orbit.Periapsis;` `KSA/Vehicle.cs:383` and `Apoapsis` `:385` | as listed | **Confirmed radii from body center.** Computed `a(1±e)` at `KSA/Orbit.cs:1573-1574`; every UI site subtracts `MeanRadius` (`KSA/IOrbiter.cs:105-106`, `KSA/Program.cs:2438`, `:2452`); impact test is `periapsis < meanRadius` (`KSA/Vehicle.cs:2890`). **No `*Altitude` properties exist.** |
 | Ap/Pe on non-elliptical orbits | **CHANGED vs plan's "NaN-guard"** | hyperbolic: `apoapsis = a(1+e)` with `a < 0` ⇒ **negative**; `period = NaN`. parabolic: `apoapsis = NaN`, `semiMajorAxis = +Inf`. | `KSA/Orbit.cs:1578-1595`; struct fallbacks `KSA/OrbitData.cs:61-75` | Game's own guard: `if (num2 < 0.0) num2 = double.PositiveInfinity;` `KSA/Vehicle.cs:2879-2883`. Use `Orbit.IsHyperbolic()/IsParabolic()/IsBound()` (`KSA/Orbit.cs:1751-1775`). |
 | Inclination | **VERIFIED** | `public double Inclination => _data.Inclination;` | `KSA/Orbit.cs:1160` | **Radians.** Siblings: `SemiMajorAxis` `:1156`, `SemiMinorAxis` `:1158`, `LongitudeOfAscendingNode` `:1162`, `ArgumentOfPeriapsis` `:1164`, `Period` (s) `:1170`, `TimeAtPeriapsis` `:1152`. |
+| Complete `vehicle.orbit` element reads | **VERIFIED** | `SemiMajorAxis`, `LongitudeOfAscendingNode`, `ArgumentOfPeriapsis` and `Period` are `double`; `TimeAtPeriapsis` is `SimTime`, whose `Seconds()` returns `double`. | `KSA/Orbit.cs:1152-1170`; `KSA/SimTime.cs:6,67-70` | `SemiMajorAxis` is metres. LAN and argument of periapsis are radians and catlog converts them to degrees, as it already does inclination. `TimeAtPeriapsis.Seconds()` is absolute game-clock seconds, not an offset. `Period` is seconds. The mod sanitises non-finite values to 0 and sets `period_s = 0` whenever `OrbitClass` is hyperbolic or parabolic; an exception rejects the whole 2 Hz snapshot. The payload fields are non-optional and no current fold reads them. |
+| `telemetry.window.state` — parent-body-centred inertial state | **VERIFIED (2026-08-10)** | `public ref readonly StateVectors StateVectors => ref _stateVectors`; `public readonly double3 PositionCci; public readonly double3 VelocityCci;` | `KSA/Orbit.cs:1150,2107-2113`; `KSA/StateVectors.cs:6-14` | **Churn risk Low.** `Orbit.GetStateVectorsAt` transforms both vectors through `Orb2ParentCci`: position is raw game metres and velocity is metres/second relative to `Orbit.Parent` in that parent's centred inertial frame, not global ecliptic coordinates. Catlog re-reads the normalised parent name and requires it to equal the snapshot `body`; a mismatch, exception or any non-finite component yields `null` and omits the whole `state`. The accumulator keeps the last sample, and a later null clears an older vector so an SOI transition cannot mislabel coordinates. No component-zero or origin fallback. |
+| Period and semi-major axis on unbound conics | **VERIFIED** | elliptical: finite positive `SemiMajorAxis` and finite `Period`; parabolic: `SemiMajorAxis = +Inf`, `Period = NaN`; hyperbolic: negative finite `SemiMajorAxis`, `Period = NaN`. | `KSA/OrbitData.cs:35-75` | Catlog preserves a finite negative hyperbolic `sma_m`, sanitises parabolic `+Inf` to 0, and writes `period_s: 0` for either unbound class. This is distinct from `system.body.period_s`, whose catalogue contract is optional and omits an unbound period. |
 | Anomalies | **GONE (never existed as properties)** | `public TrueAnomaly GetTrueAnomaly()` `KSA/Orbit.cs:2193`; `public abstract MeanAnomaly GetMeanAnomaly(TrueAnomaly ta)` `KSA/Orbit.cs:1302` | as listed | `TrueAnomaly`/`MeanAnomaly` are `readonly struct` wrappers — use `.Degrees` (`KSA/TrueAnomaly.cs:21`). |
 | SOI: `vehicle.Parent.Id`, type of `Id` | **VERIFIED — `Id` is `string`** | `public IParentBody Parent => Orbit.Parent;` `KSA/Vehicle.cs:363`; `string Id { get; }` `KSA/IObjectId.cs:5`; impl `public virtual string Id { get; protected set; }` `KSA/Astronomical.cs:96` | as listed | `Id` is **not** declared on `IParentBody` — it comes from `IObjectId`. Cheap key: `KeyHash Hash { get; }` `KSA/IObjectId.cs:7` (`public readonly record struct KeyHash(uint Code)` `KSA/KeyHash.cs:9`). **See B6: `Parent` can throw, not return null.** |
 | `Parts.RocketNozzles` | **CHANGED (shape clarified)** | `public ModuleStateful<RocketNozzle, RocketNozzleState, EmptyStruct, RocketNozzleFxState>.StateList RocketNozzles;` — **public instance field** | `KSA/PartTree.cs:49` (was `:47` in 5117 — line shift only) | `RocketNozzle` is `public abstract class RocketNozzle : ModuleStateful<…>` `KSA/RocketNozzle.cs:9`. Enumerate via `.ModulesAndStates` / `.ModulesAndAllStates` (`ref struct` enumerators, `KSA/ModuleStateful.cs:266-281`); `.NumModules` for count. Real usage: `KSA/Vehicle.cs:3946`, `:5203`. |
 | `ActivatedThisFrame` / `DeactivatedThisFrame` | **CHANGED (location)** | `public required bool ActivatedThisFrame;` / `public required bool DeactivatedThisFrame;` — **fields on `public struct RocketNozzleState`** | `KSA/RocketNozzleState.cs:28`, `:30` | Cleared `KSA/RocketCore.cs:172-173`, set `:205`/`:210`, solid-motor override `KSA/SolidMotor.cs:206-207`, copied core→nozzle `KSA/RocketNozzle.cs:218-219`. **Caveat:** `Rocket.UpdateRockets` early-outs when all cores are idle (`KSA/Rocket.cs:88-91`), so a stale `true` can persist. Treat as an edge hint, debounce. |
 | Engine "controller IsActive" reachability | **CHANGED (3 nullable hops, `IActivate`)** | `public bool IsActive { get; internal set; } = false;` on `public class EngineController : ModuleStateful<…>, IActivate` | `KSA/EngineController.cs:36` (class `:7`) | Path: `nozzle.Rocket` (`public Rocket Rocket = null;` `KSA/RocketNozzle.cs:34`, **nullable**) → `Rocket.Core` (`public required RocketCore Core;` `KSA/Rocket.cs:10`) → `RocketCore.Controller` (**`public IActivate Controller = null;`** `KSA/RocketCore.cs:18`). `Controller` may be a `ThrusterController` (RCS) — type-test. `public void SetIsActive(Vehicle? vehicle, bool activationState)` `KSA/EngineController.cs:67` is **deferred** (enqueues `InputEvents.IActivateInputData`, applied at `KSA/InputEvents.cs:339-340`). |
+| Installed rocket-engine count | **VERIFIED (2026-08-09)** | `vehicle.Parts.Modules.Get<EngineController>().Length` | `KSA/ModuleList.cs:164` | Source of optional `flight.started.engine_count`, read once when the vehicle is first tracked. Counts installed `EngineController` modules whether active or not. Do **not** count `RocketCore` or `RocketNozzle`: a core's controller may be `ThrusterController`, so those collections include RCS. `[KsaAnchor]` churn risk Medium; failure is `null` → key omitted, while present `0` means no engine installed. |
 | Flameout | **GONE (never existed)** | — | — | See **B3**. Use `IsActive && !state.IsPropellantAvailable` (`public required bool IsPropellantAvailable;` `KSA/EngineControllerState.cs:7`; game's own test `KSA/EngineController.cs:60`). Whole-vehicle helpers exist: `Vehicle.IsAnyEngineActive()` / `IsAnyEnginePropellantAvailable()` (used at `KSA/Vehicle.cs:6090-6094`). |
-| `KittenEva.LocomotionState.Mode` | **VERIFIED — but the entire subsystem is NEW in 5168** | `public LocomotionState LocomotionState => _locomotionState;` (public get-only property returning a **struct copy**) | `KSA/KittenEva.cs:20` | `LocomotionState.cs`, `LocomotionMode.cs`, `LocomotionFacts.cs`, `LocomotionCommand.cs`, `KittenLocomotion.cs`, `KittenLocomotionTuning.cs` **did not exist in 5117**. `public struct LocomotionState { public LocomotionMode Mode; public double ModeStartTime; … }` `KSA/LocomotionState.cs:5-32`. Written back from worker results at `KSA/KittenEva.cs:173-177`. |
-| `LocomotionMode` enum values | **VERIFIED — 6 values** | `public enum LocomotionMode : byte { Mmu, Grounded, Airborne, Tumbling, Rightening, Ladder }` | `KSA/LocomotionMode.cs:3-11` | `Rightening` is the post-tumble settle state (Tumbling→Rightening→Grounded). `Ladder` is **declared but unreachable** — changelog r5161: "Imported Core Utility A (ladders). Not yet functional as ladders (SoonTM)." |
+| `KittenEva.LocomotionState.Mode` | **VERIFIED — but the entire subsystem is NEW in 5168** | `public LocomotionState LocomotionState => _locomotionState;` (public get-only property returning a **struct copy**) | `KSA/KittenEva.cs:20` | `[KsaAnchor]` churn risk **High**. `LocomotionState.cs`, `LocomotionMode.cs`, `LocomotionFacts.cs`, `LocomotionCommand.cs`, `KittenLocomotion.cs`, `KittenLocomotionTuning.cs` **did not exist in 5117**. `public struct LocomotionState { public LocomotionMode Mode; public double ModeStartTime; … }` `KSA/LocomotionState.cs:5-32`. Written back from worker results at `KSA/KittenEva.cs:173-177`. |
+| `LocomotionMode` enum values | **VERIFIED — 6 values** | `public enum LocomotionMode : byte { Mmu, Grounded, Airborne, Tumbling, Rightening, Ladder }` | `KSA/LocomotionMode.cs:3-11` | `[KsaAnchor]` churn risk **High**. `Rightening` is the post-tumble settle state (Tumbling→Rightening→Grounded). `Ladder` is **declared but unreachable** — changelog r5161: "Imported Core Utility A (ladders). Not yet functional as ladders (SoonTM)." |
 | Tumble speed gate = 6.5 m/s | **VERIFIED — and it is a mutable static, not a constant** | `public float TumbleSpeedGate;` `KSA/KittenLocomotionTuning.cs:33`; `TumbleSpeedGate = 6.5f` in `public static KittenLocomotionTuning Default =>` `KSA/KittenLocomotionTuning.cs:77`; `public static KittenLocomotionTuning Current = Default;` `KSA/KittenLocomotionTuning.cs:59` | as listed | Changelog r5131 confirms "Increased TumbleSpeedGate to 6.5ms from 5.5ms". **See B9** — `KittenTuningWindow` (`KSA/KittenTuningWindow.cs:9`, instantiated `KSA/Program.cs:3422`) live-edits `KittenLocomotionTuning.Current` fields by `ref`. |
 | Tumble classification rule | **VERIFIED** | `if (facts.TerrainContact && facts.TangentialSpeedPhys >= tuning.TumbleSpeedGate) return LocomotionMode.Tumbling;` | `KSA/KittenLocomotion.cs:30-33` (in `public static LocomotionMode DeriveMode(...)` `:24`) | Fires from **any** mode except `Ladder` (early-return `:26-29`). Feet-first Airborne→Grounded is the `flag` branch at `:44-47`. `TangentialSpeedPhys` is the **body-fixed (CCF) tangential** component, computed at `KSA/VehicleUpdateTask.cs:1154` (`BuildKittenLocomotionFacts`), not raw speed. |
+| Tumble previous mode and airborne re-entry | **VERIFIED** | `Tumbling` without contact remains tumbling until `facts.Time - state.LastContactTrueTime >= tuning.TumbleAirborneExitTime`, then becomes `Airborne`; stock `TumbleAirborneExitTime = 0.5f`. | `KSA/KittenLocomotion.cs:51-60`; `KSA/KittenLocomotionTuning.cs:43,82` | Catlog caches the previous `LocomotionState.Mode` at 2 Hz and emits it, lowercased, when the next sample enters `Tumbling`. Thus `Airborne → Tumbling` is a failed landing and `Grounded → Tumbling` is a trip. Recovery is `Tumbling → Rightening → Grounded`. One physical cartwheel may yield multiple edges: after more than 0.5 s off the ground KSA returns to `Airborne`, and a later bounce can enter `Tumbling` again. The wire value is an open set; the mod's total mapper falls back to `"unknown"` for an unseen enum value. |
 | `Universe.KittenRoster` | **VERIFIED** | `public static KittenRosterData KittenRoster { get; private set; } = new KittenRosterData();` | `KSA/Universe.cs:94` | Never null, but **swapped wholesale** on load (`:2178`) / new game (`:176`) — see **B8**. |
 | Roster enumeration | **VERIFIED** | `public List<KittenRosterEntryData> Kittens = new List<KittenRosterEntryData>();` — **public field, a flat `List<>`** | `KSA/KittenRosterData.cs:13-14` | `foreach (KittenRosterEntryData k in Universe.KittenRoster.Kittens) { … }`. Lookup is a linear scan: `public KittenRosterEntryData? Find(KeyHash nameHash)` `:77`, `Find(string name)` `:89`. |
 | `TravelledMeters` | **CHANGED (type)** | `public DistanceReference TravelledMeters = new DistanceReference(0.0);` | `KSA/KittenRosterEntryData.cs:32` | `DistanceReference` is a **class** — use `.InMeters()`. Written only via `AddTravelledMeters` (`:112-115`), fed from `Vehicle.CreditCrewTravelStats` (`KSA/Vehicle.cs:2813`) ← `UpdatePerFrameData` (`KSA/Vehicle.cs:2468`). |
@@ -67,7 +72,7 @@ Only the items that change code you would otherwise write.
 | `Universe.GetElapsedSimTime()` | **VERIFIED** | `public static SimTime GetElapsedSimTime()` | `KSA/Universe.cs:2109` | Companion `public static double GetElapsedSeconds()` `KSA/Universe.cs:2103`. `Universe` is `public static class Universe`. |
 | `Vehicle.LaunchGameTime` — set at construction, survives save/load | **VERIFIED (all three claims)** | `public SimTime LaunchGameTime = SimTime.Zero;` — **public instance field** | `KSA/Vehicle.cs:162` | Set at ctor: `LaunchGameTime = Universe.GetElapsedSimTime();` `KSA/Vehicle.cs:1313`. Restored from save: `LaunchGameTime = vehicleData.LaunchGameTime;` `:922`. Serialized: `LaunchGameTime = new SimTimeReference(LaunchGameTime)` `:1026`. **Inherited by split children:** `vehicle.LaunchGameTime = LaunchGameTime;` `:1543`. |
 | `Vehicle.TotalMass` | **VERIFIED (note: `float`)** | `public float TotalMass => _props.TotalMassPropsAsmb.Props.Mass;` | `KSA/Vehicle.cs:551` | Siblings `InertMass` `:553`, `PropellantMass` `:555`. |
-| Part count | **VERIFIED** | `public int Count => Parts.Length;` on `PartTree` | `KSA/PartTree.cs:89` | `vehicle.Parts.Count`. `public ReadOnlySpan<Part> Parts => …` `:91`. `Vehicle.Parts` is a full property `KSA/Vehicle.cs:589`. |
+| Part count | **VERIFIED** | `public int Count => Parts.Length;` on `PartTree` | `KSA/PartTree.cs:89` | `vehicle.Parts.Count`. `public ReadOnlySpan<Part> Parts => …` `:91`. `Vehicle.Parts` is a full property `KSA/Vehicle.cs:589`. Read for `vehicle.rud.part_count` in the existing destruction prefix while the vehicle is intact; failure becomes `0`. |
 | Crew count | **CHANGED (semantics)** | `public ReadOnlySpan<IVASeat> Crew => Parts.Modules.Get<IVASeat>();` `KSA/Vehicle.cs:373`; `public int SeatCount => (this is KittenEva) ? 1 : Parts.Modules.Get<IVASeat>().Length;` `KSA/Vehicle.cs:375` | as listed | **`Crew` is ALL seats, not occupants.** Occupied ⇔ `seat.AssignedKittenHash != KeyHash.Zero` (`public KeyHash AssignedKittenHash;` `KSA/IVASeat.cs:46`; game's own test `KSA/IVASeat.cs:96-109`). No `CrewCount` property exists. |
 | Surface vs orbital speed | **VERIFIED** | `public double GetSurfaceSpeed()` `KSA/Vehicle.cs:2759`; `public double GetInertialSpeed()` `KSA/Vehicle.cs:2754`; `public double OrbitalSpeed => GetVelocityCci().Length();` `KSA/Vehicle.cs:581` | as listed | **No `Vehicle.GetOrbitalSpeed()`** — `Orbit.GetOrbitalSpeed(double radiusMeters)` `KSA/Orbit.cs:1422` is a vis-viva helper, not current speed. Do **not** use `NavBallData.Speed` (`KSA/Vehicle.cs:575`) — it is frame-dependent (switch at `KSA/Vehicle.cs:2506-2590`). |
 | Dynamic pressure | **CHANGED (no property)** | `public static double GetDynamicPressure(Vehicle? vehicle)` | `KSA/PhysicalAtmosphereReference.cs:66` | **No `Vehicle.DynamicPressure`.** Game calls it as `PhysicalAtmosphereReference.GetDynamicPressure(this)` (`KSA/Vehicle.cs:5672`). Cheaper cached alternatives: `vehicle.PhysicsEnvironment.AtmosphericPressure` / `.AtmosphericDensity` (`KSA/PhysicsEnvironment.cs:21`, `:23`) via `public ref readonly PhysicsEnvironment PhysicsEnvironment => ref _environment;` `KSA/Vehicle.cs:527`. |
@@ -127,7 +132,7 @@ pass violates the frame-budget rule the whole mod is built around.
 
 | Row | Status | Exact current declaration | file:line | Note |
 |---|---|---|---|---|
-| `Universe.DestroyVehicleFromEvent` | **VERIFIED** | `public static void DestroyVehicleFromEvent(Vehicle vehicle, VehicleDestructionEvent destructionEvent)` | `KSA/Universe.cs:1699` | **static, public.** Early-returns `if (vehicle.IsDisposed)`. Vehicle is fully intact at prefix time — reads of speed/pos/`Crew`/mass are valid. Tail-calls `DestroyVehicle(vehicle)` `:1733`. |
+| `Universe.DestroyVehicleFromEvent` | **VERIFIED** | `public static void DestroyVehicleFromEvent(Vehicle vehicle, VehicleDestructionEvent destructionEvent)` | `KSA/Universe.cs:1699` | **static, public.** Early-returns `if (vehicle.IsDisposed)`. Vehicle is fully intact at prefix time — reads of speed/position/`Crew`/`Parts.Count`/mass are valid. This is a whole-vehicle destruction boundary, not an individual-part destruction callback. Tail-calls `DestroyVehicle(vehicle)` `:1733`. |
 | `VehicleDestructionCause` — 6 values | **VERIFIED** | `public enum VehicleDestructionCause { GroundImpact, OceanImpact, Collision, ExcessiveGForce, AerodynamicForces, HydrodynamicForces }` | `KSA/VehicleDestructionCause.cs:3-11` | Byte-identical to 5117. Cause selection logic: `KSA/VehicleUpdateTask.cs:502`. |
 | `VehicleDestructionEvent.PeakGLoad` / `PeakDynamicPressure` | **VERIFIED** | `public required VehicleDestructionCause Cause; public required float PeakGLoad; public required float PeakDynamicPressure;` + `public void Apply(Vehicle vehicle)` | `KSA/VehicleDestructionEvent.cs:5-14` | Byte-identical to 5117. `Apply` calls `Universe.DestroyVehicleFromEvent(vehicle, this)`. Both floats. |
 | `GroundImpactEvent.Apply(Vehicle)` | **VERIFIED** | `public void Apply(Vehicle vehicle)` on `public class GroundImpactEvent : IVehicleRenderEvent` | `KSA/GroundImpactEvent.cs:21` (class `:5`) | Body only spawns FX (and is `IsImpactFxSuppressed`-gated) — a **postfix still fires for every impact**, suppressed or not. |
@@ -301,7 +306,7 @@ Items the older plan could not have covered.
 | **`StructuralLoad` struct + `Vehicle.StructuralLoad`** — brand new file | `KSA/StructuralLoad.cs`, `KSA/Vehicle.cs:531` | Peak g and peak dynamic pressure are now **pollable in real time**, not just at death. Also gives `MaxGLoad`/`MaxDynamicPressure` (the per-vehicle limits) and `GLoadFraction`/`DynamicPressureFraction`. This turns "closest call" / "highest sustained g" into a first-class leaderboard category with no Harmony patch at all. **Caveat B10: zero when not under full physics.** |
 | **G-force / pressure warning alerts** (changelog r5165) | `KSA/LoadAlert.cs` (new file), thresholds `WARN_FRACTION = 0.7`, `WARN_RELEASE = 0.65`, `DANGER_FRACTION = 0.85`, `DANGER_RELEASE = 0.8` at `:15-21`; reads `Vehicle.GetControlledStructuralLoad()` `:54` | Gives catlog ready-made, game-blessed thresholds with hysteresis for a "near-death experience" event. Copy the fractions rather than inventing your own. |
 | **Kitten locomotion subsystem** (changelog r5128/r5130/r5131/r5134/r5142) — 6 new files | `KSA/KittenLocomotion.cs`, `LocomotionMode.cs`, `LocomotionState.cs`, `LocomotionFacts.cs`, `LocomotionCommand.cs`, `KittenLocomotionTuning.cs` | The whole tumble-detection surface is one build old. Beyond `Mode`, `LocomotionState` exposes `ModeStartTime`, `GroundSpeed`, `JumpFired`, `LiftoffTime`, `LastContactTrueTime` — enough for "longest jump", "time airborne", "distance walked vs MMU'd" without any patching. `LocomotionState` is a value copy off a public property — no reflection. |
-| **`LocomotionMode.Rightening`** | `KSA/LocomotionMode.cs:8-9`, transition `KSA/KittenLocomotion.cs:55-61` | A tumble now ends `Tumbling → Rightening → Grounded` (after `SettleTime = 1 s` below `SettleSpeedThreshold = 0.2 m/s`). Counting transitions **into** `Tumbling` is still correct; counting transitions **out of** `Tumbling` would double-count via `Rightening`. |
+| **`LocomotionMode.Rightening` and tumble re-entry** | `KSA/LocomotionMode.cs:8-9`, transitions `KSA/KittenLocomotion.cs:51-63`; stock timeout `KSA/KittenLocomotionTuning.cs:43,82` | A settled tumble ends `Tumbling → Rightening → Grounded` (after `SettleTime = 1 s` below `SettleSpeedThreshold = 0.2 m/s`). A tumbling kitten off the ground for stock `TumbleAirborneExitTime = 0.5 s` instead becomes `Airborne`, so a later bounce may enter `Tumbling` again. Counting transitions **into** `Tumbling` reports the game state machine exactly; it is not a one-event-per-cartwheel guarantee. |
 | **`LocomotionMode.Ladder`** (changelog r5161) | `KSA/LocomotionMode.cs:10` | Declared but **not functional yet** ("SoonTM"). Present in `DeriveMode` (`KSA/KittenLocomotion.cs:26-29`) and `StepLadder` (`:292`) but nothing sets it. Do not build a ladder metric yet; do handle the enum value so a future build does not crash a switch. |
 | **`KittenTuningWindow`** — live tuning of the tumble gate | `KSA/KittenTuningWindow.cs:9`, instantiated `KSA/Program.cs:3422` | **Integrity hole.** See **B9**. Also exposes `JumpDeltaV`, `RunSpeed`, `WalkSpeed` etc. — a kitten-distance or jump leaderboard is forgeable via this shipped window. Snapshot the whole `KittenLocomotionTuning.Current` (or a hash of it) alongside any kitten-locomotion record. |
 | **`GroundImpactEvent.ImpactVelocity`** (changelog r5162) | `KSA/GroundImpactEvent.cs:9` | New this build. This is exactly the field the plan's "survived lithobrake at N m/s" record needs, and it did **not** exist in 5117 — so the record type only became possible now. It is the closing **normal** speed, not total speed. |
@@ -313,6 +318,219 @@ Items the older plan could not have covered.
 | **`PhysicsEnvironment` positional cache** | `KSA/PhysicsEnvironment.cs:11-31`, recomputed `:110-127` | The physics step caches `TerrainRadius`, `OceanRadius`, `AtmosphericPressure`, `AtmosphericDensity` and `InPhysicsRadius` per vehicle. This is what makes a **terrain-relative altitude affordable at 2 Hz** — see [the `GetRadarAltitude` refusal](#the-getradaraltitude-refusal). It is also the cheap source for dynamic pressure, which otherwise needs `PhysicalAtmosphereReference.GetDynamicPressure(vehicle)`. **Caveat: zeroed outside the near-surface radius**, so absence has to be detected structurally rather than by testing for 0. |
 | **`Celestial.GetLatitudeFromCce` / `GetLongitudeFromCce`** | `KSA/Celestial.cs:698`, `:733` | Body-fixed latitude/longitude in **degrees**, off a cached position and one quaternion inverse. This is the whole spatial dimension catlog was built without, and it costs nothing per tick. Declared on `Celestial` rather than `IParentBody` — a vehicle orbiting another vehicle has no latitude, and that is the honest answer rather than a defensive one. |
 | **RCS thrust rebalance** (changelog r5119, r5128) | — | "Reduced RCS thrust overall", "small RCS thrusters noticeably less thrust", "Greatly increased the thrust of Kitten RCS". Purely numeric, but any **historical** delta-v or maneuver-efficiency leaderboard is not comparable across the 5117/5168 boundary. Stamp the game build on every batch. |
+
+---
+
+## System survey and stable identity
+
+This inventory is the contract behind the once-per-loaded-system survey and its session-boundary
+cache replay. Every symbol was verified against KSA build **2026.8.5.5168** and every game access in
+`SystemSurvey` carries a `[KsaAnchor]`, so a future decompile bump turns this into a mechanical
+re-check. The current-system, enumeration, physical-value, orientation, orbit-element and parent
+anchors have churn risk **Low**; the launcher display-name lookup has churn risk **Medium**. Raw
+values used for identity stay separate from the sanitised/lowercased values later put on the wire.
+
+### Which objects are bodies
+
+The loaded system is `Universe.CurrentSystem` (`KSA/Universe.cs:92`). Its public surface is
+`CelestialSystem.Id`, `All`, `Count` and `HomeBody` (`KSA/CelestialSystem.cs:55-61`). `All` is a
+`LookupCollection<Astronomical>`, not a body collection: stock content registers five template
+vehicles there too, and `Count` is exactly `_all.Count`. The only correct enumeration is therefore:
+
+```csharp
+foreach (IParentBody body in Universe.CurrentSystem.All.OfType<IParentBody>()) { ... }
+```
+
+`Celestial` and `StellarBody` implement `IParentBody` (`KSA/Celestial.cs:23`,
+`KSA/StellarBody.cs:12`); `Vehicle` does not (`KSA/Vehicle.cs:27`). Thus the filter includes every
+celestial body and excludes every registered vehicle. `LookupCollection<T>.TypeFilter<T2>` is a
+`ref struct` over a span with `GetEnumerator`, `MoveNext` and `Current`
+(`KSA/LookupCollection.cs:12-43`), so this `foreach` is allocation-free but may neither escape the
+game-thread frame nor survive a registration/deregistration. The survey immediately materialises a
+plain immutable snapshot list. **That filtered list's count**, never `CelestialSystem.Count`, is the
+body count used by the hash, completeness cap and tests.
+
+Every enumerated value is also an `Astronomical`. `IParentBody` has no `Class`, so the survey casts
+to that base and reads its virtual `Class` (`KSA/Astronomical.cs:12,100`); virtual dispatch preserves
+the concrete runtime string rather than guessing it from an id. The normalised semantic `kind` is a
+separate value derived from that class and the direct parent's class; the raw `class` remains opaque.
+
+The derived `kind` used by the hash is exhaustive and fixed:
+
+| `kind` | Rule over the runtime `Class` and direct parent |
+|---|---|
+| `star` | `StellarBody` |
+| `planet` | `PlanetaryBody`, `TerrestrialBody` or `AtmosphericBody`, with a direct `StellarBody` parent |
+| `moon` | one of those same three classes, with a non-stellar parent |
+| `minor` | `MinorBody`, `Asteroid`, `Comet`, `PeriodicComet` or `InterstellarComet` |
+| `other` | any future or unknown class |
+
+This mapping depends on class and parent topology, never a body-name allow-list. A stellar parent
+need not itself be a root, so it remains correct in a multiple-star mod system.
+
+### A forest, not a selected sun
+
+`CelestialSystem` calls `CreateTreeFromRoot` for **every** template body whose parent is null
+(`KSA/CelestialSystem.cs:137-151,186-199`). A mod system may therefore have multiple roots.
+`GetWorldSun()` choosing one star for the game UI does not turn the catalogue into a single tree.
+The snapshot retains every parentless body, calculates `rank` as depth from that body's own root,
+and derives `roots[]` in raw-id ordinal order from the body rows. There is no singular `root_body`,
+preferred-root invariant or display-root fallback. Parent absence plus the sorted body rows already
+encodes the roots in the hash, so `roots[]` is not hashed a second time.
+
+### The order hazard
+
+`CelestialSystem.All` order is unstable even without changing content. `LookupCollection.Deregister`
+uses swap-remove (`KSA/LookupCollection.cs:148-161`), while every
+`Universe.DeserializeSave(UniverseData)` first calls `CurrentSystem.DestroyAllVehicles()`
+(`KSA/Universe.cs:2140,2152`). Removing the five stock template vehicles pulls celestial entries
+into their vacated slots. Sandbox can omit those vehicles altogether, and `CelestialSystem.Rename`
+deregisters and appends a vehicle (`KSA/CelestialSystem.cs:102-114`). The same system can therefore
+enumerate differently at boot and after a save load.
+
+**The materialised body list is sorted by raw `Id`, ordinal ascending, before any hash byte is
+written.** Sorting only the emitted presentation rows, or hashing first and sorting afterwards,
+would split identical content into two system identities.
+
+### Exact source inventory
+
+The hash intentionally follows the canonical surveyed content, including values KSA derives at
+runtime. If two surveys would publish different body rows, they must not share an identity.
+
+| Hash input | KSA source in build 5168 | Authored or derived | Why it is included |
+|---|---|---|---|
+| raw system id | `CelestialSystem.Id` → `_template.Id` (`KSA/CelestialSystem.cs:61`) | authored system template | Names which catalogue was loaded; kept raw so separator-bearing ids remain distinguishable. |
+| raw system display name | matching `SystemInfo.Id` and `SystemInfo.DisplayName.Value` (`KSA/SystemInfo.cs:10-11,29`; `KSA/StringReference.cs:9`; selection list `KSA/SelectSystem.cs:18`) | authored launcher metadata | It is published content and may differ between two otherwise similar mods. If metadata is absent, raw system id is the fallback. |
+| raw home-body id | `CelestialSystem.HomeBody.Id` (`KSA/CelestialSystem.cs:55`; authored marker `KSA/AstronomicalTemplate.cs:23-24`, selection/fallback `KSA/CelestialSystem.cs:154-181,210-230`) | authored marker, runtime-resolved | A different home body changes the system players enter. |
+| body count | materialised `All.OfType<IParentBody>()` list | runtime-derived from what registered successfully | Commits the catalogue cardinality without counting template vehicles. |
+| raw body id and optional raw parent id | `Astronomical.Id` (`KSA/Astronomical.cs:96`); `Celestial.Parent` (`KSA/Celestial.cs:73`) | authored graph, runtime instances | Identifies each node and the complete forest topology. |
+| concrete `class` | virtual `Astronomical.Class` (`KSA/Astronomical.cs:100`; `KSA/Celestial.cs:97`; `KSA/StellarBody.cs:34`) | runtime-dispatched from the instantiated type | Preserves the game's own opaque classification. |
+| normalised `kind` | fixed mapping from concrete class plus whether the direct parent is `StellarBody` | catlog-derived semantic value | It is published separately from `class`; a changed published meaning must change identity. |
+| `rank` | depth calculated by walking the parent links from each root | catlog-derived | Commits the published forest depth and catches topology changes. |
+| `radius_m` | `IParentBody.MeanRadius`; loaded from `CelestialTemplate.MeanRadius` (`KSA/Astronomical.cs:104`; `KSA/CelestialTemplate.cs:27-28`; `KSA/Celestial.cs:215`; `KSA/StellarBody.cs:36,46`) | authored template value | Published physical size. |
+| `mass_kg` | `IParentBody.Mass` (`KSA/IParentBody.cs:11`; `KSA/Celestial.cs:93,216`; `KSA/StellarBody.cs:38,47`) | authored template value | Published mass and the exact source from which `mu` can be recovered. |
+| `soi_m` | `IParentBody.SphereOfInfluence` (`KSA/IParentBody.cs:23`; `KSA/Celestial.cs:85,217-225`; stellar `+Inf` at `KSA/StellarBody.cs:28`) | authored when present, otherwise KSA-derived | The resolved value is what the game uses and what the catalogue reports. |
+| `atmo_m` | `GetAtmosphereReference()?.Physical.Height` (`KSA/IParentBody.cs:57`; `KSA/AtmosphereReference.cs:8`; `KSA/PhysicalAtmosphereReference.cs:23,40-48`) | KSA-derived boundary from authored scale height/density/pressure; zero when absent | Published atmosphere extent. |
+| `ocean_m` | `GetOceanReference()?.Level` (`KSA/IParentBody.cs:59`; `KSA/Astronomical.cs:327-330`; `KSA.Rendering.Water.Data/OceanReference.cs:8-9`) | authored template value; zero when absent | Published ocean level above mean radius. |
+| `angvel` | `IParentBody.GetAngularVelocity()` (`KSA/IParentBody.cs:78`; `KSA/Celestial.cs:192-195,239,627-642`; stellar zero at `KSA/StellarBody.cs:137-140`) | KSA-derived from authored rotation and, when tidally locked, orbital period | Published signed spin rate, including retrograde rotation. |
+| `axis.{x,y,z}` | `Celestial.GetRotationAxisCce()` (`KSA/Celestial.cs:622-625`); stellar fixed axis/identity orientation | KSA-derived orientation | Published body-centred-ecliptic rotation axis. |
+| `ccf_to_cce_t0.{x,y,z,w}` | `IParentBody.GetCcf2Cce(SimTime.Zero)` (`KSA/IParentBody.cs:35`; composition `KSA/Celestial.cs:564-578`; stellar identity `KSA/StellarBody.cs:126-129`); fields `Brutal.Numerics/doubleQuat.cs:18-27` | KSA-derived axis, phase and frame orientation | Supplies the prime-meridian phase that an axis alone omits. The survey normalises and canonicalises the quaternion before hashing. |
+| orbital group: `sma_m`, `ecc`, `inc_deg`, `lan_deg`, `argp_deg`, `t_pe` | non-root `Celestial.Orbit` and its getters (`KSA/Celestial.cs:71,99-113`; `KSA/Orbit.cs:1150-1170`) | constructed by KSA from authored orbital elements; angles converted radians→degrees by catlog | The complete six-value shape group is published; roots carry one absent-group marker instead. |
+| `period_s` | `Orbit.Period` (`KSA/Orbit.cs:1170`; calculation and unbound `NaN` in `KSA/OrbitData.cs:35-75`) | KSA-derived | Published independently of the shape group because an unbound orbit has elements but no finite period. |
+
+The orientation deserves emphasis: `GetCcf2Cce(SimTime.Zero)` already composes body-fixed spin phase
+with inertial-to-body-centred-ecliptic orientation. Reconstructing it from `axis` would lose the
+azimuth/prime-meridian phase. The four returned `doubleQuat` fields are public; stellar bodies return
+the identity quaternion.
+
+The following readable values are deliberately **excluded** from identity:
+
+| Excluded value | Source | Reason |
+|---|---|---|
+| sanitised display/body strings and lowercased join keys | catlog presentation conversion | Identity uses raw KSA strings; sanitisation can collapse distinct content. |
+| `complete`, event/session/career ids, `sim_t`, `wall_t` and envelope time | emission health/session state | None describes celestial-system content. |
+| install id | catlog local state | Unlike career/kitten ids, a system must hash identically for every player running the same content. There is intentionally no salt. |
+| `CelestialSystem.Count` and the template body count | mixed live collection / authored template | The former includes vehicles; the latter includes roots/subtrees that may have failed to instantiate. The registered `IParentBody` list is truth. |
+| `mu` | default `IParentBody.Mu = Mass * 6.6743E-11` (`KSA/IParentBody.cs:15`) | Fully derived from the included mass and not separately published. |
+| terrain/heightmap samples and envelope, positions, velocities, current state vectors | terrain and mutable per-frame state | Machine/settings/time dependent or mutable; `system.body` publishes none of them. |
+| textures, colours, meshes, locations and other cosmetic metadata | body templates/render assets | Not part of the published physical catalogue and may vary with rendering assets. |
+
+### Normative hash encoding
+
+`SystemHashInput` is encoded in this exact logical order:
+
+1. raw system id, raw display name, raw home-body id, then the filtered body count;
+2. for each body sorted by raw id ordinal: raw id, optional raw parent id, concrete `class`,
+   normalised `kind`, and forest `rank`;
+3. `radius_m`, `mass_kg`, `soi_m`, `atmo_m`, `ocean_m`, `angvel`, axis x/y/z and canonical
+   `ccf_to_cce_t0` x/y/z/w;
+4. one presence byte for the six-value orbital group, followed when present by `sma_m`, `ecc`,
+   `inc_deg`, `lan_deg`, `argp_deg`, `t_pe`; then an independent period-presence byte followed by
+   `period_s` when present.
+
+The byte stream begins with the literal ASCII domain prefix `catlog-system-v1`. Every string after
+it is strict UTF-8 encoded as a big-endian unsigned 32-bit byte length followed by exactly those
+bytes; separators in ids therefore have no structural meaning. Body count and rank are big-endian
+signed 32-bit integers. Optional parent, orbital group and period each use one byte, exactly `0` or
+`1`, before any optional content.
+
+Every finite double is tag byte `0x00` followed by its IEEE-754 binary64 bits in big-endian order,
+with `-0` canonicalised to `+0`. Positive infinity is the single byte `0x01`, negative infinity is
+the single byte `0x02`, and every NaN payload is the single byte `0x03`; platform NaN payload bits
+never enter the stream. This non-finite rule keeps identity deterministic even when the later wire
+conversion marks a catalogue incomplete. Text formatting and the current culture never participate.
+
+SHA-256 hashes the completed byte stream. The system id is the first ten digest bytes encoded as
+16 lowercase Crockford characters. There is **no install-id salt**: the purpose of the id is to join
+different players running identical public content. Known-vector tests pin the whole stream, plus
+body reordering, `fr-FR`, `-0`, NaN/infinities and separator-bearing ids.
+
+`SystemSnapshot` keeps these raw hash inputs separate from canonical wire fields. Both it and
+`SystemBodySnapshot` are immutable records in `catlog.lib` and contain no KSA type; the existing
+assembly guard enforces that boundary.
+
+### Survey timing, cache and failure behavior
+
+The survey is captured by a Harmony **postfix** on `Universe.LoadSystem(string)`
+(`KSA/Universe.cs:167-179`), whose `[KsaAnchor]` churn risk is **Low**. A prefix is wrong:
+`CurrentSystem` is assigned only at line 174, after the constructor returns, so it would see the
+previous system or null. The current game flow calls `LoadSystem` once per launch; save loading uses
+`Universe.DeserializeSave` and does not reload the system. The game thread therefore normally pays
+for one enumeration per launch. If a later path calls `LoadSystem` again, the postfix replaces the
+cache with a fresh survey; ordinary session boundaries re-emit the cached immutable snapshot rather
+than walking KSA objects again.
+
+StarMap's `AllModsLoaded` currently precedes KSA's default `LoadSystem`, so the postfix observes the
+initial load. Startup also checks `Universe.CurrentSystem` and surveys it when already non-null, in
+case lifecycle ordering changes. A null system produces no fabricated fallback survey. Session,
+career, sim and wall timestamps are attached only when C2 emits events; they are not cached as part
+of system identity.
+
+Finally, `CelestialSystem` catches exceptions **per root** while constructing the forest
+(`KSA/CelestialSystem.cs:137-153`). A bad modded root can silently lose its whole subtree while the
+rest of the system continues loading. The survey does not compare against template cardinality and
+does not pretend the missing tree exists: it hashes and reports exactly the registered, materialised
+`IParentBody` forest. A partial load consequently receives its own honest identity instead of
+colliding with the intact system.
+
+### Wire emission boundary and durable catalogue marker
+
+The `Universe.LoadSystem` postfix captures and caches only the KSA-derived immutable snapshot. It
+does not emit through its own signal, because `EventPipeline.OnSessionLoaded` is the seam that resets
+the tracker and mints the new session id. Instead `SessionLoadedSignal` carries `SystemSnapshot?`,
+and the one session-boundary path orders the records as:
+
+1. reset the old pipeline state and mint the new session;
+2. emit `system.discovered`;
+3. emit every required `system.body` row;
+4. emit `session.started`.
+
+Startup and `Universe.DeserializeSave` use that same path. The load-system postfix both captures the
+survey and establishes the boundary; the save-deserialisation postfix reuses the cache. If
+`Universe.CurrentSystem` is null there is no fallback hash and no phantom system/session pair — a
+later successful `LoadSystem` establishes it.
+
+`CatlogRuntime`, not `EventPipeline`, owns the durable decision because Runtime owns `OutboxDb`. Its
+state key is `survey:<career>:<system-hash>`. A complete, enabled and unmarked survey appends the
+header, all bodies and session together and advances that key in the same
+`OutboxDb.AppendAndSetState` transaction. A marked survey still appends a small `complete: false`
+header and session, which reasserts career→system attribution every session, but no bodies; its
+earlier complete list is already durable. The body catalogue is thus
+once per `(career, hash)`, not once per launch. A missing marker may resend; C3's specified
+immutable first-write fold makes that replay idempotent. A marker may never exist without all
+catalogue rows already in the outbox.
+
+When `system.body` is disabled, or the count is greater than `Wire.MaxSystemBodies` (5,000), or a
+required scalar/axis/quaternion cannot produce a finite wire value, Runtime emits
+`system.discovered.complete: false`, no bodies and no marker. It never truncates. Re-enabling body
+reporting or correcting the content allows the next boundary to retry. The root's authored
+`SphereOfInfluence = +Inf` is the sole conversion exception and becomes wire `soi_m: 0`; an invalid
+six-element orbital group is omitted as a whole for its body, while a non-finite period independently
+omits `period_s`.
+
+This enumeration occurs on the game thread at the system-load boundary, after which workers see
+only the immutable record. Runtime cost at stock Sol and SolDense has not yet been measured; the
+manual diagnostics run, including SolDense's 3,215 bodies, remains a blocking acceptance check.
 
 ---
 

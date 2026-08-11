@@ -34,12 +34,13 @@
 //
 // # Where a board's key comes from
 //
-// Most board keys are constants — one per fold, listed in [FixedBoards]. Two
-// families are not: `fastest_to_<body>` and `rud_<cause>` take their second half
-// from the event stream, because KSA's celestial systems and its enums are
-// content that ships as data and that mods extend. [Describe] derives a board's
-// title, unit and direction from its key alone, and [Catalog] decides which of
-// them the public index lists. See the commentary above [DefaultMinPlayers].
+// Most board keys are constants listed in [FixedBoards]. Three families are
+// not: `fastest_to_<body>`, `tumbles_on_<body>` and `rud_<cause>`
+// take their second half from the event stream, because KSA's celestial systems
+// and its enums are content that ships as data and that mods extend. [Describe]
+// derives a board's title, unit and direction from its key alone, and [Catalog]
+// decides which of them the public index lists. See the commentary above
+// [DefaultMinPlayers].
 //
 // # Rebuild refinements
 //

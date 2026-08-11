@@ -29,7 +29,7 @@ var samplePayloads = map[string]string{
 	"telemetry.window": `{"t0_sim":9560.935867065617,"t1_sim":9565.935867065617,"n":11,"body":"earth","alt_m":{"min":0,"max":255.35389716750115,"mean":44.39081693189453,"last":255.35389716750115},"surface_speed_ms":{"min":0,"max":3.118838035134325,"mean":0.5421799698128816,"last":3.118838035134325},"orbital_speed_ms":{"min":0,"max":3.118838035134325,"mean":0.5421799698128816,"last":3.118838035134325},"accel_ms2":{"min":0,"max":13.67980231499272,"mean":6.066934478368358,"last":13.67980231499272},"peak_g":1.3944752614671478,"max_q_pa":20136.96739784773,"mass_kg_last":11572.076419545007}`,
 	"vehicle.staging":  `{"stage_index":3}`,
 	"flight.started":   `{"vehicle_name":"Röntgen \"IX\"","body":"earth","crew_count":2,"mass_kg":41000,"part_count":60}`,
-	"kitten.tumble":    `{"kid":"k1","name":"Comet — 彗星","speed_ms":8.2,"body":"earth"}`,
+	"kitten.tumble":    `{"kid":"k1","name":"Comet — 彗星","speed_ms":8.2,"body":"earth","from":"airborne"}`,
 	"session.started":  `{}`,
 	"vehicle.rud":      `{"parts":[{"name":"tank\n?","id":1},{"name":"engine\t","id":2}],"cause":"aero"}`,
 }

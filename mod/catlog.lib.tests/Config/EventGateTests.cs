@@ -10,7 +10,7 @@ using Xunit;
 namespace MeowSci.Catlog.Lib.Tests.Config;
 
 /// <summary>
-/// The five event types no configuration can switch off: <c>session.started</c>,
+/// The six event types no configuration can switch off: <c>session.started</c>,
 /// <c>flight.started</c>, <c>flight.ended</c>, <c>flight.flagged</c> and <c>kitten.kia</c>.
 /// </summary>
 /// <remarks>
@@ -36,14 +36,14 @@ namespace MeowSci.Catlog.Lib.Tests.Config;
 public sealed class EventGateTests
 {
     /// <summary>
-    /// The list is exactly five names, and it is these five. This test exists so that shortening it
+    /// The list is exactly six names, and it is these six. This test exists so that shortening it
     /// is a deliberate act with a failing test attached, not a quiet edit.
     /// </summary>
     [Fact]
     public void TheLockedListIsExactlyTheIntegritySpine()
     {
         Assert.Equal(
-            ["flight.ended", "flight.flagged", "flight.started", "kitten.kia", "session.started"],
+            ["flight.ended", "flight.flagged", "flight.started", "kitten.kia", "session.started", "system.discovered"],
             EventTypes.AlwaysReported.OrderBy(static t => t, StringComparer.Ordinal).ToArray());
 
         // Every one of them is a real registered type, not a typo that would never match.
@@ -69,6 +69,7 @@ public sealed class EventGateTests
             "flight.flagged" = false
             "kitten.kia" = false
             "session.started" = false
+            "system.discovered" = false
             "flight.started" = false
             "flight.ended" = false
             "telemetry.window" = false
@@ -91,11 +92,12 @@ public sealed class EventGateTests
             Assert.DoesNotContain($"\"{type}\" = false", written, StringComparison.Ordinal);
 
         // And the file the player reads says so in as many words.
-        Assert.Contains("Five types cannot be switched off", written, StringComparison.Ordinal);
+        Assert.Contains("Six types cannot be switched off", written, StringComparison.Ordinal);
     }
 
     [Theory]
     [InlineData("session.started")]
+    [InlineData("system.discovered")]
     [InlineData("flight.started")]
     [InlineData("flight.ended")]
     [InlineData("flight.flagged")]

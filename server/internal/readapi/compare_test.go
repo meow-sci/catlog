@@ -1,6 +1,7 @@
 package readapi_test
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"slices"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/meow-sci/catlog/server/internal/readapi"
 	"github.com/meow-sci/catlog/server/internal/stats"
+	"github.com/meow-sci/catlog/server/internal/testutil"
 )
 
 // boardOf finds one board in a comparison.
@@ -109,6 +111,50 @@ func TestCompareIsConsistentWithTheProfileEndpoint(t *testing.T) {
 				t.Errorf("%s: comparison says rank %d value %v, profile says rank %d value %v",
 					row.Handle, row.Rank, row.Value, p.Rank, p.Value)
 			}
+		}
+	}
+}
+
+func TestCompareAttachesSystemsInOneResponseLevelBatch(t *testing.T) {
+	f := newFixture(t)
+	ace, rival := f.player("ace"), f.player("rival")
+	seedSystem(t, f, "hash-sol", "Sol", "Solar System", "solar-system", 0, 1, 1)
+	seedSystem(t, f, "hash-alt", "Alt", "Alternate", "alternate", 0, 1, 2)
+	aceSeq, rivalSeq := f.event(ace, 1), f.event(rival, 1)
+	seedDetailedCareer(t, f, ace, "ace-winning-career", "hash-sol", 1, false, false, 1, aceSeq, aceSeq)
+	seedDetailedCareer(t, f, rival, "rival-winning-career", "hash-alt", 1, false, false, 1, rivalSeq, rivalSeq)
+	f.statContext(ace, stats.StatStagings, 4, `{"career":"ace-winning-career"}`)
+	f.statContext(rival, stats.StatStagings, 3, `{"career":"rival-winning-career"}`)
+
+	counting := &countingLive{p: f.proj}
+	srv, err := readapi.New(readapi.Deps{
+		Projections: counting, Events: f.events, Directory: f.dir, Log: testutil.DiscardLogger(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmp, err := srv.Compare(t.Context(), []string{"ace", "rival"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := boardOf(t, cmp, stats.StatStagings).Rows
+	if len(rows) != 2 || rows[0].System == nil || rows[0].System.Name != "Solar System" ||
+		rows[1].System == nil || rows[1].System.Name != "Alternate" {
+		t.Fatalf("comparison systems = %+v", rows)
+	}
+	// stat census + (stats and rank inputs per player) + one career-binding
+	// group + one system-header metadata group. In particular, adding the second
+	// handle does not add a second system-header read.
+	if counting.calls != 7 {
+		t.Errorf("projection query groups = %d, want 7 with one response-level metadata batch", counting.calls)
+	}
+	raw, err := json.Marshal(cmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, career := range []string{"ace-winning-career", "rival-winning-career"} {
+		if strings.Contains(string(raw), career) {
+			t.Errorf("comparison published raw career %q: %s", career, raw)
 		}
 	}
 }

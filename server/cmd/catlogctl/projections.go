@@ -334,7 +334,7 @@ func callAdmin(ctx context.Context, method, url string, body, out any) error {
 	if err != nil {
 		return fmt.Errorf("read response: %w", err)
 	}
-	if res.StatusCode != http.StatusOK {
+	if res.StatusCode < http.StatusOK || res.StatusCode >= http.StatusMultipleChoices {
 		var e struct {
 			Error  string `json:"error"`
 			Detail string `json:"detail"`

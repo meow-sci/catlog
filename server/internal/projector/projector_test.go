@@ -179,6 +179,30 @@ func ev(flight ids.ID, typ string, payload any, simT float64) store.Event {
 	}
 }
 
+func inCareer(event store.Event, career string) store.Event {
+	event.Career = career
+	return event
+}
+
+func withoutSimTime(event store.Event) store.Event {
+	event.SimTime = sql.NullFloat64{}
+	return event
+}
+
+func discovery(career, hash string) store.Event {
+	return inCareer(ev(ids.Zero, "system.discovered", stats.SystemDiscovered{
+		System: hash, ID: "Sol", Name: "Solar System", Home: "earth", Bodies: 1, Complete: true,
+	}, 0), career)
+}
+
+func rootBody(hash string) store.Event {
+	return ev(ids.Zero, "system.body", stats.SystemBody{
+		System: hash, Body: "sol", Name: "Sol", Class: "Star", Kind: "star", Rank: 0,
+		RadiusM: 1, MassKg: 2, SoiM: 0, AtmoM: 0, OceanM: 0, AngVel: 3,
+		Axis: stats.Vec3{Y: 1}, CcfToCceT0: stats.Quat{W: 1},
+	}, 0)
+}
+
 func flight(n int) ids.ID {
 	var id ids.ID
 	id[0] = 0x02
@@ -187,6 +211,8 @@ func flight(n int) ids.ID {
 	return id
 }
 
+func intp(v int) *int { return &v }
+
 // cleanHistory is a history with no flags, no scuttled kittens and every flight
 // recovered — the conditions under which §5.6's incremental rules and its
 // rebuild refinements are supposed to agree exactly.
@@ -194,7 +220,7 @@ func cleanHistory(f0 int) []store.Event {
 	fa, fb := flight(f0), flight(f0+1)
 	return []store.Event{
 		ev(ids.Zero, "session.started", map[string]any{"mod_ver": "0.1.0", "game_build": "2026.8.5.5168", "install": "x"}, 0),
-		ev(fa, "flight.started", stats.FlightStarted{VehicleName: "A", Body: "kerbin", CrewCount: 2}, 10),
+		ev(fa, "flight.started", stats.FlightStarted{VehicleName: "A", Body: "kerbin", CrewCount: 2, EngineCount: intp(4)}, 10),
 		ev(fa, "vehicle.staging", stats.VehicleStaging{StageIndex: 0}, 12),
 		ev(fa, "vehicle.staging", stats.VehicleStaging{StageIndex: 1}, 14),
 		ev(fa, "telemetry.window", tw("kerbin", 2400, 7800, 4.5), 30),
@@ -203,9 +229,9 @@ func cleanHistory(f0 int) []store.Event {
 		ev(fa, "vehicle.docked", stats.VehicleDock{OtherFlight: ids.String(flight(99))}, 55),
 		ev(fa, "vehicle.impact", stats.VehicleImpact{SpeedMs: 180, EnergyJ: 3.1e7, Survived: true, Body: "mun", CrewCount: 2}, 60),
 		ev(fa, "flight.ended", stats.FlightEnded{Reason: "recovered", CrewCount: 2}, 70),
-		ev(fb, "flight.started", stats.FlightStarted{VehicleName: "B", Body: "duna", CrewCount: 1}, 80),
+		ev(fb, "flight.started", stats.FlightStarted{VehicleName: "B", Body: "duna", CrewCount: 1, EngineCount: intp(0)}, 80),
 		ev(fb, "telemetry.window", tw("duna", 780, 3100, 9.6), 90),
-		ev(fb, "vehicle.rud", stats.VehicleRUD{Cause: "ground_impact", SpeedMs: 320, Body: "duna"}, 95),
+		ev(fb, "vehicle.rud", stats.VehicleRUD{Cause: "ground_impact", SpeedMs: 320, Body: "duna", PartCount: 14, CrewCount: 3}, 95),
 		ev(fb, "kitten.tumble", stats.KittenTumble{Kid: "k1", Name: "Comet", SpeedMs: 8.2, Body: "duna"}, 96),
 		ev(fb, "flight.ended", stats.FlightEnded{Reason: "recovered", CrewCount: 1}, 99),
 		ev(ids.Zero, "roster.snapshot", stats.RosterSnapshot{Kittens: []stats.RosterKitten{
@@ -230,13 +256,24 @@ func tw(body string, surface, orbital, peakG float64) stats.TelemetryWindow {
 // compared by content rather than by rowid so an id offset cannot make two
 // identical feeds look different.
 type snapshot struct {
-	Stats   []string
-	Flights []string
-	Bodies  []string
-	Kittens []string
-	Periods []string
-	Feed    []string
-	Cursor  int64
+	Stats            []string
+	CareerStats      []string
+	SystemStats      []string
+	Flights          []string
+	Bodies           []string
+	CareerBodies     []string
+	Kittens          []string
+	CareerKittens    []string
+	Careers          []string
+	Systems          []string
+	SystemBodies     []string
+	Badges           []string
+	ChallengeStats   []string
+	ChallengeMembers []string
+	Periods          []string
+	Census           []string
+	Feed             []string
+	Cursor           int64
 }
 
 func (r *rig) snapshot() snapshot {
@@ -245,19 +282,52 @@ func (r *rig) snapshot() snapshot {
 	err := r.live.With(func(p *store.Projections) error {
 		ctx := r.t.Context()
 		var err error
-		if s.Stats, err = dump(ctx, p, `SELECT player_id, stat, value, coalesce(context,''), updated_seq FROM player_stat ORDER BY player_id, stat`); err != nil {
+		if s.Stats, err = dump(ctx, p, `SELECT player_id, stat, value, context, updated_seq FROM player_stat ORDER BY player_id, stat`); err != nil {
 			return err
 		}
-		if s.Flights, err = dump(ctx, p, `SELECT hex(flight_id), player_id, flags, coalesce(ended_reason,''), coalesce(crew,-1), coalesce(body,''), started_seq FROM flight_state ORDER BY hex(flight_id)`); err != nil {
+		if s.CareerStats, err = dump(ctx, p, `SELECT player_id, career, system, stat, value, context, updated_seq FROM career_stat ORDER BY player_id, career, stat`); err != nil {
 			return err
 		}
-		if s.Bodies, err = dump(ctx, p, `SELECT player_id, kind, body, first_seq FROM player_body ORDER BY player_id, kind, body`); err != nil {
+		if s.SystemStats, err = dump(ctx, p, `SELECT player_id, system, stat, value, context, updated_seq FROM system_stat ORDER BY player_id, system, stat`); err != nil {
+			return err
+		}
+		if s.Flights, err = dump(ctx, p, `SELECT hex(flight_id), player_id, flags, ended_reason, crew, body, started_seq, engine_count, milestones, part_count, launch_mass_kg, career, first_orbit_seq FROM flight_state ORDER BY hex(flight_id)`); err != nil {
+			return err
+		}
+		if s.Bodies, err = dump(ctx, p, `SELECT player_id, kind, body, first_seq, first_sim_t FROM player_body ORDER BY player_id, kind, body`); err != nil {
+			return err
+		}
+		if s.CareerBodies, err = dump(ctx, p, `SELECT player_id, career, system, kind, body, first_seq, first_sim_t FROM career_body ORDER BY player_id, career, kind, body`); err != nil {
 			return err
 		}
 		if s.Kittens, err = dump(ctx, p, `SELECT player_id, kid, name, travelled_m, fastest_ms, missions, mission_time_s, kia, updated_seq FROM kitten ORDER BY player_id, kid`); err != nil {
 			return err
 		}
-		if s.Periods, err = dump(ctx, p, `SELECT player_id, stat, period, bucket, value, coalesce(context,''), updated_seq FROM player_stat_period ORDER BY player_id, stat, period, bucket`); err != nil {
+		if s.CareerKittens, err = dump(ctx, p, `SELECT player_id, career, system, kid, name, travelled_m, fastest_ms, missions, mission_time_s, kia, updated_seq FROM career_kitten ORDER BY player_id, career, kid`); err != nil {
+			return err
+		}
+		if s.Careers, err = dump(ctx, p, `SELECT player_id, career, ordinal, system, system_changed, max_sim_t, rewound, first_seq, last_seq FROM career ORDER BY player_id, career`); err != nil {
+			return err
+		}
+		if s.Systems, err = dump(ctx, p, `SELECT hash, system_id, name, slug, home_body, body_count, reported_complete, first_seq FROM system ORDER BY hash`); err != nil {
+			return err
+		}
+		if s.SystemBodies, err = dump(ctx, p, `SELECT hash, body, name, class, kind, rank, parent, radius_m, mass_kg, soi_m, atmo_m, ocean_m, angvel, axis_x, axis_y, axis_z, sma_m, ecc, inc_deg, lan_deg, argp_deg, t_pe, period_s, ccf_to_cce_t0_x, ccf_to_cce_t0_y, ccf_to_cce_t0_z, ccf_to_cce_t0_w, first_seq FROM system_body ORDER BY hash, body`); err != nil {
+			return err
+		}
+		if s.Badges, err = dump(ctx, p, `SELECT player_id, career, badge, system, first_career, earned_seq, earned_at, earned_sim_t, context FROM badge_award ORDER BY player_id, career, badge`); err != nil {
+			return err
+		}
+		if s.ChallengeStats, err = dump(ctx, p, `SELECT player_id, career, challenge, system, value, context, updated_seq FROM challenge_stat ORDER BY player_id, career, system, challenge`); err != nil {
+			return err
+		}
+		if s.ChallengeMembers, err = dump(ctx, p, `SELECT player_id, career, system, challenge, member, first_seq FROM challenge_member ORDER BY player_id, career, system, challenge, member`); err != nil {
+			return err
+		}
+		if s.Periods, err = dump(ctx, p, `SELECT player_id, stat, period, bucket, value, context, updated_seq FROM player_stat_period ORDER BY player_id, stat, period, bucket`); err != nil {
+			return err
+		}
+		if s.Census, err = dump(ctx, p, `SELECT type, period, bucket, n, first_seq, last_seq, first_at, last_at FROM event_census ORDER BY type, period, bucket`); err != nil {
 			return err
 		}
 		if s.Feed, err = dump(ctx, p, `SELECT at, handle, type, summary FROM feed ORDER BY id`); err != nil {
@@ -323,7 +393,101 @@ func diff(t *testing.T, label string, got, want []string) {
 		label, strings.Join(want, "\n              "), strings.Join(got, "\n              "))
 }
 
+// diffSnapshot is the canonical column-for-column equivalence proof. Keep the
+// table list here in lockstep with snapshot: adding a field without comparing
+// it must fail review visibly rather than silently weakening the rebuild test.
+func diffSnapshot(t *testing.T, got, want snapshot, feedContentOnly bool) {
+	t.Helper()
+	diff(t, "player_stat", got.Stats, want.Stats)
+	diff(t, "career_stat", got.CareerStats, want.CareerStats)
+	diff(t, "system_stat", got.SystemStats, want.SystemStats)
+	diff(t, "flight_state", got.Flights, want.Flights)
+	diff(t, "player_body", got.Bodies, want.Bodies)
+	diff(t, "career_body", got.CareerBodies, want.CareerBodies)
+	diff(t, "kitten", got.Kittens, want.Kittens)
+	diff(t, "career_kitten", got.CareerKittens, want.CareerKittens)
+	diff(t, "career", got.Careers, want.Careers)
+	diff(t, "system", got.Systems, want.Systems)
+	diff(t, "system_body", got.SystemBodies, want.SystemBodies)
+	diff(t, "badge_award", got.Badges, want.Badges)
+	diff(t, "challenge_stat", got.ChallengeStats, want.ChallengeStats)
+	diff(t, "challenge_member", got.ChallengeMembers, want.ChallengeMembers)
+	diff(t, "player_stat_period", got.Periods, want.Periods)
+	diff(t, "event_census", got.Census, want.Census)
+	if feedContentOnly {
+		diff(t, "feed", withoutAt(got.Feed), withoutAt(want.Feed))
+	} else {
+		diff(t, "feed", got.Feed, want.Feed)
+	}
+	if got.Cursor != want.Cursor {
+		t.Errorf("checkpoint = %d, want %d", got.Cursor, want.Cursor)
+	}
+}
+
 // --- the tests ---------------------------------------------------------------
+
+func TestNewScopeTablesStartEmpty(t *testing.T) {
+	snap := newRig(t).snapshot()
+	if len(snap.CareerStats) != 0 || len(snap.SystemStats) != 0 {
+		t.Fatalf("new scope tables are not empty: career=%v system=%v", snap.CareerStats, snap.SystemStats)
+	}
+}
+
+func TestBadgeAwardSnapshotIncludesEveryColumnInStableOrder(t *testing.T) {
+	r := newRig(t)
+	err := r.live.With(func(p *store.Projections) error {
+		_, err := p.Writer().ExecContext(t.Context(), `
+			INSERT INTO badge_award
+				(player_id, career, badge, system, first_career, earned_seq, earned_at, earned_sim_t, context)
+			VALUES
+				(2, 'save-two', 'career-award', 'system-hash', '', 12, 1770000001000, 42.5, '{"body":"luna"}'),
+				(1, '', 'lifetime', '', 'save-one', 11, 1770000000000, NULL, NULL)`)
+		return err
+	})
+	if err != nil {
+		t.Fatalf("seed badge awards: %v", err)
+	}
+	want := []string{
+		"player_id=1 career= badge=lifetime system= first_career=save-one earned_seq=11 earned_at=1770000000000 earned_sim_t=<nil> context=<nil>",
+		"player_id=2 career=save-two badge=career-award system=system-hash first_career= earned_seq=12 earned_at=1770000001000 earned_sim_t=42.5 context={\"body\":\"luna\"}",
+	}
+	if got := r.snapshot().Badges; !slices.Equal(got, want) {
+		t.Errorf("badge snapshot = %v, want %v", got, want)
+	}
+}
+
+func TestChallengeSnapshotIncludesEveryColumnInStableOrder(t *testing.T) {
+	r := newRig(t)
+	err := r.live.With(func(p *store.Projections) error {
+		if _, err := p.Writer().ExecContext(t.Context(), `
+			INSERT INTO challenge_stat (player_id, career, challenge, system, value, context, updated_seq)
+			VALUES (2, 'save-two', 'career', 'system-hash', 42.5, '{"body":"luna"}', 12),
+			       (1, '', 'global', '', 3, NULL, 11)`); err != nil {
+			return err
+		}
+		_, err := p.Writer().ExecContext(t.Context(), `
+			INSERT INTO challenge_member (player_id, career, system, challenge, member, first_seq)
+			VALUES (2, '', 'system-hash', 'set', 'system-hash'||char(0)||'luna', 13)`)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap := r.snapshot()
+	wantStats := []string{
+		"player_id=1 career= challenge=global system= value=3 context=<nil> updated_seq=11",
+		"player_id=2 career=save-two challenge=career system=system-hash value=42.5 context={\"body\":\"luna\"} updated_seq=12",
+	}
+	wantMembers := []string{
+		"player_id=2 career= system=system-hash challenge=set member=system-hash\x00luna first_seq=13",
+	}
+	if !slices.Equal(snap.ChallengeStats, wantStats) {
+		t.Errorf("challenge_stat snapshot = %q, want %q", snap.ChallengeStats, wantStats)
+	}
+	if !slices.Equal(snap.ChallengeMembers, wantMembers) {
+		t.Errorf("challenge_member snapshot = %q, want %q", snap.ChallengeMembers, wantMembers)
+	}
+}
 
 func TestFoldsABatchAndAdvancesTheCheckpoint(t *testing.T) {
 	r := newRig(t)
@@ -387,15 +551,9 @@ func TestCheckpointResumesMidStreamWithoutDoubleCounting(t *testing.T) {
 	fresh.drain()
 	want := fresh.snapshot()
 
-	diff(t, "player_stat", got.Stats, want.Stats)
-	diff(t, "flight_state", got.Flights, want.Flights)
-	diff(t, "kitten", got.Kittens, want.Kittens)
 	// The two rigs inserted their events at slightly different wall times, so
 	// the feed's server-assigned `at` legitimately differs; the content must not.
-	diff(t, "feed", withoutAt(got.Feed), withoutAt(want.Feed))
-	if got.Cursor != want.Cursor {
-		t.Errorf("checkpoint = %d, want %d", got.Cursor, want.Cursor)
-	}
+	diffSnapshot(t, got, want, true)
 }
 
 func TestRebuildEqualsIncrementalForAnUnflaggedHistory(t *testing.T) {
@@ -417,18 +575,112 @@ func TestRebuildEqualsIncrementalForAnUnflaggedHistory(t *testing.T) {
 	}
 	rebuilt := r.snapshot()
 
-	diff(t, "player_stat", rebuilt.Stats, incremental.Stats)
-	diff(t, "flight_state", rebuilt.Flights, incremental.Flights)
-	diff(t, "player_body", rebuilt.Bodies, incremental.Bodies)
-	diff(t, "kitten", rebuilt.Kittens, incremental.Kittens)
-	diff(t, "player_stat_period", rebuilt.Periods, incremental.Periods)
-	diff(t, "feed", rebuilt.Feed, incremental.Feed)
-	if rebuilt.Cursor != incremental.Cursor {
-		t.Errorf("checkpoint after rebuild = %d, want %d", rebuilt.Cursor, incremental.Cursor)
-	}
+	diffSnapshot(t, rebuilt, incremental, false)
 	if len(incremental.Stats) == 0 {
 		t.Fatal("the fixture produced no stats, so the comparison proved nothing")
 	}
+}
+
+func TestRebuildEqualsIncrementalForCareerScope(t *testing.T) {
+	r := newRig(t, func(o *projector.Options) { o.BatchSize = 3 })
+	whiskers := r.player("whiskers")
+	mittens := r.player("mittens")
+	const (
+		careerA = "career-a"
+		careerB = "career-b"
+		careerC = "career-c"
+		hash    = "system-hash"
+	)
+	fa, fb, fc := flight(300), flight(301), flight(302)
+
+	// Insert across players in the order an ingest stream can interleave saves.
+	// Discovery leads every career's first session/score, matching the final mod.
+	r.ship(whiskers, discovery(careerA, hash), rootBody(hash))
+	r.ship(whiskers, inCareer(ev(ids.Zero, "session.started", stats.SessionStarted{}, 0), careerA))
+	r.ship(mittens, discovery(careerC, hash))
+	r.ship(whiskers, inCareer(ev(fa, "flight.started", stats.FlightStarted{
+		VehicleName: "A", Body: "earth", MassKg: 100, PartCount: 2, CrewCount: 1,
+	}, 10), careerA))
+	r.ship(mittens, inCareer(ev(ids.Zero, "session.started", stats.SessionStarted{}, 0), careerC))
+	r.ship(whiskers,
+		withoutSimTime(inCareer(ev(fa, "vehicle.staging", stats.VehicleStaging{StageIndex: 0}, 12), careerA)),
+		inCareer(ev(fa, "vehicle.soi", stats.VehicleSOI{FromBody: "earth", ToBody: "luna"}, 20), careerA),
+		inCareer(ev(fa, "vehicle.orbit", stats.VehicleOrbit{Phase: "achieved", Body: "earth"}, 25), careerA),
+		inCareer(ev(fa, "flight.ended", stats.FlightEnded{Reason: "recovered", CrewCount: 1, Kids: []string{"kid-a"}}, 30), careerA),
+		withoutSimTime(inCareer(ev(ids.Zero, "roster.snapshot", stats.RosterSnapshot{Kittens: []stats.RosterKitten{{
+			Kid: "kid-a", Name: "Comet", TravelledM: 50, FastestMs: 5, Missions: 1, MissionTimeS: 30,
+		}}}, 31), careerA)),
+	)
+	r.ship(mittens,
+		inCareer(ev(fc, "flight.started", stats.FlightStarted{VehicleName: "C", Body: "earth", MassKg: 80}, 10), careerC),
+		inCareer(ev(fc, "vehicle.soi", stats.VehicleSOI{FromBody: "earth", ToBody: "luna"}, 20), careerC),
+		inCareer(ev(fc, "vehicle.orbit", stats.VehicleOrbit{Phase: "achieved", Body: "earth"}, 25), careerC),
+		inCareer(ev(fc, "flight.ended", stats.FlightEnded{Reason: "recovered", CrewCount: 1, Kids: []string{"kid-c"}}, 30), careerC),
+	)
+	r.ship(whiskers,
+		discovery(careerB, hash),
+		inCareer(ev(ids.Zero, "session.started", stats.SessionStarted{}, 0), careerB),
+		// The flag precedes every candidate on fb. This is the equality case,
+		// deliberately not D22's separately pinned late-flag divergence.
+		inCareer(ev(fb, "flight.flagged", stats.FlightFlagged{Flag: "teleport", Detail: "pre-score"}, 1), careerB),
+		inCareer(ev(fb, "flight.started", stats.FlightStarted{VehicleName: "Flagged", Body: "earth", MassKg: 99999}, 2), careerB),
+		inCareer(ev(fb, "telemetry.window", tw("earth", 99999, 99999, 99), 3), careerB),
+		inCareer(ev(fb, "flight.ended", stats.FlightEnded{Reason: "recovered"}, 4), careerB),
+		// An event with no career still contributes to lifetime/log projections.
+		ev(ids.Zero, "session.started", stats.SessionStarted{}, 40),
+	)
+
+	r.drain()
+	incremental := r.snapshot()
+	for name, rows := range map[string][]string{
+		"career": incremental.Careers, "career_stat": incremental.CareerStats,
+		"system_stat": incremental.SystemStats, "career_body": incremental.CareerBodies,
+		"career_kitten": incremental.CareerKittens, "system": incremental.Systems,
+		"system_body": incremental.SystemBodies, "event_census": incremental.Census,
+	} {
+		if len(rows) == 0 {
+			t.Fatalf("fixture produced no %s rows", name)
+		}
+	}
+	if got := statMap(t, incremental)["1/heaviest_launch"]; got == 99999 {
+		t.Fatal("the pre-flagged flight scored, so this history is a late-flag divergence")
+	}
+
+	r.rebuild()
+	diffSnapshot(t, r.snapshot(), incremental, false)
+}
+
+func TestSystemDiscoveryPrecedesFirstScoreInFinalPipeline(t *testing.T) {
+	r := newRig(t, func(o *projector.Options) { o.BatchSize = 100 })
+	p := r.player("whiskers")
+	const career, hash = "career-final", "final-system-hash"
+	f := flight(350)
+	r.ship(p,
+		discovery(career, hash),
+		rootBody(hash),
+		inCareer(ev(ids.Zero, "session.started", stats.SessionStarted{}, 0), career),
+		inCareer(ev(f, "flight.started", stats.FlightStarted{
+			VehicleName: "First", Body: "earth", MassKg: 42, PartCount: 1,
+		}, 1), career),
+		inCareer(ev(f, "flight.ended", stats.FlightEnded{Reason: "recovered"}, 2), career),
+	)
+	r.drain()
+	incremental := r.snapshot()
+	if len(incremental.Careers) != 1 || !strings.Contains(incremental.Careers[0], "system="+hash) {
+		t.Fatalf("career was not bound before its first score: %v", incremental.Careers)
+	}
+	if len(incremental.CareerStats) == 0 || len(incremental.SystemStats) == 0 {
+		t.Fatalf("discovery did not reach both scoped rows: career=%v system=%v",
+			incremental.CareerStats, incremental.SystemStats)
+	}
+	for _, row := range append(slices.Clone(incremental.CareerStats), incremental.SystemStats...) {
+		if !strings.Contains(row, "system="+hash) {
+			t.Fatalf("scoped row has the wrong system: %s", row)
+		}
+	}
+
+	r.rebuild()
+	diffSnapshot(t, r.snapshot(), incremental, false)
 }
 
 func TestBatchSizeDoesNotChangeTheProjection(t *testing.T) {
@@ -455,6 +707,15 @@ func TestBatchSizeDoesNotChangeTheProjection(t *testing.T) {
 			// write to the same key.
 			r.ship(p, cleanHistory(1+i*10)...)
 			r.ship(p, cleanHistory(101+i*10)...)
+			career := fmt.Sprintf("batch-career-%04d", i)
+			f := flight(700 + i)
+			r.ship(p,
+				discovery(career, "batch-system"),
+				inCareer(ev(f, "vehicle.soi", stats.VehicleSOI{FromBody: "earth", ToBody: "batch-one"}, 1), career),
+				inCareer(ev(f, "vehicle.soi", stats.VehicleSOI{FromBody: "batch-one", ToBody: "batch-two"}, 2), career),
+				inCareer(ev(f, "vehicle.orbit", stats.VehicleOrbit{Phase: "achieved", Body: "earth"}, 1), career),
+				inCareer(ev(f, "flight.ended", stats.FlightEnded{Reason: "recovered", Kids: []string{"batch-kid"}}, 2), career),
+			)
 		}
 		r.drain()
 		return r.snapshot()
@@ -466,19 +727,81 @@ func TestBatchSizeDoesNotChangeTheProjection(t *testing.T) {
 	if len(want.Stats) == 0 {
 		t.Fatal("the fixture produced no stats, so the comparison proved nothing")
 	}
+	values := statMap(t, want)
+	if values["1/"+stats.StatPartsLost] != 28 || values["1/"+stats.StatBiggestPartsLost] != 14 {
+		t.Fatalf("part-board fixture = sum %v, biggest %v; want 28 and 14",
+			values["1/"+stats.StatPartsLost], values["1/"+stats.StatBiggestPartsLost])
+	}
+	if values["1/"+stats.StatKittensToOrbitAndBack] != 1 {
+		t.Fatalf("orbit-kitten batch fixture = %v, want 1", values["1/"+stats.StatKittensToOrbitAndBack])
+	}
+	if values["1/"+stats.StatKittensWrecked] != 6 || values["1/"+stats.StatBiggestCrewWreck] != 3 {
+		t.Fatalf("crew-wreck batch fixture = sum %v, biggest %v; want 6 and 3",
+			values["1/"+stats.StatKittensWrecked], values["1/"+stats.StatBiggestCrewWreck])
+	}
+	if values["1/"+stats.StatBodiesBy1Y] != 2 || values["1/"+stats.StatBodiesBy10Y] != 2 {
+		t.Fatalf("body-sprint batch fixture = 1y %v, 10y %v; want 2 and 2",
+			values["1/"+stats.StatBodiesBy1Y], values["1/"+stats.StatBodiesBy10Y])
+	}
 
-	for _, batchSize := range []int{2, 3, 17, 1000} {
+	for _, batchSize := range []int{2, 3, 17, projector.DefaultBatchSize, 10_000} {
 		t.Run(fmt.Sprintf("batch=%d", batchSize), func(t *testing.T) {
 			got := fold(t, batchSize)
-			diff(t, "player_stat", got.Stats, want.Stats)
-			diff(t, "flight_state", got.Flights, want.Flights)
-			diff(t, "player_body", got.Bodies, want.Bodies)
-			diff(t, "kitten", got.Kittens, want.Kittens)
-			diff(t, "player_stat_period", got.Periods, want.Periods)
-			diff(t, "feed", got.Feed, want.Feed)
-			if got.Cursor != want.Cursor {
-				t.Errorf("checkpoint = %d, want %d", got.Cursor, want.Cursor)
-			}
+			diffSnapshot(t, got, want, false)
+		})
+	}
+}
+
+func TestFlightFactsMatchAcrossBatchBoundariesAndRebuild(t *testing.T) {
+	const career = "flight-facts-career"
+	history := func() []store.Event {
+		f := flight(490)
+		earlyOnly := flight(491)
+		return []store.Event{
+			// The orbit bit is a raw historical fact even before a start. The
+			// early SOI cannot use a launch body and must never be retro-awarded.
+			inCareer(ev(f, "vehicle.orbit", stats.VehicleOrbit{Phase: "achieved"}, 1), career),
+			inCareer(ev(f, "vehicle.soi", stats.VehicleSOI{ToBody: "luna"}, 2), career),
+			inCareer(ev(f, "flight.started", stats.FlightStarted{
+				Body: "earth", MassKg: 1250.5, PartCount: 12, EngineCount: intp(2),
+			}, 3), career),
+			inCareer(ev(f, "vehicle.atmosphere", stats.VehicleAtmosphere{Dir: "exited"}, 4), career),
+			inCareer(ev(f, "vehicle.landed", stats.VehicleLanded{Survived: true}, 5), career),
+			inCareer(ev(f, "vehicle.docked", stats.VehicleDock{}, 6), career),
+			inCareer(ev(f, "vehicle.soi", stats.VehicleSOI{ToBody: "luna"}, 7), career),
+			// This second flight never gets a post-start SOI. Its early SOI must
+			// remain declined after both incremental projection and rebuild.
+			inCareer(ev(earlyOnly, "vehicle.orbit", stats.VehicleOrbit{Phase: "achieved"}, 8), career),
+			inCareer(ev(earlyOnly, "vehicle.soi", stats.VehicleSOI{ToBody: "duna"}, 9), career),
+			inCareer(ev(earlyOnly, "flight.started", stats.FlightStarted{
+				Body: "earth", MassKg: 10, PartCount: 1,
+			}, 10), career),
+		}
+	}
+	fold := func(t *testing.T, batchSize int) snapshot {
+		t.Helper()
+		r := newRig(t, func(o *projector.Options) { o.BatchSize = batchSize })
+		p := r.player("flightfacts")
+		r.ship(p, history()...)
+		r.drain()
+		incremental := r.snapshot()
+		if len(incremental.Flights) != 2 || !strings.Contains(incremental.Flights[0],
+			"milestones=31 part_count=12 launch_mass_kg=1250.5 career="+career) {
+			t.Fatalf("flight facts fixture is not fully populated: %v", incremental.Flights)
+		}
+		if !strings.Contains(incremental.Flights[1],
+			"milestones=1 part_count=1 launch_mass_kg=10 career="+career) {
+			t.Fatalf("early SOI was retro-awarded or early orbit was lost: %v", incremental.Flights)
+		}
+		r.rebuild()
+		diffSnapshot(t, r.snapshot(), incremental, false)
+		return incremental
+	}
+
+	want := fold(t, 1)
+	for _, batchSize := range []int{projector.DefaultBatchSize, 10_000} {
+		t.Run(fmt.Sprintf("batch=%d", batchSize), func(t *testing.T) {
+			diffSnapshot(t, fold(t, batchSize), want, false)
 		})
 	}
 }

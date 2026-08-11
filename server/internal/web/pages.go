@@ -2,6 +2,9 @@ package web
 
 import (
 	"net/http"
+	"net/url"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -24,6 +27,9 @@ const (
 // homeData is the front page: where am I, what is happening, and how am I doing.
 type homeData struct {
 	Featured []readapi.BoardResponse
+	// Challenge is the first open definition in the read API's already-ordered
+	// catalogue, rendered through the same compact table as featured boards.
+	Challenge *challengeBoardData
 	// Feed is the panel's server-rendered starting state. The SSE handler
 	// replaces the whole list on connect and then prepends live lines, so this
 	// is not merely a nicety: it is what the front page shows to a reader whose
@@ -72,6 +78,27 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, r, err, "read the board list")
 		return
 	}
+	challenges, err := s.deps.Read.ChallengeList(r.Context())
+	if err != nil {
+		s.serverError(w, r, err, "read the challenge list")
+		return
+	}
+	for _, summary := range challenges.Challenges {
+		if summary.State != "open" {
+			continue
+		}
+		challenge, known, err := s.deps.Read.Challenge(r.Context(), summary.Challenge, FeaturedRows, 0)
+		if err != nil {
+			s.serverError(w, r, err, "read the open challenge")
+			return
+		}
+		if !known {
+			s.deps.Log.Warn("open challenge does not exist", "challenge", summary.Challenge)
+			break
+		}
+		data.Challenge = newChallengeBoardData(challenge)
+		break
+	}
 	data.Tiles.Boards = len(list.Boards)
 	for _, b := range list.Boards {
 		data.Tiles.Placements += b.Count
@@ -80,7 +107,7 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	for _, stat := range FeaturedBoards {
-		board, known, err := s.deps.Read.Board(r.Context(), stat, stats.PeriodAllTime, "", FeaturedRows, 0)
+		board, known, err := s.deps.Read.Board(r.Context(), stat, stats.PeriodAllTime, "", stats.ScopePlayer, "", FeaturedRows, 0)
 		if err != nil {
 			s.serverError(w, r, err, "read the featured boards")
 			return
@@ -100,7 +127,171 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// --- challenges -------------------------------------------------------------
+
+const ChallengeRows = readapi.DefaultLimit
+
+type challengeGroup struct {
+	Key, Title, Empty string
+	Challenges        []readapi.ChallengeSummary
+}
+
+type challengesData struct {
+	Now    int64
+	Groups []challengeGroup
+}
+
+func (s *Server) handleChallenges(w http.ResponseWriter, r *http.Request) {
+	out, err := s.deps.Read.ChallengeList(r.Context())
+	if err != nil {
+		s.serverError(w, r, err, "read the challenge list")
+		return
+	}
+	data := challengesData{Now: out.Now, Groups: []challengeGroup{
+		{Key: "open", Title: "Open now", Empty: "Nothing running just now."},
+		{Key: "upcoming", Title: "Coming up", Empty: "Nothing scheduled yet."},
+		{Key: "closed", Title: "Finished", Empty: "Nothing has finished yet."},
+	}}
+	for _, challenge := range out.Challenges {
+		for i := range data.Groups {
+			if data.Groups[i].Key == challenge.State {
+				data.Groups[i].Challenges = append(data.Groups[i].Challenges, challenge)
+				break
+			}
+		}
+	}
+	s.render(w, r, http.StatusOK, "challenges", publicCache, page{
+		Title: "Challenges — catlog", Nav: "challenges", Data: data,
+	})
+}
+
+// challengeBoardData gives the shared board-table partial the one board field
+// a challenge names differently. All row/value/scope fields remain the exact
+// read API response rather than a second presentation model.
+type challengeBoardData struct {
+	readapi.ChallengeResponse
+	Stat string
+}
+
+func newChallengeBoardData(challenge readapi.ChallengeResponse) *challengeBoardData {
+	return &challengeBoardData{ChallengeResponse: challenge, Stat: challenge.Challenge}
+}
+
+type challengeData struct {
+	readapi.ChallengeResponse
+	CloseHint        string
+	HasMore          bool
+	PrevURL, NextURL string
+	FirstRank        int
+	LastRank         int
+}
+
+func challengeURL(key string, values url.Values) string {
+	path := "/challenges/" + key
+	if encoded := values.Encode(); encoded != "" {
+		return path + "?" + encoded
+	}
+	return path
+}
+
+func (s *Server) handleChallenge(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query()
+	limit, ok := webIntParam(query, "limit", ChallengeRows)
+	if !ok {
+		s.badRequest(w, r, "Limit must be an integer.")
+		return
+	}
+	offset, ok := webIntParam(query, "offset", 0)
+	if !ok {
+		s.badRequest(w, r, "Offset must be an integer.")
+		return
+	}
+	limit, offset = readapi.ClampPaging(limit, offset)
+	challenge, known, err := s.deps.Read.Challenge(r.Context(), r.PathValue("challenge"), limit, offset)
+	switch {
+	case err != nil:
+		s.serverError(w, r, err, "read the challenge")
+		return
+	case !known:
+		s.notFound(w, r, "No such challenge.")
+		return
+	}
+
+	base := cloneValues(query)
+	if _, present := query["limit"]; present {
+		base.Set("limit", strconv.Itoa(limit))
+	}
+	if offset == 0 {
+		base.Del("offset")
+	} else {
+		base.Set("offset", strconv.Itoa(offset))
+	}
+	prev := cloneValues(base)
+	if n := max(offset-limit, 0); n == 0 {
+		prev.Del("offset")
+	} else {
+		prev.Set("offset", strconv.Itoa(n))
+	}
+	next := cloneValues(base)
+	next.Set("offset", strconv.Itoa(offset+limit))
+	data := challengeData{
+		ChallengeResponse: challenge,
+		CloseHint:         challengeCloseHint(challenge.Closes, s.deps.Now().UnixMilli()),
+		HasMore:           len(challenge.Rows) >= challenge.Limit,
+		PrevURL:           challengeURL(challenge.Challenge, prev),
+		NextURL:           challengeURL(challenge.Challenge, next),
+		FirstRank:         challenge.Offset + 1,
+		LastRank:          challenge.Offset + len(challenge.Rows),
+	}
+	s.render(w, r, http.StatusOK, "challenge", publicCache, page{
+		Title: challenge.Title + " — catlog", Nav: "challenges", Data: data,
+	})
+}
+
+func challengeCloseHint(closes, now int64) string {
+	delta := closes - now
+	if delta == 0 {
+		return "closed just now"
+	}
+	future := delta > 0
+	if delta < 0 {
+		delta = -delta
+	}
+	const (
+		minute = int64(60_000)
+		hour   = 60 * minute
+		day    = 24 * hour
+	)
+	var n int64
+	var unit string
+	switch {
+	case delta >= day:
+		n, unit = delta/day, "day"
+	case delta >= hour:
+		n, unit = delta/hour, "hour"
+	case delta >= minute:
+		n, unit = delta/minute, "minute"
+	default:
+		if future {
+			return "closes in less than a minute"
+		}
+		return "closed less than a minute ago"
+	}
+	if n != 1 {
+		unit += "s"
+	}
+	if future {
+		return "closes in " + strconv.FormatInt(n, 10) + " " + unit
+	}
+	return "closed " + strconv.FormatInt(n, 10) + " " + unit + " ago"
+}
+
 // --- GET /boards ---------------------------------------------------------------
+
+type boardsData struct {
+	readapi.BoardsResponse
+	Systems int
+}
 
 func (s *Server) handleBoards(w http.ResponseWriter, r *http.Request) {
 	list, err := s.deps.Read.BoardList(r.Context())
@@ -108,10 +299,114 @@ func (s *Server) handleBoards(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, r, err, "read the board list")
 		return
 	}
+	systems, err := s.deps.Read.Systems(r.Context())
+	if err != nil {
+		s.serverError(w, r, err, "read the celestial systems")
+		return
+	}
 	s.render(w, r, http.StatusOK, "boards", publicCache, page{
 		Title: "Leaderboards — catlog",
 		Nav:   "boards",
-		Data:  list,
+		Data:  boardsData{BoardsResponse: list, Systems: len(systems.Systems)},
+	})
+}
+
+// --- GET /systems --------------------------------------------------------------
+
+type systemsData struct {
+	Systems []readapi.SystemSummary
+}
+
+func (s *Server) handleSystems(w http.ResponseWriter, r *http.Request) {
+	out, err := s.deps.Read.Systems(r.Context())
+	if err != nil {
+		s.serverError(w, r, err, "read the celestial systems")
+		return
+	}
+	// The read API preserves first-seen order. The index answers a different,
+	// player-facing question: where is this community playing most?
+	rows := slices.Clone(out.Systems)
+	sort.SliceStable(rows, func(i, j int) bool { return rows[i].Players > rows[j].Players })
+	s.render(w, r, http.StatusOK, "systems", publicCache, page{
+		Title: "Celestial systems — catlog",
+		Nav:   "boards",
+		Data:  systemsData{Systems: rows},
+	})
+}
+
+type systemBodyData struct {
+	Body, Name, Class, ParentName string
+	Rank                          int64
+	RadiusM, SoiM                 float64
+	SmaM, PeriodS                 float64
+	HasSma, HasPeriod             bool
+}
+
+type systemData struct {
+	readapi.SystemDetail
+	HomeName string
+	Rows     []systemBodyData
+}
+
+func (s *Server) handleSystem(w http.ResponseWriter, r *http.Request) {
+	detail, found, err := s.deps.Read.System(r.Context(), r.PathValue("slug"))
+	if err != nil {
+		s.serverError(w, r, err, "read that celestial system")
+		return
+	}
+	if !found {
+		s.notFound(w, r, "catlog has no such celestial system.")
+		return
+	}
+
+	bodies := slices.Clone(detail.Bodies)
+	sort.SliceStable(bodies, func(i, j int) bool {
+		if bodies[i].Rank != bodies[j].Rank {
+			return bodies[i].Rank < bodies[j].Rank
+		}
+		left, right := bodies[i].SmaM, bodies[j].SmaM
+		if left == nil || right == nil {
+			return left == nil && right != nil
+		}
+		if *left != *right {
+			return *left < *right
+		}
+		if bodies[i].Name != bodies[j].Name {
+			return bodies[i].Name < bodies[j].Name
+		}
+		return bodies[i].Body < bodies[j].Body
+	})
+	names := make(map[string]string, len(bodies))
+	for _, body := range bodies {
+		names[body.Body] = body.Name
+	}
+	data := systemData{SystemDetail: detail, HomeName: detail.HomeBody, Rows: make([]systemBodyData, 0, len(bodies))}
+	if name, ok := names[detail.HomeBody]; ok {
+		data.HomeName = name
+	}
+	for _, body := range bodies {
+		row := systemBodyData{
+			Body: body.Body, Name: body.Name, Class: body.Class, Rank: body.Rank,
+			RadiusM: body.RadiusM, SoiM: body.SoiM,
+		}
+		if body.Parent != nil {
+			row.ParentName = *body.Parent
+			if name, ok := names[*body.Parent]; ok {
+				row.ParentName = name
+			}
+		}
+		if body.SmaM != nil {
+			row.SmaM, row.HasSma = *body.SmaM, true
+		}
+		if body.PeriodS != nil {
+			row.PeriodS, row.HasPeriod = *body.PeriodS, true
+		}
+		data.Rows = append(data.Rows, row)
+	}
+	s.render(w, r, http.StatusOK, "system", publicCache, page{
+		Title: detail.Name + " — catlog",
+		Nav:   "boards",
+		Data:  data,
 	})
 }
 
@@ -121,19 +416,26 @@ func (s *Server) handleBoards(w http.ResponseWriter, r *http.Request) {
 // window selector and the pager.
 type boardData struct {
 	readapi.BoardResponse
-	// Periods are the windows this board can be read over, in display order.
-	Periods []string
+	Scopes      []boardChip
+	Periods     []boardChip
+	BodyDerived bool
+	SystemURL   string
 	// HasMore says a next page probably exists.
 	//
 	// Inferred from a full page rather than known: `BoardResponse` publishes no
 	// total, deliberately, and inferring is honest — a full page might be the
 	// last one, in which case the next page says "nobody is on this board yet"
 	// and the reader has lost nothing.
-	HasMore bool
-	// Prev and Next are offsets, valid only when the corresponding flag is set.
-	Prev, Next int
+	HasMore          bool
+	PrevURL, NextURL string
 	// FirstRank and LastRank are what the pager counts out loud.
 	FirstRank, LastRank int
+}
+
+type boardChip struct {
+	Key      string
+	URL      string
+	Selected bool
 }
 
 // periodLabels are how a window is written for a reader. The API's keys are
@@ -157,47 +459,338 @@ func periodLabel(period string) string {
 	return period
 }
 
+var scopeLabels = map[string]string{
+	stats.ScopePlayer: "Players",
+	stats.ScopeCareer: "Saves",
+	stats.ScopeSystem: "Systems",
+}
+
+func scopeLabel(scope string) string {
+	if label, ok := scopeLabels[scope]; ok {
+		return label
+	}
+	return scope
+}
+
 func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
-	period, ok := stats.ValidPeriod(r.URL.Query().Get("period"))
+	query := r.URL.Query()
+	limit, ok := webIntParam(query, "limit", BoardRows)
 	if !ok {
-		// A window this server does not serve is not a board that does not
-		// exist: say which of the two it is.
-		s.notFound(w, r, "catlog has no such window. Try all time, today, this week, this month or this year.")
+		s.badRequest(w, r, "Limit must be an integer.")
 		return
 	}
-	offset := 0
-	if raw := r.URL.Query().Get("offset"); raw != "" {
-		n, err := strconv.Atoi(raw)
-		if err != nil || n < 0 {
-			s.notFound(w, r, "That is not a page of this board.")
+	offset, ok := webIntParam(query, "offset", 0)
+	if !ok {
+		s.badRequest(w, r, "Offset must be an integer.")
+		return
+	}
+	limit, offset = readapi.ClampPaging(limit, offset)
+	period, ok := stats.ValidPeriod(query.Get("period"))
+	if !ok {
+		s.badRequest(w, r, "Period must be one of all time, daily, weekly, monthly or yearly.")
+		return
+	}
+	scope, ok := stats.ValidScope(query.Get("scope"))
+	if !ok {
+		s.badRequest(w, r, "Ranking must be players, saves or systems.")
+		return
+	}
+	if scope != stats.ScopePlayer && period != stats.PeriodAllTime {
+		s.badRequest(w, r, scopeLabel(scope)+" boards have no time windows.")
+		return
+	}
+	bucket := query.Get("at")
+	if bucket != "" && (period == stats.PeriodAllTime || !stats.ParseBucket(period, bucket)) {
+		s.badRequest(w, r, "That is not a well-formed "+period+" window.")
+		return
+	}
+	system := query.Get("system")
+	if system != "" && scope == stats.ScopePlayer {
+		s.badRequest(w, r, "System filtering needs a saves or systems ranking.")
+		return
+	}
+	if system != "" {
+		ref, found, err := s.deps.Read.ResolveSystem(r.Context(), system)
+		if err != nil {
+			s.serverError(w, r, err, "resolve the celestial system")
 			return
 		}
-		offset = n
+		if !found {
+			s.notFound(w, r, "catlog has never seen a system by that name.")
+			return
+		}
+		system = ref.Hash
 	}
 
-	board, known, err := s.deps.Read.Board(r.Context(), r.PathValue("stat"), period, "", BoardRows, offset)
+	board, known, err := s.deps.Read.Board(r.Context(), r.PathValue("stat"), period, bucket, scope, system, limit, offset)
 	switch {
-	case !known:
-		s.notFound(w, r, "No such leaderboard.")
-		return
 	case err != nil:
 		s.serverError(w, r, err, "read the leaderboard")
 		return
+	case !known:
+		s.notFound(w, r, "No such leaderboard.")
+		return
 	}
 
+	base := cloneValues(query)
+	if _, present := query["limit"]; present {
+		base.Set("limit", strconv.Itoa(limit))
+	}
+	if offset == 0 {
+		base.Del("offset")
+	} else {
+		base.Set("offset", strconv.Itoa(offset))
+	}
 	data := boardData{
 		BoardResponse: board,
-		Periods:       stats.Periods(),
 		HasMore:       len(board.Rows) >= board.Limit,
-		Prev:          max(board.Offset-board.Limit, 0),
-		Next:          board.Offset + board.Limit,
 		FirstRank:     board.Offset + 1,
 		LastRank:      board.Offset + len(board.Rows),
 	}
+	if meta, described := stats.Describe(board.Stat); described {
+		data.BodyDerived = meta.BodyDerived
+	}
+	for _, candidate := range stats.Scopes() {
+		values := cloneValues(base)
+		values.Del("offset")
+		if candidate == stats.ScopePlayer {
+			values.Del("scope")
+			values.Del("system")
+		} else {
+			values.Set("scope", candidate)
+			values.Del("period")
+			values.Del("at")
+		}
+		chip := boardChip{Key: candidate, URL: boardURL(board.Stat, values), Selected: candidate == scope}
+		data.Scopes = append(data.Scopes, chip)
+		if candidate == stats.ScopeSystem {
+			data.SystemURL = chip.URL
+		}
+	}
+	if scope == stats.ScopePlayer {
+		for _, candidate := range stats.Periods() {
+			values := cloneValues(base)
+			values.Del("offset")
+			if candidate == stats.PeriodAllTime {
+				values.Del("period")
+				values.Del("at")
+			} else {
+				values.Set("period", candidate)
+				if candidate != period {
+					values.Del("at")
+				}
+			}
+			data.Periods = append(data.Periods, boardChip{
+				Key: candidate, URL: boardURL(board.Stat, values), Selected: candidate == period,
+			})
+		}
+	}
+	prev := cloneValues(base)
+	if n := max(board.Offset-board.Limit, 0); n == 0 {
+		prev.Del("offset")
+	} else {
+		prev.Set("offset", strconv.Itoa(n))
+	}
+	data.PrevURL = boardURL(board.Stat, prev)
+	next := cloneValues(base)
+	next.Set("offset", strconv.Itoa(board.Offset+board.Limit))
+	data.NextURL = boardURL(board.Stat, next)
 	s.render(w, r, http.StatusOK, "board", publicCache, page{
 		Title: board.Title + " — catlog",
 		Nav:   "boards",
 		Data:  data,
+	})
+}
+
+func webIntParam(query url.Values, name string, fallback int) (int, bool) {
+	raw := query.Get(name)
+	if raw == "" {
+		return fallback, true
+	}
+	value, err := strconv.Atoi(raw)
+	return value, err == nil
+}
+
+func cloneValues(values url.Values) url.Values {
+	out := make(url.Values, len(values))
+	for key, entries := range values {
+		out[key] = append([]string(nil), entries...)
+	}
+	return out
+}
+
+func boardURL(stat string, values url.Values) string {
+	path := "/boards/" + stat
+	if encoded := values.Encode(); encoded != "" {
+		return path + "?" + encoded
+	}
+	return path
+}
+
+// --- merit badges ------------------------------------------------------------
+
+const BadgeRows = readapi.DefaultLimit
+
+type badgeGroup struct {
+	Key, Title string
+	Badges     []readapi.BadgeSummary
+}
+
+var badgeGroupTitles = map[string]string{
+	"first-steps": "First steps",
+	"flight":      "Flight",
+	"survival":    "Survival",
+	"exploration": "Exploration",
+	"kittens":     "Kittens",
+}
+
+type badgesData struct {
+	MinPlayers int
+	Groups     []badgeGroup
+}
+
+func (s *Server) handleBadges(w http.ResponseWriter, r *http.Request) {
+	out, err := s.deps.Read.BadgeList(r.Context())
+	if err != nil {
+		s.serverError(w, r, err, "read the badge catalogue")
+		return
+	}
+	data := badgesData{MinPlayers: out.MinPlayers}
+	for _, badge := range out.Badges {
+		if len(data.Groups) == 0 || data.Groups[len(data.Groups)-1].Key != badge.Group {
+			data.Groups = append(data.Groups, badgeGroup{Key: badge.Group, Title: badgeGroupTitles[badge.Group]})
+		}
+		group := &data.Groups[len(data.Groups)-1]
+		group.Badges = append(group.Badges, badge)
+	}
+	s.render(w, r, http.StatusOK, "badges", publicCache, page{
+		Title: "Merit badges — catlog", Nav: "badges", Data: data,
+	})
+}
+
+type badgeData struct {
+	readapi.BadgeResponse
+	System           *readapi.SystemRef
+	HasMore          bool
+	PrevURL, NextURL string
+	AllSystemsURL    string
+	FirstRank        int
+	LastRank         int
+}
+
+func badgeURL(key string, values url.Values) string {
+	path := "/badges/" + key
+	if encoded := values.Encode(); encoded != "" {
+		return path + "?" + encoded
+	}
+	return path
+}
+
+func (s *Server) handleBadge(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query()
+	limit, ok := webIntParam(query, "limit", BadgeRows)
+	if !ok {
+		s.badRequest(w, r, "Limit must be an integer.")
+		return
+	}
+	offset, ok := webIntParam(query, "offset", 0)
+	if !ok {
+		s.badRequest(w, r, "Offset must be an integer.")
+		return
+	}
+	limit, offset = readapi.ClampPaging(limit, offset)
+	var system *readapi.SystemRef
+	if key := query.Get("system"); key != "" {
+		ref, found, err := s.deps.Read.ResolveSystem(r.Context(), key)
+		if err != nil {
+			s.serverError(w, r, err, "resolve the celestial system")
+			return
+		}
+		if !found {
+			s.notFound(w, r, "catlog has never seen a system by that name.")
+			return
+		}
+		system = &ref
+	}
+	badge, known, err := s.deps.Read.Badge(r.Context(), r.PathValue("badge"), system, limit, offset)
+	switch {
+	case err != nil:
+		s.serverError(w, r, err, "read the badge holders")
+		return
+	case !known:
+		s.notFound(w, r, "No such badge.")
+		return
+	}
+
+	base := cloneValues(query)
+	if _, present := query["limit"]; present {
+		base.Set("limit", strconv.Itoa(limit))
+	}
+	if offset == 0 {
+		base.Del("offset")
+	} else {
+		base.Set("offset", strconv.Itoa(offset))
+	}
+	prev := cloneValues(base)
+	if n := max(offset-limit, 0); n == 0 {
+		prev.Del("offset")
+	} else {
+		prev.Set("offset", strconv.Itoa(n))
+	}
+	next := cloneValues(base)
+	next.Set("offset", strconv.Itoa(offset+limit))
+	allSystems := cloneValues(base)
+	allSystems.Del("system")
+	allSystems.Del("offset")
+	data := badgeData{
+		BadgeResponse: badge, System: system, HasMore: len(badge.Rows) >= badge.Limit,
+		PrevURL: badgeURL(badge.Badge, prev), NextURL: badgeURL(badge.Badge, next),
+		AllSystemsURL: badgeURL(badge.Badge, allSystems),
+		FirstRank:     badge.Offset + 1, LastRank: badge.Offset + len(badge.Rows),
+	}
+	s.render(w, r, http.StatusOK, "badge", publicCache, page{
+		Title: badge.Title + " — catlog", Nav: "badges", Data: data,
+	})
+}
+
+type playerBadgesData struct {
+	readapi.PlayerBadgesResponse
+	Save int64
+}
+
+func (s *Server) handlePlayerBadges(w http.ResponseWriter, r *http.Request) {
+	out, known, err := s.deps.Read.PlayerBadges(r.Context(), r.PathValue("handle"))
+	switch {
+	case err != nil:
+		s.serverError(w, r, err, "read the player's badges")
+		return
+	case !known:
+		s.notFound(w, r, "No such player.")
+		return
+	}
+	s.render(w, r, http.StatusOK, "player_badges", publicCache, page{
+		Title: out.Handle + "'s badges — catlog", Nav: "badges", Data: playerBadgesData{PlayerBadgesResponse: out},
+	})
+}
+
+func (s *Server) handleSaveBadges(w http.ResponseWriter, r *http.Request) {
+	ordinal, err := strconv.ParseInt(r.PathValue("ordinal"), 10, 64)
+	if err != nil || ordinal < 1 {
+		s.notFound(w, r, "No such save.")
+		return
+	}
+	out, found, err := s.deps.Read.SaveBadges(r.Context(), r.PathValue("handle"), ordinal)
+	switch {
+	case err != nil:
+		s.serverError(w, r, err, "read the save's badges")
+		return
+	case !found:
+		s.notFound(w, r, "No such save.")
+		return
+	}
+	s.render(w, r, http.StatusOK, "player_badges", publicCache, page{
+		Title: "Save " + strconv.FormatInt(ordinal, 10) + " badges — " + out.Handle + " — catlog",
+		Nav:   "badges", Data: playerBadgesData{PlayerBadgesResponse: out, Save: ordinal},
 	})
 }
 
@@ -219,6 +812,86 @@ func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {
 		Title: player.Handle + " — catlog",
 		Nav:   "boards",
 		Data:  player,
+	})
+}
+
+// --- GET /p/{handle}/saves ----------------------------------------------------
+
+type saveListRow struct {
+	readapi.SaveSummary
+	Badges int64
+}
+
+type savesData struct {
+	Handle string
+	Saves  []saveListRow
+}
+
+func (s *Server) handleSaves(w http.ResponseWriter, r *http.Request) {
+	saves, known, err := s.deps.Read.Saves(r.Context(), r.PathValue("handle"))
+	switch {
+	case err != nil:
+		s.serverError(w, r, err, "read the player's saves")
+		return
+	case !known:
+		s.notFound(w, r, "No such player.")
+		return
+	}
+	counts, known, err := s.deps.Read.SaveBadgeCounts(r.Context(), saves.Handle)
+	if err != nil {
+		s.serverError(w, r, err, "read the saves' badge counts")
+		return
+	}
+	if !known {
+		s.notFound(w, r, "No such player.")
+		return
+	}
+	data := savesData{Handle: saves.Handle, Saves: make([]saveListRow, 0, len(saves.Saves))}
+	for _, save := range saves.Saves {
+		data.Saves = append(data.Saves, saveListRow{SaveSummary: save, Badges: counts[save.Save]})
+	}
+	s.render(w, r, http.StatusOK, "saves", publicCache, page{
+		Title: saves.Handle + "'s saves — catlog",
+		Nav:   "boards",
+		Data:  data,
+	})
+}
+
+// --- GET /p/{handle}/saves/{ordinal} -----------------------------------------
+
+type saveData struct {
+	readapi.SaveResponse
+	Badges int
+}
+
+func (s *Server) handleSave(w http.ResponseWriter, r *http.Request) {
+	ordinal, err := strconv.ParseInt(r.PathValue("ordinal"), 10, 64)
+	if err != nil || ordinal < 1 {
+		s.notFound(w, r, "No such save.")
+		return
+	}
+	save, found, err := s.deps.Read.Save(r.Context(), r.PathValue("handle"), ordinal)
+	switch {
+	case err != nil:
+		s.serverError(w, r, err, "read the player's save")
+		return
+	case !found:
+		s.notFound(w, r, "No such save.")
+		return
+	}
+	badges, found, err := s.deps.Read.SaveBadges(r.Context(), save.Handle, save.Save)
+	if err != nil {
+		s.serverError(w, r, err, "read the save's badge count")
+		return
+	}
+	if !found {
+		s.notFound(w, r, "No such save.")
+		return
+	}
+	s.render(w, r, http.StatusOK, "save", publicCache, page{
+		Title: "Save " + strconv.FormatInt(save.Save, 10) + " — " + save.Handle + " — catlog",
+		Nav:   "boards",
+		Data:  saveData{SaveResponse: save, Badges: len(badges.Earned)},
 	})
 }
 
@@ -519,6 +1192,13 @@ func (s *Server) notFound(w http.ResponseWriter, r *http.Request, detail string)
 	// — an unbounded cache anybody can fill by asking for nonsense.
 	s.render(w, r, http.StatusNotFound, "notfound", privateCache, page{
 		Title: "Not found — catlog",
+		Data:  notFoundData{Detail: detail, Path: r.URL.Path},
+	})
+}
+
+func (s *Server) badRequest(w http.ResponseWriter, r *http.Request, detail string) {
+	s.render(w, r, http.StatusBadRequest, "notfound", privateCache, page{
+		Title: "Bad request — catlog",
 		Data:  notFoundData{Detail: detail, Path: r.URL.Path},
 	})
 }

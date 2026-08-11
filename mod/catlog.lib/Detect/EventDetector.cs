@@ -484,6 +484,11 @@ public sealed class EventDetector
                 PeM: curr.PeAltM,
                 Ecc: curr.Ecc,
                 IncDeg: curr.IncDeg,
+                SmaM: curr.SmaM,
+                LanDeg: curr.LanDeg,
+                ArgpDeg: curr.ArgpDeg,
+                TPe: curr.TPe,
+                PeriodS: curr.IsBoundOrbit ? curr.PeriodS : 0.0,
                 MassKg: curr.MassKg),
             curr.SimT,
             curr.WallMs);

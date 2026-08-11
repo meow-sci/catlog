@@ -430,6 +430,11 @@ func signProof(key *ecdsa.PrivateKey, claims authz.ProofClaims) (string, error) 
 //   - a nested array of objects (`roster.snapshot.kittens`) and a nested
 //     optional object (`telemetry.window.radar_alt_m`);
 //   - a JSON `null` inside a payload (`vehicle.docked.other_flight`).
+//   - both meaningful `kitten.tumble.from` cases: airborne for a botched
+//     landing and grounded for a trip;
+//   - celestial-system orbit optionals in all three legal forms: absent as a
+//     group on a root, all six plus a finite period on a bound body, and all
+//     six with period absent on an unbound conic.
 //
 // Determinism: every identifier is a [fixedULID] of a constant, every `wall_t`
 // is derived from the line's index, and the payloads are `map[string]any`, which
@@ -467,6 +472,51 @@ func batch001() []byte {
 	}
 
 	specs := []spec{{
+		label: "ev-system-complete", typ: "system.discovered", ver: 1, flight: nil, simT: 0,
+		payload: map[string]any{
+			"system": "01kittensol", "id": "Sol", "name": "Sol", "home": "earth",
+			"bodies": 3, "complete": true,
+		},
+	}, {
+		label: "ev-system-root", typ: "system.body", ver: 1, flight: nil, simT: 0,
+		payload: map[string]any{
+			"system": "01kittensol", "body": "sol", "name": "Sol", "class": "StellarBody",
+			"kind": "star", "rank": 0, "radius_m": 696340000.0, "mass_kg": 1.98847e30,
+			"soi_m": 0.0, "atmo_m": 0.0, "ocean_m": 0.0, "angvel": 2.865e-6,
+			"axis":          map[string]any{"x": 0.0, "y": 1.0, "z": 0.0},
+			"ccf_to_cce_t0": map[string]any{"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0},
+		},
+	}, {
+		label: "ev-system-orbit", typ: "system.body", ver: 1, flight: nil, simT: 0,
+		payload: map[string]any{
+			"system": "01kittensol", "body": "earth", "name": "Earth", "class": "TerrestrialBody",
+			"kind": "planet", "rank": 1, "parent": "sol", "radius_m": 6371000.0,
+			"mass_kg": 5.9722e24, "soi_m": 924000000.0, "atmo_m": 100000.0, "ocean_m": 0.0,
+			"angvel": 7.2921159e-5, "axis": map[string]any{"x": 0.0, "y": 1.0, "z": 0.0},
+			"ccf_to_cce_t0": map[string]any{"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0},
+			"sma_m":         149597870700.0, "ecc": 0.0167086, "inc_deg": 0.00005,
+			"lan_deg": -11.26064, "argp_deg": 114.20783, "t_pe": -1234.5, "period_s": 31558149.8,
+		},
+	}, {
+		// An unbound conic still has a complete six-value orbital shape. Only
+		// period is absent: serialising it as zero would claim a finite repeat.
+		label: "ev-system-unbound", typ: "system.body", ver: 1, flight: nil, simT: 0,
+		payload: map[string]any{
+			"system": "01kittensol", "body": "whisker-comet", "name": "Whisker Comet", "class": "Celestial",
+			"kind": "other", "rank": 1, "parent": "sol", "radius_m": 1200.0,
+			"mass_kg": 8.5e12, "soi_m": 250000.0, "atmo_m": 0.0, "ocean_m": 0.0,
+			"angvel": 0.00012, "axis": map[string]any{"x": 0.0, "y": 1.0, "z": 0.0},
+			"ccf_to_cce_t0": map[string]any{"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0},
+			"sma_m":         -42000000000.0, "ecc": 1.25, "inc_deg": 73.5,
+			"lan_deg": 22.0, "argp_deg": 147.25, "t_pe": 86400.0,
+		},
+	}, {
+		label: "ev-system-incomplete", typ: "system.discovered", ver: 1, flight: nil, simT: 0,
+		payload: map[string]any{
+			"system": "01kittenbad", "id": "Generated", "name": "Generated", "home": "origin",
+			"bodies": 5001, "complete": false,
+		},
+	}, {
 		label: "ev-1", typ: "session.started", ver: 1, flight: nil, simT: 0,
 		payload: map[string]any{
 			"mod_ver": "0.1.0", "game_build": "2026.8.5.5168",
@@ -510,6 +560,10 @@ func batch001() []byte {
 			"mass_kg_last":     9800.25,
 			"radar_alt_m":      agg(0, 41880.5, 20940.25, 41880.5),
 			"warp_max":         1,
+			"state": map[string]any{
+				"pos": map[string]any{"x": 6557100.375, "y": -182500.25, "z": 42125.5},
+				"vel": map[string]any{"x": 215.75, "y": 7640.5, "z": -38.125},
+			},
 		},
 	}, {
 		label: "ev-7", typ: "vehicle.atmosphere", ver: 1, flight: &mission, simT: 145,
@@ -524,6 +578,8 @@ func batch001() []byte {
 		payload: map[string]any{
 			"phase": "achieved", "body": "earth",
 			"ap_m": 185000.5, "pe_m": 172400.25, "ecc": 0.0034, "inc_deg": 28.58,
+			"sma_m": 6557100.375, "lan_deg": 72.25, "argp_deg": 14.75,
+			"t_pe": 160.125, "period_s": 5420.5,
 			"mass_kg": 4820.75,
 		},
 	}, {
@@ -554,9 +610,17 @@ func batch001() []byte {
 		label: "ev-13", typ: "kitten.eva_start", ver: 1, flight: &eva, simT: 215,
 		payload: map[string]any{"kid": kidAce, "name": "Ace"},
 	}, {
-		// A tumble that names the flight it happened on.
+		// A botched landing: the kitten was airborne immediately before tumbling.
 		label: "ev-14", typ: "kitten.tumble", ver: 1, flight: &eva, simT: 218.5,
-		payload: map[string]any{"kid": kidAce, "name": "Ace", "speed_ms": 4.25, "body": "duna"},
+		payload: map[string]any{
+			"kid": kidAce, "name": "Ace", "speed_ms": 4.25, "body": "duna", "from": "airborne",
+		},
+	}, {
+		// A trip: the kitten was grounded immediately before tumbling.
+		label: "ev-14-grounded", typ: "kitten.tumble", ver: 1, flight: &eva, simT: 220,
+		payload: map[string]any{
+			"kid": kidAce, "name": "Ace", "speed_ms": 2.75, "body": "duna", "from": "grounded",
+		},
 	}, {
 		// `flight` is explicitly null here, asymmetrically with eva_start.
 		label: "ev-15", typ: "kitten.eva_end", ver: 1, flight: nil, simT: 232.75,
@@ -568,7 +632,7 @@ func batch001() []byte {
 		payload: map[string]any{
 			"vehicle_name": "Kitten I Probe", "body": "duna",
 			"mass_kg": 850.75, "part_count": 6, "crew_count": 0,
-			"kids": []string{}, "stage_count": 0,
+			"kids": []string{}, "stage_count": 0, "engine_count": 0,
 		},
 	}, {
 		label: "ev-17", typ: "vehicle.undocked", ver: 1, flight: &mission, simT: 240.5,
@@ -621,6 +685,7 @@ func batch001() []byte {
 		payload: map[string]any{
 			"cause": "ground_impact", "peak_g": 12.5, "peak_q_pa": 74500.25,
 			"speed_ms": 312.75, "altitude_m": 0.5, "body": "earth", "crew_count": 1,
+			"part_count": 31,
 		},
 	}, {
 		// A KIA that names the flight it happened on.
