@@ -111,9 +111,9 @@ public sealed partial class IdsTests
     }
 
     [Fact]
-    public void SanitizeName_CapsAtThirtyTwoCharacters()
+    public void SanitizeName_CapsAtOneHundredTwentyEightCharacters()
     {
-        Assert.Equal(32, Ids.SanitizeName(new string('x', 100)).Length);
+        Assert.Equal(128, Ids.SanitizeName(new string('x', 300)).Length);
     }
 
     [Fact]

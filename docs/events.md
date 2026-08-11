@@ -69,7 +69,7 @@ Aggregate object `agg` = `{"min": f, "max": f, "mean": f, "last": f}`.
 **Why a board for somewhere new may not appear immediately.** Such a board is *listed* by `GET /v1/leaderboards` once at least **2 distinct players** hold a value on it (configurable, `[boards] min_players`). Before that it still exists, is still served at its own URL, and still shows on the profile of whoever is on it — a leaderboard with a single entrant is not a leaderboard, and the threshold is also what stops one modified client filling the public index with invented place names. Nothing is lost while waiting: the per-player value is recorded for **every** body and every cause regardless, so a body sitting at one player is published the moment a second player gets there, and changing the threshold publishes history that is already in the projection.
 A trailing `?` on a type — `f?`, `agg?` — marks an **optional** key: when the value is unreadable the key is **absent from the object entirely**, never `null` and never `0`. See "Optional keys" below.
 
-Kitten identity: `kid` = lowercase Crockford base32 of the first 10 bytes of `SHA-256("catlog-kitten:" + install_id + ":" + roster_name)` (16 chars); `name` = roster display name sanitized to printable US-ASCII, max 32 chars (moderation surface — purge path covers it).
+Kitten identity: `kid` = lowercase Crockford base32 of the first 10 bytes of `SHA-256("catlog-kitten:" + install_id + ":" + roster_name)` (16 chars); `name` = roster display name sanitized to printable US-ASCII, max 128 chars (moderation surface — purge path covers it).
 
 | type | payload |
 |---|---|

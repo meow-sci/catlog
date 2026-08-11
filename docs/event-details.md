@@ -268,7 +268,7 @@ derived from `SHA-256("catlog-public-label:" + kind + ':' + int64BE(playerID) + 
 | Field | Rule | Where |
 |---|---|---|
 | `flight.started.vehicle_name` | printable US-ASCII `0x20–0x7E`, **≤ 64 chars**, trimmed; empty → `"vehicle"` | `Ids.SanitizeVehicleName`, `:124`; `SanitizeAscii`, `:126-143` |
-| every kitten `name` | printable US-ASCII, **≤ 32 chars**, trimmed; empty → `"kitten"` | `Ids.SanitizeName`, `:116` |
+| every kitten `name` | printable US-ASCII, **≤ 128 chars**, trimmed; empty → `"kitten"` | `Ids.SanitizeName`, `:116` |
 | `body` | `IParentBody.Id` lowercased; empty/unreadable → **`"unknown"`** | `VehicleTelemetry.BodyName`, `:267-271`; `BodyOf`, `:276-286` |
 | `situation` | exhaustive switch over KSA's 8-value `Situation` enum → fixed lowercase names; anything else → **`"unknown"`** | `VehicleTelemetry.SituationName`, `:895-906`; library-side `SituationInfo.Normalize`, `Telemetry/SituationInfo.cs:93-94` |
 
@@ -1766,7 +1766,7 @@ before its `flight.started` exists — the one documented exception to the order
 | Key | Type | Source |
 |---|---|---|
 | `kid` | string (16 Crockford) | `Ids.KittenId(installId, kittenName)` (`EventPipeline.cs:428`). **Relabelled per player by `Redact` before publication.** |
-| `name` | string | `Ids.SanitizeName(eva.KittenName)` — ≤ 32 printable ASCII, fallback `"kitten"` |
+| `name` | string | `Ids.SanitizeName(eva.KittenName)` — ≤ 128 printable ASCII, fallback `"kitten"` |
 
 **Detector.** `EventPipeline.Dispatch`, `EvaStartSignal` case (`:250-255`).
 
@@ -2030,7 +2030,7 @@ built by `EventFactory.RosterPayload` (`:81-97`). Shape: `{"kittens": [ {…}, {
 | Row key | Type | Units | Source (KSA) |
 |---|---|---|---|
 | `kid` | string (16 Crockford) | — | `Ids.KittenId(installId, k.Name)` |
-| `name` | string | — | `Ids.SanitizeName(k.Name)` — ≤ 32 printable ASCII |
+| `name` | string | — | `Ids.SanitizeName(k.Name)` — ≤ 128 printable ASCII |
 | `travelled_m` | number | m | `KittenRosterEntryData.TravelledMeters.InMeters()` (`VehicleTelemetry.cs:691`). **`DistanceReference` is a CLASS**, not a double (B5). |
 | `fastest_ms` | number | m/s | `KittenRosterEntryData.FastestSpeed.InMeters()` (`:692`). **ECLIPTIC-FRAME** — it includes the parent body's orbital motion, so it reads ~30 km/s standing still on Earth (B5). Recorded for completeness only; **must never become a speed board**. |
 | `missions` | int | count | `KittenRosterEntryData.MissionCount` (`KSA/KittenRosterEntryData.cs:26`). Counts aborted pre-launch missions too. |

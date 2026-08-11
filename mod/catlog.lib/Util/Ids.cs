@@ -226,12 +226,12 @@ public static class Ids
     }
 
     /// <summary>
-    /// Sanitizes a roster display name to printable US-ASCII, at most 32 characters (§4.2 —
+    /// Sanitizes a roster display name to printable US-ASCII, at most 128 characters (§4.2 —
     /// this is a moderation surface, so nothing exotic reaches the server).
     /// </summary>
     /// <param name="name">The raw display name.</param>
     /// <returns>The sanitized name; empty input yields <c>"kitten"</c>.</returns>
-    public static string SanitizeName(string? name) => SanitizeAscii(name, 32, "kitten");
+    public static string SanitizeName(string? name) => SanitizeAscii(name, 128, "kitten");
 
     /// <summary>
     /// Sanitizes a vehicle name to printable US-ASCII, at most 64 characters (§4.2

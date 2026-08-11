@@ -140,7 +140,7 @@ func kittenName(name string) string {
 	if name == "" {
 		return "a kitten"
 	}
-	return sanitize(name, 32)
+	return sanitize(name, 128)
 }
 
 // sanitize keeps the feed printable. Names are a moderation surface (§4.2), so

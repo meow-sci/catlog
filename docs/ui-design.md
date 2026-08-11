@@ -309,7 +309,7 @@ stay hermetic (D2 — the same argument that made
 
 **Latin subset only, and it is safe for the dynamic strings but not for every glyph we
 write.** Every dynamic string catlog renders is ASCII by construction: handles are
-`[a-z0-9._-]`; kitten names are "sanitized to printable US-ASCII, max 32 chars"
+`[a-z0-9._-]`; kitten names are "sanitized to printable US-ASCII, max 128 chars"
 (`docs/events.md`); body names pass `statSuffix`'s `[a-z0-9._-]` for boards and `sanitize()`
 for the feed. The punctuation is ours, and it has to be checked one glyph at a time against
 the package's own `unicode.json` — **the `unicode-range` is the list of glyphs the file

@@ -694,7 +694,7 @@ export const EVENTS: CatlogEvent[] = [
         unit: "",
         what: "A per-kitten identifier. It is re-labelled per player before publication.",
       },
-      { key: "name", unit: "", what: "The kitten's name, trimmed to 32 characters." },
+      { key: "name", unit: "", what: "The kitten's name, trimmed to 128 characters." },
     ],
     feeds: ["evas"],
     page: "kittens",
